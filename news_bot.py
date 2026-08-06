@@ -38,9 +38,8 @@ warnings.filterwarnings('ignore', category=XMLParsedAsHTMLWarning)
 # ==========================================
 # ⚙️ [시간 설정]
 # ==========================================
-SCAN_INTERVAL = 15  # <- 시간 숫자
-TIME_UNIT = '초'  # <- "초", "분", "시간", "일" 중 입력
-MAX_NEWS_AGE_HOURS = 1  # 💡 [설정] 최근 몇 시간 이내 기사만 보낼지 설정 (예: 1시간)
+SCAN_INTERVAL = 15  # 스캔 주기 (초)
+MAX_NEWS_AGE_HOURS = 3  # 최근 3시간 이내 기사 수집 (시차 고려 여유 확보)
 
 # ==========================================
 # [설정 항목] 텔레그램 및 네이버 API 정보
@@ -54,7 +53,7 @@ CONFIG = {
 
 SEEN_NEWS_URLS = set()
 
-# 주요 언론사 직통 속보 RSS
+# 주요 국내/외신 직통 속보 RSS
 DIRECT_RSS_FEEDS = [
     {'source': '연합뉴스 속보', 'url': 'https://www.yna.co.kr/rss/news.xml'},
     {'source': '한국경제 속보', 'url': 'https://www.hankyung.com/feed/news'},
@@ -65,6 +64,7 @@ DIRECT_RSS_FEEDS = [
     },
 ]
 
+# 국내 및 미국장/외신 검색 쿼리
 SEARCH_QUERIES = [
     '속보',
     '특징주',
@@ -72,16 +72,23 @@ SEARCH_QUERIES = [
     '단독',
     'M&A',
     'FDA',
-    '삼성',
-    'SK',
-    '현대',
-    'LG',
-    '두산',
-    '한화',
+    '미국증시',
+    '뉴욕증시',
+    '나스닥',
+    'S&P500',
     '테슬라',
     '엔비디아',
+    '애플',
+    '마이크로소프트',
+    'MS',
+    '오픈AI',
+    '구글',
+    'AMAT',
+    'TSMC',
     'AI',
     'HBM',
+    'SMR',
+    '변압기',
 ]
 
 MUST_SEND_KEYWORDS = [
@@ -98,6 +105,10 @@ MUST_SEND_KEYWORDS = [
     '세계최초',
     '공급계약',
     '특징주',
+    '급등',
+    '급락',
+    '파월',
+    '금리',
 ]
 
 KEYWORDS = [
@@ -151,6 +162,9 @@ KEYWORDS = [
     '저궤도위성',
     '초전도체',
     '희토류',
+    '뉴욕증시',
+    '나스닥',
+    '다우',
 ]
 
 EXCLUDE_KEYWORDS = [
@@ -196,17 +210,26 @@ def evaluate_title(title):
 
 
 def is_recent_news(pub_date_str):
-  """기사의 발행 시간이 지정한 시간(MAX_NEWS_AGE_HOURS) 이내인지 검사"""
+  """기사의 발행 시간이 지정한 시간(MAX_NEWS_AGE_HOURS) 이내인지 검사 (UTC/시차 안전 처리)"""
   if not pub_date_str:
     return True
   try:
     pub_dt = parsedate_to_datetime(pub_date_str)
     now_dt = datetime.datetime.now(datetime.timezone.utc)
-    # 기사 생성 시각과 현재 시각의 차이 계산
+
+    # 타임존 정보가 없으면 UTC로 기본 적용
+    if pub_dt.tzinfo is None:
+      pub_dt = pub_dt.replace(tzinfo=datetime.timezone.utc)
+
     time_diff = now_dt - pub_dt
+
+    # 미래 시각으로 잘못 파싱되거나 설정 시간보다 오래된 경우 거름
+    if time_diff.total_seconds() < -300:  # 5분 이상 미래 시간 오차 방지
+      return True
+
     return time_diff <= datetime.timedelta(hours=MAX_NEWS_AGE_HOURS)
   except Exception:
-    return True  # 시간 파싱 실패 시 기본 통과
+    return True
 
 
 def send_telegram_msg(text):
@@ -226,7 +249,6 @@ def send_telegram_msg(text):
 def fetch_naver_news():
   cid = CONFIG['NAVER_CLIENT_ID'].strip()
   csec = CONFIG['NAVER_CLIENT_SECRET'].strip()
-
   headers = {'X-Naver-Client-Id': cid, 'X-Naver-Client-Secret': csec}
 
   found, sent = 0, 0
@@ -250,7 +272,6 @@ def fetch_naver_news():
           if not link or link in SEEN_NEWS_URLS:
             continue
 
-          # 💡 최근 시간 이내 기사가 아니면 건너뜀
           if not is_recent_news(pub_date):
             SEEN_NEWS_URLS.add(link)
             continue
@@ -315,7 +336,6 @@ def fetch_direct_rss():
         if not link or not title or link in SEEN_NEWS_URLS:
           continue
 
-        # 💡 최근 시간 이내 기사가 아니면 건너뜀
         if not is_recent_news(pub_date):
           SEEN_NEWS_URLS.add(link)
           continue
@@ -349,7 +369,8 @@ def fetch_google_rss():
 
   for q in SEARCH_QUERIES:
     encoded_q = urllib.parse.quote(q)
-    url = f'https://news.google.com/rss/search?q={encoded_q}+when:1d&hl=ko&gl=KR&ceid=KR:ko'
+    # 구글 RSS에서 최근 1시간 이내(when:1h)로 설정하여 해외 외신/특징주 실시간성을 대폭 높임
+    url = f'https://news.google.com/rss/search?q={encoded_q}+when:1h&hl=ko&gl=KR&ceid=KR:ko'
 
     try:
       res = requests.get(url, headers=headers, timeout=5)
@@ -383,7 +404,6 @@ def fetch_google_rss():
         if not link or not title or link in SEEN_NEWS_URLS:
           continue
 
-        # 💡 최근 시간 이내 기사가 아니면 건너뜀
         if not is_recent_news(pub_date):
           SEEN_NEWS_URLS.add(link)
           continue
@@ -426,21 +446,9 @@ def run_all_crawlers():
 # ==========================================
 # 주기 자동 적용
 # ==========================================
-if TIME_UNIT == '초':
-  schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
-elif TIME_UNIT == '분':
-  schedule.every(SCAN_INTERVAL).minutes.do(run_all_crawlers)
-elif TIME_UNIT == '시간':
-  schedule.every(SCAN_INTERVAL).hours.do(run_all_crawlers)
-elif TIME_UNIT == '일':
-  schedule.every(SCAN_INTERVAL).days.do(run_all_crawlers)
-else:
-  schedule.every(15).seconds.do(run_all_crawlers)
+schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
 
-print(
-    f'⚡ [뉴스 속보 봇 가동] 주기: {SCAN_INTERVAL}{TIME_UNIT} 마다 자동'
-    ' 스캔'
-)
+print(f'⚡ [뉴스 속보 봇 가동] 주기: {SCAN_INTERVAL}초 마다 자동 스캔')
 run_all_crawlers()
 
 while True:
