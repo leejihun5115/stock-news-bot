@@ -59,7 +59,7 @@ MUST_SEND_KEYWORDS = [
 ]
 
 KEYWORDS = [
-    '삼성', 'SK', '현대', 'LG', '두산', '한화', '테슬라',
+    '삼성', 'SK', '현대', '기아', 'LG', '두산', '한화', '테슬라',
     '스페이스X', '스타링크', '엔비디아', '애플', 'MS', '오픈AI',
     '구글', 'TSMC', 'CATL', '인수', '매각', '경영권분쟁',
     '지분매각', '지분인수', '공급계약', '독점공급', '국산화',
@@ -70,28 +70,26 @@ KEYWORDS = [
     '저궤도위성', '초전도체', '희토류', '뉴욕증시', '나스닥',
 ]
 
+# 긴 단어부터 먼저 매칭되도록 정렬
+KEYWORDS = sorted(list(set(KEYWORDS)), key=len, reverse=True)
+
+# '판매' 등 불필요한 일반 단어 삭제 후 주가 호재/악재 직결 키워드 위주 재편
 ACTION_KEYWORDS = list({
-    '1위', '가능성', '가닥', '가상현실', '가속화', '가시화', '가치', '가치부각',
-    '개발', '개발성공', '개시', '개시결정', '거래재개', '거론', '검토', '결과',
-    '결정', '계약', '계약체결', '공개매각', '공급', '공급계약', '공동개발',
-    '공동투자', '공식제안', '공식진출', '공식화', '국산화', '국회통과', '극적타결',
-    '극비접촉', '급물살', '급부상', '급등', '급증', '기술개발', '기술수출',
-    '기술이전', '납품', '논의', '독점계약', '독점공급', '독점생산', '돌입',
-    '돌풍', '러브콜', '매각', '발표', '본격', '본격화', '본계약', '부각',
-    '부품공급', '분쟁', '분할', '사업추진', '상업화', '상용화', '상장',
-    '상장추진', '생산', '선정', '설립', '성공', '수주', '수출', '승인',
-    '시동', '시장진출', '시판', '신청', '양산', '연구개발', '완료', '완전관해',
-    '완치', '완판', '유력', '유일', '유치', '육성', '인상', '인수',
-    '인수검토', '인수전', '인수추진', '인수합병', '임박', '임상', '임상1상',
-    '임상2상', '임상3상', '임상결과', '입증', '위탁생산', '재개', '재매각',
-    '재상장', '재추진', '적용', '제휴', '증설', '지분매각', '지분인수',
-    '지분투자', '지정', '진출', '진행중', '착수', '체결', '초읽기', '최대',
-    '최대주주', '추진', '추진중', '취득', '출범', '타결', '탑재', '통과',
-    '투자', '투자유치', '판권계약', '판매', '판매승인', '품목허가', '합병',
-    '합작', '허가', '협력', '협상', '확대', '확보', '확정', '획득',
-    '효능입증', '흥행', 'MOU', '3상', '美FDA', '흑자전환', '최대매출',
-    '제3자배정', '경영참여',
+    '1위', '개발성공', '개시결정', '거래재개', '계약체결', '공개매각',
+    '공급계약', '공동개발', '공동투자', '공식제안', '공식진출', '국산화',
+    '국회통과', '극적타결', '극비접촉', '급물살', '급부상', '급등', '급증',
+    '기술개발', '기술수출', '기술이전', '독점계약', '독점공급', '독점생산',
+    '러브콜', '매각', '본계약', '부품공급', '경영권분쟁', '사업추진',
+    '상업화', '상용화', '상장추진', '공급계약', '승인', '시장진출', '양산',
+    '완전관해', '완치', '유치', '인수', '인수검토', '인수전', '인수추진',
+    '인수합병', '임상3상', '임상결과', '위탁생산', '재매각', '재상장',
+    '재추진', '지분매각', '지분인수', '지분투자', '초읽기', '최대주주',
+    '타결', '탑재', '투자유치', '판권계약', '판매승인', '품목허가',
+    '합병', '합작', '협상', '획득', '효능입증', 'MOU', '3상', '美FDA',
+    '흑자전환', '최대매출', '제3자배정', '경영참여', '대규모수주', '수주계약'
 })
+
+ACTION_KEYWORDS = sorted(ACTION_KEYWORDS, key=len, reverse=True)
 
 EXCLUDE_KEYWORDS = [
     '스탁론', '추천주', '추천종목', '급등예고', '황금주', '무료공개',
@@ -145,34 +143,32 @@ def evaluate_title(title, search_query=''):
 
   highlighted_title = title
 
-  # 2. 필수 매칭 키워드 확인
+  # 2. 필수 매칭 키워드 확인 (제목에 직접 존재하는 경우)
   for must in MUST_SEND_KEYWORDS:
     if must in title:
       highlighted_title = highlighted_title.replace(must, f'<b>{must}</b>')
       return True, f'🔥 {must}', highlighted_title
 
-  # 3. 주요 키워드 확인 (제목에 있거나, 수집 쿼리에 매칭된 경우)
-  matched_kw = None
+  # 3. 제목 내부 키워드 직접 탐색
+  in_title_kw = None
   for kw in KEYWORDS:
     if kw in title:
-      matched_kw = kw
+      in_title_kw = kw
       break
 
-  # 제목 자체엔 없지만 검색 쿼리가 KEYWORDS 중 하나인 경우
-  if not matched_kw and search_query in KEYWORDS:
-    matched_kw = search_query
+  target_kw = in_title_kw or (search_query if search_query in KEYWORDS else None)
 
-  if matched_kw:
+  if target_kw:
     matched_act = None
     for act in ACTION_KEYWORDS:
       if act in title:
         matched_act = act
         break
 
-    # 제목에 실제로 들어있는 키워드들만 안전하게 강조(치환)
-    if matched_kw in highlighted_title:
+    # 제목에 실제 존재하는 키워드만 <b> 강조
+    if in_title_kw and in_title_kw in highlighted_title:
       highlighted_title = highlighted_title.replace(
-          matched_kw, f'<b>{matched_kw}</b>'
+          in_title_kw, f'<b>{in_title_kw}</b>'
       )
 
     if matched_act and matched_act in highlighted_title:
@@ -180,11 +176,14 @@ def evaluate_title(title, search_query=''):
           matched_act, f'<b>{matched_act}</b>'
       )
 
+    # 태그 생성
+    tag_kw = in_title_kw if in_title_kw else target_kw
     if matched_act:
-      tag = f'{matched_kw}+{matched_act}'
-      return True, tag, highlighted_title
+      tag = f'{tag_kw}+{matched_act}'
     else:
-      return True, matched_kw, highlighted_title
+      tag = tag_kw
+
+    return True, tag, highlighted_title
 
   return False, '관련없음', title
 
@@ -476,7 +475,7 @@ schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
 
 if __name__ == '__main__':
   print('=' * 60)
-  print('⚡ [장중 뉴스 속보 봇 - 제목 내부 키워드 안전 강조 처리 완료]')
+  print('⚡ [장중 뉴스 속보 봇 - 액션 키워드 노이즈 제거 완료]')
   print('✅ 텔레그램 비공개 채널 연동 완료')
   print(f'⏰ 스캔 주기: {SCAN_INTERVAL}초')
   print('=' * 60)
