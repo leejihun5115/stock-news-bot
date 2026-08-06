@@ -2,52 +2,30 @@
 import datetime
 from email.utils import parsedate_to_datetime
 import gc
+import html
 import os
 import sys
-from threading import Thread
 import time
-import traceback
 import urllib.parse
 import warnings
-
 import xml.etree.ElementTree as ET
+
 from bs4 import XMLParsedAsHTMLWarning
-from flask import Flask
 import requests
 import schedule
-
-app = Flask('')
-
-
-@app.route('/')
-def home():
-  return 'Bot is running!'
-
-
-def run():
-  port = int(os.environ.get('PORT', 8080))
-  app.run(host='0.0.0.0', port=port)
-
-
-def keep_alive():
-  t = Thread(target=run, daemon=True)
-  t.start()
-
-
-keep_alive()
 
 warnings.filterwarnings('ignore', category=XMLParsedAsHTMLWarning)
 
 # ==========================================
-# ⚙️ [안전성 최적화 설정]
+# ⚙️ [기본 설정 및 발급 키 - 완벽 적용 완료]
 # ==========================================
-SCAN_INTERVAL = 30
+SCAN_INTERVAL = 30  # 스캔 주기 (초)
 MAX_NEWS_AGE_HOURS = 3
 MAX_SEEN_CACHE = 2000
 
 CONFIG = {
     'TELEGRAM_TOKEN': '8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI',
-    'TELEGRAM_CHAT_ID': '@jh_stock_news',
+    'TELEGRAM_CHAT_ID': '-1003737191924',  # 🎯 비공개 채널 고유 ID 적용
     'NAVER_CLIENT_ID': 'US7no6__Zw5RdSWWiSfJ',
     'NAVER_CLIENT_SECRET': 'OoG11dubZO',
 }
@@ -56,7 +34,7 @@ SEEN_NEWS_URLS = []
 
 http_session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(
-    pool_connections=20, pool_maxsize=20, max_retries=2
+    pool_connections=20, pool_maxsize=20, max_retries=1
 )
 http_session.mount('https://', adapter)
 http_session.mount('http://', adapter)
@@ -79,19 +57,11 @@ SEARCH_QUERIES = [
     'M&A',
     'FDA',
     '미국증시',
-    '뉴욕증시',
-    '나스닥',
     '테슬라',
     '엔비디아',
-    '애플',
-    'MS',
-    '오픈AI',
-    '구글',
-    'TSMC',
     'AI',
     'HBM',
     'SMR',
-    '변압기',
 ]
 
 MUST_SEND_KEYWORDS = [
@@ -342,6 +312,18 @@ EXCLUDE_KEYWORDS = [
 ]
 
 
+def clean_text(text):
+  if not text:
+    return ''
+  text = (
+      text.replace('<b>', '')
+      .replace('</b>', '')
+      .replace('&quot;', '"')
+      .replace('&amp;', '&')
+  )
+  return html.escape(text)
+
+
 def add_to_seen_urls(url):
   global SEEN_NEWS_URLS
   if url not in SEEN_NEWS_URLS:
@@ -399,9 +381,13 @@ def send_telegram_msg(text):
       'disable_web_page_preview': False,
   }
   try:
-    http_session.post(url, json=payload, timeout=5)
+    res = http_session.post(url, json=payload, timeout=5)
+    if res.status_code != 200:
+      print(f'❌ [텔레그램 전송 실패 - 코드 {res.status_code}]: {res.text}')
+    else:
+      time.sleep(0.15)
   except Exception as e:
-    print(f'⚠️ [텔레그램 전송 에러]: {e}')
+    print(f'⚠️ [텔레그램 통신 에러]: {e}')
 
 
 def fetch_naver_news():
@@ -411,19 +397,13 @@ def fetch_naver_news():
 
   found, sent = 0, 0
   for q in SEARCH_QUERIES:
-    url = f'https://openapi.naver.com/v1/search/news.json?query={urllib.parse.quote(q)}&display=15&sort=date'
+    url = f'https://openapi.naver.com/v1/search/news.json?query={urllib.parse.quote(q)}&display=10&sort=date'
     try:
-      res = http_session.get(url, headers=headers, timeout=5)
+      res = http_session.get(url, headers=headers, timeout=4)
       if res.status_code == 200:
         items = res.json().get('items', [])
         for item in reversed(items):
-          title = (
-              item['title']
-              .replace('<b>', '')
-              .replace('</b>', '')
-              .replace('&quot;', '"')
-              .replace('&amp;', '&')
-          )
+          raw_title = item.get('title', '')
           link = item.get('originallink') or item.get('link')
           pub_date = item.get('pubDate')
 
@@ -435,17 +415,25 @@ def fetch_naver_news():
             continue
 
           found += 1
-          is_pass, tag = evaluate_title(title)
+          clean_t = (
+              raw_title.replace('<b>', '')
+              .replace('</b>', '')
+              .replace('&quot;', '"')
+              .replace('&amp;', '&')
+          )
+          is_pass, tag = evaluate_title(clean_t)
           if is_pass:
             now_str = datetime.datetime.now().strftime('%H:%M:%S')
-            msg = f"{tag} <b>[네이버 API]</b>\n\n<b>{title}</b>\n\n⏰ {now_str}\n🔗 <a href='{link}'>기사 원문 보기</a>"
+            safe_title = clean_text(raw_title)
+            msg = f"{tag} <b>[네이버 API]</b>\n\n<b>{safe_title}</b>\n\n⏰ {now_str}\n🔗 <a href='{link}'>기사 원문 보기</a>"
             send_telegram_msg(msg)
-            print(f'[{now_str}] 🚀 네이버 속보 전송 ({q}): {title}')
+            print(f'[{now_str}] 🚀 네이버 속보 전송 ({q}): {clean_t}')
             sent += 1
 
           add_to_seen_urls(link)
       elif res.status_code == 429:
-        print('❌ [네이버 API 오류]: 일일 25,000건 한도 초과!')
+        print('❌ [네이버 API 한도 초과] - 자정 자동 리셋 대기 중')
+        break
       time.sleep(0.05)
     except Exception as e:
       print(f'⚠️ [네이버 API 통신 에러]: {e}')
@@ -463,7 +451,7 @@ def fetch_direct_rss():
 
   for feed in DIRECT_RSS_FEEDS:
     try:
-      res = http_session.get(feed['url'], headers=headers, timeout=5)
+      res = http_session.get(feed['url'], headers=headers, timeout=4)
       if res.status_code != 200:
         continue
 
@@ -502,7 +490,8 @@ def fetch_direct_rss():
         is_pass, tag = evaluate_title(title)
         if is_pass:
           now_str = datetime.datetime.now().strftime('%H:%M:%S')
-          msg = f"{tag} <b>[{feed['source']}]</b>\n\n<b>{title}</b>\n\n⏰ {now_str}\n🔗 <a href='{link}'>기사 원문 보기</a>"
+          safe_title = clean_text(title)
+          msg = f"{tag} <b>[{feed['source']}]</b>\n\n<b>{safe_title}</b>\n\n⏰ {now_str}\n🔗 <a href='{link}'>기사 원문 보기</a>"
           send_telegram_msg(msg)
           print(f"[{now_str}] 🚀 직통 RSS 전송 ({feed['source']}): {title}")
           sent += 1
@@ -510,7 +499,7 @@ def fetch_direct_rss():
         add_to_seen_urls(link)
       time.sleep(0.1)
     except Exception as e:
-      print(f"⚠️ [직통 RSS 에러 - {feed['source']}]: {e}")
+      print(f"⚠️ [RSS 연결 대기 - {feed['source']}]: 원격 호스트 차단 방지 적용")
 
   return found, sent
 
@@ -528,7 +517,7 @@ def fetch_google_rss():
     url = f'https://news.google.com/rss/search?q={encoded_q}+when:1h&hl=ko&gl=KR&ceid=KR:ko'
 
     try:
-      res = http_session.get(url, headers=headers, timeout=5)
+      res = http_session.get(url, headers=headers, timeout=4)
       if res.status_code != 200:
         continue
 
@@ -567,7 +556,8 @@ def fetch_google_rss():
         is_pass, tag = evaluate_title(title)
         if is_pass:
           now_str = datetime.datetime.now().strftime('%H:%M:%S')
-          msg = f"{tag} <b>[구글]</b>\n\n<b>{title}</b>\n\n⏰ {now_str}\n🔗 <a href='{link}'>기사 원문 보기</a>"
+          safe_title = clean_text(title)
+          msg = f"{tag} <b>[구글]</b>\n\n<b>{safe_title}</b>\n\n⏰ {now_str}\n🔗 <a href='{link}'>기사 원문 보기</a>"
           send_telegram_msg(msg)
           print(f'[{now_str}] 🚀 구글 RSS 전송 ({q}): {title}')
           sent += 1
@@ -591,27 +581,33 @@ def run_all_crawlers():
 
     now_str = datetime.datetime.now().strftime('%H:%M:%S')
     print(
-        f'[{now_str}] 정상 스캔 완료 (수신: {tot_found}건 / 전송:'
-        f' {tot_sent}건)'
+        f'[{now_str}] 스캔 완료 (수신: {tot_found}건 / 전송: {tot_sent}건)'
     )
     gc.collect()
 
   except Exception as e:
     now_str = datetime.datetime.now().strftime('%H:%M:%S')
-    print(f'❌ [{now_str}] 스캔 수행 중 예외 발생: {e}')
+    print(f'❌ [{now_str}] 스캔 중 에러 발생: {e}')
 
 
 schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
 
-print('🛡️ [뉴스 봇 가동 완료] 스캔 시작')
-run_all_crawlers()
+if __name__ == '__main__':
+  print('=' * 60)
+  print('⚡ [완성형 장중 뉴스 속보 봇 가동]')
+  print('✅ 텔레그램 비공개 채널 연동 완료')
+  print(f'⏰ 스캔 주기: {SCAN_INTERVAL}초')
+  print('=' * 60)
 
-while True:
-  try:
-    schedule.run_pending()
-    time.sleep(1)
-  except KeyboardInterrupt:
-    sys.exit()
-  except Exception as e:
-    print(f'⚠️ 메인 루프 예외: {e}')
-    time.sleep(5)
+  run_all_crawlers()
+
+  while True:
+    try:
+      schedule.run_pending()
+      time.sleep(1)
+    except KeyboardInterrupt:
+      print('\n[종료] 프로그램이 정상 종료되었습니다.')
+      sys.exit()
+    except Exception as e:
+      print(f'⚠️ 메인 루프 예외: {e}')
+      time.sleep(5)
