@@ -31,7 +31,7 @@ CONFIG = {
 }
 
 SEEN_NEWS_URLS = []
-IS_FIRST_RUN = True  # 최초 실행 시 과거 데이터 폭탄 전송 방지용 플래그
+IS_FIRST_RUN = True  # 최초 실행 시 과거 데이터 전송 방지 플래그
 
 http_session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(
@@ -44,285 +44,82 @@ DIRECT_RSS_FEEDS = [
     {'source': '연합뉴스', 'url': 'https://www.yna.co.kr/rss/news.xml'},
     {'source': '한국경제', 'url': 'https://www.hankyung.com/feed/news'},
     {'source': '매일경제', 'url': 'https://www.mk.co.kr/rss/30200030/'},
-    {
-        'source': '이데일리',
-        'url': 'https://rss.edaily.co.kr/edaily_news.xml',
-    },
+    {'source': '이데일리', 'url': 'https://rss.edaily.co.kr/edaily_news.xml'},
 ]
 
+# SEARCH_QUERIES 및 KEYWORDS 내 단독 'AI'를 제거하고 세부 키워드로 정교화
 SEARCH_QUERIES = [
-    '속보',
-    '특징주',
-    '상한가',
-    '단독',
-    'M&A',
-    'FDA',
-    '미국증시',
-    '테슬라',
-    '엔비디아',
-    'AI',
-    'HBM',
-    'SMR',
+    '속보', '특징주', '상한가', '단독', 'M&A', 'FDA',
+    '미국증시', '테슬라', '엔비디아', 'AI반도체', 'HBM', 'SMR',
 ]
 
 MUST_SEND_KEYWORDS = [
-    '단독',
-    '속보',
-    '상한가',
-    'FDA승인',
-    'M&A',
-    '인수합병',
-    '3자배정',
-    '무상증자',
-    '기술수출',
-    '완전관해',
-    '세계최초',
-    '공급계약',
-    '특징주',
-    '급등',
-    '급락',
+    '단독', '속보', '상한가', 'FDA승인', 'M&A', '인수합병',
+    '3자배정', '무상증자', '기술수출', '완전관해', '세계최초',
+    '공급계약', '특징주', '급등', '급락',
 ]
 
 KEYWORDS = [
-    '삼성',
-    'SK',
-    '현대',
-    'LG',
-    '두산',
-    '한화',
-    '테슬라',
-    '스페이스X',
-    '스타링크',
-    '엔비디아',
-    '애플',
-    'MS',
-    '오픈AI',
-    '구글',
-    'TSMC',
-    'CATL',
-    '인수',
-    '매각',
-    '경영권분쟁',
-    '지분매각',
-    '지분인수',
-    '공급계약',
-    '독점공급',
-    '국산화',
-    '국내최초',
-    '어닝서프라이즈',
-    '최대실적',
-    '수주계약',
-    '대규모수주',
-    'FDA',
-    '임상3상',
-    '기술이전',
-    'L/O',
-    'AI',
-    '인공지능',
-    'HBM',
-    'CXL',
-    '온디바이스',
-    '유리기판',
-    '전고체',
-    '자율주행',
-    'UAM',
-    '로봇',
-    'SMR',
-    '소형모듈원전',
-    '변압기',
-    '우주항공',
-    '저궤도위성',
-    '초전도체',
-    '희토류',
-    '뉴욕증시',
-    '나스닥',
+    '삼성', 'SK', '현대', 'LG', '두산', '한화', '테슬라',
+    '스페이스X', '스타링크', '엔비디아', '애플', 'MS', '오픈AI',
+    '구글', 'TSMC', 'CATL', '인수', '매각', '경영권분쟁',
+    '지분매각', '지분인수', '공급계약', '독점공급', '국산화',
+    '국내최초', '어닝서프라이즈', '최대실적', '수주계약', '대규모수주',
+    'FDA', '임상3상', '기술이전', 'L/O', '인공지능', '생성형AI', 'AI반도체', 'AI서버',
+    'HBM', 'CXL', '온디바이스', '유리기판', '전고체', '자율주행',
+    'UAM', '로봇', 'SMR', '소형모듈원전', '변압기', '우주항공',
+    '저궤도위성', '초전도체', '희토류', '뉴욕증시', '나스닥',
 ]
 
 ACTION_KEYWORDS = list({
-    '1위',
-    '가능성',
-    '가닥',
-    '가상현실',
-    '가속화',
-    '가시화',
-    '가치',
-    '가치부각',
-    '개발',
-    '개발성공',
-    '개시',
-    '개시결정',
-    '거래재개',
-    '거론',
-    '검토',
-    '결과',
-    '결정',
-    '계약',
-    '계약체결',
-    '공개매각',
-    '공급',
-    '공급계약',
-    '공동개발',
-    '공동투자',
-    '공식제안',
-    '공식진출',
-    '공식화',
-    '국산화',
-    '국회통과',
-    '극적타결',
-    '극비접촉',
-    '급물살',
-    '급부상',
-    '급등',
-    '급증',
-    '기술개발',
-    '기술수출',
-    '기술이전',
-    '납품',
-    '논의',
-    '독점계약',
-    '독점공급',
-    '독점생산',
-    '돌입',
-    '돌풍',
-    '러브콜',
-    '매각',
-    '발표',
-    '본격',
-    '본격화',
-    '본계약',
-    '부각',
-    '부품공급',
-    '분쟁',
-    '분할',
-    '사업추진',
-    '상업화',
-    '상용화',
-    '상장',
-    '상장추진',
-    '생산',
-    '선정',
-    '설립',
-    '성공',
-    '수주',
-    '수출',
-    '승인',
-    '시동',
-    '시장진출',
-    '시판',
-    '신청',
-    '양산',
-    '연구개발',
-    '완료',
-    '완전관해',
-    '완치',
-    '완판',
-    '유력',
-    '유일',
-    '유치',
-    '육성',
-    '인상',
-    '인수',
-    '인수검토',
-    '인수전',
-    '인수추진',
-    '인수합병',
-    '임박',
-    '임상',
-    '임상1상',
-    '임상2상',
-    '임상3상',
-    '임상결과',
-    '입증',
-    '위탁생산',
-    '재개',
-    '재매각',
-    '재상장',
-    '재추진',
-    '적용',
-    '제휴',
-    '증설',
-    '지분매각',
-    '지분인수',
-    '지분투자',
-    '지정',
-    '진출',
-    '진행중',
-    '착수',
-    '체결',
-    '초읽기',
-    '최대',
-    '최대주주',
-    '추진',
-    '추진중',
-    '취득',
-    '출범',
-    '타결',
-    '탑재',
-    '통과',
-    '투자',
-    '투자유치',
-    '판권계약',
-    '판매',
-    '판매승인',
-    '품목허가',
-    '합병',
-    '합작',
-    '허가',
-    '협력',
-    '협상',
-    '확대',
-    '확보',
-    '확정',
-    '획득',
-    '효능입증',
-    '흥행',
-    'MOU',
-    '3상',
-    '美FDA',
-    '흑자전환',
-    '최대매출',
-    '제3자배정',
-    '경영참여',
+    '1위', '가능성', '가닥', '가상현실', '가속화', '가시화', '가치', '가치부각',
+    '개발', '개발성공', '개시', '개시결정', '거래재개', '거론', '검토', '결과',
+    '결정', '계약', '계약체결', '공개매각', '공급', '공급계약', '공동개발',
+    '공동투자', '공식제안', '공식진출', '공식화', '국산화', '국회통과', '극적타결',
+    '극비접촉', '급물살', '급부상', '급등', '급증', '기술개발', '기술수출',
+    '기술이전', '납품', '논의', '독점계약', '독점공급', '독점생산', '돌입',
+    '돌풍', '러브콜', '매각', '발표', '본격', '본격화', '본계약', '부각',
+    '부품공급', '분쟁', '분할', '사업추진', '상업화', '상용화', '상장',
+    '상장추진', '생산', '선정', '설립', '성공', '수주', '수출', '승인',
+    '시동', '시장진출', '시판', '신청', '양산', '연구개발', '완료', '완전관해',
+    '완치', '완판', '유력', '유일', '유치', '육성', '인상', '인수',
+    '인수검토', '인수전', '인수추진', '인수합병', '임박', '임상', '임상1상',
+    '임상2상', '임상3상', '임상결과', '입증', '위탁생산', '재개', '재매각',
+    '재상장', '재추진', '적용', '제휴', '증설', '지분매각', '지분인수',
+    '지분투자', '지정', '진출', '진행중', '착수', '체결', '초읽기', '최대',
+    '최대주주', '추진', '추진중', '취득', '출범', '타결', '탑재', '통과',
+    '투자', '투자유치', '판권계약', '판매', '판매승인', '품목허가', '합병',
+    '합작', '허가', '협력', '협상', '확대', '확보', '확정', '획득',
+    '효능입증', '흥행', 'MOU', '3상', '美FDA', '흑자전환', '최대매출',
+    '제3자배정', '경영참여',
 })
 
 EXCLUDE_KEYWORDS = [
-    '스탁론',
-    '추천주',
-    '추천종목',
-    '급등예고',
-    '황금주',
-    '무료공개',
-    '리딩방',
-    '수익률',
-    '체험단',
-    '무료체험',
-    '카톡방',
-    '텔레그램',
-    'VIP',
-    '원금회복',
-    '사칭',
-    '대출',
-    '신용',
-    '금리비교',
-    '당일입금',
-    '100%무료',
-    '선착순',
-    '급등일보',
-    '오늘의운세',
-    '날씨',
+    '스탁론', '추천주', '추천종목', '급등예고', '황금주', '무료공개',
+    '리딩방', '수익률', '체험단', '무료체험', '카톡방', '텔레그램',
+    'VIP', '원금회복', '사칭', '대출', '신용', '금리비교', '당일입금',
+    '100%무료', '선착순', '급등일보', '오늘의운세', '날씨', '슈돌', '예능',
 ]
 
 
 def clean_text(text):
   if not text:
     return ''
+
+  # 1. 네이버 API 특유의 <b>, </b> 태그 및 HTML 엔티티 일차 제거
   text = (
       text.replace('<b>', '')
       .replace('</b>', '')
       .replace('&quot;', '"')
       .replace('&amp;', '&')
+      .replace('&lt;', '<')
+      .replace('&gt;', '>')
+      .replace('&#39;', "'")
   )
-  return html.escape(text)
+
+  # 2. 텔레그램 HTML 모드 필수 예약어 안 안전하게 처리
+  text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+  return text.strip()
 
 
 def add_to_seen_urls(url):
@@ -359,9 +156,9 @@ def evaluate_title(title):
 
 def build_message(tag, source_name, raw_title, link):
   now_str = datetime.datetime.now().strftime('%H:%M:%S')
+
   safe_title = clean_text(raw_title)
 
-  # ⚡️[출처] - [키워드] 형태 포맷팅
   msg = (
       f'⚡️<b>[{source_name}]</b> - <b>[{tag}]</b>\n\n'
       f'<b>{safe_title}</b>\n\n'
@@ -445,15 +242,12 @@ def fetch_naver_news():
             continue
 
           found += 1
-          clean_t = (
-              raw_title.replace('<b>', '')
-              .replace('</b>', '')
-              .replace('&quot;', '"')
-              .replace('&amp;', '&')
-          )
+
+          clean_t = clean_text(raw_title)
           is_pass, tag = evaluate_title(clean_t)
+
           if is_pass:
-            msg = build_message(tag, '네이버', raw_title, link)
+            msg = build_message(tag, '네이버', clean_t, link)
             send_telegram_msg(msg)
             if not IS_FIRST_RUN:
               now_str = datetime.datetime.now().strftime('%H:%M:%S')
@@ -517,13 +311,14 @@ def fetch_direct_rss():
           continue
 
         found += 1
-        is_pass, tag = evaluate_title(title)
+        clean_t = clean_text(title)
+        is_pass, tag = evaluate_title(clean_t)
         if is_pass:
-          msg = build_message(tag, feed['source'], title, link)
+          msg = build_message(tag, feed['source'], clean_t, link)
           send_telegram_msg(msg)
           if not IS_FIRST_RUN:
             now_str = datetime.datetime.now().strftime('%H:%M:%S')
-            print(f"[{now_str}] 🚀 직통 RSS 전송 ({feed['source']}): {title}")
+            print(f"[{now_str}] 🚀 직통 RSS 전송 ({feed['source']}): {clean_t}")
             sent += 1
 
         add_to_seen_urls(link)
@@ -582,7 +377,6 @@ def fetch_google_rss():
           add_to_seen_urls(link)
           continue
 
-        # 구글 RSS 특성상 "제목 - 언론사명"으로 들어오는 제목 분리 파싱
         source_name = '구글'
         if ' - ' in title:
           parts = title.rsplit(' - ', 1)
@@ -593,13 +387,14 @@ def fetch_google_rss():
           display_title = title
 
         found += 1
-        is_pass, tag = evaluate_title(display_title)
+        clean_t = clean_text(display_title)
+        is_pass, tag = evaluate_title(clean_t)
         if is_pass:
-          msg = build_message(tag, source_name, display_title, link)
+          msg = build_message(tag, source_name, clean_t, link)
           send_telegram_msg(msg)
           if not IS_FIRST_RUN:
             now_str = datetime.datetime.now().strftime('%H:%M:%S')
-            print(f'[{now_str}] 🚀 구글 RSS 전송 ({q}): {display_title}')
+            print(f'[{now_str}] 🚀 구글 RSS 전송 ({q}): {clean_t}')
             sent += 1
 
         add_to_seen_urls(link)
@@ -644,7 +439,7 @@ schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
 
 if __name__ == '__main__':
   print('=' * 60)
-  print('⚡ [완성형 장중 뉴스 속보 봇 가동 - 안정화 버전]')
+  print('⚡ [완성형 장중 뉴스 속보 봇 가동 - 키워드 정교화 버전]')
   print('✅ 텔레그램 비공개 채널 연동 완료')
   print(f'⏰ 스캔 주기: {SCAN_INTERVAL}초')
   print('=' * 60)
