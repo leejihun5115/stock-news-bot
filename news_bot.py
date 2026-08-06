@@ -21,7 +21,7 @@ warnings.filterwarnings('ignore', category=XMLParsedAsHTMLWarning)
 # ==========================================
 SCAN_INTERVAL = 30  # 스캔 주기 (초)
 MAX_NEWS_AGE_HOURS = 3
-MAX_SEEN_CACHE = 2000
+MAX_SEEN_CACHE = 3000
 
 CONFIG = {
     'TELEGRAM_TOKEN': '8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI',
@@ -31,6 +31,7 @@ CONFIG = {
 }
 
 SEEN_NEWS_URLS = []
+IS_FIRST_RUN = True  # 최초 실행 시 과거 데이터 폭탄 전송 방지용 플래그
 
 http_session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(
@@ -339,7 +340,7 @@ def evaluate_title(title):
 
   for must in MUST_SEND_KEYWORDS:
     if must in title:
-      return True, f'🔥 VIP속보[{must}]'
+      return True, must
 
   matched_kw = None
   for kw in KEYWORDS:
@@ -347,12 +348,11 @@ def evaluate_title(title):
       matched_kw = kw
       break
 
-  # KEYWORD + ACTION_KEYWORD 2개 결합시 'DOUBLE' 식별자 반환
   if matched_kw:
     for act in ACTION_KEYWORDS:
       if act in title:
-        return True, f'DOUBLE:{matched_kw}+{act}'
-    return True, f'📌 [{matched_kw}]'
+        return True, f'{matched_kw}+{act}'
+    return True, matched_kw
 
   return False, '관련없음'
 
@@ -361,20 +361,8 @@ def build_message(tag, source_name, raw_title, link):
   now_str = datetime.datetime.now().strftime('%H:%M:%S')
   safe_title = clean_text(raw_title)
 
-  # 🟨 키워드 2개 결합시 (노란색 상하단 바 강조)
-  if tag.startswith('DOUBLE:'):
-    kw_pair = tag.split(':')[1]
-    msg = (
-        f'🟨🟨🟨🟨🟨🟨🟨🟨🟨🟨🟨🟨\n'
-        f'⚡ <b>[대형재료 포착: {kw_pair}]</b> - <b>[{source_name}]</b>\n\n'
-        f'<b>{safe_title}</b>\n\n'
-        f'⏰ {now_str}\n'
-        f"🔗 <a href='{link}'>기사 원문 보기</a>\n"
-        f'🟨🟨🟨🟨🟨🟨🟨🟨🟨🟨🟨🟨'
-    )
-  else:
-    # 단일 키워드 및 일반 속보 메시지
-    msg = f"{tag} <b>[{source_name}]</b>\n\n<b>{safe_title}</b>\n\n⏰ {now_str}\n🔗 <a href='{link}'>기사 원문 보기</a>"
+  # ⚡️[구글] - [키워드/조합] 형태로 통일된 출력
+  msg = f"⚡️<b>[{source_name}]</b> - <b>[{tag}]</b>\n\n<b>{safe_title}</b>\n\n⏰ {now_str}\n🔗 <a href='{link}'>기사 원문 보기</a>"
 
   return msg
 
@@ -396,6 +384,9 @@ def is_recent_news(pub_date_str):
 
 
 def send_telegram_msg(text):
+  if IS_FIRST_RUN:
+    return
+
   url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_TOKEN'].strip()}/sendMessage"
   payload = {
       'chat_id': CONFIG['TELEGRAM_CHAT_ID'].strip(),
@@ -403,14 +394,25 @@ def send_telegram_msg(text):
       'parse_mode': 'HTML',
       'disable_web_page_preview': False,
   }
-  try:
-    res = http_session.post(url, json=payload, timeout=5)
-    if res.status_code != 200:
-      print(f'❌ [텔레그램 전송 실패 - 코드 {res.status_code}]: {res.text}')
-    else:
-      time.sleep(0.15)
-  except Exception as e:
-    print(f'⚠️ [텔레그램 통신 에러]: {e}')
+
+  while True:
+    try:
+      res = http_session.post(url, json=payload, timeout=5)
+      if res.status_code == 200:
+        time.sleep(0.5)
+        break
+      elif res.status_code == 429:
+        retry_after = res.json().get('parameters', {}).get('retry_after', 5)
+        print(
+            f'⏳ [텔레그램 속도 제한] {retry_after}초 대기 후 자동 재시도합니다...'
+        )
+        time.sleep(retry_after + 1)
+      else:
+        print(f'❌ [텔레그램 전송 실패 - 코드 {res.status_code}]: {res.text}')
+        break
+    except Exception as e:
+      print(f'⚠️ [텔레그램 통신 에러]: {e}')
+      break
 
 
 def fetch_naver_news():
@@ -446,11 +448,12 @@ def fetch_naver_news():
           )
           is_pass, tag = evaluate_title(clean_t)
           if is_pass:
-            msg = build_message(tag, '네이버 API', raw_title, link)
+            msg = build_message(tag, '네이버', raw_title, link)
             send_telegram_msg(msg)
-            now_str = datetime.datetime.now().strftime('%H:%M:%S')
-            print(f'[{now_str}] 🚀 네이버 속보 전송 ({q}): {clean_t}')
-            sent += 1
+            if not IS_FIRST_RUN:
+              now_str = datetime.datetime.now().strftime('%H:%M:%S')
+              print(f'[{now_str}] 🚀 네이버 속보 전송 ({q}): {clean_t}')
+              sent += 1
 
           add_to_seen_urls(link)
       elif res.status_code == 429:
@@ -513,9 +516,10 @@ def fetch_direct_rss():
         if is_pass:
           msg = build_message(tag, feed['source'], title, link)
           send_telegram_msg(msg)
-          now_str = datetime.datetime.now().strftime('%H:%M:%S')
-          print(f"[{now_str}] 🚀 직통 RSS 전송 ({feed['source']}): {title}")
-          sent += 1
+          if not IS_FIRST_RUN:
+            now_str = datetime.datetime.now().strftime('%H:%M:%S')
+            print(f"[{now_str}] 🚀 직통 RSS 전송 ({feed['source']}): {title}")
+            sent += 1
 
         add_to_seen_urls(link)
       time.sleep(0.1)
@@ -578,9 +582,10 @@ def fetch_google_rss():
         if is_pass:
           msg = build_message(tag, '구글', title, link)
           send_telegram_msg(msg)
-          now_str = datetime.datetime.now().strftime('%H:%M:%S')
-          print(f'[{now_str}] 🚀 구글 RSS 전송 ({q}): {title}')
-          sent += 1
+          if not IS_FIRST_RUN:
+            now_str = datetime.datetime.now().strftime('%H:%M:%S')
+            print(f'[{now_str}] 🚀 구글 RSS 전송 ({q}): {title}')
+            sent += 1
 
         add_to_seen_urls(link)
       time.sleep(0.05)
@@ -591,6 +596,7 @@ def fetch_google_rss():
 
 
 def run_all_crawlers():
+  global IS_FIRST_RUN
   try:
     n_found, n_sent = fetch_naver_news()
     d_found, d_sent = fetch_direct_rss()
@@ -600,9 +606,17 @@ def run_all_crawlers():
     tot_sent = n_sent + d_sent + g_sent
 
     now_str = datetime.datetime.now().strftime('%H:%M:%S')
-    print(
-        f'[{now_str}] 스캔 완료 (수신: {tot_found}건 / 전송: {tot_sent}건)'
-    )
+
+    if IS_FIRST_RUN:
+      print(
+          f'[{now_str}] 🧹 초기 데이터 스위핑 완료 ({tot_found}건 캐시 등록 / 텔레그램 전송 생략)'
+      )
+      IS_FIRST_RUN = False
+    else:
+      print(
+          f'[{now_str}] 스캔 완료 (수신: {tot_found}건 / 전송: {tot_sent}건)'
+      )
+
     gc.collect()
 
   except Exception as e:
@@ -614,7 +628,7 @@ schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
 
 if __name__ == '__main__':
   print('=' * 60)
-  print('⚡ [완성형 장중 뉴스 속보 봇 가동 - 노란색 2중 강조 적용]')
+  print('⚡ [완성형 장중 뉴스 속보 봇 가동 - 깔끔 형식을 적용]')
   print('✅ 텔레그램 비공개 채널 연동 완료')
   print(f'⏰ 스캔 주기: {SCAN_INTERVAL}초')
   print('=' * 60)
