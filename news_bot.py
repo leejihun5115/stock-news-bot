@@ -93,28 +93,18 @@ ACTION_KEYWORDS = list({
     '제3자배정', '경영참여',
 })
 
-# 🚫 [요약된 핵심 삭제어 - 단어 1개만 걸려도 즉시 차단]
 EXCLUDE_KEYWORDS = [
-    # 기존 주식/광고 스팸
     '스탁론', '추천주', '추천종목', '급등예고', '황금주', '무료공개',
     '리딩방', '수익률', '체험단', '무료체험', '카톡방', '텔레그램',
     'VIP', '원금회복', '사칭', '대출', '신용', '금리비교', '당일입금',
     '100%무료', '선착순', '급등일보', '오늘의운세', '날씨', '슈돌', '예능',
-
-    # 관공서 / 지자체 핵심 단어
     '시', '군', '구', '도', '지역', '관공서', '지자체', '지방',
     '시청', '군청', '구청', '도청', '의회', '교육청', '경찰', '소방', '보건소',
     '센터', '공단', '공사', '재단', '선관위', '우체국', '세무서', '법원', '검찰',
-
-    # 직위 및 관계자
     '시장', '군수', '구청장', '지사', '의원', '교육감', '의장', '원장', '이사장',
     '주민', '시민', '군민', '구민', '도민', '이장', '통장', '반장',
-
-    # 행정 / 공사 / 민원 작업 단어
     '정비', '작업', '공사', '보수', '점검', '단속', '계도', '과태료',
     '개통', '확장', '안전', '민원', '조례', '감사', '청소', '방역', '제설',
-
-    # 행사 / 모임 / 지원 단어
     '설명회', '간담회', '보고회', '토론회', '공청회', '캠페인', '축제', '행사',
     '지원', '모집', '채용', '공모', '선포', '개소', '기공', '준공', '현판',
     '위촉', '발대', '협약', '복지', '돌봄', '봉사', '장학', '경로당', '급식'
@@ -147,25 +137,30 @@ def add_to_seen_urls(url):
     SEEN_NEWS_URLS = SEEN_NEWS_URLS[-MAX_SEEN_CACHE:]
 
 
-def evaluate_title(title):
-  # 1. 삭제어 확인
+def evaluate_title(title, search_query=''):
+  # 1. 삭제어 검사
   for exclude in EXCLUDE_KEYWORDS:
     if exclude in title:
       return False, f'제외[{exclude}]', title
 
+  highlighted_title = title
+
   # 2. 필수 매칭 키워드 확인
   for must in MUST_SEND_KEYWORDS:
     if must in title:
-      # 제목 내 핵심 키워드를 <b> 태그로 강조
-      highlighted_title = title.replace(must, f'<b>{must}</b>')
+      highlighted_title = highlighted_title.replace(must, f'<b>{must}</b>')
       return True, f'🔥 {must}', highlighted_title
 
-  # 3. 주요 키워드 + 액션 키워드 조합 확인
+  # 3. 주요 키워드 확인 (제목에 있거나, 수집 쿼리에 매칭된 경우)
   matched_kw = None
   for kw in KEYWORDS:
     if kw in title:
       matched_kw = kw
       break
+
+  # 제목 자체엔 없지만 검색 쿼리가 KEYWORDS 중 하나인 경우
+  if not matched_kw and search_query in KEYWORDS:
+    matched_kw = search_query
 
   if matched_kw:
     matched_act = None
@@ -174,14 +169,21 @@ def evaluate_title(title):
         matched_act = act
         break
 
+    # 제목에 실제로 들어있는 키워드들만 안전하게 강조(치환)
+    if matched_kw in highlighted_title:
+      highlighted_title = highlighted_title.replace(
+          matched_kw, f'<b>{matched_kw}</b>'
+      )
+
+    if matched_act and matched_act in highlighted_title:
+      highlighted_title = highlighted_title.replace(
+          matched_act, f'<b>{matched_act}</b>'
+      )
+
     if matched_act:
       tag = f'{matched_kw}+{matched_act}'
-      highlighted_title = title.replace(
-          matched_kw, f'<b>{matched_kw}</b>'
-      ).replace(matched_act, f'<b>{matched_act}</b>')
       return True, tag, highlighted_title
     else:
-      highlighted_title = title.replace(matched_kw, f'<b>{matched_kw}</b>')
       return True, matched_kw, highlighted_title
 
   return False, '관련없음', title
@@ -275,7 +277,9 @@ def fetch_naver_news():
           found += 1
 
           clean_t = clean_text(raw_title)
-          is_pass, tag, highlighted_title = evaluate_title(clean_t)
+          is_pass, tag, highlighted_title = evaluate_title(
+              clean_t, search_query=q
+          )
 
           if is_pass:
             msg = build_message(tag, '네이버', highlighted_title, link)
@@ -419,7 +423,9 @@ def fetch_google_rss():
 
         found += 1
         clean_t = clean_text(display_title)
-        is_pass, tag, highlighted_title = evaluate_title(clean_t)
+        is_pass, tag, highlighted_title = evaluate_title(
+            clean_t, search_query=q
+        )
         if is_pass:
           msg = build_message(tag, source_name, highlighted_title, link)
           send_telegram_msg(msg)
@@ -470,7 +476,7 @@ schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
 
 if __name__ == '__main__':
   print('=' * 60)
-  print('⚡ [장중 뉴스 속보 봇 - 키워드 하이라이트(볼드 강조) 적용 완료]')
+  print('⚡ [장중 뉴스 속보 봇 - 제목 내부 키워드 안전 강조 처리 완료]')
   print('✅ 텔레그램 비공개 채널 연동 완료')
   print(f'⏰ 스캔 주기: {SCAN_INTERVAL}초')
   print('=' * 60)
