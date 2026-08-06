@@ -67,26 +67,26 @@ KEYWORDS = [
     'FDA', '임상3상', '기술이전', 'L/O', '인공지능', '생성형AI', 'AI반도체', 'AI서버',
     'HBM', 'CXL', '온디바이스', '유리기판', '전고체', '자율주행',
     'UAM', '로봇', 'SMR', '소형모듈원전', '변압기', '우주항공',
-    '저궤도위성', '초전도체', '희토류', '뉴욕증시', '나스닥',
+    '저궤도위성', '초전도체', '희토류', '뉴욕증시', '나스닥', 'AMD',
 ]
 
-# 긴 단어부터 먼저 매칭되도록 정렬
+# 긴 단어 우선 정렬
 KEYWORDS = sorted(list(set(KEYWORDS)), key=len, reverse=True)
 
-# '판매' 등 불필요한 일반 단어 삭제 후 주가 호재/악재 직결 키워드 위주 재편
+# 주요 액션 키워드 (긴 단어 우선)
 ACTION_KEYWORDS = list({
     '1위', '개발성공', '개시결정', '거래재개', '계약체결', '공개매각',
     '공급계약', '공동개발', '공동투자', '공식제안', '공식진출', '국산화',
     '국회통과', '극적타결', '극비접촉', '급물살', '급부상', '급등', '급증',
     '기술개발', '기술수출', '기술이전', '독점계약', '독점공급', '독점생산',
     '러브콜', '매각', '본계약', '부품공급', '경영권분쟁', '사업추진',
-    '상업화', '상용화', '상장추진', '공급계약', '승인', '시장진출', '양산',
+    '상업화', '상용화', '상장추진', '승인', '시장진출', '양산',
     '완전관해', '완치', '유치', '인수', '인수검토', '인수전', '인수추진',
     '인수합병', '임상3상', '임상결과', '위탁생산', '재매각', '재상장',
     '재추진', '지분매각', '지분인수', '지분투자', '초읽기', '최대주주',
     '타결', '탑재', '투자유치', '판권계약', '판매승인', '품목허가',
     '합병', '합작', '협상', '획득', '효능입증', 'MOU', '3상', '美FDA',
-    '흑자전환', '최대매출', '제3자배정', '경영참여', '대규모수주', '수주계약'
+    '흑자전환', '최대매출', '제3자배정', '경영참여', '대규모수주', '수주계약', '추격'
 })
 
 ACTION_KEYWORDS = sorted(ACTION_KEYWORDS, key=len, reverse=True)
@@ -135,49 +135,66 @@ def add_to_seen_urls(url):
     SEEN_NEWS_URLS = SEEN_NEWS_URLS[-MAX_SEEN_CACHE:]
 
 
+def apply_highlights(title, words_to_highlight):
+  """제목 내 존재하는 단어들을 정밀 분석하여 중복 없이 <b> 태그 적용"""
+  if not words_to_highlight:
+    return title
+
+  # 단어 길이 긴 순으로 정리하여 짧은 단어가 긴 단어를 침범하지 않도록 방지
+  unique_words = sorted(list(set(words_to_highlight)), key=len, reverse=True)
+
+  # 치환용 임시 토큰 매핑
+  tokens = {}
+  temp_title = title
+
+  for idx, word in enumerate(unique_words):
+    if word in temp_title:
+      token = f'__HIGHLIGHT_TOKEN_{idx}__'
+      tokens[token] = f'<b>{word}</b>'
+      temp_title = temp_title.replace(word, token)
+
+  # 토큰을 실제 <b> 태그로 복원
+  for token, html_val in tokens.items():
+    temp_title = temp_title.replace(token, html_val)
+
+  return temp_title
+
+
 def evaluate_title(title, search_query=''):
   # 1. 삭제어 검사
   for exclude in EXCLUDE_KEYWORDS:
     if exclude in title:
       return False, f'제외[{exclude}]', title
 
-  highlighted_title = title
-
   # 2. 필수 매칭 키워드 확인 (제목에 직접 존재하는 경우)
   for must in MUST_SEND_KEYWORDS:
     if must in title:
-      highlighted_title = highlighted_title.replace(must, f'<b>{must}</b>')
+      highlighted_title = apply_highlights(title, [must])
       return True, f'🔥 {must}', highlighted_title
 
-  # 3. 제목 내부 키워드 직접 탐색
-  in_title_kw = None
-  for kw in KEYWORDS:
-    if kw in title:
-      in_title_kw = kw
-      break
+  # 3. 제목 내부 키워드 및 검색어 체크
+  found_kws_in_title = [kw for kw in KEYWORDS if kw in title]
+  found_acts_in_title = [act for act in ACTION_KEYWORDS if act in title]
 
-  target_kw = in_title_kw or (search_query if search_query in KEYWORDS else None)
+  # 제목에 직접 없지만 검색 쿼리가 KEYWORDS에 포함된 경우
+  matched_kw = (
+      found_kws_in_title[0]
+      if found_kws_in_title
+      else (search_query if search_query in KEYWORDS else None)
+  )
 
-  if target_kw:
-    matched_act = None
-    for act in ACTION_KEYWORDS:
-      if act in title:
-        matched_act = act
-        break
+  if matched_kw:
+    matched_act = found_acts_in_title[0] if found_acts_in_title else None
 
-    # 제목에 실제 존재하는 키워드만 <b> 강조
-    if in_title_kw and in_title_kw in highlighted_title:
-      highlighted_title = highlighted_title.replace(
-          in_title_kw, f'<b>{in_title_kw}</b>'
-      )
+    # 강조할 단어 목록 수집 (제목에 실제로 존재하는 단어들만)
+    words_to_bold = []
+    words_to_bold.extend(found_kws_in_title)
+    words_to_bold.extend(found_acts_in_title)
 
-    if matched_act and matched_act in highlighted_title:
-      highlighted_title = highlighted_title.replace(
-          matched_act, f'<b>{matched_act}</b>'
-      )
+    highlighted_title = apply_highlights(title, words_to_bold)
 
     # 태그 생성
-    tag_kw = in_title_kw if in_title_kw else target_kw
+    tag_kw = found_kws_in_title[0] if found_kws_in_title else matched_kw
     if matched_act:
       tag = f'{tag_kw}+{matched_act}'
     else:
@@ -475,7 +492,7 @@ schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
 
 if __name__ == '__main__':
   print('=' * 60)
-  print('⚡ [장중 뉴스 속보 봇 - 액션 키워드 노이즈 제거 완료]')
+  print('⚡ [장중 뉴스 속보 봇 - 안전한 위치 기반 다중 키워드 강조 처리 완료]')
   print('✅ 텔레그램 비공개 채널 연동 완료')
   print(f'⏰ 스캔 주기: {SCAN_INTERVAL}초')
   print('=' * 60)
