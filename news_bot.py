@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 import datetime
 from email.utils import parsedate_to_datetime
-import gc  # 메모리 강제 청소용
+import gc
 import os
 import sys
 from threading import Thread
 import time
-import tracebacks
+import traceback
 import urllib.parse
 import warnings
 
@@ -41,9 +41,9 @@ warnings.filterwarnings('ignore', category=XMLParsedAsHTMLWarning)
 # ==========================================
 # ⚙️ [안전성 최적화 설정]
 # ==========================================
-SCAN_INTERVAL = 30  # 30초 주기
-MAX_NEWS_AGE_HOURS = 3  # 최근 3시간 내 기사 수집
-MAX_SEEN_CACHE = 2000  # 중복 저장소 크기 제한 (메모리 과부하 방지)
+SCAN_INTERVAL = 30
+MAX_NEWS_AGE_HOURS = 3
+MAX_SEEN_CACHE = 2000
 
 CONFIG = {
     'TELEGRAM_TOKEN': '8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI',
@@ -52,10 +52,8 @@ CONFIG = {
     'NAVER_CLIENT_SECRET': 'OoG11dubZO',
 }
 
-# 메모리 관리를 위한 리스트 기반 캐시 (FIFO)
 SEEN_NEWS_URLS = []
 
-# 💡 네트워크 커넥션 리크 방지를 위한 세션 객체 생성
 http_session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(
     pool_connections=20, pool_maxsize=20, max_retries=2
@@ -344,12 +342,10 @@ EXCLUDE_KEYWORDS = [
 ]
 
 
-# 🧹 [과부하 방지] 캐시 제어 및 메모리 강제 비우기 함수
 def add_to_seen_urls(url):
   global SEEN_NEWS_URLS
   if url not in SEEN_NEWS_URLS:
     SEEN_NEWS_URLS.append(url)
-  # 2,000개가 넘어가면 오래된 순서대로 잘라내어 메모리 누수 방지
   if len(SEEN_NEWS_URLS) > MAX_SEEN_CACHE:
     SEEN_NEWS_URLS = SEEN_NEWS_URLS[-MAX_SEEN_CACHE:]
 
@@ -584,7 +580,6 @@ def fetch_google_rss():
   return found, sent
 
 
-# 🛡️ [메인 실행부] 에러로 프로그램이 죽지 않도록 방어막 처리
 def run_all_crawlers():
   try:
     n_found, n_sent = fetch_naver_news()
@@ -599,18 +594,16 @@ def run_all_crawlers():
         f'[{now_str}] 정상 스캔 완료 (수신: {tot_found}건 / 전송:'
         f' {tot_sent}건)'
     )
-
-    # 주기적 파이썬 자비지 컬렉터 강제 호출 (메모리 정리)
     gc.collect()
 
   except Exception as e:
     now_str = datetime.datetime.now().strftime('%H:%M:%S')
-    print(f'❌ [{now_str}] 치명적 에러 발생 감지 (프로그램 계속 유지): {e}')
+    print(f'❌ [{now_str}] 스캔 수행 중 예외 발생: {e}')
 
 
 schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
 
-print(f'🛡️ [과부하 대책 적용 완료] 뉴스 봇이 정상적으로 시작되었습니다.')
+print('🛡️ [뉴스 봇 가동 완료] 스캔 시작')
 run_all_crawlers()
 
 while True:
@@ -618,8 +611,7 @@ while True:
     schedule.run_pending()
     time.sleep(1)
   except KeyboardInterrupt:
-    print('사용자에 의해 프로그램이 종료되었습니다.')
     sys.exit()
   except Exception as e:
-    print(f'⚠️ 메인 루프 예외 발생: {e}')
+    print(f'⚠️ 메인 루프 예외: {e}')
     time.sleep(5)
