@@ -24,10 +24,10 @@ MAX_NEWS_AGE_HOURS = 3
 MAX_SEEN_CACHE = 3000
 
 CONFIG = {
-    'TELEGRAM_TOKEN': '8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI',
-    'TELEGRAM_CHAT_ID': '-1003737191924',  # 🎯 비공개 채널 고유 ID
-    'NAVER_CLIENT_ID': 'US7no6__Zw5RdSWWiSfJ',
-    'NAVER_CLIENT_SECRET': 'OoG11dubZO',
+    'TELEGRAM_TOKEN': os.environ.get('TELEGRAM_TOKEN', '8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI'),
+    'TELEGRAM_CHAT_ID': os.environ.get('TELEGRAM_CHAT_ID', '-1003737191924'),  # 비공개 채널 ID
+    'NAVER_CLIENT_ID': os.environ.get('NAVER_CLIENT_ID', 'US7no6__Zw5RdSWWiSfJ'),
+    'NAVER_CLIENT_SECRET': os.environ.get('NAVER_CLIENT_SECRET', 'OoG11dubZO'),
 }
 
 SEEN_NEWS_URLS = []
@@ -41,11 +41,11 @@ http_session.mount('https://', adapter)
 http_session.mount('http://', adapter)
 
 DIRECT_RSS_FEEDS = [
-    {'source': '연합뉴스 속보', 'url': 'https://www.yna.co.kr/rss/news.xml'},
-    {'source': '한국경제 속보', 'url': 'https://www.hankyung.com/feed/news'},
-    {'source': '매일경제 증권', 'url': 'https://www.mk.co.kr/rss/30200030/'},
+    {'source': '연합뉴스', 'url': 'https://www.yna.co.kr/rss/news.xml'},
+    {'source': '한국경제', 'url': 'https://www.hankyung.com/feed/news'},
+    {'source': '매일경제', 'url': 'https://www.mk.co.kr/rss/30200030/'},
     {
-        'source': '이데일리 주요뉴스',
+        'source': '이데일리',
         'url': 'https://rss.edaily.co.kr/edaily_news.xml',
     },
 ]
@@ -361,9 +361,13 @@ def build_message(tag, source_name, raw_title, link):
   now_str = datetime.datetime.now().strftime('%H:%M:%S')
   safe_title = clean_text(raw_title)
 
-  # ⚡️[구글] - [키워드/조합] 형태로 통일된 출력
-  msg = f"⚡️<b>[{source_name}]</b> - <b>[{tag}]</b>\n\n<b>{safe_title}</b>\n\n⏰ {now_str}\n🔗 <a href='{link}'>기사 원문 보기</a>"
-
+  # ⚡️[출처] - [키워드] 형태 포맷팅
+  msg = (
+      f'⚡️<b>[{source_name}]</b> - <b>[{tag}]</b>\n\n'
+      f'<b>{safe_title}</b>\n\n'
+      f'⏰ {now_str}\n'
+      f"🔗 <a href='{link}'>기사 원문 보기</a>"
+  )
   return msg
 
 
@@ -404,7 +408,8 @@ def send_telegram_msg(text):
       elif res.status_code == 429:
         retry_after = res.json().get('parameters', {}).get('retry_after', 5)
         print(
-            f'⏳ [텔레그램 속도 제한] {retry_after}초 대기 후 자동 재시도합니다...'
+            f'⏳ [텔레그램 속도 제한] {retry_after}초 대기 후 자동'
+            ' 재시도합니다...'
         )
         time.sleep(retry_after + 1)
       else:
@@ -577,14 +582,24 @@ def fetch_google_rss():
           add_to_seen_urls(link)
           continue
 
+        # 구글 RSS 특성상 "제목 - 언론사명"으로 들어오는 제목 분리 파싱
+        source_name = '구글'
+        if ' - ' in title:
+          parts = title.rsplit(' - ', 1)
+          display_title = parts[0].strip()
+          media_source = parts[1].strip()
+          source_name = f'구글|{media_source}'
+        else:
+          display_title = title
+
         found += 1
-        is_pass, tag = evaluate_title(title)
+        is_pass, tag = evaluate_title(display_title)
         if is_pass:
-          msg = build_message(tag, '구글', title, link)
+          msg = build_message(tag, source_name, display_title, link)
           send_telegram_msg(msg)
           if not IS_FIRST_RUN:
             now_str = datetime.datetime.now().strftime('%H:%M:%S')
-            print(f'[{now_str}] 🚀 구글 RSS 전송 ({q}): {title}')
+            print(f'[{now_str}] 🚀 구글 RSS 전송 ({q}): {display_title}')
             sent += 1
 
         add_to_seen_urls(link)
@@ -609,7 +624,8 @@ def run_all_crawlers():
 
     if IS_FIRST_RUN:
       print(
-          f'[{now_str}] 🧹 초기 데이터 스위핑 완료 ({tot_found}건 캐시 등록 / 텔레그램 전송 생략)'
+          f'[{now_str}] 🧹 초기 데이터 스위핑 완료 ({tot_found}건 캐시 등록 / 텔레그램'
+          ' 전송 생략)'
       )
       IS_FIRST_RUN = False
     else:
@@ -628,7 +644,7 @@ schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
 
 if __name__ == '__main__':
   print('=' * 60)
-  print('⚡ [완성형 장중 뉴스 속보 봇 가동 - 깔끔 형식을 적용]')
+  print('⚡ [완성형 장중 뉴스 속보 봇 가동 - 안정화 버전]')
   print('✅ 텔레그램 비공개 채널 연동 완료')
   print(f'⏰ 스캔 주기: {SCAN_INTERVAL}초')
   print('=' * 60)
