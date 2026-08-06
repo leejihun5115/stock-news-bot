@@ -148,14 +148,19 @@ def add_to_seen_urls(url):
 
 
 def evaluate_title(title):
+  # 1. 삭제어 확인
   for exclude in EXCLUDE_KEYWORDS:
     if exclude in title:
-      return False, f'제외[{exclude}]'
+      return False, f'제외[{exclude}]', title
 
+  # 2. 필수 매칭 키워드 확인
   for must in MUST_SEND_KEYWORDS:
     if must in title:
-      return True, must
+      # 제목 내 핵심 키워드를 <b> 태그로 강조
+      highlighted_title = title.replace(must, f'<b>{must}</b>')
+      return True, f'🔥 {must}', highlighted_title
 
+  # 3. 주요 키워드 + 액션 키워드 조합 확인
   matched_kw = None
   for kw in KEYWORDS:
     if kw in title:
@@ -163,21 +168,31 @@ def evaluate_title(title):
       break
 
   if matched_kw:
+    matched_act = None
     for act in ACTION_KEYWORDS:
       if act in title:
-        return True, f'{matched_kw}+{act}'
-    return True, matched_kw
+        matched_act = act
+        break
 
-  return False, '관련없음'
+    if matched_act:
+      tag = f'{matched_kw}+{matched_act}'
+      highlighted_title = title.replace(
+          matched_kw, f'<b>{matched_kw}</b>'
+      ).replace(matched_act, f'<b>{matched_act}</b>')
+      return True, tag, highlighted_title
+    else:
+      highlighted_title = title.replace(matched_kw, f'<b>{matched_kw}</b>')
+      return True, matched_kw, highlighted_title
+
+  return False, '관련없음', title
 
 
-def build_message(tag, source_name, raw_title, link):
+def build_message(tag, source_name, highlighted_title, link):
   now_str = datetime.datetime.now().strftime('%H:%M:%S')
-  safe_title = clean_text(raw_title)
 
   msg = (
       f'⚡️<b>[{source_name}]</b> - <b>[{tag}]</b>\n\n'
-      f'<b>{safe_title}</b>\n\n'
+      f'{highlighted_title}\n\n'
       f'⏰ {now_str}\n'
       f"🔗 <a href='{link}'>기사 원문 보기</a>"
   )
@@ -260,10 +275,10 @@ def fetch_naver_news():
           found += 1
 
           clean_t = clean_text(raw_title)
-          is_pass, tag = evaluate_title(clean_t)
+          is_pass, tag, highlighted_title = evaluate_title(clean_t)
 
           if is_pass:
-            msg = build_message(tag, '네이버', clean_t, link)
+            msg = build_message(tag, '네이버', highlighted_title, link)
             send_telegram_msg(msg)
             if not IS_FIRST_RUN:
               now_str = datetime.datetime.now().strftime('%H:%M:%S')
@@ -328,9 +343,9 @@ def fetch_direct_rss():
 
         found += 1
         clean_t = clean_text(title)
-        is_pass, tag = evaluate_title(clean_t)
+        is_pass, tag, highlighted_title = evaluate_title(clean_t)
         if is_pass:
-          msg = build_message(tag, feed['source'], clean_t, link)
+          msg = build_message(tag, feed['source'], highlighted_title, link)
           send_telegram_msg(msg)
           if not IS_FIRST_RUN:
             now_str = datetime.datetime.now().strftime('%H:%M:%S')
@@ -404,9 +419,9 @@ def fetch_google_rss():
 
         found += 1
         clean_t = clean_text(display_title)
-        is_pass, tag = evaluate_title(clean_t)
+        is_pass, tag, highlighted_title = evaluate_title(clean_t)
         if is_pass:
-          msg = build_message(tag, source_name, clean_t, link)
+          msg = build_message(tag, source_name, highlighted_title, link)
           send_telegram_msg(msg)
           if not IS_FIRST_RUN:
             now_str = datetime.datetime.now().strftime('%H:%M:%S')
@@ -455,7 +470,7 @@ schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
 
 if __name__ == '__main__':
   print('=' * 60)
-  print('⚡ [장중 뉴스 속보 봇 - 단어 단위 요약 삭제어 적용 완료]')
+  print('⚡ [장중 뉴스 속보 봇 - 키워드 하이라이트(볼드 강조) 적용 완료]')
   print('✅ 텔레그램 비공개 채널 연동 완료')
   print(f'⏰ 스캔 주기: {SCAN_INTERVAL}초')
   print('=' * 60)
