@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 import datetime
 from email.utils import parsedate_to_datetime
+import gc  # 메모리 강제 청소용
 import os
+import sys
 from threading import Thread
 import time
+import tracebacks
 import urllib.parse
 import warnings
 
@@ -27,7 +30,7 @@ def run():
 
 
 def keep_alive():
-  t = Thread(target=run)
+  t = Thread(target=run, daemon=True)
   t.start()
 
 
@@ -36,14 +39,12 @@ keep_alive()
 warnings.filterwarnings('ignore', category=XMLParsedAsHTMLWarning)
 
 # ==========================================
-# ⚙️ [07:00~16:00 장중 무료 최적화 설정]
+# ⚙️ [안전성 최적화 설정]
 # ==========================================
-SCAN_INTERVAL = 30  # 30초 스캔 (9시간 연속 실행 시 하루 약 21,600회로 네이버 무료 한도 25,000건 준수)
-MAX_NEWS_AGE_HOURS = 3  # 최근 3시간 이내 기사 수집
+SCAN_INTERVAL = 30  # 30초 주기
+MAX_NEWS_AGE_HOURS = 3  # 최근 3시간 내 기사 수집
+MAX_SEEN_CACHE = 2000  # 중복 저장소 크기 제한 (메모리 과부하 방지)
 
-# ==========================================
-# 🔑 [텔레그램 & 네이버 API 키]
-# ==========================================
 CONFIG = {
     'TELEGRAM_TOKEN': '8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI',
     'TELEGRAM_CHAT_ID': '@jh_stock_news',
@@ -51,9 +52,17 @@ CONFIG = {
     'NAVER_CLIENT_SECRET': 'OoG11dubZO',
 }
 
-SEEN_NEWS_URLS = set()
+# 메모리 관리를 위한 리스트 기반 캐시 (FIFO)
+SEEN_NEWS_URLS = []
 
-# 주요 국내 직통 속보 RSS
+# 💡 네트워크 커넥션 리크 방지를 위한 세션 객체 생성
+http_session = requests.Session()
+adapter = requests.adapters.HTTPAdapter(
+    pool_connections=20, pool_maxsize=20, max_retries=2
+)
+http_session.mount('https://', adapter)
+http_session.mount('http://', adapter)
+
 DIRECT_RSS_FEEDS = [
     {'source': '연합뉴스 속보', 'url': 'https://www.yna.co.kr/rss/news.xml'},
     {'source': '한국경제 속보', 'url': 'https://www.hankyung.com/feed/news'},
@@ -64,7 +73,6 @@ DIRECT_RSS_FEEDS = [
     },
 ]
 
-# 검색 쿼리 (20개)
 SEARCH_QUERIES = [
     '속보',
     '특징주',
@@ -88,7 +96,6 @@ SEARCH_QUERIES = [
     '변압기',
 ]
 
-# 🔥 1순위: 즉시 발송 단독/VIP 속보 키워드
 MUST_SEND_KEYWORDS = [
     '단독',
     '속보',
@@ -107,7 +114,6 @@ MUST_SEND_KEYWORDS = [
     '급락',
 ]
 
-# 📌 2순위: 주식/종목 관련 관심 키워드
 KEYWORDS = [
     '삼성',
     'SK',
@@ -163,7 +169,6 @@ KEYWORDS = [
     '나스닥',
 ]
 
-# 🚨 2순위 조합용: 호재/재료 모멘텀 단어
 ACTION_KEYWORDS = list({
     '1위',
     '가능성',
@@ -175,14 +180,11 @@ ACTION_KEYWORDS = list({
     '가치부각',
     '개발',
     '개발성공',
-    '개발中',
-    '개발중',
     '개시',
     '개시결정',
     '거래재개',
     '거론',
     '검토',
-    '검토中',
     '결과',
     '결정',
     '계약',
@@ -190,8 +192,6 @@ ACTION_KEYWORDS = list({
     '공개매각',
     '공급',
     '공급계약',
-    '공급중',
-    '공급中',
     '공동개발',
     '공동투자',
     '공식제안',
@@ -210,7 +210,6 @@ ACTION_KEYWORDS = list({
     '기술이전',
     '납품',
     '논의',
-    '논의중',
     '독점계약',
     '독점공급',
     '독점생산',
@@ -218,7 +217,6 @@ ACTION_KEYWORDS = list({
     '돌풍',
     '러브콜',
     '매각',
-    '매물로',
     '발표',
     '본격',
     '본격화',
@@ -318,7 +316,6 @@ ACTION_KEYWORDS = list({
     '경영참여',
 })
 
-# 🛑 스팸 및 광고성 기사 필터링
 EXCLUDE_KEYWORDS = [
     '스탁론',
     '추천주',
@@ -347,21 +344,25 @@ EXCLUDE_KEYWORDS = [
 ]
 
 
-# ==========================================
-# 🧠 [뉴스 평가 수식/로직]
-# ==========================================
+# 🧹 [과부하 방지] 캐시 제어 및 메모리 강제 비우기 함수
+def add_to_seen_urls(url):
+  global SEEN_NEWS_URLS
+  if url not in SEEN_NEWS_URLS:
+    SEEN_NEWS_URLS.append(url)
+  # 2,000개가 넘어가면 오래된 순서대로 잘라내어 메모리 누수 방지
+  if len(SEEN_NEWS_URLS) > MAX_SEEN_CACHE:
+    SEEN_NEWS_URLS = SEEN_NEWS_URLS[-MAX_SEEN_CACHE:]
+
+
 def evaluate_title(title):
-  # 1. 스팸 단어 포함 시 즉시 버림
   for exclude in EXCLUDE_KEYWORDS:
     if exclude in title:
       return False, f'제외[{exclude}]'
 
-  # 2. 1순위 최우선 키워드 감지 시 발송
   for must in MUST_SEND_KEYWORDS:
     if must in title:
       return True, f'🔥 VIP속보[{must}]'
 
-  # 3. 2순위: (종목/기업) + (호재 재료) 조합 감지 시 발송
   matched_kw = None
   for kw in KEYWORDS:
     if kw in title:
@@ -402,14 +403,11 @@ def send_telegram_msg(text):
       'disable_web_page_preview': False,
   }
   try:
-    requests.post(url, json=payload, timeout=5)
-  except Exception:
-    pass
+    http_session.post(url, json=payload, timeout=5)
+  except Exception as e:
+    print(f'⚠️ [텔레그램 전송 에러]: {e}')
 
 
-# ==========================================
-# 🌐 [3대 수집 엔진: 네이버, 언론사, 구글]
-# ==========================================
 def fetch_naver_news():
   cid = CONFIG['NAVER_CLIENT_ID'].strip()
   csec = CONFIG['NAVER_CLIENT_SECRET'].strip()
@@ -419,7 +417,7 @@ def fetch_naver_news():
   for q in SEARCH_QUERIES:
     url = f'https://openapi.naver.com/v1/search/news.json?query={urllib.parse.quote(q)}&display=15&sort=date'
     try:
-      res = requests.get(url, headers=headers, timeout=5)
+      res = http_session.get(url, headers=headers, timeout=5)
       if res.status_code == 200:
         items = res.json().get('items', [])
         for item in reversed(items):
@@ -437,7 +435,7 @@ def fetch_naver_news():
             continue
 
           if not is_recent_news(pub_date):
-            SEEN_NEWS_URLS.add(link)
+            add_to_seen_urls(link)
             continue
 
           found += 1
@@ -449,10 +447,12 @@ def fetch_naver_news():
             print(f'[{now_str}] 🚀 네이버 속보 전송 ({q}): {title}')
             sent += 1
 
-          SEEN_NEWS_URLS.add(link)
+          add_to_seen_urls(link)
+      elif res.status_code == 429:
+        print('❌ [네이버 API 오류]: 일일 25,000건 한도 초과!')
       time.sleep(0.05)
-    except Exception:
-      pass
+    except Exception as e:
+      print(f'⚠️ [네이버 API 통신 에러]: {e}')
 
   return found, sent
 
@@ -467,7 +467,7 @@ def fetch_direct_rss():
 
   for feed in DIRECT_RSS_FEEDS:
     try:
-      res = requests.get(feed['url'], headers=headers, timeout=5)
+      res = http_session.get(feed['url'], headers=headers, timeout=5)
       if res.status_code != 200:
         continue
 
@@ -499,7 +499,7 @@ def fetch_direct_rss():
           continue
 
         if not is_recent_news(pub_date):
-          SEEN_NEWS_URLS.add(link)
+          add_to_seen_urls(link)
           continue
 
         found += 1
@@ -511,10 +511,10 @@ def fetch_direct_rss():
           print(f"[{now_str}] 🚀 직통 RSS 전송 ({feed['source']}): {title}")
           sent += 1
 
-        SEEN_NEWS_URLS.add(link)
+        add_to_seen_urls(link)
       time.sleep(0.1)
-    except Exception:
-      pass
+    except Exception as e:
+      print(f"⚠️ [직통 RSS 에러 - {feed['source']}]: {e}")
 
   return found, sent
 
@@ -532,7 +532,7 @@ def fetch_google_rss():
     url = f'https://news.google.com/rss/search?q={encoded_q}+when:1h&hl=ko&gl=KR&ceid=KR:ko'
 
     try:
-      res = requests.get(url, headers=headers, timeout=5)
+      res = http_session.get(url, headers=headers, timeout=5)
       if res.status_code != 200:
         continue
 
@@ -564,7 +564,7 @@ def fetch_google_rss():
           continue
 
         if not is_recent_news(pub_date):
-          SEEN_NEWS_URLS.add(link)
+          add_to_seen_urls(link)
           continue
 
         found += 1
@@ -576,44 +576,50 @@ def fetch_google_rss():
           print(f'[{now_str}] 🚀 구글 RSS 전송 ({q}): {title}')
           sent += 1
 
-        SEEN_NEWS_URLS.add(link)
+        add_to_seen_urls(link)
       time.sleep(0.05)
-    except Exception:
-      pass
+    except Exception as e:
+      print(f'⚠️ [구글 RSS 에러]: {e}')
 
   return found, sent
 
 
-# ==========================================
-# 🔄 [통합 실행 루프]
-# ==========================================
+# 🛡️ [메인 실행부] 에러로 프로그램이 죽지 않도록 방어막 처리
 def run_all_crawlers():
-  n_found, n_sent = fetch_naver_news()
-  d_found, d_sent = fetch_direct_rss()
-  g_found, g_sent = fetch_google_rss()
+  try:
+    n_found, n_sent = fetch_naver_news()
+    d_found, d_sent = fetch_direct_rss()
+    g_found, g_sent = fetch_google_rss()
 
-  tot_found = n_found + d_found + g_found
-  tot_sent = n_sent + d_sent + g_sent
+    tot_found = n_found + d_found + g_found
+    tot_sent = n_sent + d_sent + g_sent
 
-  now_str = datetime.datetime.now().strftime('%H:%M:%S')
-  print(
-      f'[{now_str}] 스캔 완료 (수신: {tot_found}건 / 전송:'
-      f' {tot_sent}건)'
-  )
+    now_str = datetime.datetime.now().strftime('%H:%M:%S')
+    print(
+        f'[{now_str}] 정상 스캔 완료 (수신: {tot_found}건 / 전송:'
+        f' {tot_sent}건)'
+    )
 
-  if len(SEEN_NEWS_URLS) > 5000:
-    SEEN_NEWS_URLS.clear()
+    # 주기적 파이썬 자비지 컬렉터 강제 호출 (메모리 정리)
+    gc.collect()
+
+  except Exception as e:
+    now_str = datetime.datetime.now().strftime('%H:%M:%S')
+    print(f'❌ [{now_str}] 치명적 에러 발생 감지 (프로그램 계속 유지): {e}')
 
 
-# 30초 주기 설정
 schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
 
-print(
-    f'⚡ [장중 뉴스 속보 봇 가동 완료] {SCAN_INTERVAL}초 마다'
-    ' 자동 스캔 중...'
-)
+print(f'🛡️ [과부하 대책 적용 완료] 뉴스 봇이 정상적으로 시작되었습니다.')
 run_all_crawlers()
 
 while True:
-  schedule.run_pending()
-  time.sleep(1)
+  try:
+    schedule.run_pending()
+    time.sleep(1)
+  except KeyboardInterrupt:
+    print('사용자에 의해 프로그램이 종료되었습니다.')
+    sys.exit()
+  except Exception as e:
+    print(f'⚠️ 메인 루프 예외 발생: {e}')
+    time.sleep(5)
