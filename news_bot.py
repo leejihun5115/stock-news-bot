@@ -327,3 +327,12 @@ while True:
     except Exception as e:
         print(f"메인 루프 에러 발생: {e}")
         time.sleep(CHECK_INTERVAL)
+
+# 🚀 강제 테스트 전송 (코드 맨 아래 while문 시작하기 전이나 아무 곳에나 한 번 넣고 실행해보기)
+send_telegram_message_with_button(
+    "테스트 뉴스 제목입니다. 봇 정상 작동 확인!", 
+    "https://www.naver.com", 
+    datetime.datetime.now().strftime('%H:%M:%S'), 
+    matched_count=1, 
+    is_exclusive=False, is_breaking=True, is_feature=False, is_us_market=False
+)
