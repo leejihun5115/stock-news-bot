@@ -134,11 +134,11 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
     
     # 🔴 요청사항 반영: 태그와 제목의 불필요한 간격을 붙이고 제목을 강조
     if is_exclusive:
-        prefix_tag = "📌 <b>[단독]</b>"
+        prefix_tag = "📌<b>[단독]</b>"
     elif is_breaking:
-        prefix_tag = "📌 <b>[속보]</b>"
+        prefix_tag = "📌<b>[속보]</b>"
     else:
-        prefix_tag = "📌 <b>[실시간]</b>"
+        prefix_tag = "📌<b>[실시간]</b>"
 
     text_content = (
         f"{prefix_tag} ⏱ <b>{time_str}</b>\n"
