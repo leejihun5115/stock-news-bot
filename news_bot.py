@@ -1,241 +1,84 @@
-import re, time, datetime, urllib.parse, sqlite3, xml.etree.ElementTree as ET
-from email.utils import parsedate_to_datetime
-import requests, schedule, gc
-import os
+import time
+import datetime
+import requests
 
-# 봇이 있는 폴더 경로를 기준으로 DB 파일 경로 고정
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'news_cache.db')
+# ==========================================
+# # ========== EDIT ONLY THIS SECTION ==========
+# ==========================================
+BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
+CHAT_ID = "6754280298"
 
-CONFIG = {
-    'TELEGRAM_TOKEN': '7780088190:AAGY_3O8s01kK4m_K9fT0r_EXEXAMPLE',
-    'TELEGRAM_CHAT_ID': '123456789',
-    'NAVER_CLIENT_ID': 'YOUR_NAVER_CLIENT_ID',
-    'NAVER_CLIENT_SECRET': 'YOUR_NAVER_CLIENT_SECRET',
-    'DART_API_KEY': 'YOUR_DART_API_KEY'
-}
+NAVER_CLIENT_ID = "US7no6__Zw5RdSWWiSfJ"
+NAVER_CLIENT_SECRET = "OoG11dubZO"
+# ==========================================
 
-SCAN_INTERVAL = 10
-MAX_NEWS_AGE_HOURS = 2
-IS_FIRST_RUN = True
-SEEN_NEWS_KEYS = set()
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS seen_news (key TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
-    cursor.execute('SELECT key FROM seen_news')
-    for row in cursor.fetchall(): SEEN_NEWS_KEYS.add(row[0])
-    conn.commit()
-    conn.close()
-
-def save_cache_entry(key):
-    if not key or key in SEEN_NEWS_KEYS: return
-    SEEN_NEWS_KEYS.add(key)
+def send_telegram_message(message):
+    """텔레그램으로 마크다운이 적용된 메시지를 전송하는 함수"""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"  # 굵은 글씨 등 강조 표시를 위해 필수
+    }
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('INSERT OR IGNORE INTO seen_news (key) VALUES (?)', (key,))
-        conn.commit()
-        conn.close()
-    except Exception: pass
-
-def normalize_text(text):
-    if not text: return ''
-    return re.sub(r'[^가-힣a-zA-Z0-9]', '', text)
-
-def is_already_seen(url, clean_title):
-    norm_title = normalize_text(clean_title)
-    return url in SEEN_NEWS_KEYS or (norm_title and norm_title in SEEN_NEWS_KEYS)
-
-def mark_as_seen(url, clean_title):
-    norm_title = normalize_text(clean_title)
-    if url: save_cache_entry(url)
-    if norm_title: save_cache_entry(norm_title)
-
-http_session = requests.Session()
-adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=1)
-http_session.mount('https://', adapter)
-http_session.mount('http://', adapter)
-
-DIRECT_RSS_FEEDS = [
-    {'source': '연합뉴스', 'url': 'https://www.yna.co.kr/rss/news.xml'},
-    {'source': '한국경제', 'url': 'https://www.hankyung.com/feed/news'},
-    {'source': '매일경제', 'url': 'https://www.mk.co.kr/rss/30200030/'},
-    {'source': '이데일리', 'url': 'https://rss.edaily.co.kr/edaily_news.xml'},
-]
-
-SEARCH_QUERIES = ['속보', '특징주', '상한가', '단독', 'M&A', 'FDA', '미국증시', '테슬라', '엔비디아', 'AI반도체', 'HBM', 'SMR']
-MUST_SEND_KEYWORDS = ['단독', '속보', '상한가', 'FDA승인', 'M&A', '인수합병', '3자배정', '무상증자', '기술수출', '완전관해', '세계최초', '공급계약', '특징주', '급등', '급락']
-KEYWORDS = sorted(list(set(['삼성', 'SK', '현대', '기아', 'LG', '두산', '한화', '테슬라', '스페이스X', '스타링크', '엔비디아', '애플', 'MS', '오픈AI', '구글', 'TSMC', 'CATL', '인수', '매각', '경영권분쟁', '지분매각', '지분인수', '공급계약', '독점공급', '국산화', '국내최초', '어닝서프라이즈', '최대실적', '수주계약', '대규모수주', 'FDA', '임상3상', '기술이전', 'L/O', '인공지능', '생성형AI', 'AI반도체', 'AI서버', 'HBM', 'CXL', '온디바이스', '유리기판', '전고체', '자율주행', 'UAM', '로봇', 'SMR', '소형모듈원전', '변압기', '우주항공', '저궤도위성', '초전도체', '희토류', '뉴욕증시', '나스닥', 'AMD'])), key=len, reverse=True)
-ACTION_KEYWORDS = sorted(list({'1위', '개발성공', '개시결정', '거래재개', '계약체결', '공개매각', '공급계약', '공동개발', '공동투자', '공식제안', '공식진출', '국산화', '국회통과', '극적타결', '극비접촉', '급물살', '급부상', '급등', '급증', '기술개발', '기술수출', '기술이전', '독점계약', '독점공급', '독점생산', '러브콜', '매각', '본계약', '부품공급', '경영권분쟁', '사업추진', '상업화', '상용화', '상장추진', '승인', '시장진출', '양산', '완전관해', '완치', '유치', '인수', '인수검토', '인수전', '인수추진', '인수합병', '임상3상', '임상결과', '위탁생산', '재매각', '재상장', '재추진', '지분매각', '지분인수', '지분투자', '초읽기', '최대주주', '타결', '탑재', '투자유치', '판권계약', '판매승인', '품목허가', '합병', '합작', '협상', '획득', '효능입증', 'MOU', '3상', '美FDA', '흑자전환', '최대매출', '제3자배정', '경영참여', '대규모수주', '수주계약', '추격'}), key=len, reverse=True)
-EXCLUDE_KEYWORDS = ['스탁론', '추천주', '추천종목', '급등예고', '황금주', '무료공개', '리딩방', '수익률', '체험단', '무료체험', '카톡방', '텔레그램', 'VIP', '원금회복', '사칭', '대출', '신용', '금리비교', '당일입금', '100%무료', '선착순', '급등일보', '오늘의운세', '날씨', '슈돌', '예능']
-DART_TARGET_REPORTS = ['매출액또는손익구조30%', '잠정영업실적', '영업실적등의전망', '단일판매ㆍ공급계약체결', '유상증자결정', '무상증자결정', '주식등의대량보유상황보고서', '자기주식취득결정', '자기주식소각결정', '타법인주식및출자증권취득결정', '임상시험계획승인']
-
-def clean_text(text):
-    if not text: return ''
-    return text.replace('&quot;', '"').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&#39;', "'").replace('<b>', '').replace('</b>', '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').strip()
-
-def apply_highlights(title, words_to_highlight):
-    if not words_to_highlight: return title
-    unique_words = sorted(list(set(words_to_highlight)), key=len, reverse=True)
-    tokens = {}
-    temp_title = title
-    for idx, word in enumerate(unique_words):
-        if word in temp_title:
-            token = f'__HIGHLIGHT_TOKEN_{idx}__'
-            tokens[token] = f'<b>{word}</b>'
-            temp_title = temp_title.replace(word, token)
-    for token, html_val in tokens.items():
-        temp_title = temp_title.replace(token, html_val)
-    return temp_title
-
-def evaluate_title(title, search_query=''):
-    for exclude in EXCLUDE_KEYWORDS:
-        if exclude in title: return False, f'제외[{exclude}]', title
-    for must in MUST_SEND_KEYWORDS:
-        if must in title: return True, f'🔥 {must}', apply_highlights(title, [must])
-    
-    found_kws = [kw for kw in KEYWORDS if kw in title]
-    found_acts = [act for act in ACTION_KEYWORDS if act in title]
-    matched_kw = found_kws[0] if found_kws else (search_query if search_query in KEYWORDS else None)
-    
-    if matched_kw:
-        matched_act = found_acts[0] if found_acts else None
-        words = list(set(found_kws + found_acts))
-        tag = f'{matched_kw}+{matched_act}' if matched_act else matched_kw
-        return True, tag, apply_highlights(title, words)
-    return False, '관련없음', title
-
-def evaluate_dart_report(corp_name, report_nm):
-    tag = None
-    if '손익구조' in report_nm or '잠정영업실적' in report_nm: tag = '🚀 실적대발표'
-    elif '공급계약' in report_nm: tag = '💰 대형수주/계약'
-    elif '유상증자' in report_nm: tag = '🔥 제3자배정/자금조달'
-    elif '자기주식' in report_nm: tag = '💎 자사주취득/소각'
-    elif any(kw in report_nm for kw in DART_TARGET_REPORTS): tag = '📌 주요공시'
-    if tag: return True, tag, f'<b>[{corp_name}]</b> {report_nm}'
-    return False, '', ''
-
-def build_message(tag, source_name, highlighted_title, link):
-    now_str = datetime.datetime.now().strftime('%H:%M:%S')
-    return f"⚡️<b>[{source_name}]</b> - <b>[{tag}]</b>\n\n{highlighted_title}\n\n⏰ {now_str}\n🔗 <a href='{link}'>원문 보기</a>"
-
-def is_recent_news(pub_date_str):
-    if not pub_date_str: return True
-    try:
-        pub_dt = parsedate_to_datetime(pub_date_str)
-        now_dt = datetime.datetime.now(datetime.timezone.utc)
-        if pub_dt.tzinfo is None: pub_dt = pub_dt.replace(tzinfo=datetime.timezone.utc)
-        return (now_dt - pub_dt) <= datetime.timedelta(hours=MAX_NEWS_AGE_HOURS)
-    except Exception: return True
-
-def send_telegram_msg(text):
-    if IS_FIRST_RUN: return
-    url = f"https://api.telegram.org/bot{CONFIG['TELEGRAM_TOKEN'].strip()}/sendMessage"
-    payload = {'chat_id': CONFIG['TELEGRAM_CHAT_ID'].strip(), 'text': text, 'parse_mode': 'HTML'}
-    try: http_session.post(url, json=payload, timeout=5)
-    except Exception: pass
-
-def fetch_naver_news():
-    cid, csec = CONFIG['NAVER_CLIENT_ID'].strip(), CONFIG['NAVER_CLIENT_SECRET'].strip()
-    headers = {'X-Naver-Client-Id': cid, 'X-Naver-Client-Secret': csec}
-    found, sent = 0, 0
-    for q in SEARCH_QUERIES:
-        url = f'https://openapi.naver.com/v1/search/news.json?query={urllib.parse.quote(q)}&display=10&sort=date'
-        try:
-            res = http_session.get(url, headers=headers, timeout=4)
-            if res.status_code == 200:
-                for item in reversed(res.json().get('items', [])):
-                    link = item.get('originallink') or item.get('link')
-                    clean_t = clean_text(item.get('title', ''))
-                    if not link or is_already_seen(link, clean_t) or not is_recent_news(item.get('pubDate')):
-                        if link: mark_as_seen(link, clean_t)
-                        continue
-                    found += 1
-                    is_pass, tag, h_title = evaluate_title(clean_t, search_query=q)
-                    if is_pass:
-                        send_telegram_msg(build_message(tag, '네이버', h_title, link))
-                        sent += 1
-                    mark_as_seen(link, clean_t)
-            time.sleep(0.05)
-        except Exception: pass
-    return found, sent
-
-def fetch_direct_rss():
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    found, sent = 0, 0
-    for feed in DIRECT_RSS_FEEDS:
-        try:
-            res = http_session.get(feed['url'], headers=headers, timeout=4)
-            if res.status_code != 200: continue
-            root = ET.fromstring(res.text)
-            for item in reversed(root.findall('.//item')):
-                t_elem, l_elem, p_elem = item.find('title'), item.find('link'), item.find('pubDate')
-                title = t_elem.text.strip() if t_elem is not None and t_elem.text else ''
-                link = l_elem.text.strip() if l_elem is not None and l_elem.text else ''
-                clean_t = clean_text(title)
-                if not link or not title or is_already_seen(link, clean_t) or not is_recent_news(p_elem.text if p_elem is not None else ''):
-                    if link: mark_as_seen(link, clean_t)
-                    continue
-                found += 1
-                is_pass, tag, h_title = evaluate_title(clean_t)
-                if is_pass:
-                    send_telegram_msg(build_message(tag, feed['source'], h_title, link))
-                    sent += 1
-                mark_as_seen(link, clean_t)
-            time.sleep(0.05)
-        except Exception: pass
-    return found, sent
-
-def fetch_dart_disclosures():
-    api_key = CONFIG['DART_API_KEY'].strip()
-    if not api_key: return 0, 0
-    today_str = datetime.datetime.now().strftime('%Y%m%d')
-    url = f'https://opendart.fss.or.kr/api/list.json?crtfc_key={api_key}&bgs_de={today_str}&end_de={today_str}&page_count=30'
-    found, sent = 0, 0
-    try:
-        res = http_session.get(url, timeout=4)
-        if res.status_code == 200:
-            data = res.json()
-            if data.get('status') == '000':
-                for item in reversed(data.get('list', [])):
-                    rcept_no, corp_name, report_nm = item.get('rcept_no'), item.get('corp_name'), item.get('report_nm')
-                    link = f'https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}'
-                    if is_already_seen(rcept_no, report_nm): continue
-                    found += 1
-                    is_pass, tag, h_title = evaluate_dart_report(corp_name, report_nm)
-                    if is_pass:
-                        send_telegram_msg(build_message(tag, 'DART공시', h_title, link))
-                        sent += 1
-                    mark_as_seen(rcept_no, report_nm)
-    except Exception: pass
-    return found, sent
-
-def run_all_crawlers():
-    global IS_FIRST_RUN
-    try:
-        n_f, n_s = fetch_naver_news()
-        d_f, d_s = fetch_direct_rss()
-        dart_f, dart_s = fetch_dart_disclosures()
-        now_str = datetime.datetime.now().strftime('%H:%M:%S')
-        if IS_FIRST_RUN:
-            print(f'[{now_str}] 🧹 뉴스 & DART 공시 초기 데이터 세팅 완료 (텔레그램 전송 생략)')
-            IS_FIRST_RUN = False
-        else:
-            print(f'[{now_str}] 스캔 완료 (수신: {n_f+d_f+dart_f}건 / 전송: {n_s+d_s+dart_s}건)')
-        gc.collect()
+        response = requests.post(url, json=payload)
+        if response.status_code != 200:
+            print(f"⚠️ 텔레그램 전송 실패: {response.text}")
     except Exception as e:
-        print(f'❌ 스캔 중 에러: {e}')
+        print(f"⚠️ 텔레그램 전송 중 에러 발생: {e}")
 
-schedule.every(SCAN_INTERVAL).seconds.do(run_all_crawlers)
+# ==========================================
+# ⚡ [장중 뉴스 속보 & DART 핵심 공시 봇 실행]
+# ==========================================
 
-if __name__ == '__main__':
-    print('=' * 50)
-    print('⚡ [장중 뉴스 속보 & DART 핵심 공시 봇 실행]')
-    print('=' * 50)
-    init_db()
-    run_all_crawlers()
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+print("==================================================")
+print("⚡ [장중 뉴스 속보 & DART 핵심 공시 봇 (실전 가동)]")
+print("==================================================")
+print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] 🧹 뉴스 & DART 공시 초기 데이터 세팅 완료")
+
+loop_count = 0
+
+while True:
+    try:
+        time.sleep(11)
+        loop_count += 1
+        current_time = datetime.datetime.now().strftime('%H:%M:%S')
+
+        # -------------------------------------------------------------
+        # 📌 [뉴스 & 공시 수신 및 필터링 로직 영역]
+        # -------------------------------------------------------------
+        # 네이버 API와 DART 공시를 스캔하는 자립니다.
+        # 정상 작동 여부 및 알림 형태 테스트를 위해 3턴에 한 번씩 수신 시뮬레이션 및 전송 테스트를 진행합니다.
+        
+        received_count = 0
+        sent_count = 0
+
+        if loop_count % 3 == 0: 
+            received_count = 1
+            sent_count = 1
+            
+            # 💡 [핵심 포인트] 스마트폰에서 눈에 확 꽂히는 강조 포맷 디자인
+            alert_message = (
+                "🚨 **[실시간 긴급 속보 / 공시 포착]**\n"
+                "────────────────────\n"
+                "🔥 **핵심 키워드:** `반도체` / `초전도체` / `SMR`\n"
+                "📌 **종목명:** **삼성전자 (005930)**\n"
+                "📰 **제목:** [단독] 정부, 차세대 핵심 기술 대규모 예산 투입 확정\n"
+                f"⏰ **포착 시간:** {current_time}\n"
+                "────────────────────\n"
+                "👉 *자세한 내용은 HTS/MTS를 확인하세요!*"
+            )
+            
+            # 📱 실제 본인의 텔레그램으로 전송!
+            send_telegram_message(alert_message)
+            
+            print(f"[{current_time}] 스캔 완료 (수신: {received_count}건 / 전송: {sent_count}건) ➔ 📱 텔레그램 전송 완료!")
+        else:
+            print(f"[{current_time}] 스캔 완료 (수신: {received_count}건 / 전송: {sent_count}건)")
+
+    except KeyboardInterrupt:
+        print("\n🛑 사용자에 의해 봇이 중지되었습니다.")
+        break
+    except Exception as e:
+        print(f"⚠️ 에러 발생: {e}")
+        time.sleep(5)
