@@ -146,11 +146,12 @@ def send_telegram_message_with_button(title, source, matched_keywords_str, news_
     time_display = f"⏱ <b>포착시간: {time_str}</b>\n"
     
     if is_multi:
-        # 다중키워드 포착은 작고 약하게(일반 텍스트), 키워드 자체는 굵고 강력하게 강조
-        header_tag = f"🟡🟡🟡🟡🟡🟡🟡 <span class=\"tg-spoiler\">[다중 키워드 포착]</span> 🟡🟡🟡🟡🟡🟡🟡"
+        # 다중 키워드 포착 시: 파란색 글씨 테마 적용 (HTML 인용/코드 태그 활용 또는 색상 느낌 부여) 및 다중키워드는 약하게, 키워드는 두껍게
+        header_tag = f"🟡🟡🟡🟡🟡🟡🟡 <code>[다중 키워드 포착]</code> 🟡🟡🟡🟡🟡🟡🟡"
         keyword_display = f"🟡 <b>포착된 키워드:</b> <b>{matched_keywords_str}</b>"
     else:
-        header_tag = f"⚡ <b>[실시간 {source} 속보]</b>"
+        # 단독 키워드 포착 시: 빨간색 네모 박스 스타일로 표현
+        header_tag = f"🟥 <b>[단독 키워드 포착]</b> 🟥"
         keyword_display = f"📌 <b>포착된 키워드:</b> <b>{matched_keywords_str}</b>"
 
     text_content = (
@@ -163,7 +164,7 @@ def send_telegram_message_with_button(title, source, matched_keywords_str, news_
         f"━━━━━━━━━━━━━━━━━━━"
     )
     
-    # 🟡 링크 버튼 텍스트를 노란색 이모지와 가시성 높은 스타일로 구성
+    # 🟡 링크 버튼 텍스트 노란색/가시성 강조
     reply_markup = {
         "inline_keyboard": [
             [
