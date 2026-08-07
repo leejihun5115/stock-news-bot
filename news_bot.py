@@ -55,7 +55,7 @@ TOP_KEYWORDS = [
     "국가차원", "국제전자제품박람회(CES)", "국제학회서", "국토부", "국회", "그린수소", "금강산", "금산관광", "한한령", 
     "기후변화", "김해신공항", "긴급사용", "긴급사태", "국가비상사태", "남부내륙철도", "뉴딜사업", "뉴딜정책", "뉴스테이", 
     "다보스", "다보스포럼", "단체관광", "대구공항", "대륙철도", "대망론", "도시재생", "도시재생뉴딜", "도시재생사업", "도시철도", 
-    "두나무", "두자녀", "만에", "무상교복", "무상교육", "무상급식", "미세먼지", "美협상", "방통위", "보안솔루션", "보안시스템", 
+    "두자녀", "만에", "무상교복", "무상교육", "무상급식", "미세먼지", "美협상", "방통위", "보안솔루션", "보안시스템", 
     "보조금", "본회의", "불매운동", "블록체인", "비밀대화", "비밀리", "비밀리접촉", "비밀접촉", "비상사태", "비트코인", 
     "병상대란", "병상부족", "반사이익", "시장", "사드보복", "사물인터넷", "산아제한", "산업부", "산업통상자원부", "산업혁명", 
     "삼계탕", "상용화기술", "새만금", "새만금사업", "센서시장", "셰일가스", "소재공급", "수소", "수소버스", "수소센서", 
@@ -148,28 +148,30 @@ def send_telegram_message_with_button(title, matched_keywords_list, news_url, ti
         else:
             formatted_keywords.append(k)
     
+    # 🔥 요구사항 반영: 앞정에 키워드를 넣고, 뉴스 제목 바로 앞에 노란 네모(🟨) 아이콘 배치
     if is_exclusive:
         text_content = (
             f"{time_display}\n\n"
-            f"🟥 <b>[ 단 독 ]</b>\n\n"
+            f"📌 <b>[ 단 독 긴 급 ]</b>\n\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"📰 <b>{title}</b>\n"
+            f"🟨 <b>{title}</b>\n"
             f"━━━━━━━━━━━━━━━"
         )
     elif is_multi:
         single_keyword_display = formatted_keywords[0] if formatted_keywords else ""
         text_content = (
             f"{time_display}\n\n"
-            f"📌 <i>[ 다 중 키 워 드 ]</i> : {single_keyword_display}\n\n"
+            f"📌 <i>[ 복 합 이 슈 ]</i> : {single_keyword_display}\n\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"📰 <b>{title}</b>\n"
+            f"🟨 <b>{title}</b>\n"
             f"━━━━━━━━━━━━━━━"
         )
     else:
         text_content = (
             f"{time_display}\n\n"
+            f"📌 <b>[ 실 시간 속 보 ]</b>\n\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"📰 <b>{title}</b>\n"
+            f"🟨 <b>{title}</b>\n"
             f"━━━━━━━━━━━━━━━"
         )
 
@@ -227,7 +229,7 @@ def fetch_live_news():
             
     return news_items
 
-print("🚀 [금융 속보 봇 가동 시작 (키워드 매칭 모드 정상 작동)]")
+print("🚀 [금융 속보 봇 가동 시작 (앞정 및 노란 네모 위치 수정 완료)]")
 
 while True:
     try:
@@ -237,7 +239,6 @@ while True:
         for item in live_scans:
             title = item['title']
             
-            # 키워드 매칭 검사
             found_top = [k for k in TOP_KEYWORDS if k in title]
             found_bottom = [k for k in BOTTOM_KEYWORDS if k in title]
             all_matched = list(set(found_top + found_bottom))
