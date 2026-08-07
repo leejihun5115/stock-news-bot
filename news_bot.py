@@ -8,7 +8,7 @@ import requests
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
 
-# 1. 상단 핵심 검색어 목록
+# 1. 상단 핵심 검색어 목록 (기존 내용 완벽 보존 + 핵심 주가 반응 공시/일정 키워드 추가)
 TOP_KEYWORDS = [
     "도심항공모빌리티", "도심항공모빌리티(UAM)", "UAM", "COPD치료신약", "1상", "2상", "3상", "AI", "AI바이러스", "CFDA", 
     "DNA백신", "EMA", "FDA", "FDA로부터", "FDA승인", "FDA신약", "FDA신청이", "FDA에", "FDA에서", "FDA임상", "FDA최초", 
@@ -92,10 +92,13 @@ TOP_KEYWORDS = [
     "석탄가격", "아연", "옥수수", "원자재", "원자재가", "원자재가격이", "원자재인", "콩", "펄프", "펄프가격", "포장지", 
     "폴리실리콘", "황산코발트", "희귀금속", "中양회", "치명률", "투자한", "어닝서프라이즈", "적대적", "시간외거래", "中서", 
     "전고체배터리", "현대", "현대차", "삼성", "더벨", "레이더M", "마켓인", "마켓인사이트", "마켓파워", "인베스트조선", 
-    "[핫!종목]", "핫!종목", "[SP단독]", "[단독]", "단독"
+    "[핫!종목]", "핫!종목", "[SP단독]", "[단독]", "단독",
+    # 💡 [추가된 강력 주가 반응 공시 및 일정 키워드]
+    "무상증자", "유상증자", "제3자배정", "제3자배정유상증자", "흑자전환", "어닝서프라이즈", 
+    "전환사채", "신주인수권부사채", "최대주주변경", "경영권분쟁", "공개매각", "지분매각"
 ]
 
-# 2. 하단 핵심 검색어 목록
+# 2. 하단 핵심 검색어 목록 (기존 내용 완벽 보존)
 BOTTOM_KEYWORDS = [
     "1위", "가능성", "가닥", "가속화", "가시화", "가치", "가치부각", "개발", "개발성공", "개발中", "개발중", "개시", 
     "개시결정", "거래재개", "거론", "검토", "검토中", "결론낸다", "결과", "결정", "계약", "계약체결", "공개매각", "공급", 
@@ -136,61 +139,106 @@ BOTTOM_KEYWORDS = [
 # 중복 방지 저장소 (최신 3000개 유지)
 sent_news_titles = set()
 
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+def send_telegram_photo_with_button(title, source, matched_keywords_str, image_url, news_url, time_str, is_multi):
+    """
+    그림(사진) 파일, 원문 바로가기 버튼, 그리고 키워드 2개 이상 중복 시 노란색/이모지 강조 적용 함수
+    """
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    
+    # 2개 이상 중복 시 눈에 확 띄도록 🟡 노란색 신호 및 강력 강조 타이틀 적용
+    if is_multi:
+        header_tag = f"🚨🔥 <b>[중대형 급등 포착 ★ 다중키워드]</b>"
+        keyword_display = f"🟡 <code>{matched_keywords_str}</code> (강력 주목)"
+    else:
+        header_tag = f"🚨 <b>[실시간 {source} 핵심 포착]</b>"
+        keyword_display = f"<code>{matched_keywords_str}</code>"
+
+    caption = (
+        f"{header_tag}\n"
+        f"────────────────────\n"
+        f"🔥 <b>매칭 키워드:</b> {keyword_display}\n"
+        f"📰 <b>제목:</b> {title}\n"
+        f"⏰ <b>포착 시각:</b> {time_str}\n"
+        f"────────────────────"
+    )
+    
+    # 클릭 시 원문이 바로 열리는 인라인 버튼
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "🔗 뉴스 및 공시 원문 바로가기",
+                    "url": news_url
+                }
+            ]
+        ]
+    }
+    
     payload = {
         "chat_id": CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
+        "photo": image_url,
+        "caption": caption,
+        "parse_mode": "HTML",
+        "reply_markup": reply_markup
     }
+    
     try:
         requests.post(url, json=payload, timeout=5)
     except Exception as e:
         print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] 전송 에러: {e}")
 
-print("⚡ [장중 뉴스 & DART 봇 - 대규모 키워드 필터링 및 30초 불변 루프 가동 시작]")
+print("⚡️ [장중 뉴스 & 핵심 공시 봇 - 이미지, 링크 버튼, 다중 키워드 강력 강조 장착 완료]")
 
 while True:
     try:
         current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
         
-        # 💡 [실전 데이터 수집 영역] 실제 네이버/DART 수신 데이터 연동 지점
+        # 💡 [실전 데이터 수집 영역] 실제 네이버/DART 수신 데이터 연동 지점 (이미지 주소 및 원문 링크 포함)
         live_scans = [
-            {"title": "[단독] 삼성전자, 차세대 반도체 공정 기술 조기 확보", "source": "네이버뉴스"},
-            {"title": "[공시] SK오션플랜트, 대규모 공급계약 체결", "source": "DART공시"}
+            {
+                "title": "[단독] 삼성전자, 차세대 반도체 공정 기술 조기 확보 및 흑자전환 달성", 
+                "source": "네이버뉴스",
+                "image_url": "https://img.news.naver.com/image/example_thumbnail.jpg",
+                "news_url": "https://n.news.naver.com/article/example"
+            },
+            {
+                "title": "[공시] SK오션플랜트, 대규모 공급계약 체결 및 무상증자 결정", 
+                "source": "DART공시",
+                "image_url": "https://dart.fss.or.kr/images/example_thumbnail.jpg",
+                "news_url": "https://dart.fss.or.kr/dsaf001/main.do?rcsNo=example"
+            }
         ]
         
         for item in live_scans:
             title = item['title']
             source = item['source']
+            image_url = item['image_url']
+            news_url = item['news_url']
             
-            # 조건 체크: 상단 키워드 혹은 하단 키워드가 제목에 포함되어 있는지 검사
-            matched_top = next((k for k in TOP_KEYWORDS if k in title), None)
-            matched_bottom = next((k for k in BOTTOM_KEYWORDS if k in title), None)
+            # 제목에 포함된 모든 상단/하단 키워드를 중복 없이 탐색
+            found_top = [k for k in TOP_KEYWORDS if k in title]
+            found_bottom = [k for k in BOTTOM_KEYWORDS if k in title]
+            all_matched = list(set(found_top + found_bottom))
             
-            # 상단 또는 하단 키워드가 잡히고, 아직 전송하지 않은 뉴스인 경우
-            if (matched_top or matched_bottom) and title not in sent_news_titles:
-                active_keyword = matched_top if matched_top else matched_bottom
+            # 키워드가 1개 이상 잡히고, 아직 전송하지 않은 뉴스인 경우
+            if len(all_matched) > 0 and title not in sent_news_titles:
+                matched_keywords_str = ", ".join(all_matched)
                 
-                # 🚨 텔레그램 시각적 강조 포맷
-                alert_message = (
-                    f"🚨 **[실시간 {source} 핵심 포착]**\n"
-                    f"────────────────────\n"
-                    f"🔥 **매칭 키워드:** `{active_keyword}`\n"
-                    f"📰 **제목:** {title}\n"
-                    f"⏰ **포착 시각:** {current_time_str}\n"
-                    f"────────────────────\n"
-                    f"✅ *30초 주기 정밀 필터링 완료*"
+                # 키워드가 2개 이상 중복되었는지 여부 체크
+                is_multi = len(all_matched) >= 2
+                
+                # 이미지 + 텍스트(강조) + 원문 링크 버튼 통합 전송
+                send_telegram_photo_with_button(
+                    title, source, matched_keywords_str, image_url, news_url, current_time_str, is_multi
                 )
                 
-                send_telegram_message(alert_message)
                 sent_news_titles.add(title)
                 
                 # 메모리 관리 (3000개 초과 시 초기화)
                 if len(sent_news_titles) > 3000:
                     sent_news_titles.clear()
                     
-                print(f"[{current_time_str}] 전송 완료 [{active_keyword}]: {title}")
+                print(f"[{current_time_str}] 전송 완료 [키워드: {matched_keywords_str}]: {title}")
 
         # 30초 불변 세팅 유지
         time.sleep(30)
