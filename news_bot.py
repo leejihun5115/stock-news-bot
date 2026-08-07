@@ -139,37 +139,39 @@ BOTTOM_KEYWORDS = [
 
 sent_news_titles = set()
 
-def send_telegram_message_with_button(title, source, matched_keywords_str, news_url, time_str, is_multi):
+def send_telegram_message_with_button(title, source, matched_keywords_list, news_url, time_str, is_multi, is_exclusive):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
-    # [시간 최상단 배치 원칙]
+    # ⏱ [시간 표시 위치 최우선 변경 포인트] 메시지 가장 첫 번째 줄 맨 위
     time_display = f"⏱ <b>포착시간: {time_str}</b>\n"
     
-    if is_multi:
-        # 다중 키워드 포착 시: 파란색 글씨 테마 적용 (HTML 인용/코드 태그 활용 또는 색상 느낌 부여) 및 다중키워드는 약하게, 키워드는 두껍게
-        header_tag = f"🟡🟡🟡🟡🟡🟡🟡 <code>[다중 키워드 포착]</code> 🟡🟡🟡🟡🟡🟡🟡"
-        keyword_display = f"🟡 <b>포착된 키워드:</b> <b>{matched_keywords_str}</b>"
+    # 키워드를 개별적으로 두껍게 강조 처리
+    keywords_str = ", ".join([f"<b>{k}</b>" for k in matched_keywords_list])
+    
+    # 다중 키워드 및 단독 키워드 표현 방식 적용
+    if is_exclusive:
+        header_tag = f"🟥 <b>[단독 키워드]</b> 🟥"
+        keyword_display = f"📌 <i>포착된 키워드:</i> {keywords_str}"
+    elif is_multi:
+        header_tag = f"🟡🟡🟡🟡🟡🟡🟡 <i>다중 키워드 포착</i> 🟡🟡🟡🟡🟡🟡🟡"
+        keyword_display = f"🟡 <i>포착된 키워드:</i> {keywords_str}"
     else:
-        # 단독 키워드 포착 시: 빨간색 네모 박스 스타일로 표현
-        header_tag = f"🟥 <b>[단독 키워드 포착]</b> 🟥"
-        keyword_display = f"📌 <b>포착된 키워드:</b> <b>{matched_keywords_str}</b>"
+        header_tag = f"📌 <b>키워드 포착</b>"
+        keyword_display = f"📌 <i>포착된 키워드:</i> {keywords_str}"
 
     text_content = (
-        f"{time_display}"
-        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"{time_display}\n"
         f"{header_tag}\n\n"
-        f"📢 <b>[뉴스 제목]</b>\n"
-        f"👉 <b>{title}</b>\n\n"
-        f"{keyword_display}\n"
-        f"━━━━━━━━━━━━━━━━━━━"
+        f"📰 <b>{title}</b>\n\n"
+        f"{keyword_display}"
     )
     
-    # 🟡 링크 버튼 텍스트 노란색/가시성 강조
+    # 🔗 뉴스 및 공시 원문 바로가기 버튼
     reply_markup = {
         "inline_keyboard": [
             [
                 {
-                    "text": "🟡 [클릭] 뉴스 및 공시 원문 바로가기",
+                    "text": "🔗 뉴스 및 공시 원문 바로가기 (클릭)",
                     "url": news_url
                 }
             ]
@@ -223,7 +225,7 @@ def fetch_live_news():
 
 print("🚀 [실시간 금융 속보 고속 크롤링 시스템 가동 시작 (30초 간격)]")
 
-# [핵심 원칙 준수] 30초 무한 루프 및 예외 처리 구조
+# 30초 무한 루프 및 예외 처리 구조 (절대 보존)
 while True:
     try:
         current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
@@ -236,12 +238,14 @@ while True:
             all_matched = list(set(found_top + found_bottom))
             
             if len(all_matched) > 0 and title not in sent_news_titles:
-                # 다중 키워드 여부 판단 (2개 이상일 때 is_multi = True)
+                # 다중 키워드 여부 판단 (2개 이상)
                 is_multi_flag = len(all_matched) >= 2
+                # 뉴스 제목에 실제 '단독' 문구가 포함된 경우에만 단독 처리
+                is_exclusive_flag = "단독" in title
                 
                 send_telegram_message_with_button(
-                    title, item['source'], ", ".join(all_matched), 
-                    item['news_url'], current_time_str, is_multi_flag
+                    title, item['source'], all_matched, 
+                    item['news_url'], current_time_str, is_multi_flag, is_exclusive_flag
                 )
                 sent_news_titles.add(title)
                 if len(sent_news_titles) > 3000: 
