@@ -1,14 +1,15 @@
-Set-Content -Path news_bot.py -Value @"
 import re, time, datetime, urllib.parse, sqlite3, xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 import requests, schedule, gc
+import os
 
-# ==========================================
-# [설정] 본인의 키 값으로 변경하세요
-# ==========================================
+# 봇이 있는 폴더 경로를 기준으로 DB 파일 경로 고정
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'news_cache.db')
+
 CONFIG = {
-    'TELEGRAM_TOKEN': 'YOUR_TELEGRAM_TOKEN',
-    'TELEGRAM_CHAT_ID': 'YOUR_TELEGRAM_CHAT_ID',
+    'TELEGRAM_TOKEN': '7780088190:AAGY_3O8s01kK4m_K9fT0r_EXEXAMPLE',
+    'TELEGRAM_CHAT_ID': '123456789',
     'NAVER_CLIENT_ID': 'YOUR_NAVER_CLIENT_ID',
     'NAVER_CLIENT_SECRET': 'YOUR_NAVER_CLIENT_SECRET',
     'DART_API_KEY': 'YOUR_DART_API_KEY'
@@ -20,7 +21,7 @@ IS_FIRST_RUN = True
 SEEN_NEWS_KEYS = set()
 
 def init_db():
-    conn = sqlite3.connect('news_cache.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('CREATE TABLE IF NOT EXISTS seen_news (key TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
     cursor.execute('SELECT key FROM seen_news')
@@ -32,7 +33,7 @@ def save_cache_entry(key):
     if not key or key in SEEN_NEWS_KEYS: return
     SEEN_NEWS_KEYS.add(key)
     try:
-        conn = sqlite3.connect('news_cache.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute('INSERT OR IGNORE INTO seen_news (key) VALUES (?)', (key,))
         conn.commit()
@@ -94,12 +95,14 @@ def evaluate_title(title, search_query=''):
         if exclude in title: return False, f'제외[{exclude}]', title
     for must in MUST_SEND_KEYWORDS:
         if must in title: return True, f'🔥 {must}', apply_highlights(title, [must])
+    
     found_kws = [kw for kw in KEYWORDS if kw in title]
     found_acts = [act for act in ACTION_KEYWORDS if act in title]
     matched_kw = found_kws[0] if found_kws else (search_query if search_query in KEYWORDS else None)
+    
     if matched_kw:
         matched_act = found_acts[0] if found_acts else None
-        words = found_kws + found_acts
+        words = list(set(found_kws + found_acts))
         tag = f'{matched_kw}+{matched_act}' if matched_act else matched_kw
         return True, tag, apply_highlights(title, words)
     return False, '관련없음', title
@@ -236,4 +239,3 @@ if __name__ == '__main__':
     while True:
         schedule.run_pending()
         time.sleep(1)
-"@ -Encoding utf8
