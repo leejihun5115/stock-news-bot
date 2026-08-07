@@ -2,16 +2,15 @@ import time
 import datetime
 import requests
 from bs4 import BeautifulSoup
-import urllib.parse
 
 # ==============================================================================
 # 🎯 [절대 수정 금지] 핵심 검색어 및 30초 무중단 설정 완벽 보존
 # ==============================================================================
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
-CHECK_INTERVAL = 30  # 30초 고정 (네이버 서버 차단 방지)
+CHECK_INTERVAL = 30  # 30초 고정
 
-# TOP_KEYWORDS 리스트 100% 완벽 보존
+# TOP_KEYWORDS 리스트 100% 완벽 보존 (단 하나의 글자도 누락/생략 없음)
 TOP_KEYWORDS = [
     "도심항공모빌리티", "도심항공모빌리티(UAM)", "UAM", "COPD치료신약", "1상", "2상", "3상", "AI", "AI바이러스", "CFDA", 
     "DNA백신", "EMA", "FDA", "FDA로부터", "FDA승인", "FDA신약", "FDA신청이", "FDA에", "FDA에서", "FDA임상", "FDA최초", 
@@ -100,7 +99,7 @@ TOP_KEYWORDS = [
     "전환사채", "신주인수권부사채", "최대주주변경", "경영권분쟁", "공개매각", "지분매각"
 ]
 
-# BOTTOM_KEYWORDS 리스트 100% 완벽 보존
+# BOTTOM_KEYWORDS 리스트 100% 완벽 보존 (단 하나의 글자도 누락/생략 없음)
 BOTTOM_KEYWORDS = [
     "1위", "가능성", "가닥", "가속화", "가시화", "가치", "가치부각", "개발", "개발성공", "개발中", "개발중", "개시", 
     "개시결정", "거래재개", "거론", "검토", "검토中", "결론낸다", "결과", "결정", "계약", "계약체결", "공개매각", "공급", 
@@ -140,95 +139,90 @@ BOTTOM_KEYWORDS = [
 
 sent_news_titles = set()
 
-def send_telegram_photo_with_button(title, source, matched_keywords_str, image_url, news_url, time_str, is_multi):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+def send_telegram_message_with_button(title, source, matched_keywords_str, news_url, time_str, is_multi):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
-    # [최우선 변경 포인트] 포착시간을 가장 상단에 배치
+    # [시간 최상단 배치 원칙]
     time_display = f"⏱ <b>포착시간: {time_str}</b>\n"
     
     if is_multi:
-        header_tag = f"🚨🔥🚨🔥 <b>[★대형 긴급속보 ★ 다중키워드 포착]</b> 🚨🔥🚨🔥"
-        keyword_display = f"🟡 <b>[핵심 키워드]</b> <code>{matched_keywords_str}</code>"
+        # 다중키워드 포착은 작고 약하게(일반 텍스트), 키워드 자체는 굵고 강력하게 강조
+        header_tag = f"🟡🟡🟡🟡🟡🟡🟡 <span class=\"tg-spoiler\">[다중 키워드 포착]</span> 🟡🟡🟡🟡🟡🟡🟡"
+        keyword_display = f"🟡 <b>포착된 키워드:</b> <b>{matched_keywords_str}</b>"
     else:
-        header_tag = f"🚨⚡ <b>[실시간 {source} 긴급속보]</b> ⚡🚨"
-        keyword_display = f"📌 <b>[포착 키워드]</b> <code>{matched_keywords_str}</code>"
+        header_tag = f"⚡ <b>[실시간 {source} 속보]</b>"
+        keyword_display = f"📌 <b>포착된 키워드:</b> <b>{matched_keywords_str}</b>"
 
-    caption = (
+    text_content = (
         f"{time_display}"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"{header_tag}\n\n"
-        f"📢 <b>[속보 내용 요약]</b>\n"
+        f"📢 <b>[뉴스 제목]</b>\n"
         f"👉 <b>{title}</b>\n\n"
         f"{keyword_display}\n"
         f"━━━━━━━━━━━━━━━━━━━"
     )
     
+    # 🟡 링크 버튼 텍스트를 노란색 이모지와 가시성 높은 스타일로 구성
     reply_markup = {
-        "inline_keyboard": [[{"text": "🔗 뉴스 및 공시 원문 바로가기 (클릭)", "url": news_url}]]
+        "inline_keyboard": [
+            [
+                {
+                    "text": "🟡 [클릭] 뉴스 및 공시 원문 바로가기",
+                    "url": news_url
+                }
+            ]
+        ]
     }
     
     payload = {
         "chat_id": CHAT_ID,
-        "photo": image_url,
-        "caption": caption,
+        "text": text_content,
         "parse_mode": "HTML",
-        "reply_markup": reply_markup
+        "reply_markup": reply_markup,
+        "disable_web_page_preview": True
     }
     
     try:
-        requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code != 200:
+            print(f"[텔레그램 API 오류 응답] {response.text}")
     except Exception as e:
-        print(f"전송 에러: {e}")
+        print(f"텔레그램 전송 에러: {e}")
 
 def fetch_live_news():
     news_items = []
-    try:
-        url = "https://finance.naver.com/news/news_list.naver?mode=LSS2D&section_id=101&section_id2=258"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        resp = requests.get(url, headers=headers, timeout=5)
-        
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            for item in soup.select('ul.newsList li, .boardList.type5 tr, .no_a1'):
-                a_tag = item.select_one('a')
-                if a_tag:
+    urls = [
+        "https://finance.naver.com/news/mainnews.naver",
+        "https://finance.naver.com/news/flash.naver"
+    ]
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+    
+    for url in urls:
+        try:
+            resp = requests.get(url, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                for a_tag in soup.find_all('a', href=True):
                     title = a_tag.get_text(strip=True)
-                    href = a_tag.get('href', '')
-                    news_url = "https://finance.naver.com" + href if href.startswith('/') else href
+                    href = a_tag['href']
                     
-                    if title and len(title) > 2:
+                    if ('news' in href or 'article' in href) and len(title) > 5:
+                        news_url = "https://finance.naver.com" + href if href.startswith('/') else href
                         news_items.append({
                             "title": title, 
                             "source": "네이버금융속보", 
-                            "image_url": "https://ssl.pstatic.net/static/news/image/news_default.png", 
                             "news_url": news_url
                         })
-        
-        url_flash = "https://finance.naver.com/news/flash.naver"
-        resp_flash = requests.get(url_flash, headers=headers, timeout=5)
-        if resp_flash.status_code == 200:
-            soup_flash = BeautifulSoup(resp_flash.text, 'html.parser')
-            for item in soup_flash.select('.lss001 li, .section.std_news ul li'):
-                a_tag = item.select_one('a')
-                if a_tag:
-                    title = a_tag.get_text(strip=True)
-                    href = a_tag.get('href', '')
-                    news_url = "https://finance.naver.com" + href if href.startswith('/') else href
-                    if title and len(title) > 2:
-                        news_items.append({
-                            "title": title, 
-                            "source": "증권속보", 
-                            "image_url": "https://ssl.pstatic.net/static/news/image/news_default.png", 
-                            "news_url": news_url
-                        })
-    except Exception as e:
-        print(f"크롤링 중 에러: {e}")
-        
+        except Exception as e:
+            print(f"크롤링 수집 에러 ({url}): {e}")
+            continue
+            
     return news_items
 
 print("🚀 [실시간 금융 속보 고속 크롤링 시스템 가동 시작 (30초 간격)]")
 
-# [절대 준수] 30초 무한 루프
+# [핵심 원칙 준수] 30초 무한 루프 및 예외 처리 구조
 while True:
     try:
         current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
@@ -241,9 +235,12 @@ while True:
             all_matched = list(set(found_top + found_bottom))
             
             if len(all_matched) > 0 and title not in sent_news_titles:
-                send_telegram_photo_with_button(
+                # 다중 키워드 여부 판단 (2개 이상일 때 is_multi = True)
+                is_multi_flag = len(all_matched) >= 2
+                
+                send_telegram_message_with_button(
                     title, item['source'], ", ".join(all_matched), 
-                    item['image_url'], item['news_url'], current_time_str, len(all_matched) >= 2
+                    item['news_url'], current_time_str, is_multi_flag
                 )
                 sent_news_titles.add(title)
                 if len(sent_news_titles) > 3000: 
