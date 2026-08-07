@@ -1,338 +1,36 @@
-import time
-import datetime
-import feedparser
 import requests
+import datetime
 import html
-import re
 
-# ==============================================================================
-# 🎯 설정 영역 (봇 토큰 및 채널 ID)
-# ==============================================================================
+# 🎯 본인의 봇 토큰과 채팅 ID가 정확한지 확인용
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
-CHECK_INTERVAL = 30  # 30초 주기
-DART_API_KEY = "YOUR_DART_API_KEY_HERE"
 
-# ==============================================================================
-# 🇺🇸 미국 증시 및 글로벌 심볼(Ticker)
-# ==============================================================================
-TARGET_KEYWORDS = [
-    "SKHY", "SOXL", "SOXS", "SOXX", "NVDA", "AMD", "ASML", 
-    "MU", "INTC", "TSMC", "AAPL", "TSLA", "MSFT", "GOOG", "AMZN", "META",
-    "TRUMP", "EARNINGS", "FED", "POWELL", "OIL", "WTI", "GOLD", "COPPER"
-]
-
-# ==============================================================================
-# 🇰🇷 국내 키워드 1 그룹 (이 키워드 중 하나만 걸려도 바로 수집됩니다)
-# ==============================================================================
-KEYWORDS_1 = [
-    "도심항공모빌리티", "UAM", "도심항공모빌리티(UAM)", "COPD치료신약", "1상", "2상", "3상", "AI", "AI바이러스", "CFDA", 
-    "DNA백신", "EMA", "FDA", "FDA로부터", "FDA승인", "FDA신약", "FDA신청이", "FDA에", "FDA에서", "FDA임상", "FDA최초", 
-    "IND", "KFDA", "SCD(겸상적혈구병)", "SCD", "SCD시장", "SCD신약", "SFTS", "WHO", "기후변화", "간세포치료제", "검출키트", 
-    "고병원성", "관절치료제", "광우병", "구제역", "글로벌제약사", "건보적용", "기술개발", "기술도입", "기술보유", "기술수출", 
-    "기술이전", "기능적완치", "가치", "나스닥", "나치성", "난임", "난임시술", "뇌졸중치료제", "독점", "디즈니플러스", 
-    "다중암진단키트", "당뇨병신약", "당뇨병치료제", "당뇨시장", "당뇨족부궤양", "대마초", "대폭", "뎅기열", "돼지독감", 
-    "돼지췌도", "돼지콜레라", "렘데시비르", "로열티", "레이더", "라이다", "림프종", "로타바이러스", "마이크로바이옴", "메타버스", 
-    "마리화나", "마약성", "마텔", "만성폐쇄성폐질환", "메르스", "면역원성", "면역항암", "면역항암제", "무릎연골", "미FDA", 
-    "美FDA", "美FDA에", "美FDA임상", "미국FDA", "미국서", "미국식품의약국(FDA)", "미국임상시험", "미국혈액학회(ASH)", 
-    "美엠마우스", "美임상", "美전역", "바이러스", "바이오스타", "바이오시밀러", "바이오인공간", "박테리아", "반응", "배아줄기세포", 
-    "백신", "백신치료제", "버거병", "법정감염병", "변이바이러스", "변종", "병용시", "병용요법", "병용임상", "보톡스", 
-    "복제돼지", "복지부", "복합치료제", "브루셀라", "브루셀라병", "비마약성", "비밀유지계약", "비보존", "사스", "살인진드기", 
-    "삼성메디슨", "상용화", "생산라인", "성체줄기세포", "세계", "세계보건기구(WHO)", "세포치료제", "셀그램", "소두증", "소아임상", 
-    "소아임상계획", "수암연구소", "수입품목허가", "시험생산", "슈퍼바이러스", "슈퍼박테리아", "스마젠", "식약처", "식약처에", 
-    "식약처(CFDA)의", "식품의약국", "식품의약국(FDA)", "식품의약국(FDA)으로부터", "식품의약품안전처로부터", "신경병성통증", 
-    "신경병성통증치료", "신기술", "신물질", "신약", "신약가치", "신약개발", "신약승인신청", "신약후보", "신약후보물질", "신장암", 
-    "신종", "신종플루", "신항암제", "승인신청서", "승인심사", "시판허가", "시험계획", "시장규모", "세계에", "세계에서", 
-    "세계적인", "세계최고", "세계최대", "세계최초", "사상최대", "사상최고", "세계1위", "아기상어", "영업비밀", "아토피치료제", 
-    "안정성", "암세포", "암치료", "암학회서", "야생진드기", "양성반응", "양성판정", "양성환자", "에볼라", "에이즈", "에이즈백신", 
-    "연구결과", "완전해소", "완치", "완치성공", "원천기술", "위생허가", "유럽의약청(EMA)", "유럽의약청", "유럽최대", "유전자", 
-    "유전자가위", "유전자치료", "유전자치료제", "의료용마리화나", "이종장기이식", "이중표적항체", "인간배아", "인간인슐린분비", 
-    "인간장기", "인공간", "인기몰이", "인수의향서", "인슐린돼지", "인슐린분비", "인체적용", "인플루엔자", "인수하나", 
-    "인수합병(M&A)", "인수합병", "인허가", "임상", "임상1b상", "임상1상", "임상2b상", "임상2상", "임상3b상", "임상3상", 
-    "임상3상서", "임상3상에서", "임상3상을", "임상개시", "임상결과", "임상서", "임상승인", "임상시험", "임상시험계획(IND)", 
-    "임상신청", "임상실험", "임상실험서", "임상치료", "임상허가", "임상효과", "입증", "자가면역질환", "자가세포치료제", 
-    "자궁경부상피이형증", "전략적", "전임상", "전임상(동물실험)", "제네릭사", "조기예측", "조기진단", "조류독감", "조현병", 
-    "조현병치료제", "줄기세포", "줄기세포배양액", "줄기세포치료", "줄기세포치료제", "중국식약청", "중국위생허가", "지분투자", 
-    "지카", "지카바이러스", "진단기술", "진단시스템", "진단키트", "진단키트업체", "진드기", "진통제", "차세대항암제", 
-    "체세포", "체세포복제", "체외진단", "체외진단기기", "최대", "최종승인", "최종임상", "최초", "추적임상서", "췌도세포", 
-    "췌장암진단", "췌장암치료제", "치료", "치료백신", "치료법", "치료신약", "치료용", "치료제", "치료효과", "치매복제돼지", 
-    "치매치료", "치매치료제", "카나비스메디칼", "칸나비노이드", "캡슐내시경", "케이스템셀", "코로나19", "코로나바이러스", 
-    "코르노", "콜레라", "키트루다", "탄소중립", "핑크퐁", "탈모시장", "탈모전용화장품", "퇴행성관절염", "파이프라인", 
-    "표적치료", "표적치료제", "표적항암신약", "표적항암제", "필로시스", "필로시스바이오", "항바이러스", "항생제", "항암", 
-    "항암물질", "항암신약", "항암요법", "항암제", "항암진통제", "항체치료제", "항암치료제", "항체", "항체신약", "핵심기술", 
-    "핵심기술인", "핵심부품", "핵심소재", "핵심소재인", "허가가", "허가받아", "허가", "허가승인", "허가신청", "허가취득", 
-    "허셉틴", "허용", "허용검토", "화학요법", "혈당측정기", "형질전환", "황우석", "효과", "효능", "후보물질", "희귀약", 
-    "희귀약품", "희귀약품指定", "美백신", "T세포", "이동통신", "4차산업", "4차산업혁명", "4차산업혁명위원회", "ADAS", 
-    "ADAS기술", "ADAS시스템", "AR", "BNG광구", "CES", "jP모건헬스케어", "LOI", "Lot", "MWC", "OLED", "UAE", "UAE의", 
-    "VR", "구리값", "골판지", "가덕도", "가덕신공항", "가상현실", "가상화폐", "가상화폐거래", "가스관", "가스관사업", "개헌", 
-    "갤럭시", "갤럭시S", "갤럭시노트", "경영권", "경영권분쟁", "경영권양도", "경영참가", "경영참여", "경제사절단", 
-    "고속철도", "공공임대", "공공임대주택", "과기부", "과기정통부", "과학기술", "관광객", "광군제", "교복", "교복시장", 
-    "국가차원", "국제전자제품박람회(CES)", "국제학회서", "국토부", "국회", "그린수소", "금강산", "금산관광", "한한령", 
-    "기후변화", "김해신공항", "긴급사용", "긴급사태", "국가비상사태", "남부내륙철도", "뉴딜사업", "뉴딜정책", "뉴스테이", 
-    "다보스", "다보스포럼", "단체관광", "대구공항", "대륙철도", "대망론", "도시재생", "도시재생뉴딜", "도시재생사업", "도시철도", 
-    "두자녀", "만에", "무상교복", "무상교육", "무상급식", "미세먼지", "美협상", "방통위", "보안솔루션", "보안시스템", 
-    "보조금", "본회의", "불매운동", "블록체인", "비밀대화", "비밀리", "비밀리접촉", "비밀접촉", "비상사태", "비트코인", 
-    "병상대란", "병상부족", "반사이익", "시장", "사드보복", "사물인터넷", "산아제한", "산업부", "산업통상자원부", "산업혁명", 
-    "삼계탕", "상용화기술", "새만금", "새만금사업", "센서시장", "셰일가스", "소재공급", "수소", "수소버스", "수소센서", 
-    "수소수기", "수소연료탱크", "수소차", "수소車", "수소탱크", "수입관세", "스마트공장", "스마트스피커", "스마트시티", 
-    "스마트카", "스마트팩토리", "스마트홈", "스모그", "스피커", "신(新)경제지도", "경제지도", "신공항", "신재생에너지", 
-    "신항만", "신설", "의무화", "양회", "아틱", "알뜰폰", "암호기술", "암호화폐", "양자암호통신", "양자통신", "엑티브X", 
-    "엠에스씨(MSC)", "연료전지", "예비타당성", "예비후보지", "오디오", "원전", "原電", "유럽", "유럽시장", "유아용품", 
-    "음성인식", "음성인식스피커", "음원", "음원공급", "이전후보지", "인공지능", "인공지능칩", "자율주행", "자율주행차", 
-    "자율주행車", "저출산", "전기차", "전면시행", "전면실시", "전면확대", "전자쇼", "전해질", "전고체", "전자화폐", "전작권", 
-    "전장부품", "전장사업", "정부", "정부과제", "정상회담", "정상회의", "제4이동통신", "제4이통", "중기부", "중소벤처기업부", 
-    "증강현실", "지방분권", "철도", "철도망", "철도사업", "철도산업", "첨단운전자보조시스템", "청년주택", "초미세먼지", 
-    "치매국가책임제", "친환경車", "카자흐스탄광구", "카카오", "커넥티드카", "컨소시엄", "컨트롤타워", "타당성조사", "탈원전", 
-    "脫원전", "태양광", "통신비", "통일부", "통합신공항", "평화철도", "풀하우스카지노", "풍력", "프로젝트", "플렉시블", 
-    "필러시장", "필름히터", "하만", "한-러", "한-중", "한•러", "한국참여", "한미FTA", "한반도전쟁", "韓C", "한중합작", 
-    "韓최초", "해수부", "해저가스관", "해저터널", "해킹", "핵추진잠수함", "행정수도", "화장품", "환경규제", "환경부", 
-    "횡단철도", "휴교령", "오늘", "내일", "이번주", "오늘부터", "내일부터", "감사의견", "공급사", "공급업체", "공급자", 
-    "관계사", "규제완화", "기업가치", "매매거래", "매출", "모회사", "무상증자", "미래기업포커스", "법정관리", "보유지분", 
-    "부품", "부품공급", "부품사", "분할계획", "사업권", "순현재가치", "신기술", "신물질", "신사업", "신제품", "업체인수", 
-    "우선협상", "우선협상대상자", "유상증자결정(제3자배정)", "인적분할", "자산매각", "자산재평가", "자회사", "전년대비", 
-    "전년比", "전략적제휴", "제품개발", "존속가치", "종목이슈", "주간사", "주관기관", "주관사업자", "주주가치", "증권신고서(합병)", 
-    "지분가치", "지원과제", "청산가치", "최대실적", "최대유통", "최종입찰서", "출자전환", "판도", "파트너사", "파트너쉽", 
-    "판매허가", "품목허가", "합자기업", "합자회사", "합작", "합작법인", "합작사", "합작투자", "합작회사", "현재가치", "협력사", 
-    "회생계획", "회생절차", "남북", "북한", "北", "南北", "북측", "南제안", "北제안", "김정은", "미국", "美", "DMZ", 
-    "DMZ공원", "DMZ관광", "DMZ평화공원", "DMZ평화벨트", "DMZ한반도생태평화공원", "ICBM", "개성공단", "개성연락사무소", 
-    "경수로", "경제협력", "고위급", "고위급회담", "광물개발", "광물자원", "극동장관", "극비접촉", "금광산관광", "나진-하산", 
-    "남-북-러", "南-北-러", "남북경협", "남북고위급", "남북공동연락사무소", "남북러", "남북정상회담", "남북철도", "남북협력", 
-    "남북회담", "농기계", "농업", "단거리미사일", "대륙간탄도미사일(ICBM)", "대북사업", "대화", "로켓", "미사일", "발사", 
-    "발사체", "방북", "북미대화", "북미회담", "북방정책", "북한제의", "비료", "비무장지대(DMZ)", "비핵화", "사망", "산림복구", 
-    "세계생태평화공원", "수산물", "승인", "新남방정책", "신북방정책", "실무협상", "실무회담", "연락채널", "영변경수로", 
-    "이산가족", "이산가족상봉", "인공지진", "인프라", "인프라사업", "자원개발", "재개", "전력망", "조림사업", "중대보도", 
-    "중태설", "지하자원", "진돗개", "차단", "총살", "추진", "탄도미사일", "통신연락선", "통치", "폐기", "폭파", "피격", 
-    "한국광업공단(가칭)법", "한국광업공단법", "한반도종단철도", "핵실험", "핵추진", "화력발전소", "희토류", "브루셀라균", 
-    "변이변종", "사람간", "사망자", "성관계", "성관계로", "성접촉", "性접촉", "의심신고", "의심환자", "정액서", "첫감염", 
-    "첫발생", "첫사망", "첫환자", "침서", "침에서", "콘돔", "확산", "환자급증", "가격", "가격이", "구리", "금", "농산물", 
-    "석탄가격", "아연", "옥수수", "원자재", "원자재가", "원자재가격이", "원자재인", "콩", "펄프", "펄프가격", "포장지", 
-    "폴리실리콘", "황산코발트", "희귀금속", "中양회", "치명률", "투자한", "어닝서프라이즈", "적대적", "시간외거래", "中서", 
-    "전고체배터리", "현대", "현대차", "삼성",
-    "무상증자", "유상증자", "제3자배정", "제3자배정유상증자", "흑자전환", "어닝서프라이즈", 
-    "전환사채", "신주인수권부사채", "최대주주변경", "경영권분쟁", "공개매각", "지분매각",
-    "이재명", "트럼프", "도널드 트럼프", "젠슨 황", "정의선", "이재용",
-    "엔비디아", "마이크로소프트", "애플", "테슬라", "SK하이닉스", "한미반도체", "LG에너지솔루션", "에코프로", "SK오션플랜트"
-]
-
-EXCLUSIVE_KEYWORDS = [
-    "더벨", "레이더M", "마켓인", "마켓인사이트", "마켓파워", "인베스트조선", 
-    "[핫!종목]", "핫!종목", "[SP단독]", "[단독]", "단독"
-]
-
-UNIQUE_KEYWORDS_1 = set(KEYWORDS_1)
-UNIQUE_EXCLUSIVE = set(EXCLUSIVE_KEYWORDS)
-UNIQUE_TARGET = set(TARGET_KEYWORDS)
-
-# 🌐 신뢰성 높은 국내/외 언론사 RSS 채널 구성
-RSS_URLS = [
-    "https://www.yna.co.kr/rss/economy.xml",
-    "https://rss.hankyung.com/new/hk_news.xml",
-    "https://www.mk.co.kr/rss/30000001/les.xml",
-    "https://news.google.com/rss/search?q=주식+증권+상장+엔비디아+테슬라+삼성전자+SK하이닉스&hl=ko&gl=KR&ceid=KR:ko",
-    "https://news.google.com/rss/search?q=US+Stock+Market+Trump+Earnings+SKHY+Nvidia+Semiconductor+Oil+Gold+Copper&hl=en-US&gl=US&ceid=US:en"
-]
-
-sent_news_titles = set()
-
-# ==============================================================================
-# 🎨 제목 형식 지정 및 키워드 강조 함수
-# ==============================================================================
-def format_title(title):
-    formatted = html.escape(title)
-    
-    # 1. 미국/글로벌 티커 강조
-    for kw in sorted(UNIQUE_TARGET, key=len, reverse=True):
-        if kw.lower() in formatted.lower():
-            pattern = re.compile(re.escape(kw), re.IGNORECASE)
-            formatted = pattern.sub(f"<b><u>⭐{kw}⭐</u></b>", formatted)
-
-    # 2. 국내 상장기업 및 KEYWORDS_1 전체 강조
-    for term in sorted(UNIQUE_KEYWORDS_1, key=len, reverse=True):
-        if len(term) >= 2 and term in formatted:
-            pattern = re.compile(re.escape(term), re.IGNORECASE)
-            formatted = pattern.sub(f"<b><u>⭐{term}⭐</u></b>", formatted)
-            
-    return formatted
-
-# ==============================================================================
-# 🚀 텔레그램 메시지 전송 함수
-# ==============================================================================
-def send_telegram_message_with_button(title, news_url, time_str, matched_count, is_exclusive, is_breaking, is_feature, is_us_market, is_disclosure=False):
+def test_send():
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
-    display_title = format_title(title)
-    
-    if is_disclosure:
-        prefix_tag = "📌<b>[전자공시]</b>"
-        box_icon = "🏢"
-    elif is_exclusive:
-        prefix_tag = "📌<b>[단독]</b>"
-        box_icon = "🟥"
-    elif is_feature:
-        prefix_tag = "📌<b>[특징주]</b>"
-        box_icon = "🌟🌟"
-    elif is_breaking:
-        prefix_tag = "📌<b>[속보]</b>"
-        box_icon = "🟦"
-    elif is_us_market:
-        prefix_tag = "📌<b>[미국/글로벌]</b>"
-        box_icon = "🌐"
-    else:
-        prefix_tag = "📌<b>[실시간]</b>"
-        box_icon = "🟩"
-
     text_content = (
-        f"{prefix_tag} ⏱ <b>{time_str}</b>\n"
+        f"📌<b>[시스템 진단 테스트]</b> ⏱ <b>{datetime.datetime.now().strftime('%H:%M:%S')}</b>\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"{box_icon} {display_title}\n"
+        f"🟩 텔레그램 API 연결 및 전송 정상 작동 확인 완료!\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"<i>(매칭 키워드 수: {matched_count})</i>"
+        f"<i>(이 메시지가 오면 봇 설정은 완벽합니다)</i>"
     )
 
-    reply_markup = {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "👆 <b>[ 🔗 원문 및 상세 확인 바로가기 ]</b> 👆",
-                    "url": news_url
-                }
-            ]
-        ]
-    }
-    
     payload = {
         "chat_id": CHAT_ID,
         "text": text_content,
         "parse_mode": "HTML",
-        "reply_markup": reply_markup,
         "disable_web_page_preview": True
     }
     
     try:
         response = requests.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            print(f"텔레그램 전송 실패 코드: {response.status_code}")
+        print(f"응답 코드: {response.status_code}")
+        print(f"응답 내용: {response.text}")
     except Exception as e:
-        print(f"텔레그램 전송 에러: {e}")
+        print(f"에러 발생: {e}")
 
-# ==============================================================================
-# 🏢 DART 공시 API 수집 함수
-# ==============================================================================
-def fetch_and_filter_dart_disclosures():
-    if not DART_API_KEY or DART_API_KEY == "YOUR_DART_API_KEY_HERE":
-        return []
-        
-    url = f"https://opendart.fss.or.kr/api/list.json?crtfc_key={DART_API_KEY}&page_count=30"
-    qualified_disclosures = []
-    
-    try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("status") == "000":
-                list_items = data.get("list", [])
-                
-                for item in list_items:
-                    report_nm = item.get("report_nm", "")
-                    corp_name = item.get("corp_name", "")
-                    rcept_no = item.get("rcept_no", "")
-                    report_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
-                    
-                    is_earnings_jump = any(kw in report_nm for kw in [
-                        "흑자전환", "적자축소", "어닝서프라이즈", "사상최대", "영업이익 흑자", "당기순이익 흑자"
-                    ])
-                    is_major_contract = ("단일판매" in report_nm or "공급계약" in report_nm or "수주" in report_nm) and \
-                                        any(kw in report_nm for kw in ["30%", "50%", "대규모", "미국", "테슬라", "엔비디아", "SMR", "원전", "배터리"])
-                    is_issue_schedule = any(kw in report_nm for kw in ["풍문", "조회공시", "보도에관해", "향후일정"])
-                    
-                    if is_earnings_jump or is_major_contract or is_issue_schedule:
-                        formatted_title = f"🔥 ⭐[{corp_name}]⭐ {report_nm}"
-                        qualified_disclosures.append({
-                            "title": formatted_title,
-                            "url": report_url
-                        })
-    except Exception as e:
-        print(f"DART API 연동 에러: {e}")
-        
-    return qualified_disclosures
-
-# ==============================================================================
-# 🔄 메인 실행 루프
-# ==============================================================================
-print("🚀 [뉴스 수집 봇 정상 가동 시작 - 필터 조건 완화 완료]")
-
-while True:
-    try:
-        current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
-        
-        # 1. DART 공시 체크
-        disclosures = fetch_and_filter_dart_disclosures()
-        for disc in disclosures:
-            if disc["title"] not in sent_news_titles:
-                send_telegram_message_with_button(
-                    disc["title"], disc["url"], current_time_str, 
-                    matched_count=99, is_exclusive=False, is_breaking=False, 
-                    is_feature=False, is_us_market=False, is_disclosure=True
-                )
-                sent_news_titles.add(disc["title"])
-
-        # 2. 뉴스 RSS 피드 체크
-        for rss_url in RSS_URLS:
-            try:
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
-                response = requests.get(rss_url, headers=headers, timeout=10)
-                
-                if response.status_code == 200:
-                    feed = feedparser.parse(response.content)
-                    
-                    for entry in feed.entries:
-                        title = getattr(entry, 'title', '')
-                        news_url = getattr(entry, 'link', '')
-                        
-                        if not title or title in sent_news_titles:
-                            continue
-                        
-                        title_clean_spaces = title.replace(" ", "")
-                        
-                        is_us_market_flag = any(tk.lower() in title.lower() for tk in UNIQUE_TARGET)
-                        is_exclusive_flag = any(ex_kw in title for ex_kw in UNIQUE_EXCLUSIVE)
-                        
-                        # 💡 [핵심 수정] KEYWORDS_1 또는 TARGET_KEYWORDS 중 하나만 포함되어도 수집되도록 조건 변경
-                        has_kw1 = any(k1 in title for k1 in UNIQUE_KEYWORDS_1)
-                        
-                        if is_us_market_flag or is_exclusive_flag or has_kw1:
-                            matched_keywords = [kw for kw in UNIQUE_KEYWORDS_1.union(UNIQUE_TARGET) if kw.lower() in title.lower()]
-                            match_count = max(len(matched_keywords), 1)
-                            
-                            is_feature_flag = "특징주" in title_clean_spaces
-                            has_word_breaking = "속보" in title
-                            is_breaking_flag = has_word_breaking and not is_exclusive_flag
-                            
-                            send_telegram_message_with_button(
-                                title, news_url, current_time_str, match_count, 
-                                is_exclusive_flag, is_breaking_flag, is_feature_flag, is_us_market_flag, is_disclosure=False
-                            )
-                            
-                            sent_news_titles.add(title)
-                            print(f"[{current_time_str}] 뉴스 전송 완료: {title}")
-                            
-            except Exception as rss_err:
-                continue
-                
-        if len(sent_news_titles) > 5000: 
-            sent_news_titles.clear()
-            
-        time.sleep(CHECK_INTERVAL)
-        
-    except Exception as e:
-        print(f"메인 루프 에러 발생: {e}")
-        time.sleep(CHECK_INTERVAL)
-
-# 🚀 강제 테스트 전송 (코드 맨 아래 while문 시작하기 전이나 아무 곳에나 한 번 넣고 실행해보기)
-send_telegram_message_with_button(
-    "테스트 뉴스 제목입니다. 봇 정상 작동 확인!", 
-    "https://www.naver.com", 
-    datetime.datetime.now().strftime('%H:%M:%S'), 
-    matched_count=1, 
-    is_exclusive=False, is_breaking=True, is_feature=False, is_us_market=False
-)
+if __name__ == "__main__":
+    print("진단 테스트 실행 중...")
+    test_send()
