@@ -6,24 +6,24 @@ import html
 import re
 
 # ==============================================================================
-# 🎯 설정 영역 (봇 토큰 및 채널 ID)
+# 🎯 설정 영역 (봇 토큰 및 채널 ID, DART API 키)
 # ==============================================================================
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
-CHECK_INTERVAL = 30  # 30초 주기
-DART_API_KEY = "YOUR_DART_API_KEY_HERE"
+DART_API_KEY = "YOUR_DART_API_KEY_HERE"  # 본인의 DART API 키를 입력하세요
 
 # ==============================================================================
-# 🇺🇸 미국 증시 및 글로벌 심볼(Ticker)
+# 🇺🇸 미국 증시 및 글로벌 심볼(Ticker) - 전체 복구 완료
 # ==============================================================================
 TARGET_KEYWORDS = [
     "SKHY", "SOXL", "SOXS", "SOXX", "NVDA", "AMD", "ASML", 
     "MU", "INTC", "TSMC", "AAPL", "TSLA", "MSFT", "GOOG", "AMZN", "META",
-    "TRUMP", "EARNINGS", "FED", "POWELL", "OIL", "WTI", "GOLD", "COPPER"
+    "TRUMP", "EARNINGS", "FED", "POWELL", "OIL", "WTI", "GOLD", "COPPER",
+    "COREWAVE", "IONQ", "SMR"
 ]
 
 # ==============================================================================
-# 🇰🇷 국내 키워드 1 그룹
+# 🇰🇷 국내 키워드 1 그룹 - 전체 복구 완료
 # ==============================================================================
 KEYWORDS_1 = [
     "도심항공모빌리티", "UAM", "도심항공모빌리티(UAM)", "COPD치료신약", "1상", "2상", "3상", "AI", "AI바이러스", "CFDA", 
@@ -115,7 +115,7 @@ KEYWORDS_1 = [
 ]
 
 # ==============================================================================
-# 🇰🇷 국내 키워드 2 그룹 (행동·이슈어)
+# 🇰🇷 국내 키워드 2 그룹 (행동·이슈어) - 전체 복구 완료
 # ==============================================================================
 KEYWORDS_2 = [
     "1위", "가능성", "가닥", "가상현실", "가속화", "가시화", "가치", "가치부각", "개발", "개발성공", "개발중", 
@@ -169,23 +169,16 @@ UNIQUE_KEYWORDS_2 = set(KEYWORDS_2)
 UNIQUE_EXCLUSIVE = set(EXCLUSIVE_KEYWORDS)
 UNIQUE_TARGET = set(TARGET_KEYWORDS)
 
-# 🌐 신뢰성 높은 국내/외 언론사 RSS 채널 구성
 RSS_URLS = [
     "https://www.yna.co.kr/rss/economy.xml",
     "https://rss.hankyung.com/new/hk_news.xml",
     "https://www.mk.co.kr/rss/30000001/les.xml",
     "https://news.google.com/rss/search?q=주식+증권+상장+엔비디아+테슬라+삼성전자+SK하이닉스&hl=ko&gl=KR&ceid=KR:ko",
-    "https://news.google.com/rss/search?q=US+Stock+Market+Trump+Earnings+SKHY+Nvidia+Semiconductor+Oil+Gold+Copper&hl=en-US&gl=US&ceid=US:en"
+    "https://news.google.com/rss/search?q=US+Stock+Market+Trump+Earnings+SKHY+Nvidia+Semiconductor+Oil+Gold+Copper+CoreWeave+IonQ+SMR&hl=en-US&gl=US&ceid=US:en"
 ]
 
-sent_news_titles = set()
-
-# ==============================================================================
-# 🎨 제목 형식 지정 및 키워드 강조 함수
-# ==============================================================================
 def format_title(title):
     formatted = html.escape(title)
-    
     for kw in sorted(UNIQUE_TARGET, key=len, reverse=True):
         if kw.lower() in formatted.lower():
             pattern = re.compile(re.escape(kw), re.IGNORECASE)
@@ -195,35 +188,24 @@ def format_title(title):
         if len(term) >= 2 and term in formatted:
             pattern = re.compile(re.escape(term), re.IGNORECASE)
             formatted = pattern.sub(f"<b><u>⭐{term}⭐</u></b>", formatted)
-            
     return formatted
 
-# ==============================================================================
-# 🚀 텔레그램 메시지 전송 함수 (버튼 포함 원본 UI)
-# ==============================================================================
 def send_telegram_message_with_button(title, news_url, time_str, matched_count, is_exclusive, is_breaking, is_feature, is_us_market, is_disclosure=False):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    
     display_title = format_title(title)
     
     if is_disclosure:
-        prefix_tag = "📌<b>[전자공시]</b>"
-        box_icon = "🏢"
+        prefix_tag = "📌<b>[전자공시]</b>"; box_icon = "🏢"
     elif is_exclusive:
-        prefix_tag = "📌<b>[단독]</b>"
-        box_icon = "🟥"
+        prefix_tag = "📌<b>[단독]</b>"; box_icon = "🟥"
     elif is_feature:
-        prefix_tag = "📌<b>[특징주]</b>"
-        box_icon = "🌟🌟"
+        prefix_tag = "📌<b>[특징주]</b>"; box_icon = "🌟🌟"
     elif is_breaking:
-        prefix_tag = "📌<b>[속보]</b>"
-        box_icon = "🟦"
+        prefix_tag = "📌<b>[속보]</b>"; box_icon = "🟦"
     elif is_us_market:
-        prefix_tag = "📌<b>[미국/글로벌]</b>"
-        box_icon = "🌐"
+        prefix_tag = "📌<b>[미국/글로벌]</b>"; box_icon = "🌐"
     else:
-        prefix_tag = "📌<b>[실시간]</b>"
-        box_icon = "🟩"
+        prefix_tag = "📌<b>[실시간]</b>"; box_icon = "🟩"
 
     text_content = (
         f"{prefix_tag} ⏱ <b>{time_str}</b>\n"
@@ -235,12 +217,7 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
 
     reply_markup = {
         "inline_keyboard": [
-            [
-                {
-                    "text": "👆 <b>[ 🔗 원문 및 상세 확인 바로가기 ]</b> 👆",
-                    "url": news_url
-                }
-            ]
+            [{"text": "👆 <b>[ 🔗 원문 및 상세 확인 바로가기 ]</b> 👆", "url": news_url}]
         ]
     }
     
@@ -253,9 +230,7 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
     }
     
     try:
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            print(f"텔레그램 전송 실패 코드: {response.status_code}")
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"텔레그램 전송 에러: {e}")
 
@@ -300,76 +275,61 @@ def fetch_and_filter_dart_disclosures():
         
     return qualified_disclosures
 
-# ==============================================================================
-# 🔄 메인 실행 루프 (원본 2중 조합 필터링 로직)
-# ==============================================================================
-print("🚀 [뉴스 수집 봇 정상 가동 시작 - 원본 2중 키워드 및 UI 완전 복원]")
+def run_bot():
+    print("🚀 [GitHub Actions 전자공시 및 뉴스 수집 실행]")
+    current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
+    sent_news_titles = set()
 
-while True:
-    try:
-        current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
-        
-        # 1. DART 공시 체크
-        disclosures = fetch_and_filter_dart_disclosures()
-        for disc in disclosures:
-            if disc["title"] not in sent_news_titles:
-                send_telegram_message_with_button(
-                    disc["title"], disc["url"], current_time_str, 
-                    matched_count=99, is_exclusive=False, is_breaking=False, 
-                    is_feature=False, is_us_market=False, is_disclosure=True
-                )
-                sent_news_titles.add(disc["title"])
+    # 1. DART 공시 체크
+    disclosures = fetch_and_filter_dart_disclosures()
+    for disc in disclosures:
+        if disc["title"] not in sent_news_titles:
+            send_telegram_message_with_button(
+                disc["title"], disc["url"], current_time_str, 
+                matched_count=99, is_exclusive=False, is_breaking=False, 
+                is_feature=False, is_us_market=False, is_disclosure=True
+            )
+            sent_news_titles.add(disc["title"])
 
-        # 2. 뉴스 RSS 피드 체크
-        for rss_url in RSS_URLS:
-            try:
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
-                response = requests.get(rss_url, headers=headers, timeout=10)
-                
-                if response.status_code == 200:
-                    feed = feedparser.parse(response.content)
-                    
-                    for entry in feed.entries:
-                        title = getattr(entry, 'title', '')
-                        news_url = getattr(entry, 'link', '')
-                        
-                        if not title or title in sent_news_titles:
-                            continue
-                        
-                        title_clean_spaces = title.replace(" ", "")
-                        
-                        is_us_market_flag = any(tk.lower() in title.lower() for tk in UNIQUE_TARGET)
-                        is_exclusive_flag = any(ex_kw in title for ex_kw in UNIQUE_EXCLUSIVE)
-                        
-                        # 💡 원본 핵심 로직: KEYWORDS_1 과 KEYWORDS_2 가 동시에 포함되어야 매칭
-                        has_kw1 = any(k1 in title for k1 in UNIQUE_KEYWORDS_1)
-                        has_kw2 = any(k2 in title for k2 in UNIQUE_KEYWORDS_2)
-                        is_combination_matched = (has_kw1 and has_kw2)
-                        
-                        if is_us_market_flag or is_exclusive_flag or is_combination_matched:
-                            matched_keywords = [kw for kw in UNIQUE_KEYWORDS_1.union(UNIQUE_KEYWORDS_2).union(UNIQUE_TARGET) if kw.lower() in title.lower()]
-                            match_count = len(matched_keywords)
-                            
-                            is_feature_flag = "특징주" in title_clean_spaces
-                            has_word_breaking = "속보" in title
-                            is_breaking_flag = has_word_breaking and not is_exclusive_flag
-                            
-                            send_telegram_message_with_button(
-                                title, news_url, current_time_str, match_count, 
-                                is_exclusive_flag, is_breaking_flag, is_feature_flag, is_us_market_flag, is_disclosure=False
-                            )
-                            
-                            sent_news_titles.add(title)
-                            print(f"[{current_time_str}] 뉴스 전송 완료: {title}")
-                            
-            except Exception as rss_err:
-                continue
-                
-        if len(sent_news_titles) > 5000: 
-            sent_news_titles.clear()
+    # 2. 뉴스 RSS 피드 체크
+    for rss_url in RSS_URLS:
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
+            response = requests.get(rss_url, headers=headers, timeout=10)
             
-        time.sleep(CHECK_INTERVAL)
-        
-    except Exception as e:
-        print(f"메인 루프 에러 발생: {e}")
-        time.sleep(CHECK_INTERVAL)
+            if response.status_code == 200:
+                feed = feedparser.parse(response.content)
+                for entry in feed.entries:
+                    title = getattr(entry, 'title', '')
+                    news_url = getattr(entry, 'link', '')
+                    
+                    if not title or title in sent_news_titles:
+                        continue
+                    
+                    title_clean_spaces = title.replace(" ", "")
+                    is_us_market_flag = any(tk.lower() in title.lower() for tk in UNIQUE_TARGET)
+                    is_exclusive_flag = any(ex_kw in title for ex_kw in UNIQUE_EXCLUSIVE)
+                    
+                    has_kw1 = any(k1 in title for k1 in UNIQUE_KEYWORDS_1)
+                    has_kw2 = any(k2 in title for k2 in UNIQUE_KEYWORDS_2)
+                    is_combination_matched = (has_kw1 and has_kw2)
+                    
+                    if is_us_market_flag or is_exclusive_flag or is_combination_matched:
+                        matched_keywords = [kw for kw in UNIQUE_KEYWORDS_1.union(UNIQUE_KEYWORDS_2).union(UNIQUE_TARGET) if kw.lower() in title.lower()]
+                        match_count = len(matched_keywords)
+                        
+                        is_feature_flag = "특징주" in title_clean_spaces
+                        has_word_breaking = "속보" in title
+                        is_breaking_flag = has_word_breaking and not is_exclusive_flag
+                        
+                        send_telegram_message_with_button(
+                            title, news_url, current_time_str, match_count, 
+                            is_exclusive_flag, is_breaking_flag, is_feature_flag, is_us_market_flag, is_disclosure=False
+                        )
+                        sent_news_titles.add(title)
+        except Exception as e:
+            continue
+    print("✅ [공시 및 뉴스 수집 완료]")
+
+if __name__ == "__main__":
+    run_bot()
