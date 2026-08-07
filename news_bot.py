@@ -4,13 +4,12 @@ import requests
 from bs4 import BeautifulSoup
 
 # ==============================================================================
-# 🎯 [절대 수정 금지] 핵심 검색어 및 30초 무중단 설정 완벽 보존
+# 🎯 설정 영역
 # ==============================================================================
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
 CHECK_INTERVAL = 30  # 30초 고정
 
-# TOP_KEYWORDS 리스트 100% 완벽 보존 (단 하나의 글자도 누락/생략 없음)
 TOP_KEYWORDS = [
     "도심항공모빌리티", "도심항공모빌리티(UAM)", "UAM", "COPD치료신약", "1상", "2상", "3상", "AI", "AI바이러스", "CFDA", 
     "DNA백신", "EMA", "FDA", "FDA로부터", "FDA승인", "FDA신약", "FDA신청이", "FDA에", "FDA에서", "FDA임상", "FDA최초", 
@@ -99,7 +98,6 @@ TOP_KEYWORDS = [
     "전환사채", "신주인수권부사채", "최대주주변경", "경영권분쟁", "공개매각", "지분매각"
 ]
 
-# BOTTOM_KEYWORDS 리스트 100% 완벽 보존 (단 하나의 글자도 누락/생략 없음)
 BOTTOM_KEYWORDS = [
     "1위", "가능성", "가닥", "가속화", "가시화", "가치", "가치부각", "개발", "개발성공", "개발中", "개발중", "개시", 
     "개시결정", "거래재개", "거론", "검토", "검토中", "결론낸다", "결과", "결정", "계약", "계약체결", "공개매각", "공급", 
@@ -139,54 +137,42 @@ BOTTOM_KEYWORDS = [
 
 sent_news_titles = set()
 
-def send_telegram_message_with_button(title, source, matched_keywords_list, news_url, time_str, is_multi, is_exclusive):
+def send_telegram_message_with_button(title, matched_keywords_list, news_url, time_str, is_multi, is_exclusive):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    
-    # 1. 포착시간 최상단 배치
     time_display = f"⏱ <b>포착시간 :</b> {time_str}"
     
-    # 2. 키워드 강조 처리 (사용자 요청 키워드들 및 포착된 핵심 키워드 굵게, 나머지는 가늘게)
     formatted_keywords = []
     for k in matched_keywords_list:
-        if k in ["최대", "금", "美", "수출", "증가", "거래재개", "재개"]:
+        if k in ["최대", "금", "美", "수출", "증가", "거래재개", "재개", "이차전지", "코스피", "코스닥"]:
             formatted_keywords.append(f"<b>{k}</b>")
         else:
             formatted_keywords.append(k)
-    keywords_str = ", ".join(formatted_keywords)
     
-    # 3. 단독 / 다중 / 일반 형식 통일 및 여백/칸 나누기 적용
     if is_exclusive:
-        # 단독은 빨간색 네모 🟥 사용
-        header_tag = f"🟥 <b>[ 단 독 ]</b>"
         text_content = (
             f"{time_display}\n\n"
-            f"{header_tag}\n\n"
+            f"🟥 <b>[ 단 독 ]</b>\n\n"
             f"━━━━━━━━━━━━━━━\n"
             f"📰 <b>{title}</b>\n"
             f"━━━━━━━━━━━━━━━"
         )
     elif is_multi:
-        # 다중 키워드는 파란색 네모 🟦 사용 및 위아래 노란원(🟡), [다중키워드] 작게, 포착된 키워드 하나만 나열
         single_keyword_display = formatted_keywords[0] if formatted_keywords else ""
         text_content = (
             f"{time_display}\n\n"
-            f"<i>[다중키워드]</i> : {single_keyword_display}\n\n"
-            f"🟡🟡🟡🟡🟡🟡🟡\n\n"
-            f"📰 <b>{title}</b>\n\n"
-            f"🟡🟡🟡🟡🟡🟡🟡"
+            f"📌 <i>[ 다 중 키 워 드 ]</i> : {single_keyword_display}\n\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"📰 <b>{title}</b>\n"
+            f"━━━━━━━━━━━━━━━"
         )
     else:
-        # 일반 포착은 파란색 네모 🟦 사용
-        header_tag = f"🟦 <b>[ 속 보 ]</b>"
         text_content = (
             f"{time_display}\n\n"
-            f"{header_tag}\n\n"
             f"━━━━━━━━━━━━━━━\n"
             f"📰 <b>{title}</b>\n"
             f"━━━━━━━━━━━━━━━"
         )
 
-    # 인라인 버튼 (노란색/시인성 강조를 위한 이모지 및 구조 적용)
     reply_markup = {
         "inline_keyboard": [
             [
@@ -207,9 +193,7 @@ def send_telegram_message_with_button(title, source, matched_keywords_list, news
     }
     
     try:
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            print(f"[텔레그램 API 오류 응답] {response.text}")
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"텔레그램 전송 에러: {e}")
 
@@ -238,12 +222,12 @@ def fetch_live_news():
                             "news_url": news_url
                         })
         except Exception as e:
-            print(f"크롤링 수집 에러 ({url}): {e}")
+            print(f"크롤링 에러 ({url}): {e}")
             continue
             
     return news_items
 
-print("🚀 [실시간 금융 속보 고속 크롤링 시스템 가동 시작 (30초 간격)]")
+print("🚀 [금융 속보 봇 가동 시작 (키워드 매칭 모드 정상 작동)]")
 
 while True:
     try:
@@ -252,6 +236,8 @@ while True:
         
         for item in live_scans:
             title = item['title']
+            
+            # 키워드 매칭 검사
             found_top = [k for k in TOP_KEYWORDS if k in title]
             found_bottom = [k for k in BOTTOM_KEYWORDS if k in title]
             all_matched = list(set(found_top + found_bottom))
@@ -261,15 +247,15 @@ while True:
                 is_exclusive_flag = "단독" in title
                 
                 send_telegram_message_with_button(
-                    title, item['source'], all_matched, 
-                    item['news_url'], current_time_str, is_multi_flag, is_exclusive_flag
+                    title, all_matched, item['news_url'], current_time_str, is_multi_flag, is_exclusive_flag
                 )
                 sent_news_titles.add(title)
+                print(f"[{current_time_str}] 전송 완료: {title}")
+                
                 if len(sent_news_titles) > 3000: 
                     sent_news_titles.clear()
-                print(f"[{current_time_str}] [긴급속보 전송 완료] 키워드: {', '.join(all_matched)} | 제목: {title}")
             
         time.sleep(CHECK_INTERVAL)
     except Exception as e:
-        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] 루프 에러 발생: {e}")
+        print(f"루프 에러: {e}")
         time.sleep(CHECK_INTERVAL)
