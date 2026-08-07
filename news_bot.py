@@ -199,7 +199,7 @@ def format_title(title):
     return formatted
 
 # ==============================================================================
-# 🚀 텔레그램 메시지 전송 함수
+# 🚀 텔레그램 메시지 전송 함수 (버튼 포함 원본 UI)
 # ==============================================================================
 def send_telegram_message_with_button(title, news_url, time_str, matched_count, is_exclusive, is_breaking, is_feature, is_us_market, is_disclosure=False):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -301,9 +301,9 @@ def fetch_and_filter_dart_disclosures():
     return qualified_disclosures
 
 # ==============================================================================
-# 🔄 메인 실행 루프 (원본 2중 조합 필터링 로직 완벽 복원)
+# 🔄 메인 실행 루프 (원본 2중 조합 필터링 로직)
 # ==============================================================================
-print("🚀 [뉴스 수집 봇 정상 가동 시작 - 원본 로직 완벽 복원 완료]")
+print("🚀 [뉴스 수집 봇 정상 가동 시작 - 원본 2중 키워드 및 UI 완전 복원]")
 
 while True:
     try:
