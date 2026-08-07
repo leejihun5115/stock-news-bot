@@ -4,13 +4,12 @@ import feedparser
 import requests
 
 # ==============================================================================
-# 🎯 설정 영역 (원본 키워드 전체 통합 완료)
+# 🎯 설정 영역 (원본 키워드 전체 유지)
 # ==============================================================================
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
 CHECK_INTERVAL = 30  # 30초 주기
 
-# 원본의 방대한 키워드 + 주요 인물 및 대형 기업 전체 통합
 FILTER_KEYWORDS = [
     "속보",
     "도심항공모빌리티", "도심항공모빌리티(UAM)", "UAM", "COPD치료신약", "1상", "2상", "3상", "AI", "AI바이러스", "CFDA", 
@@ -98,20 +97,18 @@ FILTER_KEYWORDS = [
     "[핫!종목]", "핫!종목", "[SP단독]", "[단독]", "단독",
     "무상증자", "유상증자", "제3자배정", "제3자배정유상증자", "흑자전환", "어닝서프라이즈", 
     "전환사채", "신주인수권부사채", "최대주주변경", "경영권분쟁", "공개매각", "지분매각",
-    # 추가된 핵심 인물 및 글로벌 주요 기업
     "이재명", "트럼프", "도널드 트럼프", "젠슨 황", "정의선", "이재용",
     "엔비디아", "마이크로소프트", "애플", "테슬라", "SK하이닉스", "한미반도체", "LG에너지솔루션", "에코프로"
 ]
 
-# 중복 키워드 제거
 UNIQUE_KEYWORDS = list(set(FILTER_KEYWORDS))
 
-# 연합뉴스, 한경, 매경 + 네이버 뉴스 RSS 통합
 RSS_URLS = [
     "https://www.yna.co.kr/rss/economy.xml",
     "https://rss.hankyung.com/new/hk_news.xml",
     "https://www.mk.co.kr/rss/30000001/les.xml",
-    "https://news.naver.com/main/rss/rss9.nhn?sid1=101"
+    "https://news.naver.com/main/rss/rss9.nhn?sid1=101",
+    "https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko"
 ]
 
 sent_news_titles = set()
@@ -127,23 +124,29 @@ def highlight_important_terms(text):
             text = text.replace(term, f"<b>🔴 {term}</b>")
     return text
 
-def send_telegram_message_with_button(title, news_url, time_str, matched_count, is_exclusive, is_breaking):
+def send_telegram_message_with_button(title, news_url, time_str, matched_count, is_exclusive, is_breaking, is_feature):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
     highlighted_title = highlight_important_terms(title)
     
-    # 🔴 요청사항 반영: 태그와 제목의 불필요한 간격을 붙이고 제목을 강조
-    if is_exclusive:
+    # 특징주: 진한 황금색 별표(🌟🌟), 단독: 빨간 네모(🟥), 속보: 파란 네모(🟦), 일반: 연두색 네모(🟩)
+    if is_feature:
+        prefix_tag = "📌<b>[특징주]</b>"
+        box_icon = "🌟🌟"
+    elif is_exclusive:
         prefix_tag = "📌<b>[단독]</b>"
+        box_icon = "🟥"
     elif is_breaking:
         prefix_tag = "📌<b>[속보]</b>"
+        box_icon = "🟦"
     else:
         prefix_tag = "📌<b>[실시간]</b>"
+        box_icon = "🟩"
 
     text_content = (
         f"{prefix_tag} ⏱ <b>{time_str}</b>\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"🟨 <b>{highlighted_title}</b>\n"
+        f"{box_icon} <b>{highlighted_title}</b>\n"
         f"━━━━━━━━━━━━━━━\n"
         f"<i>(매칭 키워드: {matched_count}개)</i>"
     )
@@ -174,6 +177,8 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
 
 def fetch_rss_news():
     news_items = []
+    feedparser.USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    
     for rss_url in RSS_URLS:
         try:
             feed = feedparser.parse(rss_url)
@@ -186,7 +191,7 @@ def fetch_rss_news():
             print(f"RSS 파싱 에러 ({rss_url}): {e}")
     return news_items
 
-print("🚀 [통합 뉴스 RSS 봇 가동: 30초 주기, [실시간] 적용 및 레이아웃 최적화 완료]")
+print("🚀 [통합 뉴스 RSS 봇 가동: 특징주(황금별🌟)/단독(빨강)/속보(파랑)/일반(연두) 적용 완료]")
 
 while True:
     try:
@@ -203,14 +208,16 @@ while True:
             
             if has_word_breaking or match_count >= 2:
                 if title not in sent_news_titles:
-                    is_exclusive_flag = "단독" in title.replace(" ", "")
+                    title_clean_spaces = title.replace(" ", "")
+                    is_feature_flag = "특징주" in title_clean_spaces
+                    is_exclusive_flag = "단독" in title_clean_spaces
                     is_breaking_flag = has_word_breaking
                     
                     send_telegram_message_with_button(
-                        title, item['news_url'], current_time_str, match_count, is_exclusive_flag, is_breaking_flag
+                        title, item['news_url'], current_time_str, match_count, is_exclusive_flag, is_breaking_flag, is_feature_flag
                     )
                     sent_news_titles.add(title)
-                    print(f"[{current_time_str}] 전송 완료 (속보여부: {is_breaking_flag}, 매칭 키워드 {match_count}개): {title}")
+                    print(f"[{current_time_str}] 전송 완료 (특징주여부: {is_feature_flag}, 속보여부: {is_breaking_flag}, 매칭 키워드 {match_count}개): {title}")
                     
                     if len(sent_news_titles) > 5000: 
                         sent_news_titles.clear()
