@@ -23,7 +23,7 @@ TARGET_KEYWORDS = [
 ]
 
 # ==============================================================================
-# 🇰🇷 국내 키워드 1 그룹 (이 전체가 이제 전부 굵고 크게 강조됩니다!)
+# 🇰🇷 국내 키워드 1 그룹
 # ==============================================================================
 KEYWORDS_1 = [
     "도심항공모빌리티", "UAM", "도심항공모빌리티(UAM)", "COPD치료신약", "1상", "2상", "3상", "AI", "AI바이러스", "CFDA", 
@@ -166,21 +166,20 @@ UNIQUE_KEYWORDS_2 = set(KEYWORDS_2)
 UNIQUE_EXCLUSIVE = set(EXCLUSIVE_KEYWORDS)
 UNIQUE_TARGET = set(TARGET_KEYWORDS)
 
+# 🛑 [수정] 막힌 네이버 뉴스 RSS를 제거하고, 안정적인 구글 뉴스 및 주요 언론사 RSS로 교체
 RSS_URLS = [
+    "https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko",
     "https://www.yna.co.kr/rss/economy.xml",
     "https://rss.hankyung.com/new/hk_news.xml",
     "https://www.mk.co.kr/rss/30000001/les.xml",
-    "https://news.naver.com/main/rss/rss9.nhn?sid1=101",
-    "https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko",
-    "https://finance.yahoo.com/news/rssindex",
-    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=SKHY,SOXL,SOXX,NVDA,AAPL,TSLA,MSFT,WTI,GC=F,HG=F",
+    "https://news.google.com/rss/search?q=주식+증권+상장+엔비디아+테슬라+삼성전자+SK하이닉스&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=US+Stock+Market+Trump+Earnings+SKHY+Nvidia+Semiconductor+Oil+Gold+Copper&hl=en-US&gl=US&ceid=US:en"
 ]
 
 sent_news_titles = set()
 
 # ==============================================================================
-# 🎨 [핵심 수정] KEYWORDS_1 및 TARGET_KEYWORDS 전체를 확실하게 강조하는 함수
+# 🎨 제목 형식 지정 및 키워드 강조 함수
 # ==============================================================================
 def format_title(title):
     formatted = html.escape(title)
@@ -191,16 +190,16 @@ def format_title(title):
             pattern = re.compile(re.escape(kw), re.IGNORECASE)
             formatted = pattern.sub(f"<b><u>⭐{kw}⭐</u></b>", formatted)
 
-    # 2. 국내 상장기업 및 KEYWORDS_1 전체를 별표 + 밑줄 + 굵게 강조 (긴 단어부터 먼저 매칭)
+    # 2. 국내 상장기업 및 KEYWORDS_1 전체 강조
     for term in sorted(UNIQUE_KEYWORDS_1, key=len, reverse=True):
-        if len(term) >= 2 and term in formatted: # 너무 짧은 한 글자 제외 및 매칭
+        if len(term) >= 2 and term in formatted:
             pattern = re.compile(re.escape(term), re.IGNORECASE)
             formatted = pattern.sub(f"<b><u>⭐{term}⭐</u></b>", formatted)
             
     return formatted
 
 # ==============================================================================
-# 🚀 텔레그램 메시지 전송 함수
+# 🚀 텔레그램 메시지 전송 함수 (에러 방지용 try-except 보강)
 # ==============================================================================
 def send_telegram_message_with_button(title, news_url, time_str, matched_count, is_exclusive, is_breaking, is_feature, is_us_market, is_disclosure=False):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -254,14 +253,19 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
     }
     
     try:
-        requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code != 200:
+            print(f"텔레그램 전송 실패 코드: {response.status_code}, 내용: {response.text}")
     except Exception as e:
-        print(f"텔레그램 전송 에러: {e}")
+        print(f"텔레그램 전송 에러 발생: {e}")
 
 # ==============================================================================
 # 🏢 DART 공시 API 수집 함수
 # ==============================================================================
 def fetch_and_filter_dart_disclosures():
+    if not DART_API_KEY or DART_API_KEY == "YOUR_DART_API_KEY_HERE":
+        return []
+        
     url = f"https://opendart.fss.or.kr/api/list.json?crtfc_key={DART_API_KEY}&page_count=30"
     qualified_disclosures = []
     
@@ -299,12 +303,13 @@ def fetch_and_filter_dart_disclosures():
 # ==============================================================================
 # 🔄 메인 실행 루프
 # ==============================================================================
-print("🚀 [키워드 1 및 상장기업 전체 강조 로직 적용 완료]")
+print("🚀 [뉴스 수집 봇 정상 가동 시작 - RSS 최적화 완료]")
 
 while True:
     try:
         current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
         
+        # 1. DART 공시 체크
         disclosures = fetch_and_filter_dart_disclosures()
         for disc in disclosures:
             if disc["title"] not in sent_news_titles:
@@ -315,45 +320,50 @@ while True:
                 )
                 sent_news_titles.add(disc["title"])
 
+        # 2. 뉴스 RSS 피드 체크 (헤더 속성 추가로 차단 우회)
         for rss_url in RSS_URLS:
             try:
-                feedparser.USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                feed = feedparser.parse(rss_url)
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
+                response = requests.get(rss_url, headers=headers, timeout=10)
                 
-                for entry in feed.entries:
-                    title = getattr(entry, 'title', '')
-                    news_url = getattr(entry, 'link', '')
+                if response.status_code == 200:
+                    feed = feedparser.parse(response.content)
                     
-                    if not title or title in sent_news_titles:
-                        continue
-                    
-                    title_clean_spaces = title.replace(" ", "")
-                    
-                    is_us_market_flag = any(tk.lower() in title.lower() for tk in UNIQUE_TARGET)
-                    is_exclusive_flag = any(ex_kw in title for ex_kw in UNIQUE_EXCLUSIVE)
-                    
-                    has_kw1 = any(k1 in title for k1 in UNIQUE_KEYWORDS_1)
-                    has_kw2 = any(k2 in title for k2 in UNIQUE_KEYWORDS_2)
-                    is_combination_matched = (has_kw1 and has_kw2)
-                    
-                    if is_us_market_flag or is_exclusive_flag or is_combination_matched:
-                        matched_keywords = [kw for kw in UNIQUE_KEYWORDS_1.union(UNIQUE_KEYWORDS_2).union(UNIQUE_TARGET) if kw.lower() in title.lower()]
-                        match_count = len(matched_keywords)
+                    for entry in feed.entries:
+                        title = getattr(entry, 'title', '')
+                        news_url = getattr(entry, 'link', '')
                         
-                        is_feature_flag = "특징주" in title_clean_spaces
-                        has_word_breaking = "속보" in title
-                        is_breaking_flag = has_word_breaking and not is_exclusive_flag
+                        if not title or title in sent_news_titles:
+                            continue
                         
-                        send_telegram_message_with_button(
-                            title, news_url, current_time_str, match_count, 
-                            is_exclusive_flag, is_breaking_flag, is_feature_flag, is_us_market_flag, is_disclosure=False
-                        )
+                        title_clean_spaces = title.replace(" ", "")
                         
-                        sent_news_titles.add(title)
-                        print(f"[{current_time_str}] 뉴스 전송 완료: {title}")
+                        is_us_market_flag = any(tk.lower() in title.lower() for tk in UNIQUE_TARGET)
+                        is_exclusive_flag = any(ex_kw in title for ex_kw in UNIQUE_EXCLUSIVE)
                         
+                        has_kw1 = any(k1 in title for k1 in UNIQUE_KEYWORDS_1)
+                        has_kw2 = any(k2 in title for k2 in UNIQUE_KEYWORDS_2)
+                        is_combination_matched = (has_kw1 and has_kw2)
+                        
+                        if is_us_market_flag or is_exclusive_flag or is_combination_matched:
+                            matched_keywords = [kw for kw in UNIQUE_KEYWORDS_1.union(UNIQUE_KEYWORDS_2).union(UNIQUE_TARGET) if kw.lower() in title.lower()]
+                            match_count = len(matched_keywords)
+                            
+                            is_feature_flag = "특징주" in title_clean_spaces
+                            has_word_breaking = "속보" in title
+                            is_breaking_flag = has_word_breaking and not is_exclusive_flag
+                            
+                            send_telegram_message_with_button(
+                                title, news_url, current_time_str, match_count, 
+                                is_exclusive_flag, is_breaking_flag, is_feature_flag, is_us_market_flag, is_disclosure=False
+                            )
+                            
+                            sent_news_titles.add(title)
+                            print(f"[{current_time_str}] 뉴스 전송 완료: {title}")
+                            
             except Exception as rss_err:
-                print(f"RSS 파싱 에러 상세 ({rss_url}): {rss_err}")
+                # 개별 RSS 에러로 전체 봇이 멈추지 않도록 예외 처리
+                continue
                 
         if len(sent_news_titles) > 5000: 
             sent_news_titles.clear()
@@ -361,5 +371,5 @@ while True:
         time.sleep(CHECK_INTERVAL)
         
     except Exception as e:
-        print(f"메인 루프 에러: {e}")
+        print(f"메인 루프 에러 발생: {e}")
         time.sleep(CHECK_INTERVAL)
