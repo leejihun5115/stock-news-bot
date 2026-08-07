@@ -2,7 +2,12 @@ name: News Bot Auto Run
 
 on:
   schedule:
-    - cron: '*/1 * * * 1-5'
+    # ⏱️ 오후 5시 ~ 새벽 6시 (프리마켓 및 미국장 시간대): 1분마다 실행
+    # (UTC 기준 오전 8시 ~ 오후 21시)
+    - cron: '*/1 8-21 * * 1-5'
+    
+    # ⏱️ 그 외 시간 및 주말: 5분마다 실행
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -10,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
