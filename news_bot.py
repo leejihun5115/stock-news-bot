@@ -292,7 +292,7 @@ def run_bot():
             )
             sent_news_titles.add(disc["title"])
 
-    # 2. 뉴스 RSS 피드 체크
+    # 2. 뉴스 RSS 피드 체크 (조건 완화 버전)
     for rss_url in RSS_URLS:
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
@@ -308,16 +308,20 @@ def run_bot():
                         continue
                     
                     title_clean_spaces = title.replace(" ", "")
-                    is_us_market_flag = any(tk.lower() in title.lower() for tk in UNIQUE_TARGET)
+                    title_lower = title.lower()
+                    
+                    is_us_market_flag = any(tk.lower() in title_lower for tk in UNIQUE_TARGET)
                     is_exclusive_flag = any(ex_kw in title for ex_kw in UNIQUE_EXCLUSIVE)
                     
                     has_kw1 = any(k1 in title for k1 in UNIQUE_KEYWORDS_1)
                     has_kw2 = any(k2 in title for k2 in UNIQUE_KEYWORDS_2)
-                    is_combination_matched = (has_kw1 and has_kw2)
                     
-                    if is_us_market_flag or is_exclusive_flag or is_combination_matched:
-                        matched_keywords = [kw for kw in UNIQUE_KEYWORDS_1.union(UNIQUE_KEYWORDS_2).union(UNIQUE_TARGET) if kw.lower() in title.lower()]
-                        match_count = len(matched_keywords)
+                    # 조합 조건 완화: 타겟 키워드, 단독, 또는 키워드 1이나 2 중 하나만 포함되어도 통과
+                    is_matched = is_us_market_flag or is_exclusive_flag or has_kw1 or has_kw2
+                    
+                    if is_matched:
+                        matched_keywords = [kw for kw in UNIQUE_KEYWORDS_1.union(UNIQUE_KEYWORDS_2).union(UNIQUE_TARGET) if kw.lower() in title_lower]
+                        match_count = max(len(matched_keywords), 1)
                         
                         is_feature_flag = "특징주" in title_clean_spaces
                         has_word_breaking = "속보" in title
