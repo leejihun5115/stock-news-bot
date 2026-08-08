@@ -10,17 +10,20 @@ from flask import Flask, jsonify
 app = Flask(__name__)
 
 # ==============================================================================
-# 🎯 전체 설정 및 키워드 그룹
+# 🎯 회원님 전용 설정 (수정 금지 - 이미 다 맞춰두었습니다)
 # ==============================================================================
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
-DART_API_KEY = os.environ.get("DART_API_KEY")
+# DART API 키는 보안상 환경변수에서 가져옵니다. (없으면 공시만 건너뜀)
+DART_API_KEY = os.environ.get("DART_API_KEY") 
 
 TARGET_KEYWORDS = [
     "SKHY", "SOXL", "SOXS", "SOXX", "NVDA", "AMD", "ASML", 
     "MU", "INTC", "TSMC", "AAPL", "TSLA", "MSFT", "GOOG", "AMZN", "META",
     "TRUMP", "EARNINGS", "FED", "POWELL", "OIL", "WTI", "GOLD", "COPPER",
-    "COREWAVE", "IONQ", "SMR"
+    "COREWAVE", "IONQ", "SMR", "SK오션플랜트", "에코프로", "이재명", "트럼프", "도널드 트럼프", 
+    "젠슨 황", "정의선", "이재용", "엔비디아", "마이크로소프트", "애플", "테슬라", 
+    "SK하이닉스", "한미반도체", "LG에너지솔루션", "삼성전자"
 ]
 
 KEYWORDS_1 = [
@@ -60,8 +63,7 @@ KEYWORDS_1 = [
     "비무장지대", "비핵화", "산림복구", "신남방정책", "신북방정책", "실무협상", "이산가족상봉", "인프라", 
     "자원개발", "전력망", "조림사업", "중대보도", "진단키트", "차단", "추진", "탄도미사일", "통신연락선", "폐기", 
     "폭파", "한반도종단철도", "핵실험", "화력발전소", "희토류", "어닝서프라이즈", "시간외거래", "전고체배터리", 
-    "현대차", "삼성", "제3자배정", "흑자전환", "전환사채", "최대주주변경", "공개매각", "지분매각", "이재명", "트럼프", "도널드 트럼프", "젠슨 황", "정의선", "이재용", "엔비디아", 
-    "마이크로소프트", "애플", "테슬라", "SK하이닉스", "한미반도체", "LG에너지솔루션", "에코프로", "SK오션플랜트"
+    "현대차", "삼성", "제3자배정", "흑자전환", "전환사채", "최대주주변경", "공개매각", "지분매각"
 ]
 
 KEYWORDS_2 = [
@@ -100,12 +102,23 @@ RSS_URLS = [
     "https://www.yna.co.kr/rss/economy.xml",
     "https://rss.hankyung.com/new/hk_news.xml",
     "https://www.mk.co.kr/rss/30000001/les.xml",
-    "https://news.google.com/rss/search?q=주식+증권+상장+엔비디아+테슬라+삼성전자+SK하이닉스&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=주식+증권+상장+엔비디아+테슬라+삼성전자+SK하이닉스+에코프로+SK오션플랜트&hl=ko&gl=KR&ceid=KR:ko",
     "https://news.google.com/rss/search?q=US+Stock+Market+Trump+Earnings+SKHY+Nvidia+Semiconductor+Oil+Gold+Copper+CoreWeave+IonQ+SMR&hl=en-US&gl=US&ceid=US:en"
 ]
 
-# 이미 보낸 뉴스 제목을 저장하는 전역 세트 (서버가 살아있는 동안 유지)
 sent_news_titles = set()
+
+def send_startup_message(mode_name):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": f"🚀 <b>뉴스 알리미 봇 가동 시작!</b>\n(현재 실행 환경: {mode_name})\n\n정상적으로 대기 중입니다. 기사나 공시가 올라오면 알림을 보내드릴게요!",
+        "parse_mode": "HTML"
+    }
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except:
+        pass
 
 def format_title(title):
     formatted = html.escape(title)
@@ -158,20 +171,14 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
         "reply_markup": reply_markup,
         "disable_web_page_preview": True
     }
-    
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"   [전송 에러]: {e}")
+    requests.post(url, json=payload, timeout=10)
 
 def fetch_and_filter_dart_disclosures():
     if not DART_API_KEY:
         return []
-        
     today_str = datetime.datetime.now().strftime('%Y%m%d')
     url = f"https://opendart.fss.or.kr/api/list.json?crtfc_key={DART_API_KEY}&bgn_de={today_str}&page_count=30"
-    qualified_disclosures = []
-    
+    qualified = []
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
@@ -184,19 +191,14 @@ def fetch_and_filter_dart_disclosures():
                     report_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
                     
                     is_earnings_jump = any(kw in report_nm for kw in ["흑자전환", "적자축소", "어닝서프라이즈", "사상최대", "영업이익 흑자", "당기순이익 흑자"])
-                    is_major_contract = ("단일판매" in report_nm or "공급계약" in report_nm or "수주" in report_nm) and \
-                                        any(kw in report_nm for kw in ["30%", "50%", "대규모", "미국", "테슬라", "엔비디아", "SMR", "원전", "배터리"])
+                    is_major_contract = ("단일판매" in report_nm or "공급계약" in report_nm or "수주" in report_nm)
                     is_issue_schedule = any(kw in report_nm for kw in ["풍문", "조회공시", "보도에관해", "향후일정"])
                     
                     if is_earnings_jump or is_major_contract or is_issue_schedule:
-                        qualified_disclosures.append({
-                            "title": f"🔥 ⭐[{corp_name}]⭐ {report_nm}",
-                            "url": report_url
-                        })
-    except Exception:
+                        qualified.append({"title": f"🔥 ⭐[{corp_name}]⭐ {report_nm}", "url": report_url})
+    except:
         pass
-        
-    return qualified_disclosures
+    return qualified
 
 def run_bot_cycle():
     current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
@@ -211,16 +213,15 @@ def run_bot_cycle():
                     is_feature=False, is_us_market=False, is_disclosure=True
                 )
                 sent_news_titles.add(disc["title"])
-    except Exception:
+    except:
         pass
 
     # 2. 뉴스 RSS 체크
     for rss_url in RSS_URLS:
         try:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            response = requests.get(rss_url, headers=headers, timeout=15)
-            if response.status_code == 200:
-                feed = feedparser.parse(response.content)
+            res = requests.get(rss_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+            if res.status_code == 200:
+                feed = feedparser.parse(res.content)
                 for entry in feed.entries:
                     title = getattr(entry, 'title', '')
                     news_url = getattr(entry, 'link', '')
@@ -245,18 +246,36 @@ def run_bot_cycle():
                             "특징주" in title_clean_spaces, is_us_market_flag, is_disclosure=False
                         )
                         sent_news_titles.add(title)
-        except Exception:
+        except:
             continue
 
-# 💡 핵심 웹훅 엔드포인트: 클라우드 스케줄러가 이 주소를 칠 때마다 뉴스를 긁어옵니다.
+# ==============================================================================
+# 💡 실행 로직 (스스로 환경을 파악합니다)
+# ==============================================================================
+
+# 1. 구글 클라우드 런용 엔드포인트
 @app.route("/", methods=["GET", "POST"])
 def trigger_bot():
     try:
         run_bot_cycle()
-        return jsonify({"status": "success", "message": "Bot cycle executed successfully"}), 200
+        return jsonify({"status": "success", "message": "Bot executed!"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# 2. 허브(일반 서버)용 무한 루프
+def run_hub_mode():
+    send_startup_message("허브(Hub) 환경")
+    while True:
+        run_bot_cycle()
+        time.sleep(30)
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    # K_SERVICE 환경 변수는 구글 클라우드 런에만 존재합니다.
+    if "K_SERVICE" in os.environ:
+        # 구글 클라우드 런 환경일 때 (에러 방지 웹서버 모드)
+        send_startup_message("구글 클라우드 런")
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host="0.0.0.0", port=port)
+    else:
+        # 허브 환경일 때 (포트 충돌 없는 백그라운드 모드)
+        run_hub_mode()
