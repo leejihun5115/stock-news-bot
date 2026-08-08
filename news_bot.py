@@ -11,10 +11,10 @@ import os
 # ==============================================================================
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
-DART_API_KEY = os.environ.get("DART_API_KEY")  # GitHub Secrets에서 안전하게 가져오도록 수정 완료
+DART_API_KEY = os.environ.get("DART_API_KEY")
 
 # ==============================================================================
-# 🇺🇸 미국 증시 및 글로벌 심볼(Ticker) - 전체 복구 완료
+# 🇺🇸 미국 증시 및 글로벌 심볼(Ticker)
 # ==============================================================================
 TARGET_KEYWORDS = [
     "SKHY", "SOXL", "SOXS", "SOXX", "NVDA", "AMD", "ASML", 
@@ -24,7 +24,7 @@ TARGET_KEYWORDS = [
 ]
 
 # ==============================================================================
-# 🇰🇷 국내 키워드 1 그룹 - 전체 복구 완료
+# 🇰🇷 국내 키워드 1 그룹
 # ==============================================================================
 KEYWORDS_1 = [
     "도심항공모빌리티", "UAM", "도심항공모빌리티(UAM)", "COPD치료신약", "1상", "2상", "3상", "AI", "AI바이러스", "CFDA", 
@@ -116,7 +116,7 @@ KEYWORDS_1 = [
 ]
 
 # ==============================================================================
-# 🇰🇷 국내 키워드 2 그룹 (행동·이슈어) - 전체 복구 완료
+# 🇰🇷 국내 키워드 2 그룹
 # ==============================================================================
 KEYWORDS_2 = [
     "1위", "가능성", "가닥", "가상현실", "가속화", "가시화", "가치", "가치부각", "개발", "개발성공", "개발중", 
@@ -235,9 +235,6 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
     except Exception as e:
         print(f"텔레그램 전송 에러: {e}")
 
-# ==============================================================================
-# 🏢 DART 공시 API 수집 함수
-# ==============================================================================
 def fetch_and_filter_dart_disclosures():
     if not DART_API_KEY:
         return []
@@ -281,7 +278,6 @@ def run_bot():
     current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
     sent_news_titles = set()
 
-    # 1. DART 공시 체크
     disclosures = fetch_and_filter_dart_disclosures()
     for disc in disclosures:
         if disc["title"] not in sent_news_titles:
@@ -292,7 +288,6 @@ def run_bot():
             )
             sent_news_titles.add(disc["title"])
 
-    # 2. 뉴스 RSS 피드 체크 (조건 완화 버전)
     for rss_url in RSS_URLS:
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
@@ -316,7 +311,6 @@ def run_bot():
                     has_kw1 = any(k1 in title for k1 in UNIQUE_KEYWORDS_1)
                     has_kw2 = any(k2 in title for k2 in UNIQUE_KEYWORDS_2)
                     
-                    # 조합 조건 완화: 타겟 키워드, 단독, 또는 키워드 1이나 2 중 하나만 포함되어도 통과
                     is_matched = is_us_market_flag or is_exclusive_flag or has_kw1 or has_kw2
                     
                     if is_matched:
