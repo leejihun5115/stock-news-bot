@@ -4,13 +4,14 @@ import feedparser
 import requests
 import html
 import re
+import os
 
 # ==============================================================================
 # 🎯 설정 영역 (봇 토큰 및 채널 ID, DART API 키)
 # ==============================================================================
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
-DART_API_KEY = "YOUR_DART_API_KEY_HERE"  # 본인의 DART API 키를 입력하세요
+DART_API_KEY = os.environ.get("DART_API_KEY")  # GitHub Secrets에서 안전하게 가져오도록 수정 완료
 
 # ==============================================================================
 # 🇺🇸 미국 증시 및 글로벌 심볼(Ticker) - 전체 복구 완료
@@ -238,7 +239,7 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
 # 🏢 DART 공시 API 수집 함수
 # ==============================================================================
 def fetch_and_filter_dart_disclosures():
-    if not DART_API_KEY or DART_API_KEY == "YOUR_DART_API_KEY_HERE":
+    if not DART_API_KEY:
         return []
         
     url = f"https://opendart.fss.or.kr/api/list.json?crtfc_key={DART_API_KEY}&page_count=30"
