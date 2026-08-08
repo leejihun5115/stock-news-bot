@@ -2,32 +2,28 @@ name: News Bot Auto Run
 
 on:
   schedule:
-    # ⏱️ 오후 5시 ~ 새벽 6시 (프리마켓 및 미국장 시간대): 1분마다 실행
-    # (UTC 기준 오전 8시 ~ 오후 21시)
-    - cron: '*/1 8-21 * * 1-5'
-    
-    # ⏱️ 그 외 시간 및 주말: 5분마다 실행
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    - cron: '*/1 * * * *'  # 1분마다 실행
+  workflow_dispatch:      # 수동 실행 버튼 활성화
 
 jobs:
-  run-bot:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: 깃허브 코드 가져오기
+      uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+    - name: 파이썬 설정
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
 
-      - name: Install dependencies
-        run: |
-          pip install requests feedparser
+    - name: 필요한 라이브러리 설치
+      run: |
+        pip install feedparser requests
 
-      - name: Run News Bot
-        env:
-          DART_API_KEY: ${{ secrets.DART_API_KEY }}
-        run: |
-          python news_bot.py
+    - name: 봇 실행
+      env:
+        DART_API_KEY: ${{ secrets.DART_API_KEY }}
+      run: |
+        python news_bot.py
