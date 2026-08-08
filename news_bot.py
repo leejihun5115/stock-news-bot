@@ -143,7 +143,6 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
         f"<i>(매칭 키워드 수: {matched_count})</i>"
     )
 
-    # 💡 버튼 텍스트의 HTML 태그가 그대로 노출되지 않도록 수정됨
     reply_markup = {
         "inline_keyboard": [
             [{"text": "👆 [ 🔗 원문 및 상세 확인 바로가기 ] 👆", "url": news_url}]
@@ -248,9 +247,10 @@ def run_bot_cycle(sent_news_titles):
             continue
 
 def background_loop():
-    print("🚀 실시간 뉴스 감시 백그라운드 루프 시작")
+    print("🚀 실시간 뉴스 및 공시 감시 백그라운드 루프 시작")
     sent_news_titles = set()
     
+    # 초기 기사 수집 (중복 발송 방지)
     for rss_url in RSS_URLS:
         try:
             res = requests.get(rss_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
@@ -269,14 +269,17 @@ def background_loop():
             print(f"Loop error: {e}")
         time.sleep(30)
 
+# 웹 서버 라우트 (구글 클라우드 런 헬스체크 및 허브용 엔드포인트)
 @app.route("/", methods=["GET", "POST"])
 def health_check():
-    return "News Bot is running live!", 200
+    return "Integrated News & Hub Bot is running live!", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     
+    # 백그라운드 감시 스레드 실행
     t = threading.Thread(target=background_loop, daemon=True)
     t.start()
 
+    # Flask 웹 서버 실행
     app.run(host="0.0.0.0", port=port)
