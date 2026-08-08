@@ -1,12 +1,17 @@
+import os
+import time
+import threading
 import datetime
 import feedparser
 import requests
 import html
 import re
-import os
+from flask import Flask
+
+app = Flask(__name__)
 
 # ==============================================================================
-# 🎯 전체 설정 및 키워드 그룹 (원본 유지)
+# 🎯 전체 설정 및 키워드 그룹
 # ==============================================================================
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
@@ -45,7 +50,7 @@ KEYWORDS_1 = [
     "보조금", "블록체인", "비트코인", "반사이익", "사드보복", "사물인터넷", "산업통상자원부", "새만금", "수소", 
     "수소버스", "수소차", "스마트공장", "스마트시티", "스마트카", "스마트팩토리", "스마트홈", "신공항", "신재생에너지", 
     "양자통신", "연료전지", "예비타당성", "원전", "유럽", "음성인식", "인공지능", "자율주행", "자율주행차", "저출산", 
-    "전기차", "전고체", "정부과제", "정상회담", "중기부", "증강현실", "철도", "청년주택", "초미세먼지", "탈원전", 
+    "전기차", "전고체", "정부과제", "정상회담", "중기부", "증시상장", "철도", "청년주택", "초미세먼지", "탈원전", 
     "태양광", "통신비", "통일부", "풍력", "프로젝트", "플렉시블", "하만", "한미FTA", "한반도", "해저터널", "해킹", 
     "핵추진잠수함", "화장품", "환경부", "감사의견", "공급사", "공급업체", "기업가치", "매매거래", "매출", "모회사", 
     "무상증자", "법정관리", "보유지분", "부품", "분할계획", "사업권", "신사업", "신제품", "우선협상대상자", 
@@ -56,16 +61,14 @@ KEYWORDS_1 = [
     "비무장지대", "비핵화", "산림복구", "신남방정책", "신북방정책", "실무협상", "이산가족상봉", "인프라", 
     "자원개발", "전력망", "조림사업", "중대보도", "진단키트", "차단", "추진", "탄도미사일", "통신연락선", "폐기", 
     "폭파", "한반도종단철도", "핵실험", "화력발전소", "희토류", "어닝서프라이즈", "시간외거래", "전고체배터리", 
-    "현대차", "삼성", "무상증자", "유상증자", "제3자배정", "흑자전환", "전환사채", "최대주주변경", "경영권분쟁", 
-    "공개매각", "지분매각", "이재명", "트럼프", "도널드 트럼프", "젠슨 황", "정의선", "이재용", "엔비디아", 
+    "현대차", "삼성", "제3자배정", "흑자전환", "전환사채", "최대주주변경", "공개매각", "지분매각", "이재명", "트럼프", "도널드 트럼프", "젠슨 황", "정의선", "이재용", "엔비디아", 
     "마이크로소프트", "애플", "테슬라", "SK하이닉스", "한미반도체", "LG에너지솔루션", "에코프로", "SK오션플랜트"
 ]
 
 KEYWORDS_2 = [
     "가능성", "가속화", "가시화", "개발", "개발성공", "개발중", "개시", "거래재개", "검토", "결과", "결정", 
-    "계약", "계약체결", "공개매각", "공급", "공급계약", "공동개발", "공동연구", "공동투자", "공식진출", 
-    "국산화", "국회통과", "급물살", "급부상", "급등", "급증", "기술개발", "기술도입", "기술수출", "기술이전", 
-    "규모", "납품", "논의", "독점계약", "독점공급", "돌입", "돌풍", "대란", "라이선스계약", "러브콜", "매각", 
+    "계약", "계약체결", "공급", "공급계약", "공동개발", "공동연구", "공동투자", "공식진출", 
+    "국산화", "국회통과", "급물살", "급부상", "급등", "급증", "규모", "납품", "논의", "독점계약", "독점공급", "돌입", "돌풍", "대란", "라이선스계약", "러브콜", "매각", 
     "매물로", "발표", "본격", "본격화", "본계약", "본입찰", "부각", "부품공급", "분쟁", "분할", "사업추진", 
     "상업화", "상용화", "상장", "상장추진", "생산", "생산계약", "선언", "선정", "설립", "성공", "속도낸다", 
     "손잡고", "손잡는다", "수주", "수주전", "수출", "수출재개", "수출허가", "승인", "시동", "시장진출", 
@@ -74,12 +77,12 @@ KEYWORDS_2 = [
     "유치", "육성", "의무화", "인기", "인상", "인수", "인수검토", "인수설", "인수전", "인수추진", "인수합병", 
     "인허가", "임박", "임상", "임상결과", "임상시험", "임상신청", "입점", "입증", "위탁생산", "재개", "재상장", 
     "재추진", "재평가", "재협상", "잭팟", "적용", "접촉", "제안", "제조", "제출", "제휴", "조달", "중국진출", 
-    "증가", "증설", "증시상장", "지분", "지분매각", "지분인수", "지분투자", "지정", "진출", "진행", "착수", 
+    "증가", "증설", "지분", "지분매각", "지분인수", "지분투자", "지정", "진출", "진행", "착수", 
     "참여", "첫승인", "청신호", "체결", "초읽기", "최대", "최고치", "최종", "추진", "추진중", "취득", 
     "출범", "타결", "탄력", "탑재", "통과", "투입", "투자", "투자유치", "투자합작", "판권", "판매", "판매개시", 
     "판매계약", "판매승인", "판매허가", "폭등", "품귀", "품목허가", "품절", "합류", "합병", "합의", "합작", 
     "해소", "해제", "해지", "허가", "허가신청", "허가취득", "허용", "협력", "협상", "협의", "협약", "확대", 
-    "확보", "확인", "확정", "획득", "효과", "효능", "흥행", "MOU", "매각설", "본계약", "상장설", "액면분할", 
+    "확보", "확인", "확정", "획득", "효과", "효능", "흥행", "MOU", "매각설", "상장설", "액면분할", 
     "우회상장", "인수설", "인수전", "인수추진", "인수합병", "지분인수", "임상3상", "흑자전환", "어닝서프라이즈", 
     "최대매출", "지분매각", "지분투자", "흡수합병", "분할합병", "주식분할", "최대주주변경", "M&A", "경영권분쟁", "경영참여"
 ]
@@ -102,9 +105,6 @@ RSS_URLS = [
     "https://news.google.com/rss/search?q=US+Stock+Market+Trump+Earnings+SKHY+Nvidia+Semiconductor+Oil+Gold+Copper+CoreWeave+IonQ+SMR&hl=en-US&gl=US&ceid=US:en"
 ]
 
-# ==============================================================================
-# 🎯 포맷팅 및 실시간 전송 함수
-# ==============================================================================
 def format_title(title):
     formatted = html.escape(title)
     for kw in sorted(UNIQUE_TARGET, key=len, reverse=True):
@@ -143,9 +143,10 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
         f"<i>(매칭 키워드 수: {matched_count})</i>"
     )
 
+    # 💡 버튼 텍스트의 HTML 태그가 그대로 노출되지 않도록 수정됨
     reply_markup = {
         "inline_keyboard": [
-            [{"text": "👆 <b>[ 🔗 원문 및 상세 확인 바로가기 ]</b> 👆", "url": news_url}]
+            [{"text": "👆 [ 🔗 원문 및 상세 확인 바로가기 ] 👆", "url": news_url}]
         ]
     }
     
@@ -158,23 +159,16 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
     }
     
     try:
-        res = requests.post(url, json=payload, timeout=10)
-        if res.status_code == 200:
-            print(f"   [전송 성공] 텔레그램 발사 완료!")
-        else:
-            print(f"   [전송 실패] 상태코드: {res.status_code}, 내용: {res.text}")
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"   [전송 에러]: {e}")
 
-# ==============================================================================
-# 🎯 DART 및 RSS 실시간 수집 루프
-# ==============================================================================
 def fetch_and_filter_dart_disclosures():
     if not DART_API_KEY:
-        print("⚠️ DART_API_KEY가 설정되어 있지 않습니다.")
         return []
         
-    url = f"https://opendart.fss.or.kr/api/list.json?crtfc_key={DART_API_KEY}&page_count=30"
+    today_str = datetime.datetime.now().strftime('%Y%m%d')
+    url = f"https://opendart.fss.or.kr/api/list.json?crtfc_key={DART_API_KEY}&bgn_de={today_str}&page_count=30"
     qualified_disclosures = []
     
     try:
@@ -182,69 +176,53 @@ def fetch_and_filter_dart_disclosures():
         if response.status_code == 200:
             data = response.json()
             if data.get("status") == "000":
-                list_items = data.get("list", [])
-                for item in list_items:
+                for item in data.get("list", []):
                     report_nm = item.get("report_nm", "")
                     corp_name = item.get("corp_name", "")
                     rcept_no = item.get("rcept_no", "")
                     report_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
                     
-                    is_earnings_jump = any(kw in report_nm for kw in [
-                        "흑자전환", "적자축소", "어닝서프라이즈", "사상최대", "영업이익 흑자", "당기순이익 흑자"
-                    ])
+                    is_earnings_jump = any(kw in report_nm for kw in ["흑자전환", "적자축소", "어닝서프라이즈", "사상최대", "영업이익 흑자", "당기순이익 흑자"])
                     is_major_contract = ("단일판매" in report_nm or "공급계약" in report_nm or "수주" in report_nm) and \
                                         any(kw in report_nm for kw in ["30%", "50%", "대규모", "미국", "테슬라", "엔비디아", "SMR", "원전", "배터리"])
                     is_issue_schedule = any(kw in report_nm for kw in ["풍문", "조회공시", "보도에관해", "향후일정"])
                     
                     if is_earnings_jump or is_major_contract or is_issue_schedule:
-                        formatted_title = f"🔥 ⭐[{corp_name}]⭐ {report_nm}"
                         qualified_disclosures.append({
-                            "title": formatted_title,
+                            "title": f"🔥 ⭐[{corp_name}]⭐ {report_nm}",
                             "url": report_url
                         })
-    except Exception as e:
-        print(f"❌ DART 연동 중 에러 발생: {e}")
+    except Exception:
+        pass
         
     return qualified_disclosures
 
-def run_bot():
-    print("🚀 [실시간 봇 구동 시작]")
+def run_bot_cycle(sent_news_titles):
     current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
-    sent_news_titles = set()
 
-    # 1. DART 공시 실시간 체크
-    print("🔍 [1/2] DART 전자공시 확인 중...")
+    # 1. DART 공시 체크
     try:
-        disclosures = fetch_and_filter_dart_disclosures()
-        print(f"ㄴ 대상 공시 개수: {len(disclosures)}건")
-        for disc in disclosures:
+        for disc in fetch_and_filter_dart_disclosures():
             if disc["title"] not in sent_news_titles:
-                print(f"   ✨ 공시 전송 시도: {disc['title']}")
                 send_telegram_message_with_button(
                     disc["title"], disc["url"], current_time_str, 
                     matched_count=99, is_exclusive=False, is_breaking=False, 
                     is_feature=False, is_us_market=False, is_disclosure=True
                 )
                 sent_news_titles.add(disc["title"])
-    except Exception as e:
-        print(f"❌ DART 실행 중 예외: {e}")
+    except Exception:
+        pass
 
-    # 2. 뉴스 RSS 피드 실시간 체크
-    print("🔍 [2/2] 뉴스 RSS 피드 확인 중...")
-    for idx, rss_url in enumerate(RSS_URLS):
-        print(f"ㄴ [{idx+1}/{len(RSS_URLS)}] RSS 읽는 중: {rss_url}")
+    # 2. 뉴스 RSS 체크
+    for rss_url in RSS_URLS:
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             response = requests.get(rss_url, headers=headers, timeout=15)
-            
             if response.status_code == 200:
                 feed = feedparser.parse(response.content)
-                print(f"   ㄴ 수신된 피드 기사 수: {len(feed.entries)}개")
-                
                 for entry in feed.entries:
                     title = getattr(entry, 'title', '')
                     news_url = getattr(entry, 'link', '')
-                    
                     if not title or title in sent_news_titles:
                         continue
                     
@@ -253,33 +231,52 @@ def run_bot():
                     
                     is_us_market_flag = any(tk.lower() in title_lower for tk in UNIQUE_TARGET)
                     is_exclusive_flag = any(ex_kw in title for ex_kw in UNIQUE_EXCLUSIVE)
-                    
                     has_kw1 = any(k1 in title for k1 in UNIQUE_KEYWORDS_1)
                     has_kw2 = any(k2 in title for k2 in UNIQUE_KEYWORDS_2)
                     
-                    is_matched = is_us_market_flag or is_exclusive_flag or (has_kw1 and has_kw2) or has_kw1
-                    
-                    if is_matched:
+                    if is_us_market_flag or is_exclusive_flag or (has_kw1 and has_kw2) or has_kw1:
                         matched_keywords = [kw for kw in UNIQUE_KEYWORDS_1.union(UNIQUE_KEYWORDS_2).union(UNIQUE_TARGET) if kw.lower() in title_lower]
                         match_count = max(len(matched_keywords), 1)
                         
-                        is_feature_flag = "특징주" in title_clean_spaces
-                        has_word_breaking = "속보" in title
-                        is_breaking_flag = has_word_breaking and not is_exclusive_flag
-                        
-                        print(f"   ✨ 뉴스 매칭 성공! 전송 시도 -> {title}")
                         send_telegram_message_with_button(
                             title, news_url, current_time_str, match_count, 
-                            is_exclusive_flag, is_breaking_flag, is_feature_flag, is_us_market_flag, is_disclosure=False
+                            is_exclusive_flag, "속보" in title and not is_exclusive_flag, 
+                            "특징주" in title_clean_spaces, is_us_market_flag, is_disclosure=False
                         )
                         sent_news_titles.add(title)
-            else:
-                print(f"   ❌ HTTP 응답 에러: {response.status_code}")
-        except Exception as e:
-            print(f"   ❌ RSS 파싱 중 에러: {e}")
+        except Exception:
             continue
-            
-    print("✅ [완료] 실시간 검사 사이클 종료")
+
+def background_loop():
+    print("🚀 실시간 뉴스 감시 백그라운드 루프 시작")
+    sent_news_titles = set()
+    
+    for rss_url in RSS_URLS:
+        try:
+            res = requests.get(rss_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            if res.status_code == 200:
+                feed = feedparser.parse(res.content)
+                for entry in feed.entries:
+                    if hasattr(entry, 'title'):
+                        sent_news_titles.add(entry.title)
+        except:
+            pass
+
+    while True:
+        try:
+            run_bot_cycle(sent_news_titles)
+        except Exception as e:
+            print(f"Loop error: {e}")
+        time.sleep(30)
+
+@app.route("/", methods=["GET", "POST"])
+def health_check():
+    return "News Bot is running live!", 200
 
 if __name__ == "__main__":
-    run_bot()
+    port = int(os.environ.get("PORT", 8080))
+    
+    t = threading.Thread(target=background_loop, daemon=True)
+    t.start()
+
+    app.run(host="0.0.0.0", port=port)
