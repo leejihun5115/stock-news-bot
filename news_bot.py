@@ -6,7 +6,7 @@ import re
 import os
 
 # ==============================================================================
-# 🎯 전체 설정 및 키워드 그룹 (사용자님 원본 그대로 유지)
+# 🎯 전체 설정 및 키워드 그룹 (원본 유지)
 # ==============================================================================
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
@@ -103,7 +103,7 @@ RSS_URLS = [
 ]
 
 # ==============================================================================
-# 🎯 포맷팅 및 텔레그램 전송 함수
+# 🎯 포맷팅 및 실시간 전송 함수
 # ==============================================================================
 def format_title(title):
     formatted = html.escape(title)
@@ -158,15 +158,20 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
     }
     
     try:
-        requests.post(url, json=payload, timeout=10)
+        res = requests.post(url, json=payload, timeout=10)
+        if res.status_code == 200:
+            print(f"   [전송 성공] 텔레그램 발사 완료!")
+        else:
+            print(f"   [전송 실패] 상태코드: {res.status_code}, 내용: {res.text}")
     except Exception as e:
-        print(f"텔레그램 전송 에러: {e}")
+        print(f"   [전송 에러]: {e}")
 
 # ==============================================================================
-# 🎯 DART 및 RSS 수집 메인 로직 (예외 처리 강화로 멈춤 방지)
+# 🎯 DART 및 RSS 실시간 수집 루프
 # ==============================================================================
 def fetch_and_filter_dart_disclosures():
     if not DART_API_KEY:
+        print("⚠️ DART_API_KEY가 설정되어 있지 않습니다.")
         return []
         
     url = f"https://opendart.fss.or.kr/api/list.json?crtfc_key={DART_API_KEY}&page_count=30"
@@ -178,7 +183,6 @@ def fetch_and_filter_dart_disclosures():
             data = response.json()
             if data.get("status") == "000":
                 list_items = data.get("list", [])
-                
                 for item in list_items:
                     report_nm = item.get("report_nm", "")
                     corp_name = item.get("corp_name", "")
@@ -199,20 +203,23 @@ def fetch_and_filter_dart_disclosures():
                             "url": report_url
                         })
     except Exception as e:
-        print(f"DART API 연동 에러: {e}")
+        print(f"❌ DART 연동 중 에러 발생: {e}")
         
     return qualified_disclosures
 
 def run_bot():
-    print("🚀 [GitHub Actions 전자공시 및 뉴스 수집 실행]")
+    print("🚀 [실시간 봇 구동 시작]")
     current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
     sent_news_titles = set()
 
-    # 1. DART 공시 체크
+    # 1. DART 공시 실시간 체크
+    print("🔍 [1/2] DART 전자공시 확인 중...")
     try:
         disclosures = fetch_and_filter_dart_disclosures()
+        print(f"ㄴ 대상 공시 개수: {len(disclosures)}건")
         for disc in disclosures:
             if disc["title"] not in sent_news_titles:
+                print(f"   ✨ 공시 전송 시도: {disc['title']}")
                 send_telegram_message_with_button(
                     disc["title"], disc["url"], current_time_str, 
                     matched_count=99, is_exclusive=False, is_breaking=False, 
@@ -220,16 +227,19 @@ def run_bot():
                 )
                 sent_news_titles.add(disc["title"])
     except Exception as e:
-        print(f"DART 실행 중 예외 발생: {e}")
+        print(f"❌ DART 실행 중 예외: {e}")
 
-    # 2. 뉴스 RSS 피드 체크 (개별 피드 오류 시에도 전체가 안 죽고 계속 돌도록 보완)
-    for rss_url in RSS_URLS:
+    # 2. 뉴스 RSS 피드 실시간 체크
+    print("🔍 [2/2] 뉴스 RSS 피드 확인 중...")
+    for idx, rss_url in enumerate(RSS_URLS):
+        print(f"ㄴ [{idx+1}/{len(RSS_URLS)}] RSS 읽는 중: {rss_url}")
         try:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             response = requests.get(rss_url, headers=headers, timeout=15)
             
             if response.status_code == 200:
                 feed = feedparser.parse(response.content)
+                print(f"   ㄴ 수신된 피드 기사 수: {len(feed.entries)}개")
                 
                 for entry in feed.entries:
                     title = getattr(entry, 'title', '')
@@ -257,16 +267,19 @@ def run_bot():
                         has_word_breaking = "속보" in title
                         is_breaking_flag = has_word_breaking and not is_exclusive_flag
                         
+                        print(f"   ✨ 뉴스 매칭 성공! 전송 시도 -> {title}")
                         send_telegram_message_with_button(
                             title, news_url, current_time_str, match_count, 
                             is_exclusive_flag, is_breaking_flag, is_feature_flag, is_us_market_flag, is_disclosure=False
                         )
                         sent_news_titles.add(title)
+            else:
+                print(f"   ❌ HTTP 응답 에러: {response.status_code}")
         except Exception as e:
-            print(f"RSS 처리 중 에러 발생 ({rss_url}): {e}")
+            print(f"   ❌ RSS 파싱 중 에러: {e}")
             continue
             
-    print("✅ [공시 및 뉴스 수집 완료]")
+    print("✅ [완료] 실시간 검사 사이클 종료")
 
 if __name__ == "__main__":
     run_bot()
