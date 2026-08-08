@@ -1,4 +1,3 @@
-import time
 import datetime
 import feedparser
 import requests
@@ -223,7 +222,7 @@ def run_bot():
             )
             sent_news_titles.add(disc["title"])
 
-    # 2. 뉴스 RSS 피드 체크 (키워드 매칭 실패하더라도 작동하도록 안전장치 추가)
+    # 2. 뉴스 RSS 피드 체크 (키워드 매칭 + 강제 통과 안전장치 포함)
     for rss_url in RSS_URLS:
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
@@ -232,7 +231,6 @@ def run_bot():
             if response.status_code == 200:
                 feed = feedparser.parse(response.content)
                 
-                # [안전장치] 각 RSS 소스별 최신 기사 2개는 키워드 조건과 상관없이 무조건 수집하여 누락 방지
                 forced_count = 0
                 for entry in feed.entries:
                     title = getattr(entry, 'title', '')
@@ -250,8 +248,8 @@ def run_bot():
                     has_kw1 = any(k1 in title for k1 in UNIQUE_KEYWORDS_1)
                     has_kw2 = any(k2 in title for k2 in UNIQUE_KEYWORDS_2)
                     
-                    # 키워드가 매칭되거나, 혹은 각 피드의 최신 기사 강제 포함 조건(forced_count < 2) 적용
-                    is_matched = is_us_market_flag or is_exclusive_flag or has_kw1 or has_kw2 or (forced_count < 2)
+                    # [핵심] 키워드 조건이 안 맞아도 각 RSS 소스별 최신 기사 1개는 무조건 뚫고 들어가도록 설정
+                    is_matched = is_us_market_flag or is_exclusive_flag or has_kw1 or has_kw2 or (forced_count < 1)
                     
                     if is_matched:
                         matched_keywords = [kw for kw in UNIQUE_KEYWORDS_1.union(UNIQUE_KEYWORDS_2).union(UNIQUE_TARGET) if kw.lower() in title_lower]
