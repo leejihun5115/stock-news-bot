@@ -6,7 +6,7 @@ import re
 import os
 
 # ==============================================================================
-# 🎯 전체 원본 설정 및 키워드 그룹 (누락 없음)
+# 🎯 전체 설정 및 키워드 그룹 (사용자님 원본 그대로 유지)
 # ==============================================================================
 BOT_TOKEN = "8475724946:AAElSNbL00mRsL7pQ6PZ4xTrXm7hZQeNqqI"
 CHAT_ID = "6754280298"
@@ -103,7 +103,7 @@ RSS_URLS = [
 ]
 
 # ==============================================================================
-# 🎯 포맷팅 및 메시지 전송 함수 (원형 보존)
+# 🎯 포맷팅 및 텔레그램 전송 함수
 # ==============================================================================
 def format_title(title):
     formatted = html.escape(title)
@@ -163,7 +163,7 @@ def send_telegram_message_with_button(title, news_url, time_str, matched_count, 
         print(f"텔레그램 전송 에러: {e}")
 
 # ==============================================================================
-# 🎯 DART 및 RSS 필터링 수집 로직 (원형 보존)
+# 🎯 DART 및 RSS 수집 메인 로직 (예외 처리 강화로 멈춤 방지)
 # ==============================================================================
 def fetch_and_filter_dart_disclosures():
     if not DART_API_KEY:
@@ -209,21 +209,24 @@ def run_bot():
     sent_news_titles = set()
 
     # 1. DART 공시 체크
-    disclosures = fetch_and_filter_dart_disclosures()
-    for disc in disclosures:
-        if disc["title"] not in sent_news_titles:
-            send_telegram_message_with_button(
-                disc["title"], disc["url"], current_time_str, 
-                matched_count=99, is_exclusive=False, is_breaking=False, 
-                is_feature=False, is_us_market=False, is_disclosure=True
-            )
-            sent_news_titles.add(disc["title"])
+    try:
+        disclosures = fetch_and_filter_dart_disclosures()
+        for disc in disclosures:
+            if disc["title"] not in sent_news_titles:
+                send_telegram_message_with_button(
+                    disc["title"], disc["url"], current_time_str, 
+                    matched_count=99, is_exclusive=False, is_breaking=False, 
+                    is_feature=False, is_us_market=False, is_disclosure=True
+                )
+                sent_news_titles.add(disc["title"])
+    except Exception as e:
+        print(f"DART 실행 중 예외 발생: {e}")
 
-    # 2. 뉴스 RSS 피드 체크 (모든 필터링 로직 완벽 복원)
+    # 2. 뉴스 RSS 피드 체크 (개별 피드 오류 시에도 전체가 안 죽고 계속 돌도록 보완)
     for rss_url in RSS_URLS:
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
-            response = requests.get(rss_url, headers=headers, timeout=10)
+            response = requests.get(rss_url, headers=headers, timeout=15)
             
             if response.status_code == 200:
                 feed = feedparser.parse(response.content)
@@ -260,6 +263,7 @@ def run_bot():
                         )
                         sent_news_titles.add(title)
         except Exception as e:
+            print(f"RSS 처리 중 에러 발생 ({rss_url}): {e}")
             continue
             
     print("✅ [공시 및 뉴스 수집 완료]")
