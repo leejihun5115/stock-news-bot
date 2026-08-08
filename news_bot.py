@@ -1,12 +1,11 @@
 import os
 import time
-import threading
 import datetime
 import feedparser
 import requests
 import html
 import re
-from flask import Flask
+from flask import Flask, jsonify
 
 app = Flask(__name__)
 
@@ -105,6 +104,9 @@ RSS_URLS = [
     "https://news.google.com/rss/search?q=US+Stock+Market+Trump+Earnings+SKHY+Nvidia+Semiconductor+Oil+Gold+Copper+CoreWeave+IonQ+SMR&hl=en-US&gl=US&ceid=US:en"
 ]
 
+# 이미 보낸 뉴스 제목을 저장하는 전역 세트 (서버가 살아있는 동안 유지)
+sent_news_titles = set()
+
 def format_title(title):
     formatted = html.escape(title)
     for kw in sorted(UNIQUE_TARGET, key=len, reverse=True):
@@ -196,7 +198,7 @@ def fetch_and_filter_dart_disclosures():
         
     return qualified_disclosures
 
-def run_bot_cycle(sent_news_titles):
+def run_bot_cycle():
     current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
 
     # 1. DART 공시 체크
@@ -246,40 +248,15 @@ def run_bot_cycle(sent_news_titles):
         except Exception:
             continue
 
-def background_loop():
-    print("🚀 실시간 뉴스 및 공시 감시 백그라운드 루프 시작")
-    sent_news_titles = set()
-    
-    # 초기 기사 수집 (중복 발송 방지)
-    for rss_url in RSS_URLS:
-        try:
-            res = requests.get(rss_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            if res.status_code == 200:
-                feed = feedparser.parse(res.content)
-                for entry in feed.entries:
-                    if hasattr(entry, 'title'):
-                        sent_news_titles.add(entry.title)
-        except:
-            pass
-
-    while True:
-        try:
-            run_bot_cycle(sent_news_titles)
-        except Exception as e:
-            print(f"Loop error: {e}")
-        time.sleep(30)
-
-# 웹 서버 라우트 (구글 클라우드 런 헬스체크 및 허브용 엔드포인트)
+# 💡 핵심 웹훅 엔드포인트: 클라우드 스케줄러가 이 주소를 칠 때마다 뉴스를 긁어옵니다.
 @app.route("/", methods=["GET", "POST"])
-def health_check():
-    return "Integrated News & Hub Bot is running live!", 200
+def trigger_bot():
+    try:
+        run_bot_cycle()
+        return jsonify({"status": "success", "message": "Bot cycle executed successfully"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    
-    # 백그라운드 감시 스레드 실행
-    t = threading.Thread(target=background_loop, daemon=True)
-    t.start()
-
-    # Flask 웹 서버 실행
     app.run(host="0.0.0.0", port=port)
