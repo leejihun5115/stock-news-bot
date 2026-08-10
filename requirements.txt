@@ -1,4 +1,6 @@
+feedparser
 requests
-schedule
 beautifulsoup4
 flask
+gunicorn
+google-cloud-firestore
