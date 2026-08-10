@@ -459,14 +459,55 @@ def is_already_sent(title):
 def mark_as_sent(title):
     key = _normalize_for_dedup(title)
     sent_news_titles.add(key)
-    if _firestore_client:
+    if not _firestore_client:
+        return
+    if _init_batch_mode:
+        # 🚀 초기화(startup_init) 중에는 하나씩 저장하면 수백~수천 건 때문에
+        # 너무 오래 걸려서 타임아웃이 나므로, 나중에 한꺼번에 배치로 저장하기 위해
+        # 일단 목록에만 담아둔다 (아래 _flush_pending_batch_writes 참고).
+        _pending_batch_writes.append((key, title))
+        return
+    try:
+        _firestore_client.collection("sent_titles").document(key).set({
+            "ts": datetime.datetime.now(datetime.timezone.utc),
+            "title": title[:200],
+        })
+    except Exception as e:
+        print(f"⚠️ [Firestore] 전송기록 저장 실패 (메모리에는 반영됨): {e}")
+
+
+# 🚀 초기화 중 배치 저장용 (mark_as_sent 참고)
+_init_batch_mode = False
+_pending_batch_writes = []
+
+
+def _flush_pending_batch_writes():
+    """
+    startup_init() 중 _init_batch_mode=True로 쌓아둔 mark_as_sent 기록들을
+    Firestore에 한꺼번에(최대 400개씩 묶어서) 저장한다. 기존에는 항목 하나마다
+    네트워크 요청을 보내서 (텔레그램 채널만 298건 등) 전체 초기화가 몇 분씩
+    걸려 타임아웃으로 죽었는데, 이렇게 배치로 처리하면 몇 초면 끝난다.
+    """
+    global _pending_batch_writes
+    items = _pending_batch_writes
+    _pending_batch_writes = []
+    if not _firestore_client or not items:
+        return
+    now = datetime.datetime.now(datetime.timezone.utc)
+    CHUNK = 400  # Firestore 배치 쓰기 한도(500)보다 여유있게
+    saved = 0
+    for i in range(0, len(items), CHUNK):
+        chunk = items[i:i + CHUNK]
         try:
-            _firestore_client.collection("sent_titles").document(key).set({
-                "ts": datetime.datetime.now(datetime.timezone.utc),
-                "title": title[:200],
-            })
+            batch = _firestore_client.batch()
+            for key, title in chunk:
+                doc_ref = _firestore_client.collection("sent_titles").document(key)
+                batch.set(doc_ref, {"ts": now, "title": title[:200]})
+            batch.commit()
+            saved += len(chunk)
         except Exception as e:
-            print(f"⚠️ [Firestore] 전송기록 저장 실패 (메모리에는 반영됨): {e}")
+            print(f"⚠️ [Firestore] 초기화 일괄 저장 일부 실패 (메모리에는 반영됨): {e}")
+    print(f"✅ [Firestore] 초기화 기록 {saved}건을 일괄 저장했습니다.")
 
 
 def should_run_task(task_name, interval_seconds):
@@ -2081,10 +2122,18 @@ def startup_init():
     print(f"✅ 유튜브 채널 {len(YOUTUBE_CHANNEL_RSS_URLS)}/{len(YOUTUBE_CHANNELS)}개 연결 완료.")
 
     load_recent_sent_titles(hours=6)
-    initialize_existing_rss()
-    initialize_existing_telegram_channels()
-    initialize_existing_custom_sources()
-    initialize_existing_dart_disclosures()
+
+    global _init_batch_mode
+    _init_batch_mode = True  # 🚀 이 구간 동안은 Firestore에 하나씩 안 쓰고 모아둠
+    try:
+        initialize_existing_rss()
+        initialize_existing_telegram_channels()
+        initialize_existing_custom_sources()
+        initialize_existing_dart_disclosures()
+    finally:
+        _init_batch_mode = False
+        _flush_pending_batch_writes()  # 모아둔 걸 한꺼번에 저장
+
     _initialized = True
 
 

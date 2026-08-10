@@ -1,1 +1,1 @@
-web: gunicorn -b :$PORT news_bot:app
+web: gunicorn -b :$PORT --timeout 300 news_bot:app
