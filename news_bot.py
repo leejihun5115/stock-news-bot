@@ -371,7 +371,8 @@ BLOCKED_KEYWORDS_BY_CATEGORY = {
     ],
     # 🧹 부고/인사/경조사 - 단신성 인물 소식
     "🧹 부고·인사": [
-        "부고", "별세", "인사", "동정", "취임", "퇴직", "승진", "조문", "만찬",
+        "부고", "별세", "인사", "동정", "취임", "퇴직", "승진", "조문", "만찬", "영입",
+        "선임", "위촉", "임명", "발탁", "조직개편",
     ],
     # 🧹 시상식/행사/축제 - 기업 IR과 무관한 행사성 기사
     # ⚠️ "시상"은 "증시상장"(IPO)까지 같이 막혀서 뺐음
@@ -941,8 +942,9 @@ def format_title(title):
     # 6) 일정 단어(제목 본문 안에서) -> ⏰ 접두사
     formatted = re.sub(re.escape("일정"), "<b>⏰일정</b>", formatted)
 
-    # 7) KEYWORDS_1(내용 키워드1)의 테마 단어 -> 🎯 접두사
+    # 7) KEYWORDS_1(내용 키워드1)의 테마 단어 -> 💡 접두사
     #    (기업/인물 이름은 위에서 이미 👍⚡️⭐로 처리됐으니, 여기선 신약/임상/반도체 같은 순수 테마 단어만 대상)
+    #    ⚠️ 예전엔 🎯를 썼는데, DART 공시 카드의 "🎯괴리율"이랑 겹쳐서 헷갈려서 💡로 바꿈
     theme_only_keywords_1 = UNIQUE_KEYWORDS_1 - UNIQUE_GIANTS - UNIQUE_CELEBS - money_body_words - {"일정"}
     if theme_only_keywords_1:
         sorted_terms = sorted(theme_only_keywords_1, key=len, reverse=True)
@@ -951,7 +953,7 @@ def format_title(title):
             for t in sorted_terms
         ]
         combined_pattern = re.compile("|".join(pattern_parts), re.IGNORECASE)
-        formatted = combined_pattern.sub(lambda m: f"<b>🎯{m.group(0)}</b>", formatted)
+        formatted = combined_pattern.sub(lambda m: f"<b>💡{m.group(0)}</b>", formatted)
 
     return formatted
 
@@ -1064,6 +1066,36 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     else:
         tag_line = "📌 [키워드]"
 
+    # 🔖 tag_line과 같은 우선순위지만, 이모지/괄호 없이 순수 텍스트만 (일반 뉴스
+    # 새 형식의 "[출처]" 자리에 그대로 넣기 위함)
+    if is_schedule:
+        source_bracket = "일정"
+    elif is_rumor:
+        source_bracket = "조회공시(풍문)"
+    elif is_disclosure:
+        source_bracket = "전자공시"
+    elif is_exclusive:
+        source_bracket = "단독"
+    elif is_breaking:
+        source_bracket = "속보"
+    elif is_feature:
+        source_bracket = "특징주_해외" if is_us_market else "특징주"
+    elif is_us_market:
+        source_bracket = "해외시황/외신"
+    elif is_money:
+        if "금리" in title:
+            source_bracket = "금리"
+        elif "실적" in title or "어닝서프라이즈" in title:
+            source_bracket = "실적"
+        else:
+            source_bracket = "머니"
+    elif custom_source:
+        source_bracket = re.sub(r"[\[\]]", "", re.sub(r"^[^\w\uAC00-\uD7A3]+", "", custom_source)).strip()
+    elif source_label:
+        source_bracket = source_label
+    else:
+        source_bracket = "키워드"
+
     is_us_related = is_us_market or any(kw.lower() in title.lower() for kw in US_CONTENT_KEYWORDS)
     is_pharma_related = any(kw in title for kw in PHARMA_KEYWORDS)
 
@@ -1129,7 +1161,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
 
     title_prefix = "📌"
     if is_mega_combo:
-        title_prefix = "🚀🚨🚀"  # 위 4가지 조합 중 하나에 해당하는 최상위 재료
+        title_prefix = "🚀🚀"  # 위 4가지 조합 중 하나에 해당하는 최상위 재료
     elif importance_score >= 5:
         title_prefix = "🚀🚀"  # 중요도 5점 이상이면 다른 이모지 안 섞고 이것만 단독 표시
     if is_us_related:
@@ -1158,25 +1190,54 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     if show_link_below and news_url:
         link_line = f"\n{html.escape(news_url, quote=True)}"
 
-    text_content = (
-        f"{title_prefix} {linked_title}{highlight_line}{link_line}\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"{tag_line} · ⏰ {time_str}\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"매칭 키워드 수: {matched_count}"
-    )
+    if is_disclosure or is_rumor:
+        # 📋 DART 공시류는 지금까지 만든 통계카드 형식을 그대로 유지.
+        text_content = (
+            f"{title_prefix} {linked_title}{highlight_line}{link_line}\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"{tag_line} · ⏰ {time_str}\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"키워드: {matched_count}"
+        )
+        reply_markup = {
+            "inline_keyboard": [[{"text": "✅ 🔗기사링크", "url": news_url}]]
+        }
+    else:
+        # 📰 일반 뉴스(RSS/네이버/텔레그램 등)는 요청하신 간단한 형식으로:
+        # 📌[출처]_[키워드] / (빈줄) / 제목 / (빈줄) / ⏰시간 / 🔗기사 원문 보기
+        # (source_bracket은 위에서 tag_line과 같은 우선순위로 이미 순수 텍스트로 계산해둠)
 
-    reply_markup = {
-        "inline_keyboard": [[{"text": "✅ 🔗기사링크", "url": news_url}]]
-    }
+        listed_matches = [name for name in ALL_LISTED_COMPANIES if name in title]
+        celeb_matches = [c for c in UNIQUE_CELEBS if c in title]
+        global_matches = [g for g in UNIQUE_GIANTS if g in title]
+        keyword_display = (
+            listed_matches[0] if listed_matches else
+            celeb_matches[0] if celeb_matches else
+            global_matches[0] if global_matches else
+            None
+        )
+        keyword_bracket = f"_[{keyword_display}]" if keyword_display else ""
+
+        link_text_line = (
+            f'🔗 <a href="{html.escape(news_url, quote=True)}">기사 원문 보기</a>' if news_url else ""
+        )
+
+        text_content = (
+            f"{title_prefix}[{source_bracket}]{keyword_bracket} · ⏰ {time_str}\n\n"
+            f"<b>{display_title}</b>{highlight_line}\n\n"
+            f"{link_text_line}"
+        )
+        reply_markup = None
 
     payload = {
         "chat_id": CHAT_ID,
         "text": text_content,
         "parse_mode": "HTML",
-        "reply_markup": reply_markup,
-        "disable_web_page_preview": True,
+        "disable_web_page_preview": True,  # 예전 방식(하위호환용으로 같이 넣어둠)
+        "link_preview_options": {"is_disabled": True},  # 텔레그램 최신 방식
     }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
 
     # 메시지 사이 최소 간격 확보 (너무 빠르게 연속 전송하면 텔레그램이 429로 막음)
     global _last_telegram_send_ts
