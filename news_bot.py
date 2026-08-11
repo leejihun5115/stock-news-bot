@@ -16,6 +16,7 @@ import requests
 import html
 import re
 import os
+import difflib
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -63,7 +64,28 @@ US_MARKET_END_HOUR = 6
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # ============================================================
+# ⏸️ 일시정지 채널/블로그 - 여기에 이름을 넣으면(체크하듯) 그 채널만
+# 당분간 확인을 건너뜁니다. 아래 TARGET_TELEGRAM_CHANNELS 등의 목록에서
+# 채널을 지우지 않고, 이 세트에 이름만 추가하면 되고, 다시 켜고 싶으면
+# 이름을 빼면 됩니다. (텔레그램1/2, 유튜브, 블로그 전부 이 방식으로 공통 적용)
+#
+# 🚨채널명 삽입시 일시정지 기능
+# 사용 예: PAUSED_SOURCES = {"라르고TV 공식채널", "슈카월드"}
+#
+# 📦 카테고리 전체를 한 번에 끄고 싶으면, 채널 이름 대신 아래 특수 키워드를
+# 넣으면 됩니다 (채널이 나중에 추가돼도 자동으로 같이 꺼짐):
+#   "유튜브 전체"   → 유튜브 전체 일시정지
+#   "블로그 전체"   → 분석 블로그 전체 일시정지
+#   "텔레그램1 전체" → 텔레그램1(필터적용) 전체 일시정지
+#   "텔레그램2 전체" → 텔레그램2(무조건수신) 전체 일시정지
+# ============================================================
+PAUSED_SOURCES = {
+    "유튜브 전체",
+}
+
+# ============================================================
 # 🎯 [텔레그램 1] 상위+하위 키워드 필터 적용해서 수신할 채널 (조건 있음)
+# 🚨채널명 삽입시 일시정지 기능 (위 PAUSED_SOURCES 참고)
 # ============================================================
 TARGET_TELEGRAM_CHANNELS = [
     ("텔레그램", "https://t.me/s/notRealDonaldTrump_kr"),
@@ -71,6 +93,7 @@ TARGET_TELEGRAM_CHANNELS = [
 
 # ============================================================
 # 🎯 [텔레그램 2] 공부용 - 조건 없이 무조건 수신 (업데이트되면 바로 전송)
+# 🚨채널명 삽입시 일시정지 기능 (위 PAUSED_SOURCES 참고)
 # ============================================================
 TARGET_TELEGRAM_CHANNELS_UNFILTERED = [
     ("빠짐없이실적공시", "https://t.me/s/allsiljuk"),
@@ -92,6 +115,7 @@ TARGET_TELEGRAM_CHANNELS_UNFILTERED = [
 
 # ============================================================
 # 📝 [분석 블로그] 매일 올라오는 게 아니라 업데이트될 때만, 조건 없이 전송.
+# 🚨채널명 삽입시 일시정지 기능 (위 PAUSED_SOURCES 참고)
 # 네이버 블로그 RSS 주소 형식: https://rss.blog.naver.com/{블로그아이디}.xml
 # ⚠ 프리미엄콘텐츠(premium.naver.com)는 일반 블로그와 RSS 구조가 달라 확인이 필요합니다.
 #   실행해보고 그 채널만 안 오면 알려주세요.
@@ -114,6 +138,7 @@ ANALYSIS_BLOG_RSS_URLS = [
 
 # ============================================================
 # 🎬 [유튜브] 공부용 - 조건 없이 무조건 수신, 새 영상 올라오면 바로 전송.
+# 🚨채널명 삽입시 일시정지 기능 (위 PAUSED_SOURCES 참고)
 # (채널명, @핸들) 형태로 넣으면 시작할 때 자동으로 channel_id를 찾아 RSS로 연결합니다.
 # ⚠ "감단테"(https://xn--6j1bp61aksejsj.com/)는 유튜브가 아니라 별도 사이트라 이 방식으로 못 넣었습니다.
 #   RSS 주소를 알려주시면 블로그 목록에 추가해드릴게요.
@@ -139,9 +164,90 @@ TARGET_KEYWORDS = [
     "SKHY", "SOXL", "SOXS", "SOXX", "NVDA", "AMD", "ASML", "MU", "INTC",
     "TSMC", "AAPL", "TSLA", "MSFT", "GOOG", "AMZN", "META", "TRUMP", "EARNINGS",
     "FED", "POWELL", "OIL", "WTI", "GOLD", "COPPER", "COREWAVE", "IONQ", "SMR",
+
+    # --- 🌍 글로벌 지정학 이슈(중동/러-우/미중 등) - 뉴스만 보고 세계 흐름 파악용 ---
+    # 중동/이란 관련
+    "이란", "이스라엘", "하마스", "헤즈볼라", "후티", "가자", "레바논", "시리아",
+    "사우디", "카타르", "예멘", "팔레스타인", "네타냐후", "하메네이",
+    "걸프", "페르시아만", "호르무즈해협",
+    # 전쟁/분쟁 - "휴전/종전/정전/봉쇄/제재/무력충돌/군사충돌"처럼 평상시 외교기사에도
+    # 흔히 쓰이는 단어는 빼고, 진짜 급박한 확전 신호 단어만 남김(아래 US_MACRO_STRONG_WORDS 참고)
+    "전쟁", "휴전", "종전", "정전", "침공", "공습", "폭격", "미사일",
+    "교전", "확전", "무력충돌", "군사충돌", "호르무즈", "봉쇄", "제재",
+    # 러시아-우크라이나
+    "러시아", "우크라이나", "푸틴", "젤렌스키", "크렘린", "나토", "NATO",
+    # 미중/동아시아
+    "대만", "대만해협", "남중국해", "북한", "김정은", "ICBM",
+    # 국제기구/정상회의
+    "유엔", "UN", "안보리", "G7", "G20", "다보스",
+
+    # --- 🇰🇷 남북/한반도 이슈 - 단독으로는 안 걸리고, 아래 단어끼리 2개 이상
+    # 조합돼야 노출(단어가 흔해서 혼자 걸면 노이즈가 너무 많아짐). "DMZ","남북"처럼
+    # 짧은 뿌리 단어 하나로 뒤에 뭐가 붙는 파생어(DMZ공원/남북철도 등)까지 다 잡히므로
+    # 겹치는 파생어들은 압축해서 뺐음.
+    "남북", "南北", "북측", "北", "南제안", "北제안",
+    "DMZ", "비무장지대",
+    "개성공단", "개성연락사무소", "금강산", "금강산관광",
+    "고위급", "북미대화", "북미회담", "실무협상", "실무회담",
+    "연락채널", "통신연락선", "극비접촉", "방북", "북방정책", "신북방정책", "新남방정책",
+    "비핵화", "핵실험", "핵추진", "인공지진",
+    "발사", "로켓", "총살", "피격", "폭파", "중대보도", "중태설", "진돗개", "통치",
+    "경수로", "가스관", "화력발전소", "전력망",
+    "경제협력", "경제사절단", "대북사업", "북한제의",
+    "이산가족", "산림복구", "조림사업", "세계생태평화공원",
+    "비료", "농기계", "수산물", "인프라",
+    "자원개발", "지하자원", "희토류", "광업공단",
+    "나진-하산", "남-북-러", "南-北-러", "남북러", "극동장관",
+
+    # --- 🇨🇳 중국 이슈 - 이것도 단독 안 걸고 2개 이상 조합돼야 노출.
+    # "중국"이라는 완전한 단어 하나로 중국과/중국서/중국기업/중국법인/중국발/중국시장/
+    # 중국사업/중국식약청/중국위생허가/중국공상은행/중국핑안보험 등 파생어를 다 커버해서
+    # 압축했음. 다만 "中" 한 글자만 단독으로 넣는 건 위험해서 안 함 - "진행中","협의中",
+    # "검토中"처럼 중국이랑 무관하게 "~하는 중"이라는 뜻으로 흔히 쓰이는 접미사라
+    # 엉뚱한 기사까지 걸릴 수 있음. 그래서 "中OO" 조합어들은 각각 그대로 남겨둠
+    # (다만 "-에/-와/-과"만 붙은 중복 변형은 압축해서 뺐음. "中텐센트"는 "텐센트"가
+    # 이미 있어서 자동으로 커버되니 뺐고, "中양회"도 "양회"로 커버돼서 뺐음).
+    "중국", "시진핑", "자안그룹", "한중", "알리바바", "텐센트", "화웨이", "바이두",
+    "양회", "니오", "CATL", "韓•中",
+    "中그룹", "中관영매체", "中금지령", "中대륙", "中매출", "中매체", "中법인", "中배터리",
+    "中시장", "中사업", "中수출", "中상용화", "中수소차", "中식약청", "中언론", "中외교부",
+    "中업체", "中진출", "中정부", "中전기차", "中최대", "中흥행", "中CFDA", "中공급",
+    "中공장", "中파트너사", "中잡지", "中현지", "中합작법인",
+    # 중국 유명 기업 추가 (반도체/전기차/플랫폼/가전 등 주요 대형주)
+    "샤오미", "BYD", "비야디", "지리자동차", "징둥", "JD닷컴", "메이투안",
+    "핀둬둬", "틱톡", "바이트댄스", "SMIC", "중신궈지", "폭스콘", "레노버",
+    "DJI", "아이플라이텍", "센스타임", "이항", "샤오펑", "샤오펑모터스", "리오토",
+    "BOE", "징둥팡", "차이나모바일", "차이나텔레콤", "페트로차이나", "시노펙",
+    "공상은행", "건설은행", "초상은행",
+
+    # --- 🦠 감염병/보건 이슈 - 이것도 단독 안 걸고 2개 이상 조합돼야 노출
+    # (단일 단어로 걸면 도배되니까). 겹치는 파생어는 압축함:
+    # "진드기" 하나로 야생진드기/살인진드기 커버, "브루셀라"로 브루셀라균/브루셀라병 커버,
+    # "지카"로 지카바이러스 커버, "코로나"로 코로나19/코로나바이러스 커버,
+    # "사망"으로 사망자/첫사망 커버, "변종"으로 변종바이러스 커버,
+    # "변이"로 변이바이러스/변이변종 커버, "성관계"로 성관계로 커버,
+    # "세계보건기구"로 "세계보건기구(WHO)" 커버.
+    # ⚠️ "환자"/"양성"/"첫"/"바이러스" 뿌리만 단독으로 넣으면 병원 매출 기사나
+    # 무관한 기사까지 다 걸릴 위험이 커서, 구체적인 조합형 단어로만 넣었음.
+    "AI바이러스", "SFTS", "광우병", "구제역", "뎅기열", "돼지독감", "돼지콜레라",
+    "로타바이러스", "메르스", "브루셀라", "사스", "진드기", "소두증",
+    "슈퍼바이러스", "슈퍼박테리아", "신종플루", "에볼라", "에이즈", "인플루엔자",
+    "조류독감", "조류인플루엔자", "지카", "코로나", "콜레라",
+    "세계보건기구", "WHO",
+    "고병원성", "바이러스", "박테리아", "법정감염병", "변이", "변종",
+    "사람간", "사망", "성관계", "성접촉", "性접촉", "신종",
+    "양성반응", "양성판정", "양성환자", "의심신고", "의심환자",
+    "첫감염", "첫발생", "첫환자", "콘돔", "항바이러스",
+    "확산", "확진", "환자급증", "침에서",
 ]
 
-US_MACRO_STRONG_WORDS = {"FED", "POWELL", "TRUMP", "EARNINGS"}
+# ⚔️ 진짜 급박한 확전 신호 단어만 - 하나만 나와도 무조건 노출.
+# (휴전/종전/정전/봉쇄/제재/무력충돌/군사충돌 등은 평소 외교 기사에도 흔해서 뺐고,
+#  이런 단어들은 위 TARGET_KEYWORDS에는 남아있어서 다른 키워드와 함께 나오면 여전히 노출됨)
+US_MACRO_STRONG_WORDS = {
+    "FED", "POWELL", "TRUMP", "EARNINGS",
+    "전쟁", "침공", "공습", "폭격", "미사일", "교전", "확전", "호르무즈",
+}
 
 KEYWORDS_1 = [
     # --- 국내 대기업 그룹 루트 ---
@@ -189,6 +295,52 @@ KEYWORDS_2 = [
     "급등", "폭등", "급락", "폭락", "신고가", "신저가", "상한가", "하한가",
     "양산", "출시", "개발", "완료", "착수", "상용화", "완치",
     "타결", "협약", "합의", "제휴",
+    # --- [대량 추가] 계약/임상/승인/M&A 등 재료성 이벤트 단어 확장판 ---
+    "가닥", "가상현실", "가속화", "가시화", "가치부각", "개발성공", "개발中", "개발중",
+    "개시", "개시결정", "거래재개", "결론낸다", "계약체결", "공개매각", "공급계약", "공급중",
+    "공급中", "공동개발", "공동관리", "공동연구", "공동제작", "공동투자", "공식제안", "공식진출",
+    "공식화", "공식확인", "공약검토", "국산화", "국회통과", "극적타결", "극적-타결", "금지",
+    "급부상", "급증", "급증에", "기능적완치", "기술개발", "기술도입", "기술보유", "기술수출",
+    "기술이전", "껑충", "도입추진", "독점계약", "독점공급", "독점생산", "독점권", "독점기술",
+    "독점사업권", "독점운영", "독점판권", "대란", "라이선스계약", "러브콜", "매물로", "비상",
+    "발표", "발표키로", "발표하나", "발표할듯", "범위확대", "보급", "본격화", "본계약",
+    "본입찰", "부품공급", "부품사", "부품사와", "분쟁", "분할", "불티", "사업추진",
+    "사재투입", "상업화", "상장", "상장유지", "상장추진", "상품공급", "새주인", "생산",
+    "생산계약", "선언", "선정", "선정계획", "선포", "설립", "설립추진", "성공",
+    "소재공급", "손잡고", "손잡는다", "쇄도", "수주전", "수출길", "수출재개", "수출허가",
+    "승인신청서", "승인심사", "시동", "시동거나", "시장진출", "시판", "시판허가", "시험계획",
+    "시험생산", "신청", "신호탄", "실탄", "실시허가", "실사허가", "실질심사", "양산체계",
+    "연구", "연구개발", "연구지원", "연구참여", "예감", "예고", "예약", "완전관해",
+    "완전해소", "완치성공", "완판", "완판행진", "완화", "위생허가", "유력", "의무화",
+    "인기몰이", "인상", "인수검토", "인수설", "인수전", "인수추진", "인수키로", "인수하기로",
+    "인수하나", "인수한다", "인수합병", "인허가", "임박", "임상", "임상1상", "임상2상",
+    "임상3상", "임상결과", "임상시험", "임상신청", "임상실험", "임상실험서", "임상치료", "임상허가",
+    "임상효과", "입점", "입증", "잇따라", "위탁생산(CMO)", "위탁생산", "위탁생산한다", "연구발표",
+    "재개", "재매각", "재상장", "재시동", "재인수", "재점화", "재추진", "재판매",
+    "재평가", "재협상", "재확인", "잭팟", "적정", "제네릭사", "제안", "제안키로",
+    "제안하기로", "제안할듯", "제의", "제출", "중국진출", "증가", "증설", "증시상장",
+    "지분가치", "지분매각", "지분인수", "지분투자", "지원과제", "진단기술", "진출", "집중투자",
+    "첫승인", "청신호", "최대유통", "최대주주된다", "최고치", "최대치", "최종임상", "추진",
+    "추진설", "추진중", "추진키로", "추진할", "취득", "출범", "타당성", "탄력",
+    "탑재", "통과", "투입", "투약", "투자한", "투자유치", "투자제안", "투자합작",
+    "피인수", "판권계약", "판권인수", "판매", "판매개시", "판매계약", "판매권", "판매승인",
+    "판매허가", "팔렸다", "품귀", "품귀현상", "품는다", "품목허가", "품절", "합류",
+    "합자기업", "합작", "해소", "해제", "해지", "해체", "허가승인", "허가신청",
+    "허가심사", "허가취득", "허용", "허용검토", "협력", "협력키로", "협상", "협의",
+    "협의중", "협의中", "확보", "확정", "회생계획", "회생절차", "획득", "효과입증",
+    "효능입증", "흥행", "매각설", "비밀유지계약", "상장설", "액면분할", "우회상장", "3상",
+    "美임상3상", "치료제3상", "임상1b상", "임상2b상", "임상3b상", "미FDA", "美FDA", "美FDA에",
+    "美FDA임상", "흑자전환", "최대매출", "최대-매출", "투자판단", "흡수합병", "분할합병", "3자배정",
+    "제3자배정", "주식분할", "주식합병", "M&A", "M&A타진", "경영참여", "경영참가",
+    # --- [추가] 핵심기술/공급부족/역대급 등 8개 신규 (나머지는 하이픈만 빼면
+    # 이미 위 목록에 있어서 중복이라 제외: 집중투자, 품귀, 폭등, 경영권분쟁, M&A,
+    # 인수, 매각, 본입찰, 잭팟, 독점공급, 상장, 상장추진, 임박, 가격폭등("폭등"으로 커버)) ---
+    "핵심기술", "국내최초", "최대투자", "주문폭주", "역대급", "공급부족", "세계최초", "표대결",
+    # ⚠️ 아래 단어들은 위 목록과 뜻이 겹치거나(중복) 또는 너무 흔해서 오탐 위험이
+    # 큰 단어라서 일부러 뺐습니다: 1위, 가능성, 가치, 결과, 규모, 논의, 눈앞, 도전,
+    # 본격, 부각, 시사, 언급, 이슈, 인기, 적용, 처음, 최대, 최악, 확대, 확인, 효과,
+    # 효능, 결정, 검토, 표명, 예정, 준비중, 진행, 참가, 참여, 마무리, 통보, 지정,
+    # 조달, 접촉, 거론 등 (사망/첫사망은 민감 소재라 정책상 제외)
 ]
 
 EXCLUSIVE_KEYWORDS = [
@@ -222,8 +374,9 @@ BLOCKED_KEYWORDS_BY_CATEGORY = {
         "부고", "별세", "인사", "동정", "취임", "퇴직", "승진", "조문", "만찬",
     ],
     # 🧹 시상식/행사/축제 - 기업 IR과 무관한 행사성 기사
+    # ⚠️ "시상"은 "증시상장"(IPO)까지 같이 막혀서 뺐음
     "🧹 시상·행사": [
-        "수상", "시상", "기념", "축제", "콘서트", "전시", "간담회", "워크숍",
+        "수상", "기념", "축제", "콘서트", "전시", "간담회", "워크숍",
     ],
     # 🧹 스포츠 - 증시와 무관한 스포츠 경기 소식
     "🧹 스포츠": [
@@ -235,8 +388,9 @@ BLOCKED_KEYWORDS_BY_CATEGORY = {
         "연예인", "영화", "드라마", "뮤지컬", "음원", "시사회", "팬미팅",
     ],
     # 🧹 사건/사고/법조 - 투자 재료성이 낮은 사회면 기사
+    # ⚠️ "재판"은 "재판매"까지 같이 막혀서 뺐음
     "🧹 사건·사고": [
-        "사건", "사고", "붕괴", "화재", "음주운전", "구속", "재판", "징역",
+        "사건", "사고", "붕괴", "화재", "음주운전", "구속", "징역",
         "폭행", "스캔들", "이혼", "결혼", "출산",
     ],
     # 🧹 부동산/생활경제 - 종목 재료성이 낮은 잡음성 기사
@@ -245,9 +399,10 @@ BLOCKED_KEYWORDS_BY_CATEGORY = {
         "화제", "논란", "논쟁", "비판",
     ],
     # 🧹 행정/일반 잡음 - 지자체·공공기관 등 투자 무관 행정 기사
+    # ⚠️ "분쟁"("경영권분쟁"과 충돌), "협약"(KEYWORDS_2 이벤트 단어와 충돌)은 빼고 유지
     "🧹 행정·일반": [
-        "교육", "분쟁", "주민", "점검", "의원", "채용", "업무",
-        "협약", "의견", "정비", "임원", "현장", "응찰",
+        "교육", "주민", "점검", "의원", "채용", "업무",
+        "의견", "정비", "임원", "현장", "응찰",
     ],
     # 🧹 블로그 잡담성 - 실질 정보 없이 요일 인사/응원만 하는 짧은 글
     "🧹 블로그 잡담성": [
@@ -256,6 +411,113 @@ BLOCKED_KEYWORDS_BY_CATEGORY = {
     # 🧹 답글·댓글성 - 본문 기사가 아니라 답글/댓글/리플 형태의 글
     "🧹 답글·댓글성": [
         "답글", "댓글", "리플", "re:", "RE:", "Re:", "댓글창",
+    ],
+
+    # 🧹 찌라시·홍보성 클릭베이트
+    "🧹 찌라시·홍보성 클릭베이트": [
+        "수혜株!", "급등예고!", "관련株!", "극비재료주", "오늘의추천株", "잡아라!!",
+        "잡아라!", "폭등임박!", "황제주!", "황제주!!", "급등임박", "급등임박!",
+        "알짜매물", "오늘의", "오늘장", "코넥스", "[장외주식]", "[장외주식시황]",
+        "[종합시황]", "테마동향", "위클리", "비결", "주간결산", "투자자의",
+        "추천", "추천종목", "추천주", "주간추천종목", "주간추천주", "장마감후종목뉴스",
+        "증권거래현황", "증권사별", "주간업종등락률", "투자記", "투자자별", "투자주체",
+        "투자주체를", "현재가", "꺾고", "'上'진입", "놓치면", "즐기세요",
+        "아듀", "시황", "증시일정",
+    ],
+    # 🧹 지역·지자체 행정
+    "🧹 지역·지자체 행정": [
+        "화순군", "경남", "경기", "경기도", "광주", "인천서",
+        "예천군", "울산", "강릉", "수원시", "재난지원금", "희망재단",
+        "취약계층", "거리두기", "접종", "건보공단", "검진", "예방접종",
+        "가뭄피해", "국감", "국감서", "국정감사", "국정원", "관세청",
+        "교역", "강진군", "경남도", "고양시", "공주시", "광양시",
+        "광주시", "광주전남", "남양주", "남양주시", "대구경북", "무안",
+        "무안군", "무안서", "밀양시", "보성군", "봉화군", "서대문구",
+        "순천시", "아산시", "안산시", "양산시", "양산신도시", "양양군",
+        "영광군", "영덕군", "영등포구", "영암군", "용인시", "울릉서",
+        "음성군", "익산시", "인천시", "장흥군", "전남", "전남도",
+        "전북", "전북도", "전주시", "정읍시", "진주시", "창원시",
+        "천안시", "청송군", "청주시", "충남도", "충주시", "태백시",
+        "통영시", "파주시", "판교", "평택시", "함평군", "해남군",
+        "호남선", "경기도의회", "원주시의회", "잠실", "장마철", "장맛비",
+        "재산세", "저소득층", "서민", "서민층",
+    ],
+    # 🧹 대학·병원·기관명
+    "🧹 대학·병원·기관명": [
+        "삼육대", "목포대", "호남대", "단국대", "영남대", "연세대",
+        "한국폴리텍대학", "폴리텍대학", "광주대", "성신여대", "계명대", "원광대",
+        "대구한의대", "한남대", "영남대병원", "전남대병원", "화순전남대병원", "전북대병원",
+        "광주은행", "부산농협", "의료원", "LH", "SK행복나눔재단",
+    ],
+    # 🧹 언론사 코너·연재물 태그
+    "🧹 언론사 코너·연재물 태그": [
+        "[표]", "[경기인터뷰]", "[공감]", "[기자가만난세상]", "[기획]", "[김능구의정국진단]",
+        "[녹색세상]", "[단상]", "[디지털산책]", "[롤드컵]", "뉴스&분석", "뉴스브리핑",
+        "뉴스해설", "뉴욕마켓워치", "[fn★성적표]", "[GOAL]", "[LPGA]", "ML사이트]",
+        "[PGA]", "[SS스타기상청]", "[SS영상]", "[SS위클리토크]", "[SS프리즘]", "[TD영상]",
+        "[TV예감]", "[WCS]", "[WTKL]", "[WT논평]", "[y스페셜]", "[답변공시]",
+        "[종목상담]", "DT광장", "ET단상", "fn사설", "HD영상", "K팝스타",
+        "MISS출장대행", "SK전", "SS다시보기", "SS인턴수첩", "SS탐사보도", "S스토리",
+        "TV신문고", "TV줌인", "TV프로그램", "TV하이라이트", "US여자오픈", "US오픈",
+        "V라이브", "Why", "y피플", "[美친box]", "[美친차트]", "[美친시청률]",
+        "[창간특집]", "[e2BOT]", "[생생건강]", "[스포츠투데이]", "[와글와글]", "[연예]",
+        "[투데이]", "ET투자뉴스", "경인만평", "경인포터", "경향NIE", "뉴스파이터",
+        "모닝와이드", "오프닝", "헤드라인", "전체뉴스", "MVP", "SHOT",
+        "HOLD(유지)", "UFC", "다시보기", "해설",
+    ],
+    # 🧹 거시지표·환율(루틴 발표)
+    "🧹 거시지표·환율(루틴 발표)": [
+        "고시환율", "기준환율", "달러/위안", "달러/환율", "원•달러", "환율",
+        "고용동향", "고용지표", "실업률", "실업률은", "성장률", "소비자물가",
+        "저금리", "재정난", "재정증권", "수출액", "수출입은행", "무역",
+        "소득공제", "도매재고", "물동량", "상하이지수", "생산자물가", "생산자물가지수",
+        "수주액", "수입물가", "신규주택", "산업생산", "산업생산도", "소매판매",
+        "증가폭", "전월비", "전월比", "제조업생산", "주택착공실적", "최저임금",
+        "가계대출", "주택담보대출", "기업재고", "경기침체", "경매시장", "법원경매",
+        "입주", "입주아파트", "입주예정", "주택금융", "주택금융공사",
+    ],
+    # 🧹 기업·행정 잡무 일반
+    # ⚠️ "공개"("공개매수" 충돌), "공급계약"/"계약체결"(핵심 이벤트 자체)은 빼고 유지
+    "🧹 기업·행정 잡무 일반": [
+        "강소기업", "강좌", "개강", "개관", "개막식", "개선",
+        "개장", "개최", "개통", "결산", "공동캠퍼스",
+        "개설", "경력사원", "과징금", "관리우수기업",
+        "우수기업", "우수기관", "우수사업단", "우수인증기관", "우수기관으로", "유네스코",
+        "중소기업", "중소기업청", "中企", "중기중앙회", "사옥", "신제품",
+        "신축공사", "준공", "준공식", "참가자", "창단", "출연",
+        "취업난", "취재", "취재수첩", "축소", "총력", "철회",
+        "창출", "창출에", "캠페인", "캠퍼스", "품질향상", "한정판",
+        "한정판매", "할인", "할인판매", "할인행사", "행사", "홈페이지",
+        "홈플러스", "크리스마스", "어린이", "어린이날", "앨범", "나눔",
+        "행복나눔", "열린광장", "열린마당", "열린세상", "전당대회", "헌법",
+        "한국인", "한은", "특가상품", "교통정보", "가족캠프", "모집",
+    ],
+    # 🧹 잡담·일반 표현
+    "🧹 잡담·일반 표현": [
+        "미안", "미안하다", "눈길", "뇌물", "노출", "노조",
+        "반발", "방송", "불공정", "부결", "부과", "불발",
+        "불투명", "불안감", "불법자금", "방산비리", "감독", "감소",
+        "간부", "경험", "기록", "기고", "기자수첩", "기획전",
+        "기업분석리포트", "금융단신", "금융사", "리포트", "브리핑", "논평",
+        "대표연설", "동영상", "녹화", "달성", "둘째주", "셋째주",
+        "디지털세상", "이시각", "인덱스", "인터뷰", "임금", "연속",
+        "연임", "유출", "열정", "일반공모", "증권사", "재무리스크",
+        "적정수준", "전망", "전일대비", "제공", "주의보", "준수해야",
+        "지표", "직장인", "집중취재", "조회공시", "공시", "기업공시",
+        "e공시", "대파", "소폭", "선보여", "선봬", "선수단",
+        "선도", "선보인다", "이벤트", "영상", "예방수칙", "운전자",
+        "운행", "유가증권", "유가증권시장", "음주", "투표", "페스티벌",
+        "포럼", "피해액만", "파문", "현황", "토마토",
+        "파라다이스", "기자들의", "사진", "사설", "상담회", "상생경영",
+        "소개", "평생", "폐쇄", "침묵", "진통",
+        "저축", "종료", "증발", "중단", "전일", "정정",
+        "가려움증", "버스회사", "보험", "보험금", "보험사", "신년사",
+        "제동", "증상들", "키워드", "펀드",
+    ],
+    # 🧹 달력·숫자 패턴
+    "🧹 달력·숫자 패턴": [
+        "주년", "루수", "호선", "01월", "02월", "03월",
+        "04월", "05월", "06월", "07월", "08월", "09월",
     ],
 }
 
@@ -359,6 +621,26 @@ DART_STRONG_REPORT_KEYWORDS = {
     "투자판단관련주요경영사항",  # 자율공시 중 투자판단에 영향 주는 주요 경영사항
     "자산재평가실시결정",  # 자산가치 재평가 - 재무구조 변화
     "채권은행관리절차",  # 워크아웃 등 채권단 관리 개시/중단 - 부실 신호
+    # --- [2차 추가] 요청주신 목록에서 새로 반영 ---
+    "대량보유상황보고서",  # 5% 룰 - 대주주/기관의 지분 5% 이상 변동 (진짜 대량보유상황보고서만, 임원·주요주주 소유상황보고서는 제외)
+    "주식등의대량보유상황보고서",  # 위와 동일 유형의 다른 표기
+    "양수결정", "양도결정",  # 위의 특정 자산군(영업/유형자산) 외 일반 자산 양수·양도 결정
+    "추가상장",  # 유상증자 등으로 인한 신주 추가상장 (유통주식수 증가)
+}
+
+# ------------------------------------------------------------
+# 위 화이트리스트 중에서도 "결정 자체가 곧 재료"라서 원문 텍스트에서
+# 금액/비율을 못 뽑아도(또는 안 뽑아도) 그대로 노출해야 하는 유형들.
+# (유상증자결정/공급계약/자기주식취득/M&A류처럼 "얼마나 큰 금액인가"가
+#  핵심인 유형은 여기서 빼고, 계속 _dart_money_strong의 금액 검증을 거침)
+# ------------------------------------------------------------
+DART_ALWAYS_EXPOSE_KEYWORDS = DART_STRONG_REPORT_KEYWORDS - {
+    "유상증자결정",  # 3자배정 여부·금액이 핵심이라 금액검증 유지
+    "단일판매ㆍ공급계약체결", "단일판매·공급계약체결",  # 계약금액이 핵심
+    "타법인주식및출자증권취득결정", "타법인주식및출자증권처분결정",
+    "영업양수결정", "영업양도결정", "합병결정", "분할결정", "분할합병결정",  # M&A 거래금액이 핵심
+    "자기주식취득결정",  # 취득금액이 핵심
+    "주요사항보고서",  # 너무 포괄적인 상위 카테고리명이라 단독으로는 과다노출 위험
 }
 
 DOMESTIC_RSS_URLS = [
@@ -454,6 +736,47 @@ def load_recent_sent_titles(hours=6):
 
 def is_already_sent(title):
     return _normalize_for_dedup(title) in sent_news_titles
+
+
+# ============================================================
+# 🕵️ 유사 중복 감지 (완전히 같은 문자열은 아니지만 "사실상 같은 기사")
+# ------------------------------------------------------------
+# 지금까지의 중복 방지는 "제목이 정확히 똑같아야만" 걸러졌음. 근데 실제로는
+# 같은 사안을 연합뉴스/한경/매경이 조금씩 다른 문구로 쓰거나, 국내 RSS랑
+# 네이버 검색에서 같은 기사가 서로 다른 스니펫으로 잡혀서 "제목은 다른데
+# 사실상 같은 뉴스"가 두 번 오는 경우가 실제로 있었음 (TSMC 매출 뉴스 중복
+# 사례 참고). 이걸 막기 위해, 최근 보낸 제목들과 글자 단위로 유사도를 비교해서
+# 너무 비슷하면(기본 82% 이상) 같은 기사로 보고 걸러낸다.
+#
+# 성능/오탐 방지를 위해:
+#   - 최근 150건까지만 비교 (전체 기록과 다 비교하면 느려짐)
+#   - 8글자 미만 짧은 제목은 비교 안 함(우연히 겹칠 확률이 높아서 오탐 위험)
+#   - 길이 차이가 40% 넘게 나면 비교 자체를 건너뜀(애초에 같은 기사일 리 없음 -
+#     이 사전 필터 덕분에 매번 150건을 전부 정밀 비교하지 않아도 돼서 빠름)
+# ============================================================
+_recent_titles_for_fuzzy = []
+FUZZY_DEDUP_WINDOW = 150
+FUZZY_DEDUP_THRESHOLD = 0.82
+
+
+def is_near_duplicate(title):
+    norm = _normalize_for_dedup(title)
+    if len(norm) < 8:
+        return False
+    for prev in _recent_titles_for_fuzzy:
+        if abs(len(prev) - len(norm)) > len(norm) * 0.4:
+            continue
+        ratio = difflib.SequenceMatcher(None, norm, prev).ratio()
+        if ratio >= FUZZY_DEDUP_THRESHOLD:
+            return True
+    return False
+
+
+def _remember_for_fuzzy(title):
+    norm = _normalize_for_dedup(title)
+    _recent_titles_for_fuzzy.append(norm)
+    if len(_recent_titles_for_fuzzy) > FUZZY_DEDUP_WINDOW:
+        del _recent_titles_for_fuzzy[0]
 
 
 def mark_as_sent(title):
@@ -607,7 +930,7 @@ def format_title(title):
             for t in sorted_terms
         ]
         combined_pattern = re.compile("|".join(pattern_parts), re.IGNORECASE)
-        formatted = combined_pattern.sub(lambda m: f"<b>⚡️{m.group(0)}⚡️</b>", formatted)
+        formatted = combined_pattern.sub(lambda m: f"<b>⚡️{m.group(0)}</b>", formatted)
 
     # 5) 실적/금리/유가/머니 관련 단어(제목 본문 안에서) -> 💰 접두사
     money_body_words = MONEY_STRONG_WORDS | {"실적", "금리", "유가"}
@@ -650,7 +973,10 @@ def classify_and_score(title):
     is_feature = "특징주" in title
 
     is_strong_signal = bool(upper_hits) and bool(lower_hits)
-    should_send = is_strong_signal or is_exclusive or is_breaking or is_feature
+    # 🎯 상장 종목명이 제목에 있으면, 다른 이벤트 단어(계약/실적 등)가 없어도
+    # 그 자체로 무조건 전송 (예전에는 이벤트 단어가 같이 있어야만 전송됐음)
+    has_listed_company = bool(listed_company_hits)
+    should_send = is_strong_signal or has_listed_company or is_exclusive or is_breaking or is_feature
 
     return matched_count, is_exclusive, is_breaking, is_feature, should_send
 
@@ -687,15 +1013,18 @@ def classify_telegram_channel_message(title):
 
     is_strong_signal = bool(upper_hits) and bool(lower_hits)  # 국내 뉴스식 AND 조건
     has_important_topic = bool(celeb_hits) or bool(global_company_hits) or bool(target_hits) or bool(us_market_hits)
+    # 🎯 상장 종목명이 제목에 있으면 그 자체로 무조건 전송
+    has_listed_company = bool(listed_company_hits)
 
-    should_send = is_strong_signal or has_important_topic or is_exclusive or is_breaking or is_feature
+    should_send = is_strong_signal or has_listed_company or has_important_topic or is_exclusive or is_breaking or is_feature
 
     return matched_count, is_exclusive, is_breaking, is_feature, should_send
 
 
 def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive, is_breaking,
                          is_feature, is_us_market, is_disclosure=False, is_rumor=False,
-                         custom_source="", source_label=""):
+                         custom_source="", source_label="", highlight_suffix="",
+                         show_link_below=False):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     display_title = format_title(title)
 
@@ -716,9 +1045,9 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     elif is_exclusive:
         tag_line = "🔥 [단독]"
     elif is_breaking:
-        tag_line = "💥🚀 [속보]"
+        tag_line = "🚨[속보]🚀"
     elif is_feature:
-        tag_line = "💥 [특징주] 💥"
+        tag_line = "🚨[특징주_해외]" if is_us_market else "🚨[특징주]"
     elif is_us_market:
         tag_line = "🇺🇸 해외시황/외신"
     elif is_money:
@@ -738,7 +1067,71 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     is_us_related = is_us_market or any(kw.lower() in title.lower() for kw in US_CONTENT_KEYWORDS)
     is_pharma_related = any(kw in title for kw in PHARMA_KEYWORDS)
 
+    # 🚨 중요도 점수(1~10 등급) - 모든 신호를 점수로 환산해서 합산 후 1~10 사이로 자름.
+    # 1~10을 고르게 다 쓰도록 등급 기준을 명확히 정함:
+    #   기본 1점
+    #   + 매칭 키워드 1개당 +1점 (최대 +4점 = 키워드 4개 이상이면 만점 기여)
+    #   + 단독/속보/특징주 태그 1개당 +2점 (여러 개 겹치면 그만큼 누적, 최대 +6점)
+    #   + DART 공시 비율: 5% 미만 +1 / 5~15% +2 / 15~30% +3 / 30~50% +4 / 50%↑ 또는 "조원" 단위 +5
+    #   + DART인데 비율 없이 확실한 이벤트(흑자전환 등)면 +2
+    # 이론상 최대 1+4+6+5=16이 나올 수 있지만 10에서 잘라내서, 정말 여러 신호가
+    # 한꺼번에 겹치는 "찐" 이벤트만 10등급을 받도록 함.
+    importance_score = 1
+    importance_score += min(matched_count, 4)
+    if is_exclusive:
+        importance_score += 2
+    if is_breaking:
+        importance_score += 2
+    if is_feature:
+        importance_score += 2
+    if is_disclosure and highlight_suffix:
+        pct_match = re.findall(r"(\d+(?:\.\d+)?)\s*%", highlight_suffix)
+        if pct_match:
+            pct = max(float(p) for p in pct_match)  # 여러 줄이면 그중 가장 큰 비율 기준
+            if pct >= 50 or "조원" in highlight_suffix:
+                importance_score += 5
+            elif pct >= 30:
+                importance_score += 4
+            elif pct >= 15:
+                importance_score += 3
+            elif pct >= 5:
+                importance_score += 2
+            else:
+                importance_score += 1
+        else:
+            importance_score += 2  # 흑자전환처럼 %는 없지만 확실한 이벤트
+    importance_score = max(1, min(importance_score, 10))
+
+    # 🚀🚨🚀 "이건 상한가 재료급이다" 싶은 특정 조합 - 5점 기준과 별개로,
+    # 아래 4가지 조합 중 하나라도 해당하면 최상위 표시로 따로 구분함.
+    #  ① (상장기업 또는 유명인) + "세계최초" + 다른 키워드2 하나 더
+    #  ② 유명인 + 유명기업(글로벌 대기업 포함) + 키워드1(상위) + 키워드2(하위)
+    #  ③ M&A/합병 계열 단어 + 상장기업명 + 다른 신호(키워드 2개 이상 겹침)
+    #  ④ FDA/임상 계열 단어 + 상장기업명 + 다른 신호(키워드 2개 이상 겹침)
+    has_listed_company_here = any(name in title for name in ALL_LISTED_COMPANIES)
+    has_celeb_here = any(c in title for c in UNIQUE_CELEBS)
+    has_global_company_here = any(g in title for g in UNIQUE_GIANTS)
+    lower_hits_here = {kw for kw in STRONG_KEYWORDS_2 if kw in title}
+    upper_hits_here = {kw for kw in STRONG_KEYWORDS_1 if kw in title}
+
+    MEGA_MA_WORDS = {"합병", "인수", "M&A", "M&A타진", "경영권분쟁", "흡수합병", "분할합병", "인수합병"}
+    MEGA_FDA_WORDS = {"美FDA", "미FDA", "FDA", "임상3상", "임상2상", "임상1상", "임상시험", "품목허가", "美FDA임상"}
+
+    is_mega_combo = False
+    if (has_listed_company_here or has_celeb_here) and "세계최초" in title and (lower_hits_here - {"세계최초"}):
+        is_mega_combo = True
+    elif has_celeb_here and has_global_company_here and upper_hits_here and lower_hits_here:
+        is_mega_combo = True
+    elif any(w in title for w in MEGA_MA_WORDS) and has_listed_company_here and matched_count >= 2:
+        is_mega_combo = True
+    elif any(w in title for w in MEGA_FDA_WORDS) and has_listed_company_here and matched_count >= 2:
+        is_mega_combo = True
+
     title_prefix = "📌"
+    if is_mega_combo:
+        title_prefix = "🚀🚨🚀"  # 위 4가지 조합 중 하나에 해당하는 최상위 재료
+    elif importance_score >= 5:
+        title_prefix = "🚀🚀"  # 중요도 5점 이상이면 다른 이모지 안 섞고 이것만 단독 표시
     if is_us_related:
         title_prefix = "🇺🇸" + title_prefix
     if is_pharma_related:
@@ -751,10 +1144,24 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     else:
         linked_title = f"<b>{display_title}</b>"
 
+    # 시가총액대비/매출액대비/전년비 등 근거를 제목 밑에 그대로 이어붙임
+    # (📊비교대상/🚨비율/💰금액 라벨은 dart 쪽에서 이미 붙여서 넘어옴)
+    highlight_line = ""
+    if highlight_suffix:
+        escaped = html.escape(highlight_suffix)
+        # 🎯괴리율 줄만 콕 집어서 밑줄 처리 (다른 줄은 그대로)
+        escaped = re.sub(r"(🎯괴리율[^\n]*)", r"<u>\1</u>", escaped)
+        highlight_line = f"\n{escaped}"
+
+    # 🔗 요청에 따라 DART 공시류는 제목 밑에 링크 주소를 그대로(눈에 보이게) 한 줄 더 표시.
+    link_line = ""
+    if show_link_below and news_url:
+        link_line = f"\n{html.escape(news_url, quote=True)}"
+
     text_content = (
-        f"{title_prefix} {linked_title}\n"
+        f"{title_prefix} {linked_title}{highlight_line}{link_line}\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"{tag_line} · ⏱ {time_str}\n"
+        f"{tag_line} · ⏰ {time_str}\n"
         f"━━━━━━━━━━━━━━━\n"
         f"매칭 키워드 수: {matched_count}"
     )
@@ -975,9 +1382,16 @@ def check_domestic_news(current_time_str):
                 mark_as_sent(title)
                 continue
 
+            # 🕵️ 문자 그대로는 안 겹치지만 사실상 같은 기사(다른 매체가 다른 문구로
+            # 쓴 경우 등)면 여기서 걸러냄
+            if is_near_duplicate(title):
+                mark_as_sent(title)
+                continue
+
             # 🚫 먼저 "전송 예정"으로 등록해서, 같은 뉴스가 다른 소스(RSS/네이버 등)에서
             # 거의 동시에 잡혀도 절대 두 번 나가지 않게 함.
             mark_as_sent(title)
+            _remember_for_fuzzy(title)
             send_telegram_message(
                 title, link, current_time_str, matched_count,
                 is_exclusive, is_breaking, is_feature, False,
@@ -1019,7 +1433,9 @@ def check_us_news(current_time_str):
             matched_count = len(target_hits | giant_hits)
 
             has_macro_word = bool(target_hits & US_MACRO_STRONG_WORDS)
-            should_send = has_macro_word or matched_count >= 2
+            is_breaking = "속보" in title  # 🚨 속보 단어가 있으면 다른 조건 없이 무조건 전송
+            is_feature = "특징주" in title  # 🚨 특징주 단어가 있으면 다른 조건 없이 무조건 전송
+            should_send = has_macro_word or matched_count >= 2 or is_breaking or is_feature
 
             if not should_send:
                 mark_as_sent(title)
@@ -1028,7 +1444,7 @@ def check_us_news(current_time_str):
             mark_as_sent(title)  # 🚫 먼저 등록해서 중복 전송 원천 차단
             send_telegram_message(
                 title, link, current_time_str, matched_count,
-                False, False, False, True,
+                False, is_breaking, is_feature, True,
             )
             sent += 1
 
@@ -1216,10 +1632,18 @@ def check_naver_news(current_time_str):
                 mark_as_sent(title)
                 continue
 
+            # 🕵️ 문자 그대로는 안 겹치지만 사실상 같은 기사면 여기서 걸러냄
+            # (네이버는 회사명별로 검색어를 여러 번 돌려서, 같은 기사가 다른 검색어에서
+            #  조금 다른 스니펫으로 잡히는 경우가 특히 잦음)
+            if is_near_duplicate(title):
+                mark_as_sent(title)
+                continue
+
             # 🚫 [버그 수정] 예전엔 전송이 "성공"해야만 mark_as_sent가 호출돼서,
             # 그 사이(출처명 조회 + 텔레그램 전송하는 몇 초) 같은 기사가 다른 검색어에서도
             # 잡히면 두 번 전송되는 경우가 있었습니다. 이제는 먼저 등록부터 하고 전송합니다.
             mark_as_sent(title)
+            _remember_for_fuzzy(title)
             source_label = get_news_source_name(link)
             if send_telegram_message(
                 title, link, current_time_str, matched_count,
@@ -1324,10 +1748,28 @@ def extract_telegram_headline_and_link(msg, fallback_url):
             article_link = href
             break
 
+    container = msg.find_parent(class_="tgme_widget_message")
+
+    # 📎 본문에 실제 문구 없이 링크만 달랑 올라온 경우(=제목이 URL 그 자체이거나
+    # 아예 비어있는 경우), 텔레그램이 자동으로 만들어주는 "링크 미리보기" 카드에서
+    # 원문 기사 제목을 대신 가져온다. (링크 미리보기가 있으면 원문 링크도 거기서
+    # 다시 한번 확인해 더 정확한 주소로 보완한다.)
+    looks_like_bare_link = bool(re.fullmatch(r"https?://\S+", headline))
+    if (not headline or looks_like_bare_link) and container:
+        preview = container.select_one(".tgme_widget_message_link_preview")
+        if preview:
+            preview_title_el = preview.select_one(".link_preview_title")
+            if preview_title_el:
+                preview_title = preview_title_el.get_text(" ", strip=True)
+                if preview_title:
+                    headline = _shorten_headline(preview_title)
+            preview_href = preview.get("href", "")
+            if preview_href and "t.me" not in preview_href:
+                article_link = preview_href
+
     # 🕒 같은 메시지 박스 안의 <time datetime="..."> 태그에서 발행 시각을 읽어옴.
     # 못 찾으면 None (이 경우 시간 필터는 건너뛰고 통과시킴 - 텔레그램은 보통 실시간이라 안전).
     msg_time = None
-    container = msg.find_parent(class_="tgme_widget_message")
     if container:
         time_tag = container.find("time", attrs={"datetime": True})
         if time_tag:
@@ -1354,11 +1796,15 @@ def _is_within_last_hour(msg_time):
 
 
 def check_telegram_channels(current_time_str):
+    if "텔레그램1 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
+        return
     headers = {"User-Agent": USER_AGENT}
     scanned = 0
     sent = 0
 
     for channel_name, channel_url in TARGET_TELEGRAM_CHANNELS:
+        if channel_name in PAUSED_SOURCES:  # ⏸️ 일시정지된 채널은 건너뜀
+            continue
         try:
             res = requests.get(channel_url, headers=headers, timeout=10)
             if res.status_code != 200:
@@ -1368,6 +1814,10 @@ def check_telegram_channels(current_time_str):
 
             for msg in messages:
                 headline, article_link, msg_time = extract_telegram_headline_and_link(msg, channel_url)
+                # 📎 미리보기 제목도 못 찾아서 여전히 링크 자체가 제목인 경우는 건너뜀
+                # (내용을 알 수 없는 "링크만 온 메시지"를 방지)
+                if headline and re.fullmatch(r"https?://\S+", headline):
+                    continue
                 if not headline or len(headline) <= 4 or is_already_sent(headline):
                     continue
                 if is_blocked_title(headline):  # 🧹 삭제어 포함 시 무조건 차단
@@ -1383,7 +1833,20 @@ def check_telegram_channels(current_time_str):
                     mark_as_sent(headline)
                     continue
 
+                # 🏢 텔레그램2와 동일하게: 상장기업명이 제목에 있을 때만 최종 노출
+                has_listed_company = any(name in headline for name in ALL_LISTED_COMPANIES)
+                if not has_listed_company:
+                    mark_as_sent(headline)
+                    continue
+
+                # 🕵️ 사실상 같은 기사(다른 표현)면 걸러냄 - 텔레그램 채널이 뉴스를
+                # 재전달하는 경우가 많아서, RSS/네이버에서 이미 보낸 것과 겹칠 수 있음
+                if is_near_duplicate(headline):
+                    mark_as_sent(headline)
+                    continue
+
                 mark_as_sent(headline)  # 🚫 먼저 등록해서 중복 전송 차단
+                _remember_for_fuzzy(headline)
                 send_telegram_message(
                     headline, article_link, current_time_str, matched_count,
                     is_exclusive, is_breaking, is_feature, is_us_market=False,
@@ -1399,11 +1862,15 @@ def check_telegram_channels(current_time_str):
 
 def check_telegram_channels_unfiltered(current_time_str):
     """텔레그램2 - 공부용, 조건 없이 업데이트되면 무조건 전송"""
+    if "텔레그램2 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
+        return
     headers = {"User-Agent": USER_AGENT}
     scanned = 0
     sent = 0
 
     for channel_name, channel_url in TARGET_TELEGRAM_CHANNELS_UNFILTERED:
+        if channel_name in PAUSED_SOURCES:  # ⏸️ 일시정지된 채널은 건너뜀
+            continue
         try:
             res = requests.get(channel_url, headers=headers, timeout=10)
             if res.status_code != 200:
@@ -1413,6 +1880,9 @@ def check_telegram_channels_unfiltered(current_time_str):
 
             for msg in messages:
                 headline, article_link, msg_time = extract_telegram_headline_and_link(msg, channel_url)
+                # 📎 미리보기 제목도 못 찾아서 여전히 링크 자체가 제목인 경우는 건너뜀
+                if headline and re.fullmatch(r"https?://\S+", headline):
+                    continue
                 if not headline or len(headline) <= 4 or is_already_sent(headline):
                     continue
                 if is_blocked_title(headline):  # 🧹 삭제어 포함 시 무조건 차단 (무필터 채널도 예외 없음)
@@ -1423,6 +1893,12 @@ def check_telegram_channels_unfiltered(current_time_str):
                     continue
 
                 scanned += 1
+                # 🏢 상장기업명이 제목에 있을 때만 노출 (다른 키워드 조건은 아직 안 걸음)
+                has_listed_company = any(name in headline for name in ALL_LISTED_COMPANIES)
+                if not has_listed_company:
+                    mark_as_sent(headline)
+                    continue
+
                 mark_as_sent(headline)  # 🚫 먼저 등록해서 중복 전송 차단
                 send_telegram_message(
                     headline, article_link, current_time_str, matched_count=0,
@@ -1441,16 +1917,29 @@ def check_telegram_channels_unfiltered(current_time_str):
 # 📝 분석 블로그 (매일 올라오는 게 아니므로 키워드 필터 없이 새 글이면 무조건 전송)
 # ============================================================
 def check_blogs(current_time_str):
+    if "블로그 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
+        return
     feedparser.USER_AGENT = USER_AGENT
     scanned = 0
     sent = 0
 
     for blog_name, rss_url in ANALYSIS_BLOG_RSS_URLS:
+        if blog_name in PAUSED_SOURCES:  # ⏸️ 일시정지된 블로그는 건너뜀
+            continue
         try:
             feed = feedparser.parse(rss_url)
         except Exception as e:
             print(f"[블로그 오류] {blog_name}: {e}")
             continue
+
+        # 🕵️ 필명이 영어 아이디(ranto28 등)라서 그대로 쓰면 못 알아보니, RSS 피드
+        # 안에 있는 실제 블로그 이름(보통 한글)을 자동으로 가져와서 대신 씀.
+        # "OOO : 네이버 블로그" 형태로 오는 경우가 많아 뒷부분은 잘라내고,
+        # 못 가져오면 원래 아이디(blog_name)를 그대로 씀.
+        feed_title = feed.feed.get("title", "") if hasattr(feed, "feed") else ""
+        display_name = re.sub(r"\s*[:\-|]\s*네이버\s*블로그\s*$", "", feed_title).strip()
+        if not display_name:
+            display_name = blog_name
 
         for entry in feed.entries:
             title = getattr(entry, "title", "")
@@ -1471,7 +1960,7 @@ def check_blogs(current_time_str):
             send_telegram_message(
                 title, link, current_time_str, matched_count=0,
                 is_exclusive=False, is_breaking=False, is_feature=False, is_us_market=False,
-                custom_source=f"📝블로그 _ ✅{blog_name}",
+                custom_source=f"🕵️[블로그] {display_name}",
             )
             sent += 1
 
@@ -1538,11 +2027,15 @@ def resolve_all_youtube_channels():
 
 
 def check_youtube(current_time_str):
+    if "유튜브 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
+        return
     feedparser.USER_AGENT = USER_AGENT
     scanned = 0
     sent = 0
 
     for channel_name, rss_url in YOUTUBE_CHANNEL_RSS_URLS:
+        if channel_name in PAUSED_SOURCES:  # ⏸️ 일시정지된 채널은 건너뜀
+            continue
         try:
             feed = feedparser.parse(rss_url)
         except Exception as e:
@@ -1575,56 +2068,27 @@ def check_youtube(current_time_str):
 
 
 # ============================================================
-# DART 매우 강한 재료 수치 필터
+# DART 재료성 수치 - 문턱값 없이 "비율/금액을 찾을 수 있으면 그대로 노출"
 # ============================================================
 # 목적:
-# "공시 종류"가 아니라 실제 돈/실적/기업가치에 미치는 영향이 큰 공시만 노출.
-# 절대금액 + 매출 대비 + 시가총액 대비를 함께 사용.
+# "공시 종류"가 아니라 실제 돈/실적/기업가치와 관련된 수치를 원문에서 찾아
+# 텔레그램 제목에 그대로 보여준다 (예: 💥시가총액대비 32%, 💥영업이익 전년비 +85%).
 #
-# 매우 강한 기준:
-# ① 영업이익 YoY +50% 이상
-# ② 매출 YoY +30% 이상 + 영업이익 개선
-# ③ 흑자전환
-# ④ 컨센서스 수치가 공시 원문에 명시된 경우 +20% 이상
-# ⑤ 공급계약: 100억 이상 AND 매출 대비 20% 이상,
-#    또는 300억 이상
-# ⑥ 3자배정 유증: 100억 이상 AND 시총 대비 10% 이상,
-#    또는 300억 이상
-# ⑦ 기술이전/라이선스: 300억 이상 AND 시총 대비 10% 이상,
-#    또는 1,000억 이상
-# ⑧ 자사주 취득: 시총 대비 5% 이상,
-#    또는 300억 이상
-# ⑨ M&A/타법인/투자: 100억 이상 AND 시총 대비 10% 이상,
-#    또는 300억 이상
-# ⑩ 풍문/조회공시/해명/설명요구: 사용자 요청대로 무조건 노출
+# 예전에는 "몇 % 이상이어야만 통과"하는 문턱값(DART_MIN_* 상수들)이 있었는데,
+# 어차피 실제 비율을 제목에 그대로 보여주기 때문에 문턱값으로 미리 거를 필요가
+# 없어졌다 - 크고 작은 건 받아보는 사람이 직접 판단하면 된다. 그래서 문턱값
+# 상수들은 전부 제거했다.
+#
+# 참고:
+# - 영업이익/매출 YoY, 컨센서스대비 → 실적 공시(_dart_financial_strong)
+# - 흑자전환 → 실적 공시, 부호가 명확해서 그대로 노출
+# - 공급계약 → 매출액대비(원문에 비율이 있으면) 또는 시가총액대비(금액만 있으면)
+# - 3자배정 유상증자/기술이전/자사주매입/M&A류 → 시가총액대비
+# - 풍문/조회공시/해명/설명요구 → 사용자 요청대로 무조건 노출 (비율 없음)
 #
 # 중요: DART 원문에 시총이 없으므로 현재 시가총액은 종목코드로 조회해 보완.
 # ============================================================
-DART_MIN_OP_YOY = 50.0
-DART_MIN_REVENUE_YOY = 30.0
-DART_MIN_EARNINGS_SURPRISE = 20.0
 
-DART_MIN_CONTRACT_AMOUNT = 100.0
-DART_MIN_CONTRACT_TO_SALES = 20.0
-DART_MIN_CONTRACT_TO_MCAP = 10.0
-DART_CONTRACT_VERY_LARGE = 300.0
-
-DART_MIN_THIRD_PARTY_AMOUNT = 100.0
-DART_MIN_THIRD_PARTY_TO_MCAP = 10.0
-DART_THIRD_PARTY_VERY_LARGE = 300.0
-
-DART_MIN_TECH_AMOUNT = 300.0
-DART_MIN_TECH_TO_MCAP = 10.0
-DART_TECH_VERY_LARGE = 1000.0
-
-DART_MIN_OTHER_AMOUNT = 100.0
-DART_MIN_OTHER_TO_MCAP = 10.0
-DART_OTHER_VERY_LARGE = 300.0
-
-DART_MIN_BUYBACK_TO_MCAP = 5.0
-DART_BUYBACK_VERY_LARGE = 300.0
-
-_dart_mcap_cache = {}
 
 def _dart_eok_number(s):
     try:
@@ -1720,34 +2184,95 @@ def _dart_document_text(rcept_no):
 
     return ""
 
-def _dart_market_cap_eok(stock_code):
-    """현재 시가총액(억원). 실패하면 None. 10분 캐시."""
-    if not stock_code or not re.fullmatch(r"\d{6}", str(stock_code)):
-        return None
+_dart_snapshot_cache = {}
+
+
+def _dart_stock_snapshot(stock_code):
+    """
+    네이버 금융 페이지 하나에서 시가총액/현재가/목표주가/PER/EPS/ROE를 한 번에
+    가져와 캐싱(10분). 각 값은 페이지에 없으면 None - 특히 "목표주가"/"ROE"는
+    페이지에 아예 없는 종목도 많다(ROE는 네이버 메인 페이지엔 안 나오는 경우가
+    흔함). 절대 숫자를 지어내지 않고 실패하면 그냥 None으로 둔다.
+    """
     now = time.time()
-    cached = _dart_mcap_cache.get(stock_code)
+    cached = _dart_snapshot_cache.get(stock_code)
     if cached and now - cached[1] < 600:
         return cached[0]
 
-    try:
-        url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
-        res = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=7)
-        if res.status_code != 200:
-            return None
-        res.encoding = "euc-kr"
-        soup = BeautifulSoup(res.text, "html.parser")
-        # 네이버 금융의 시가총액 값은 '억원' 단위.
-        for em in soup.select("em"):
-            txt = em.get_text(" ", strip=True).replace(",", "")
-            if re.fullmatch(r"[0-9]+", txt):
-                parent = em.parent.get_text(" ", strip=True) if em.parent else ""
-                if "시가총액" in parent:
-                    value = float(txt)
-                    _dart_mcap_cache[stock_code] = (value, now)
-                    return value
-    except Exception:
-        pass
-    return None
+    result = {
+        "mcap": None, "current_price": None, "target_price": None,
+        "per": None, "eps": None, "roe": None,
+    }
+    if stock_code and re.fullmatch(r"\d{6}", str(stock_code)):
+        try:
+            url = f"https://finance.naver.com/item/main.naver?code={stock_code}"
+            res = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=7)
+            if res.status_code == 200:
+                res.encoding = "euc-kr"
+                soup = BeautifulSoup(res.text, "html.parser")
+                for em in soup.select("em"):
+                    txt = em.get_text(" ", strip=True).replace(",", "")
+                    parent = em.parent.get_text(" ", strip=True) if em.parent else ""
+                    if re.fullmatch(r"-?[0-9]+", txt):
+                        if result["mcap"] is None and "시가총액" in parent:
+                            result["mcap"] = float(txt)
+                        elif result["target_price"] is None and "목표주가" in parent:
+                            result["target_price"] = float(txt)
+                        elif result["current_price"] is None and "현재가" in parent:
+                            result["current_price"] = float(txt)
+                        elif result["eps"] is None and "EPS" in parent and "PER" not in parent:
+                            result["eps"] = float(txt)
+                    elif re.fullmatch(r"-?[0-9]+\.[0-9]+", txt):
+                        if result["per"] is None and "PER" in parent and "EPS" not in parent and "업종" not in parent:
+                            result["per"] = float(txt)
+                        elif result["roe"] is None and "ROE" in parent:
+                            result["roe"] = float(txt)
+        except Exception:
+            pass
+
+    _dart_snapshot_cache[stock_code] = (result, now)
+    return result
+
+
+def _dart_gap_ratio_label(stock_code):
+    """
+    🎯 괴리율(현재가 대비 목표주가 차이, %)을 "🎯괴리율 +7.0% (현 36,900 / 목 39,500)"
+    형태로 반환. 네이버 금융에 목표주가(애널리스트 컨센서스)가 없는 종목이면
+    None을 반환하고, 이 경우 그냥 줄 자체를 안 보여준다 (숫자를 지어내지 않음).
+    """
+    snap = _dart_stock_snapshot(stock_code)
+    cur = snap.get("current_price")
+    target = snap.get("target_price")
+    if not cur or not target:
+        return None
+    gap = (target - cur) / cur * 100
+    return f"🎯괴리율 {gap:+.1f}% (현재 {cur:,.0f} / ✔️목표 {target:,.0f})"
+
+
+def _dart_valuation_line(stock_code):
+    """
+    ⚡️PER · ⚡️EPS · ⚡️ROE를 있는 것만 골라서 한 줄로. 셋 다 없으면 None.
+    (ROE는 네이버 금융 메인 페이지엔 없는 경우가 흔해서 자주 빠질 수 있음)
+    """
+    snap = _dart_stock_snapshot(stock_code)
+    per = snap.get("per")
+    eps = snap.get("eps")
+    roe = snap.get("roe")
+    parts = []
+    if per is not None:
+        parts.append(f"⚡️PER {per:g}")
+    if eps is not None:
+        parts.append(f"⚡️EPS {eps:,.0f}원")
+    if roe is not None:
+        parts.append(f"⚡️ROE {roe:g}%")
+    if not parts:
+        return None
+    return " · ".join(parts)
+
+
+def _dart_market_cap_eok(stock_code):
+    """현재 시가총액(억원). 실패하면 None. 10분 캐시."""
+    return _dart_stock_snapshot(stock_code).get("mcap")
 
 def _dart_find_near(text, keywords, window=2500):
     """키워드 주변의 수치만 뽑아 엉뚱한 표의 숫자 오인식 최소화."""
@@ -1758,97 +2283,241 @@ def _dart_find_near(text, keywords, window=2500):
     joined = " ".join(chunks)
     return joined
 
-def _dart_financial_strong(text):
+def _eok_comma_label(amount):
+    """예: 17803.8 -> '17,803.8억'  /  40803.0 -> '40,803억' (소수점 0이면 생략)"""
+    s = f"{amount:,.1f}"
+    if s.endswith(".0"):
+        s = s[:-2]
+    return f"{s}억"
+
+
+# ============================================================
+# 📐 항목별(매출/영업이익/순이익) 중요도 등급 기준표 (1~10 전체 사용)
+# ------------------------------------------------------------
+# 그 항목 하나의 "전기 대비 증감률(%)" 크기만 보고 매김. 5등급부터 🚨가 붙고,
+# 5 이상은 더 잘게 나눠서(50~80/80~120/120~180/180~250/250~400/400↑)
+# 진짜 강한 재료일수록 높은 등급이 나오도록 함.
+#   1등급: 10% 미만           (거의 변화 없음)
+#   2등급: 10~20%
+#   3등급: 20~30%
+#   4등급: 30~50%
+#   5등급: 50~80%   🚨 여기부터 "매수 검토할 만큼 강함"
+#   6등급: 80~120%  🚨
+#   7등급: 120~180% 🚨
+#   8등급: 180~250% 🚨
+#   9등급: 250~400% 🚨
+#  10등급: 400% 이상 또는 흑자전환 🚨 (최고 등급)
+# ============================================================
+METRIC_IMPORTANCE_THRESHOLDS = [
+    (400, 10), (250, 9), (180, 8), (120, 7), (80, 6), (50, 5),
+    (30, 4), (20, 3), (10, 2), (0, 1),
+]
+
+
+def _keycap(n):
+    """숫자 1~10을 이모지 번호로. 1~9는 N️⃣, 10은 🔟."""
+    n = max(1, min(int(n), 10))
+    return "🔟" if n == 10 else f"{n}\ufe0f\u20e3"
+
+
+def _dart_extract_quarter_label(text, report_nm):
+    """
+    공시 원문(또는 보고서명)에서 "몇 분기 실적인지"를 뽑아서 한글로 명확하게
+    표시한다. 예: "2026년 2분기", "2026년 반기(2분기 누적)", "2026년 3분기".
+    못 찾으면 None (이 경우 그냥 report_nm만 보여주고 분기 표시는 생략).
+    """
+    # 정기보고서류는 이름 자체에 이미 분기가 드러나 있음
+    if "1분기보고서" in report_nm:
+        return "1분기"
+    if "반기보고서" in report_nm:
+        return "반기(2분기 누적)"
+    if "3분기보고서" in report_nm:
+        return "3분기"
+    if "사업보고서" in report_nm:
+        return "4분기(사업연도 전체)"
+
     if not text:
-        return False
+        return None
 
-    # 영업이익 전년비 +50% 이상
-    op_chunk = _dart_find_near(text, ["영업이익", "영업이익(손실)"])
-    op_pcts = _dart_extract_percentages(op_chunk)
-    if any(p >= DART_MIN_OP_YOY for p in op_pcts):
-        return True
+    # "2026년 2분기", "2026년도 2분기", "제2분기" 같은 표현을 원문에서 직접 탐색
+    m = re.search(r"(20\d{2})\s*년도?\s*([1-4])\s*분기", text)
+    if m:
+        return f"{m.group(1)}년 {m.group(2)}분기"
+    m = re.search(r"제\s*([1-4])\s*분기", text)
+    if m:
+        return f"{m.group(1)}분기"
+    if "반기" in text:
+        return "반기(2분기 누적)"
+    return None
 
-    # 매출 +30% AND 영업이익/순이익 개선
-    rev_chunk = _dart_find_near(text, ["매출액", "매출"])
-    rev_pcts = _dart_extract_percentages(rev_chunk)
-    if any(p >= DART_MIN_REVENUE_YOY for p in rev_pcts):
-        if any(p >= 20 for p in op_pcts):
-            return True
 
-    # 흑자전환
+def _metric_importance(pct):
+    """개별 항목(매출/영업이익/순이익)의 증가율 하나만 보고 매기는 중요도(1~10).
+    기준은 위 METRIC_IMPORTANCE_THRESHOLDS 표 참고. 5등급부터 🚨를 붙여서
+    "이 항목 자체는 매수 검토할 만큼 강하다"는 신호로 씀."""
+    if pct is None:
+        return 1
+    p = abs(pct)
+    for threshold, grade in METRIC_IMPORTANCE_THRESHOLDS:
+        if p >= threshold:
+            return grade
+    return 1
+
+
+def _dart_financial_strong(text, stock_code=None):
+    """
+    반환값: (통과여부, 근거설명 또는 None)
+    근거설명은 매출/영업이익/순이익을 각각 "당기(전기, 증감%) 중요N️⃣" 형태로
+    한 줄씩 보여주는 카드 형태로 만든다. 항목별 증가율이 클수록 그 줄의 등급이
+    높아지고(1~10, 기준은 METRIC_IMPORTANCE_THRESHOLDS 참고), 5등급부터 🚨가
+    붙는다. 어닝서프라이즈(컨센서스 대비)가 원문에 있으면 별도 줄로 추가한다.
+
+    🎯 "몇 % 이상이어야만 통과"하는 문턱값은 없습니다 - 실제 수치를 그대로
+    보여주기 때문에 크고 작은 건 보는 사람이 직접 판단하면 됩니다.
+    원문에서 관련 수치를 아예 못 찾으면(순수 정기 보고서 등) 노출하지 않습니다.
+
+    ⚠️ 참고: 괴리율(목표주가 대비)/PER/POR/전분기(QoQ)/최근 5분기 히스토리/내부자
+    거래내역은 넣지 않았습니다. 이건 DART 공시 원문에 없는 별도의 외부 주가/공시
+    데이터베이스(유료 API 등)가 있어야 나오는 정보라, 저희가 가진 DART 원문
+    데이터만으로는 정확히 재현할 방법이 없습니다. 부정확한 숫자를 보여드리느니
+    확실히 검증되는 정보만 넣었습니다.
+    """
+    if not text:
+        return False, None
+
+    # 흑자전환은 부호가 명확한 이벤트라 그대로 우선 노출 (최고 등급 10)
     if "흑자전환" in text and ("영업이익" in text or "당기순이익" in text):
-        return True
+        info_lines = [x for x in (_dart_gap_ratio_label(stock_code), _dart_valuation_line(stock_code)) if x]
+        prefix = ("\n".join(info_lines) + "\n") if info_lines else ""
+        return True, f"{prefix}📊손익 🚨흑자전환 중요{_keycap(10)}"
 
-    # 공시 원문에 컨센서스/시장예상치가 직접 적혀 있는 경우
+    def _comparison_basis_label(chunk):
+        """비율이 전년동기 대비인지 직전분기 대비인지 원문에서 찾아 라벨을 반환.
+        못 찾으면 빈 문자열(라벨 생략) - DART 실적 공시는 관례상 대부분 전년동기
+        대비지만, 원문에 명시가 없는데 임의로 "전년대비"라고 단정 짓지 않기 위함."""
+        if re.search(r"전년\s*동기|전년\s*대비|전기\s*대비", chunk):
+            return "전년대비"
+        if re.search(r"직전\s*분기|전\s*분기\s*대비|QoQ", chunk, re.IGNORECASE):
+            return "전분기대비"
+        return ""
+
+    def _metric_line(label, keywords):
+        """레이블 근처에서 금액을 최대 2개(당기, 전기)와 증감률을 뽑아
+        '당기(전기, 증감%(비교기준)) 중요N️⃣' 형태의 한 줄로 만든다. 5등급
+        이상이면 🚨를 붙인다. DART 실적 공시 원문은 보통 '당기금액 → 전기금액
+        (증감율%)' 순서로 나온다."""
+        chunk = _dart_find_near(text, keywords, window=200)
+        amounts = _dart_extract_eok_amounts(chunk)
+        pcts = _dart_extract_percentages(chunk)
+        if not amounts:
+            return None
+        cur = amounts[0]
+        pct = pcts[0] if pcts else None
+        basis = _comparison_basis_label(chunk)
+        basis_tag = f"({basis})" if basis else ""
+        arrow = "🔺" if (pct is not None and pct >= 0) else "▼"
+        imp = _metric_importance(pct)
+        badge = f"{'🚨' if imp >= 5 else ''}중요{_keycap(imp)}"
+        if len(amounts) >= 2:
+            prior = amounts[1]
+            if pct is not None:
+                return f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)}, {arrow}{abs(pct):g}%{basis_tag}) {badge}"
+            return f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)})"
+        if pct is not None:
+            return f"{label}: {_eok_comma_label(cur)} ({arrow}{abs(pct):g}%{basis_tag}) {badge}"
+        return f"{label}: {_eok_comma_label(cur)}"
+
+    lines = []
+    rev_line = _metric_line("매출", ["매출액", "매출"])
+    op_line = _metric_line("영업", ["영업이익", "영업이익(손실)"])
+    net_line = _metric_line("순이익", ["당기순이익", "순이익"])
+    for line in (rev_line, op_line, net_line):
+        if line:
+            lines.append(line)
+
+    # 🚀 어닝서프라이즈: 컨센서스/시장예상치 대비 수치가 원문에 직접 적혀 있으면
+    # 매출/영업이익 실적 줄과 별개로 한 줄 더 추가 (둘 다 있을 수 있음)
     surprise_chunk = _dart_find_near(
         text, ["컨센서스", "시장예상치", "시장 예상치", "증권사 전망", "예상 영업이익"]
     )
     surprise_pcts = _dart_extract_percentages(surprise_chunk)
-    if any(p >= DART_MIN_EARNINGS_SURPRISE for p in surprise_pcts):
-        return True
+    if surprise_pcts:
+        imp = _metric_importance(surprise_pcts[0])
+        badge = f"{'🚨' if imp >= 5 else ''}중요{_keycap(imp)}"
+        lines.append(f"🚀어닝서프라이즈 컨센서스대비 {surprise_pcts[0]:+g}% {badge}")
 
-    return False
+    if lines:
+        info_lines = [x for x in (_dart_gap_ratio_label(stock_code), _dart_valuation_line(stock_code)) if x]
+        prefix = ("\n".join(info_lines) + "\n") if info_lines else ""
+        return True, f"{prefix}📊" + "\n".join(lines)
+
+    return False, None
 
 def _dart_money_strong(report_nm, text, stock_code):
+    """
+    반환값: (통과여부, 근거설명 또는 None)
+    근거설명은 "📊비교대상 🚨비율% 💰금액" 형태로 통일해서 한눈에 들어오게 만든다.
+    예: "📊시가총액대비 🚨32% 💰500억원"
+
+    🎯 [변경] "몇 % 이상이어야만 통과"하는 문턱값을 없앴습니다. 어차피 제목에
+    실제 비율(💥📊시가총액대비 🚨N% 💰금액)을 그대로 보여주기 때문에, 문턱값으로
+    미리 거르지 않아도 됩니다 - 원문에서 금액/비율을 찾을 수 있으면 그 수치를
+    그대로 보여주고, 크고 작은 건 보는 사람이 직접 판단하면 됩니다.
+    """
     if not text:
-        return False
+        return False, None
 
     mcap = _dart_market_cap_eok(stock_code)
 
-    def strong_amount(amounts, min_amount, min_mcap_ratio, very_large):
-        for amount in amounts:
-            if amount >= very_large:
-                return True
-            if amount >= min_amount and mcap and (amount / mcap * 100) >= min_mcap_ratio:
-                return True
-        return False
+    def _amount_label(amount):
+        """억원 단위 숫자를 보기 좋게(필요하면 조 단위까지) 문자열로."""
+        if amount >= 10000:
+            return f"{amount / 10000:,.1f}조원"
+        return f"{amount:,.0f}억원"
+
+    def best_ratio_label(amounts, basis_label="시가총액대비"):
+        """금액 목록 중 가장 큰 금액을 기준으로 '📊비교대상 🚨비율% 💰금액' 형태로 반환.
+        시총 정보가 없으면 금액만 보여준다. 아무 금액도 없으면 (False, None)."""
+        if not amounts:
+            return False, None
+        best = max(amounts)
+        if mcap:
+            ratio = round(best / mcap * 100, 1)
+            return True, f"📊{basis_label} 🚨{ratio}% 💰{_amount_label(best)}"
+        return True, f"💰{_amount_label(best)}"
 
     # 공급계약
     if "단일판매" in report_nm or "공급계약" in report_nm:
         chunk = _dart_find_near(text, ["계약금액", "최근매출액", "매출액"])
         amounts = _dart_extract_eok_amounts(chunk)
         pcts = _dart_extract_percentages(chunk)
-        # 계약/매출 비율이 원문에 있는 경우 20% 이상 + 100억 이상
-        if any(a >= DART_MIN_CONTRACT_AMOUNT for a in amounts) and any(
-            p >= DART_MIN_CONTRACT_TO_SALES for p in pcts
-        ):
-            return True
-        # 원문에 비율이 없으면 300억 이상만 통과
-        return any(a >= DART_CONTRACT_VERY_LARGE for a in amounts)
+        # 매출액 대비 비율이 원문에 있으면 그 비율 + 계약금액을 같이 노출
+        if pcts:
+            if amounts:
+                return True, f"📊매출액대비 🚨{max(pcts)}% 💰{_amount_label(max(amounts))}"
+            return True, f"📊매출액대비 🚨{max(pcts)}%"
+        # 비율은 없어도 계약금액이 있으면 시가총액 대비로 환산해서 노출
+        return best_ratio_label(amounts, "시가총액대비")
 
     # 3자배정 유상증자
     if "유상증자결정" in report_nm:
         if "제3자배정" not in text and "제3자 배정" not in text:
-            return False
+            return False, None
         chunk = _dart_find_near(text, ["모집총액", "증자금액", "증자 규모", "제3자배정"])
         amounts = _dart_extract_eok_amounts(chunk)
-        return strong_amount(
-            amounts,
-            DART_MIN_THIRD_PARTY_AMOUNT,
-            DART_MIN_THIRD_PARTY_TO_MCAP,
-            DART_THIRD_PARTY_VERY_LARGE,
-        )
+        return best_ratio_label(amounts, "시가총액대비")
 
     # 기술이전/라이선스
     if "기술이전" in report_nm or "라이선스" in report_nm or "기술이전" in text or "라이선스" in text:
         chunk = _dart_find_near(text, ["총계약금액", "계약금액", "선급금", "마일스톤", "라이선스"])
         amounts = _dart_extract_eok_amounts(chunk)
-        return strong_amount(
-            amounts,
-            DART_MIN_TECH_AMOUNT,
-            DART_MIN_TECH_TO_MCAP,
-            DART_TECH_VERY_LARGE,
-        )
+        return best_ratio_label(amounts, "시가총액대비")
 
     # 자사주 취득
     if "자기주식취득" in report_nm:
         chunk = _dart_find_near(text, ["취득예정금액", "취득금액", "취득예정"])
         amounts = _dart_extract_eok_amounts(chunk)
-        if any(a >= DART_BUYBACK_VERY_LARGE for a in amounts):
-            return True
-        return bool(
-            mcap and any((a / mcap * 100) >= DART_MIN_BUYBACK_TO_MCAP for a in amounts)
-        )
+        return best_ratio_label(amounts, "시가총액대비")
 
     # M&A / 타법인 / 투자 / 출자
     if any(k in report_nm for k in [
@@ -1859,25 +2528,27 @@ def _dart_money_strong(report_nm, text, stock_code):
             text, ["취득금액", "양수가액", "양도가액", "투자금액", "출자금액", "거래금액"]
         )
         amounts = _dart_extract_eok_amounts(chunk)
-        return strong_amount(
-            amounts,
-            DART_MIN_OTHER_AMOUNT,
-            DART_MIN_OTHER_TO_MCAP,
-            DART_OTHER_VERY_LARGE,
-        )
+        return best_ratio_label(amounts, "시가총액대비")
 
-    return False
+    return False, None
 
 def dart_should_expose(report_nm, text, stock_code):
-    # 풍문/조회공시/해명/설명요구는 무조건 노출
+    """반환값: (통과여부, 근거설명 또는 None). 근거설명은 있으면 텔레그램 제목에 붙습니다."""
+    # 풍문/조회공시/해명/설명요구는 무조건 노출 (근거설명 없음)
     if any(k in report_nm for k in DART_RUMOR_KEYWORDS):
-        return True
+        return True, None
 
     if any(k in report_nm for k in [
-        "영업(잠정)실적", "영업실적", "매출액또는손익구조", "손익구조"
+        "영업(잠정)실적", "영업실적", "매출액또는손익구조", "손익구조", "어닝서프라이즈"
     ]):
         # 실적 공시는 원문 수치가 있어야 강한 재료 여부를 정확히 판단한다.
-        return _dart_financial_strong(text)
+        return _dart_financial_strong(text, stock_code)
+
+    # 🎯 [연결 완료] "결정 자체가 재료"인 유형은 원문 텍스트 성공/실패와 무관하게
+    # 항상 노출한다. 예전에는 DART_STRONG_REPORT_KEYWORDS를 만들어두고도 실제로는
+    # 아무 데서도 참조하지 않는 죽은 코드였음 - 이번에 실제로 연결함.
+    if any(k in report_nm for k in DART_ALWAYS_EXPOSE_KEYWORDS):
+        return True, None
 
     # 원문 다운로드가 실패한 경우에도 '강한 이벤트 제목' 자체는 놓치지 않는다.
     # 단, 금액/비율이 반드시 필요한 계약·투자·실적 공시는 제목만으로 통과시키지 않는다.
@@ -1892,7 +2563,7 @@ def dart_should_expose(report_nm, text, stock_code):
             "상장폐지", "불성실공시법인", "감사의견거절", "감사의견부적정",
             "감사의견한정", "흑자전환", "적자전환",
         }
-        return any(k in report_nm for k in title_only_keywords)
+        return any(k in report_nm for k in title_only_keywords), None
 
     return _dart_money_strong(report_nm, text, stock_code)
 
@@ -1946,34 +2617,49 @@ def check_dart_disclosures(current_time_str):
                 or any(root in corp_name for root in DART_WATCH_COMPANIES)
             )
 
-            # 풍문/조회공시는 상장 여부와 관계없이 요청대로 그대로 노출.
+            # 🚫 비상장사는 풍문류를 포함해서 전부 제외 (상장 여부를 최우선으로 확인)
+            if not is_listed:
+                mark_as_sent(full_title)
+                continue
+
+            # 풍문/조회공시는 (상장사에 한해서) 그대로 노출.
             if is_rumor:
                 detail_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
                 mark_as_sent(full_title)  # 🚫 먼저 등록해서 중복 전송 차단
                 send_telegram_message(
                     full_title, detail_url, current_time_str, 1,
                     False, False, False, False,
-                    is_disclosure=False, is_rumor=True
+                    is_disclosure=False, is_rumor=True,
+                    show_link_below=True,
                 )
                 sent += 1
                 continue
 
-            # 나머지는 실제 상장사만, 공시 원문 수치까지 확인.
-            if not is_listed:
-                mark_as_sent(full_title)
-                continue
-
             report_text = _dart_document_text(rcept_no)
-            if not dart_should_expose(report_nm, report_text, stock_code):
+            should_expose, reason = dart_should_expose(report_nm, report_text, stock_code)
+            if not should_expose:
                 mark_as_sent(full_title)
                 continue
 
             detail_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
             mark_as_sent(full_title)  # 🚫 먼저 등록해서 중복 전송 차단
+
+            # 🏢 회사명 (시가총액) 헤더를 제목 위에 붙임 - 시총 조회 실패하면 그냥 회사명만
+            mcap = _dart_market_cap_eok(stock_code)
+            # 🗓 "몇 분기 실적인지" 원문에서 찾아서 명확하게 붙임 (못 찾으면 report_nm만)
+            quarter_label = _dart_extract_quarter_label(report_text, report_nm)
+            report_line = f"{quarter_label} {report_nm}" if quarter_label else report_nm
+            if mcap:
+                display_title = f"🏢 {corp_name} (시가총액 {_eok_comma_label(mcap)})\n{report_line}"
+            else:
+                display_title = f"🏢 {corp_name}\n{report_line}"
+
             send_telegram_message(
-                full_title, detail_url, current_time_str, 1,
+                display_title, detail_url, current_time_str, 1,
                 False, False, False, False,
-                is_disclosure=True, is_rumor=False
+                is_disclosure=True, is_rumor=False,
+                highlight_suffix=reason or "",
+                show_link_below=True,
             )
             sent += 1
 
