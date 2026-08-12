@@ -1087,7 +1087,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     elif is_rumor:
         tag_line = "👀 조회공시(풍문)"
     elif is_disclosure:
-        tag_line = "📋 전자공시"
+        tag_line = "✅ 전자공시"
     elif is_exclusive:
         tag_line = "🔥 [단독]"
     elif is_breaking:
@@ -1237,14 +1237,16 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         if highlight_suffix:
             body_escaped = html.escape(highlight_suffix)
             body_escaped = re.sub(r"(🎯괴리율[^\n]*)", r"<u>\1</u>", body_escaped)
+        # 본문이 정말 비어있으면(구조적 이벤트라 %도 배당/병합비율도 못 찾은 경우)
+        # 텅 빈 구분선 블록 자체를 아예 안 보이게 생략함
+        body_section = f"{body_escaped}\n━━━━━━━━━━━━━━━\n" if body_escaped else ""
         text_content = (
             f"━━━━━━━━━━━━━━━\n"
             f"{title_prefix} {tag_line} {corp_header}   ⏰ {time_str}\n"
             f"━━━━━━━━━━━━━━━\n"
             f"<b>{report_body}</b>\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"{body_escaped}\n"
-            f"━━━━━━━━━━━━━━━\n"
+            f"{body_section}"
             f"🔗 {html.escape(news_url, quote=True) if news_url else ''}\n"
             f"━━━━━━━━━━━━━━━"
         )
@@ -2437,6 +2439,35 @@ def _keycap(n):
     return "🔟" if n == 10 else f"{n}\ufe0f\u20e3"
 
 
+def _dart_merge_split_ratio_label(report_nm, text):
+    """
+    주식병합/분할결정 공시면 원문에서 "N주를 1주로" 같은 병합·분할 비율을
+    찾아서 "📐병합비율 5:1 (5주 → 1주)" 형태로 반환. 못 찾으면 None.
+    """
+    if not text:
+        return None
+    if "주식병합" in report_nm:
+        label = "병합"
+    elif "주식분할" in report_nm:
+        label = "분할"
+    else:
+        return None
+
+    chunk = text[:3000]  # 병합/분할 관련 숫자는 보통 공시 앞부분에 나와서 앞쪽만 검사
+    # "5주를 1주로" 같은 표현 탐색 (숫자가 키워드 "주를/주로" 앞에 오므로
+    # _dart_find_near 대신 원문에서 직접 검색해야 숫자가 안 잘림)
+    m = re.search(r"([\d,]+)\s*주를?\s*([\d,]+)\s*주(?:로)?", chunk)
+    if m:
+        a, b = m.group(1).replace(",", ""), m.group(2).replace(",", "")
+        return f"📐{label}비율 {a}:{b} ({a}주 → {b}주)"
+    # "5:1" 같은 표현 탐색
+    m = re.search(r"([\d,]+)\s*:\s*([\d,]+)", chunk)
+    if m:
+        a, b = m.group(1).replace(",", ""), m.group(2).replace(",", "")
+        return f"📐{label}비율 {a}:{b}"
+    return None
+
+
 def _dart_dividend_amount_label(report_nm, text):
     """
     배당결정 공시면 원문에서 '주당 배당금'을 찾아서 "💰주당배당금 500원" 형태로
@@ -2792,10 +2823,17 @@ def check_dart_disclosures(current_time_str):
             else:
                 display_title = f"🏢 {corp_name}\n👀 {report_line}"
 
-            # 💰 배당 결정 공시면 배당금액을 원문에서 찾아서 같이 보여줌
-            dividend_note = _dart_dividend_amount_label(report_nm, report_text)
-            if dividend_note:
-                display_title += f"\n{dividend_note}"
+            # 💰 배당결정이면 배당금액을, 📐 주식병합/분할결정이면 병합·분할비율을
+            # 원문에서 찾아서 본문(highlight_suffix) 영역에 추가함. 이런 "구조적
+            # 이벤트" 유형은 원래 %가 없어서 본문이 비어있었는데, 이제 채워짐.
+            extra_notes = [
+                x for x in (
+                    _dart_dividend_amount_label(report_nm, report_text),
+                    _dart_merge_split_ratio_label(report_nm, report_text),
+                ) if x
+            ]
+            if extra_notes:
+                reason = (reason + "\n" if reason else "") + "\n".join(extra_notes)
 
             send_telegram_message(
                 display_title, detail_url, current_time_str, 1,
