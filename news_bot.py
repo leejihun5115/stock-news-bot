@@ -648,6 +648,48 @@ US_FEATURE_STOCK_WORDS = {
 }
 US_BREAKING_WORDS = {"breaking", "just in", "alert"}
 
+# 📊 실적발표(어닝) 관련 단어 - 이게 있으면 "실적발표" 유형으로 태그를 붙이고,
+# beat(상회)/miss(하회) 여부와 구체적 숫자(매출/EPS)를 제목에서 최대한 뽑아봄.
+US_EARNINGS_WORDS = {
+    "earnings", "quarterly results", "q1 results", "q2 results", "q3 results",
+    "q4 results", "guidance", "revenue", "eps",
+}
+US_EARNINGS_BEAT_WORDS = {"beats", "beat", "tops", "exceeds", "surpasses"}
+US_EARNINGS_MISS_WORDS = {"misses", "miss", "falls short", "below estimates"}
+
+
+def _extract_earnings_info(title):
+    """
+    영문 제목에서 실적발표 관련 정보를 최대한 뽑아본다 (제목만 갖고 하는 거라
+    한계가 뚜렷함 - 본문을 안 읽으므로 숫자가 제목에 직접 없으면 못 찾음).
+    반환: (is_earnings: bool, beat_or_miss: "beat"/"miss"/None, revenue: str나 None, eps: str나 None)
+    """
+    title_lower = title.lower()
+    is_earnings = any(w in title_lower for w in US_EARNINGS_WORDS) or "실적" in title
+
+    if not is_earnings:
+        return False, None, None, None
+
+    beat_or_miss = None
+    if any(w in title_lower for w in US_EARNINGS_BEAT_WORDS) or "어닝서프라이즈" in title:
+        beat_or_miss = "beat"
+    elif any(w in title_lower for w in US_EARNINGS_MISS_WORDS) or "어닝쇼크" in title:
+        beat_or_miss = "miss"
+
+    # 💵 매출/EPS 숫자는 제목에 이미 박혀 있을 때만 뽑을 수 있음 (본문을 안 읽음)
+    revenue = None
+    rev_match = re.search(r"revenue[^\d]{0,10}\$?([\d,.]+)\s*(billion|million|B|M)", title, re.I)
+    if rev_match:
+        unit = "billion" if rev_match.group(2).lower().startswith("b") else "million"
+        revenue = f"${rev_match.group(1)} {unit}"
+
+    eps = None
+    eps_match = re.search(r"EPS[^\d]{0,10}\$?([\d.]+)", title, re.I)
+    if eps_match:
+        eps = f"${eps_match.group(1)}"
+
+    return True, beat_or_miss, revenue, eps
+
 # 💰 태그 판단용 - "돈이 보이는" 강한 재료 단어
 MONEY_STRONG_WORDS = {
     "흑자", "적자", "어닝서프라이즈", "어닝쇼크", "영업이익", "매출",
@@ -1641,7 +1683,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
                          is_feature, is_us_market, is_disclosure=False, is_rumor=False,
                          custom_source="", source_label="", highlight_suffix="",
                          show_link_below=False, image_url="", novelty="신규", novelty_note=None,
-                         related_theme=None):
+                         related_theme=None, earnings_info=None):
     # 🔒 링크가 http(비보안)로 넘어오면 https로 자동 승격. 텔레그램은 http 링크에
     # (버튼이든 텍스트든) "이 링크를 열까요?" 보안 확인창을 띄우는 경우가 있어서,
     # 여기서 한 번 더 안전하게 막아줌 - 소스 목록에 또 http가 실수로 들어가도
@@ -1783,6 +1825,20 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         stocks_str = ", ".join(related_theme["kr_stocks"])
         related_theme_line = f"✔️ 관련 국내 테마주 [{related_theme['name']}]: {stocks_str}\n"
 
+    # 📊 실적발표(어닝) 표시 - beat/miss와 매출·EPS는 제목에 직접 숫자가 있을 때만
+    # 채워짐(본문을 안 읽으므로). 없으면 "실적발표"라는 사실만 표시.
+    earnings_line = ""
+    if earnings_info:
+        is_earnings, beat_or_miss, revenue, eps = earnings_info
+        if is_earnings:
+            beat_label = {"beat": "📈 예상 상회(beat)", "miss": "📉 예상 하회(miss)"}.get(beat_or_miss, "확인필요")
+            parts = [f"실적발표 - {beat_label}"]
+            if revenue:
+                parts.append(f"매출 {revenue}")
+            if eps:
+                parts.append(f"EPS {eps}")
+            earnings_line = f"✔️ {' · '.join(parts)}\n"
+
     key_point_html = html.escape(key_point_line) + "\n" if key_point_line else ""
 
     if is_disclosure or is_rumor:
@@ -1866,6 +1922,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             f"📌<b>{display_title}</b>{highlight_line}\n\n"
             f"{novelty_line}"
             f"{related_theme_line}"
+            f"{earnings_line}"
             f"{key_point_html}"
             f"{score_line}\n"
             f"{company_snapshot_line}"
@@ -2082,7 +2139,10 @@ def initialize_existing_telegram_channels():
 
 
 def initialize_existing_custom_sources():
-    """약업신문/전자신문도 지금 걸려있는 기사들을 미리 등록 (위와 같은 이유)"""
+    """약업신문/전자신문도 지금 걸려있는 기사들을 미리 등록 (위와 같은 이유).
+    ⚠️ check_custom_sources()와 반드시 동일한 제목 추출 로직(_extract_custom_source_headline)을
+    써야 함 - 다르면 등록이 무용지물이 되어 재시작할 때마다 기존 기사가 전부
+    "새 기사"로 쏟아지는 버그가 남(과거에 실제로 이 버그가 있었음)."""
     headers = {"User-Agent": USER_AGENT}
     registered = 0
     for target_url, source_name in CUSTOM_SCRAPE_SOURCES:
@@ -2092,7 +2152,7 @@ def initialize_existing_custom_sources():
                 continue
             soup = BeautifulSoup(res.text, "html.parser")
             for a_tag in soup.select("a"):
-                title = a_tag.get_text(strip=True)
+                title = _extract_custom_source_headline(a_tag)
                 if title and len(title) > 4:
                     mark_as_sent(title)
                     registered += 1
@@ -2508,7 +2568,19 @@ def check_us_news(current_time_str):
             # 표현(surge/plunge/breaking 등)도 같이 확인 (버그 수정)
             is_breaking = "속보" in title or any(w in title_lower for w in US_BREAKING_WORDS)
             is_feature = "특징주" in title or any(w in title_lower for w in US_FEATURE_STOCK_WORDS)
-            should_send = has_macro_word or matched_count >= 2 or is_breaking or is_feature or bool(resolved_companies)
+
+            # 🔗 테마/실적발표 판정을 should_send 결정 "전"에 미리 해둠 - "beats
+            # estimates"처럼 급등락 단어 없이 실적 얘기만 하는 제목도, 관련 테마·
+            # 기업이 식별되면 그 자체로 보낼 이유가 되도록 함(막연한 "실적시즌"
+            # 총평 기사까지 다 보내면 스팸이 되니, 테마/기업이 잡힐 때만 인정).
+            related_theme = _detect_theme_from_text(title)
+            earnings_info = _extract_earnings_info(title)
+            is_earnings_worth_sending = earnings_info[0] and (related_theme or resolved_companies)
+
+            should_send = (
+                has_macro_word or matched_count >= 2 or is_breaking or is_feature
+                or bool(resolved_companies) or is_earnings_worth_sending
+            )
 
             if not should_send:
                 mark_as_sent(title)
@@ -2524,13 +2596,11 @@ def check_us_news(current_time_str):
 
             mark_as_sent(title)  # 🚫 먼저 등록해서 중복 전송 원천 차단
             _remember_for_fuzzy(title)
-            # 🔗 이 뉴스가 특정 테마와 관련 있으면, 그 테마의 국내 관련주를 같이 붙임
-            related_theme = _detect_theme_from_text(title)
             send_telegram_message(
                 title, link, current_time_str, matched_count,
                 False, is_breaking, is_feature, True,
                 novelty=novelty, novelty_note=novelty_note,
-                related_theme=related_theme,
+                related_theme=related_theme, earnings_info=earnings_info,
             )
             sent += 1
 
@@ -2764,6 +2834,30 @@ CUSTOM_SCRAPE_SOURCES = [
 ]
 
 
+def _extract_custom_source_headline(a_tag):
+    """
+    커스텀 소스(약업신문/전자신문) <a> 태그에서 실제 제목 줄을 뽑아내는 공용 로직.
+    ⚠️ 이 함수를 check_custom_sources()와 initialize_existing_custom_sources()가
+    "반드시 똑같이" 써야 합니다. 예전엔 두 곳이 제목을 서로 다른 방식으로 계산해서
+    ("초기화 때 등록한 제목"과 "실제 체크 때 계산한 제목"이 문자열 자체가 달랐음),
+    초기화가 사실상 무용지물이 되어 봇이 재시작될 때마다 기존 기사들이 전부
+    "새 기사"인 것처럼 한꺼번에 쏟아지는 버그가 있었습니다. 반드시 이 함수
+    하나로 통일해서 재발을 막습니다.
+    """
+    # 링크 안에 카테고리/제목/요약이 통째로 들어있는 경우가 있어서,
+    # 줄바꿈 기준 첫 줄만 뽑고 그래도 길면 잘라냄 (텔레그램 헤드라인 추출과 동일 방식)
+    raw_text = a_tag.get_text(separator="\n", strip=True)
+    lines = [ln.strip() for ln in raw_text.split("\n") if ln.strip()]
+    # 첫 줄이 "약사·약학" 같은 짧은 카테고리 라벨이면 두 번째 줄(진짜 제목)을 사용
+    if lines and len(lines[0]) <= 10 and len(lines) > 1:
+        headline_line = lines[1]
+    elif lines:
+        headline_line = lines[0]
+    else:
+        headline_line = ""
+    return _shorten_headline(headline_line) if headline_line else ""
+
+
 def check_custom_sources(current_time_str):
     sources = CUSTOM_SCRAPE_SOURCES
 
@@ -2777,18 +2871,7 @@ def check_custom_sources(current_time_str):
             soup = BeautifulSoup(res.text, "html.parser")
 
             for a_tag in soup.select("a"):
-                # 링크 안에 카테고리/제목/요약이 통째로 들어있는 경우가 있어서,
-                # 줄바꿈 기준 첫 줄만 뽑고 그래도 길면 잘라냄 (텔레그램 헤드라인 추출과 동일 방식)
-                raw_text = a_tag.get_text(separator="\n", strip=True)
-                lines = [ln.strip() for ln in raw_text.split("\n") if ln.strip()]
-                # 첫 줄이 "약사·약학" 같은 짧은 카테고리 라벨이면 두 번째 줄(진짜 제목)을 사용
-                if lines and len(lines[0]) <= 10 and len(lines) > 1:
-                    headline_line = lines[1]
-                elif lines:
-                    headline_line = lines[0]
-                else:
-                    headline_line = ""
-                title = _shorten_headline(headline_line) if headline_line else ""
+                title = _extract_custom_source_headline(a_tag)
 
                 href = a_tag.get("href", "")
                 if not href or len(title) <= 4:
