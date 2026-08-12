@@ -1291,17 +1291,17 @@ def _calculate_importance_100(matched_count, is_exclusive, is_breaking, is_featu
     score = max(1, min(score, 100))
 
     if score >= 90:
-        grade = "🔥🔥🔥 S"
+        grade = "S"
     elif score >= 80:
-        grade = "🔥🔥 A+"
+        grade = "A+"
     elif score >= 70:
-        grade = "🔥 A"
+        grade = "A"
     elif score >= 55:
-        grade = "🟢 B"
+        grade = "B"
     elif score >= 40:
-        grade = "🟡 C"
+        grade = "C"
     else:
-        grade = "⚪ D"
+        grade = "D"
     return score, grade
 
 
@@ -1590,13 +1590,13 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         matched_count, is_exclusive, is_breaking, is_feature,
         has_listed_company_for_score, ratio_pct_for_score, novelty,
     )
-    score_line = f"📌 중요도 {score100}/100 {grade100}"
+    score_line = f"✔️ 중요도 {score100}/100\n✔️ 등급 {grade100}"
 
     # 🆕 신규/후속 표시 줄 (재탕은 애초에 여기까지 안 오고 발송 직전에 걸러짐)
     if novelty == "후속":
-        novelty_line = f"🔥[후속] {novelty_note}\n" if novelty_note else "🔥[후속]\n"
+        novelty_line = f"✔️ [후속] {novelty_note}\n" if novelty_note else "✔️ [후속]\n"
     else:
-        novelty_line = "🚀[신규]\n"
+        novelty_line = "✔️ [신규]\n"
 
     key_point_html = html.escape(key_point_line) + "\n" if key_point_line else ""
 
@@ -1611,38 +1611,34 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             body_escaped = html.escape(highlight_suffix)
             body_escaped = re.sub(r"(🎯괴리율[^\n]*)", r"<u>\1</u>", body_escaped)
         body_section = f"{body_escaped}\n\n" if body_escaped else ""
-        # 🔗 링크도 짧은 클릭형으로 (원문 이유는 위 일반 뉴스 쪽 주석 참고)
-        disclosure_link_line = (
-            f'🔗 <a href="{html.escape(news_url, quote=True)}">원문보기</a>' if news_url else ""
-        )
         header_line_prefix = f"{title_prefix} " if title_prefix else ""
         text_content = (
             f"{header_line_prefix}{tag_line} {corp_header}          <i>⏰ {time_str}</i>\n\n"
             f"<b>{report_body}</b>\n\n"
             f"{novelty_line}"
             f"{key_point_html}"
-            f"\n{score_line}\n\n"
+            f"{score_line}\n\n"
             f"{body_section}"
-            f"{disclosure_link_line}"
         )
-        reply_markup = None
+        # 🔘 링크를 텍스트(<a>)가 아니라 버튼(인라인 키보드)으로 바꿈.
+        # ⚠️ 텔레그램은 "표시 글자와 실제 주소가 다른 텍스트 링크"는 전부
+        # (글자가 URL처럼 안 생겼어도) "이 링크를 열까요?" 확인창을 띄웁니다.
+        # 반면 버튼은 눌렀을 때 확인창 없이 바로 열립니다 - 그래서 링크를
+        # 아예 버튼으로 빼서 확인창 자체가 안 뜨게 함.
+        reply_markup = (
+            {"inline_keyboard": [[{"text": "🔗 원문보기", "url": news_url}]]} if news_url else None
+        )
     else:
         # 📰 일반 뉴스(RSS/네이버/텔레그램 등):
-        # 📌[출처] · ⏰시간 / (빈줄) / 제목 / (빈줄) / 🔗기사보기(짧은 클릭형 링크)
+        # 📌[출처] · ⏰시간 / (빈줄) / 제목 / (빈줄) / 🔘기사보기(버튼)
         #
-        # ⚠️ 예전엔 여기서 URL을 통째로 텍스트에 그대로 노출했었습니다("이 링크를
-        # 열까요?" 확인창을 피하려고 일부러 그렇게 했던 것). 근데 그 확인창은
-        # "표시 글자가 URL처럼 생겼는데 실제 주소랑 다를 때"만 뜹니다(피싱 방지용).
-        # "🔗 기사보기"처럼 URL 모양이 아닌 짧은 글자를 링크로 걸면 확인창 없이
-        # 바로 열립니다. 그리고 미리보기(그림) 카드는 <a> 태그에 걸린 실제 URL을
-        # 그대로 사용해서 만들어지므로, 이렇게 바꿔도 그림 미리보기는 그대로 뜹니다
-        # (그림이 아예 안 뜨는 기사는, 그 기사 사이트가 애초에 미리보기용 썸네일
-        # 이미지(og:image)를 안 넣어둔 경우라 이건 이 코드로는 어떻게 할 수 없습니다).
+        # ⚠️ 텔레그램은 "표시 글자와 실제 주소가 다른 텍스트 링크"는 전부(글자가
+        # URL처럼 안 생겼어도) "이 링크를 열까요?" 확인창을 띄웁니다. 그래서
+        # 링크를 텍스트에서 아예 빼고 버튼(인라인 키보드)으로 옮겼습니다 -
+        # 버튼은 눌렀을 때 확인창 없이 바로 열립니다.
+        # 🖼️ 그림 미리보기는 텍스트 안에 링크가 없어도, link_preview_options의
+        # "url" 필드로 따로 지정할 수 있어서 이 방식으로도 그대로 유지됩니다.
         # (source_bracket은 위에서 tag_line과 같은 우선순위로 이미 순수 텍스트로 계산해둠)
-
-        link_text_line = (
-            f'🔗 <a href="{html.escape(news_url, quote=True)}">기사보기</a>' if news_url else ""
-        )
 
         # 🏢 요청에 따라: 제목에서 상장기업명이 매칭되고, 그 회사의 종목코드를
         # 알고 있으면(KRX 목록에서 조회 가능하면) DART 실적카드와 같은 방식으로
@@ -1657,6 +1653,14 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
                     _dart_gap_ratio_label(stock_code),
                     _dart_valuation_line(stock_code),
                 ) if x]
+                # 🏦 재무점수 (매출성장/영업이익성장/영업이익률/ROE/부채비율/영업현금흐름 100점)
+                fin_snap = _dart_financial_snapshot(stock_code)
+                fin_score, fin_grade, fin_missing = calculate_financial_score_100(fin_snap)
+                if fin_snap:  # 재무제표 자체를 못 가져온 경우(신규상장 등)는 아예 표시 안 함
+                    fin_line = f"✔️ 재무점수 {fin_score}/100 ✔️ {fin_grade}"
+                    if fin_missing:
+                        fin_line += f" (참고: {'/'.join(fin_missing)} 데이터 없음)"
+                    snap_parts.append(fin_line)
                 header_bits = [f"🏢{matched_company}"]
                 if mcap:
                     header_bits.append(f"(시가총액 {_eok_comma_label(mcap)})")
@@ -1671,11 +1675,12 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             f"📌<b>{display_title}</b>{highlight_line}\n\n"
             f"{novelty_line}"
             f"{key_point_html}"
-            f"\n{score_line}\n"
-            f"{company_snapshot_line}\n"
-            f"{link_text_line}"
+            f"{score_line}\n"
+            f"{company_snapshot_line}"
         )
-        reply_markup = None
+        reply_markup = (
+            {"inline_keyboard": [[{"text": "🔗 기사보기", "url": news_url}]]} if news_url else None
+        )
 
     # 🖼️ 이미지 주소가 있으면(예: 전자신문/약업신문에서 직접 추출한 og:image) sendPhoto로
     # 확실하게 사진을 첨부해서 보냄 - 텔레그램의 자동 미리보기(사이트가 봇 접근을
@@ -1706,8 +1711,18 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
                 req_payload["link_preview_options"] = {"is_disabled": True}  # 텔레그램 최신 방식
             else:
                 # 📰 일반 뉴스는 이미지를 직접 못 구했을 때의 대체 경로 -
-                # 텔레그램 자체 미리보기라도 켜서 되면 다행이고, 안 되면 링크만 나감
-                req_payload["link_preview_options"] = {"is_disabled": False, "prefer_large_media": True}
+                # 텔레그램 자체 미리보기라도 켜서 되면 다행이고, 안 되면 그냥 텍스트만 나감.
+                # ⚠️ 링크를 텍스트가 아니라 버튼으로 옮겼기 때문에("이 링크를 열까요?"
+                # 확인창 방지), 미리보기 대상 URL을 "url" 필드로 명시적으로 지정해야
+                # 함 - 안 그러면 텔레그램이 미리보기를 만들 링크를 텍스트에서 못 찾음.
+                if news_url:
+                    req_payload["link_preview_options"] = {
+                        "is_disabled": False,
+                        "prefer_large_media": True,
+                        "url": news_url,
+                    }
+                else:
+                    req_payload["link_preview_options"] = {"is_disabled": True}
         if reply_markup:
             req_payload["reply_markup"] = reply_markup
         return req_url, req_payload
@@ -2939,6 +2954,216 @@ def _get_dart_corp_code_map():
     return _dart_corp_code_map
 
 
+_dart_financial_raw_cache = {}  # stock_code -> (원본 항목 리스트, 조회시각)
+
+
+def _dart_fetch_financial_items(stock_code):
+    """
+    이 회사의 가장 최근 사업연도 재무제표 원본 항목들을 통째로 가져와서 캐싱(6시간).
+    연결재무제표(CFS)를 우선 시도하고, 없으면 별도재무제표(OFS)로 대체(소형주는
+    연결재무제표가 없는 경우가 흔함). 이 리스트 하나로 매출액/영업이익/자본/부채/
+    현금흐름 등 여러 계정을 한꺼번에 뽑아 쓸 수 있어서, 지표마다 API를 따로
+    호출하지 않아도 됨(DART API 호출 횟수 절약).
+    """
+    if not stock_code or not DART_API_KEY:
+        return []
+
+    now = time.time()
+    cached = _dart_financial_raw_cache.get(stock_code)
+    if cached and now - cached[1] < 6 * 3600:
+        return cached[0]
+
+    items = []
+    corp_code = _get_dart_corp_code_map().get(stock_code)
+    if corp_code:
+        this_year = datetime.datetime.now().year
+        for year in (this_year - 1, this_year - 2, this_year):
+            for fs_div in ("CFS", "OFS"):
+                try:
+                    res = requests.get(
+                        "https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json",
+                        params={
+                            "crtfc_key": DART_API_KEY,
+                            "corp_code": corp_code,
+                            "bsns_year": str(year),
+                            "reprt_code": "11011",  # 사업보고서(연간)
+                            "fs_div": fs_div,
+                        },
+                        timeout=10,
+                    )
+                    data = res.json()
+                    if data.get("status") == "000" and data.get("list"):
+                        items = data["list"]
+                        break
+                except Exception as e:
+                    print(f"[DART 재무제표 조회 오류] {stock_code}/{year}/{fs_div}: {e}")
+            if items:
+                break
+
+    _dart_financial_raw_cache[stock_code] = (items, now)
+    return items
+
+
+def _dart_get_account_amounts(items, account_names):
+    """items 중 계정명이 account_names 중 하나와 일치하는 첫 항목의
+    (당기금액, 전기금액)을 억원 단위로 반환. 못 찾으면 (None, None)."""
+    for item in items:
+        if item.get("account_nm") in account_names:
+            def _to_eok(key):
+                raw = (item.get(key) or "").replace(",", "")
+                if raw and re.fullmatch(r"-?\d+", raw):
+                    return float(raw) / 100000000
+                return None
+            return _to_eok("thstrm_amount"), _to_eok("frmtrm_amount")
+    return None, None
+
+
+# ============================================================
+# 🏦 재무점수 (100점 만점) - "이 회사가 재무적으로 좋은 회사인가?"
+# ------------------------------------------------------------
+# 배점: 매출성장 15 + 영업이익성장 20 + 영업이익률 15 + ROE 15 + 부채비율 15
+#      + 영업현금흐름 20 = 100점
+# 데이터가 없는 항목은 0점 처리(지어내지 않음) - 그래서 재무제표를 아예 못
+# 가져온 경우(소형주/최근 상장 등) 점수가 낮게 나올 수 있는데, 이건 "나쁜
+# 회사"라서가 아니라 "판단할 재료가 없다"는 뜻이므로 등급 옆에 항상
+# "데이터 부족" 여부를 같이 표시함.
+# ============================================================
+def _dart_financial_snapshot(stock_code):
+    """이 회사의 핵심 재무 항목들(매출/영업이익/ROE/부채비율/영업현금흐름)을
+    한 번에 조회해서 dict로 반환. 항목별로 못 구하면 None."""
+    items = _dart_fetch_financial_items(stock_code)
+    if not items:
+        return None
+
+    revenue_cur, revenue_prev = _dart_get_account_amounts(items, ("매출액", "수익(매출액)"))
+    op_cur, op_prev = _dart_get_account_amounts(items, ("영업이익", "영업이익(손실)"))
+    net_cur, _ = _dart_get_account_amounts(items, ("당기순이익", "당기순이익(손실)", "분기순이익"))
+    equity_cur, _ = _dart_get_account_amounts(items, ("자본총계",))
+    liabilities_cur, _ = _dart_get_account_amounts(items, ("부채총계",))
+    op_cf_cur, _ = _dart_get_account_amounts(
+        items, ("영업활동현금흐름", "영업활동으로인한현금흐름", "영업활동으로 인한 현금흐름")
+    )
+
+    return {
+        "revenue_cur": revenue_cur, "revenue_prev": revenue_prev,
+        "op_cur": op_cur, "op_prev": op_prev,
+        "net_cur": net_cur,
+        "equity_cur": equity_cur, "liabilities_cur": liabilities_cur,
+        "op_cf_cur": op_cf_cur,
+    }
+
+
+def _pct_change(cur, prev):
+    """전기 대비 증감률(%). 계산 불가능하면 None."""
+    if cur is None or prev is None or prev == 0:
+        return None
+    return (cur - prev) / abs(prev) * 100
+
+
+def calculate_financial_score_100(snap):
+    """
+    재무 스냅샷(dict)을 받아 100점 만점 점수 + 등급 + 데이터부족 여부를 반환.
+    반환값: (점수, 등급라벨, 부족한 항목 리스트)
+    """
+    if not snap:
+        return 0, "데이터없음", ["전체"]
+
+    score = 0
+    missing = []
+
+    # ① 매출 성장 (15점)
+    rev_growth = _pct_change(snap.get("revenue_cur"), snap.get("revenue_prev"))
+    if rev_growth is None:
+        missing.append("매출성장")
+    elif rev_growth >= 20:
+        score += 15
+    elif rev_growth >= 10:
+        score += 10
+    elif rev_growth >= 0:
+        score += 5
+
+    # ② 영업이익 성장 (20점) - 적자에서 흑자로 전환되면 만점
+    op_cur, op_prev = snap.get("op_cur"), snap.get("op_prev")
+    if op_cur is None:
+        missing.append("영업이익성장")
+    elif op_prev is not None and op_prev <= 0 < op_cur:
+        score += 20  # 🔄 흑자전환
+    else:
+        op_growth = _pct_change(op_cur, op_prev)
+        if op_growth is None:
+            missing.append("영업이익성장")
+        elif op_growth >= 30:
+            score += 20
+        elif op_growth >= 15:
+            score += 14
+        elif op_growth >= 0:
+            score += 7
+
+    # ③ 영업이익률 (15점)
+    if snap.get("op_cur") is not None and snap.get("revenue_cur"):
+        margin = snap["op_cur"] / snap["revenue_cur"] * 100
+        if margin >= 15:
+            score += 15
+        elif margin >= 8:
+            score += 10
+        elif margin >= 3:
+            score += 5
+    else:
+        missing.append("영업이익률")
+
+    # ④ ROE (15점)
+    if snap.get("net_cur") is not None and snap.get("equity_cur"):
+        roe = snap["net_cur"] / snap["equity_cur"] * 100
+        if roe >= 15:
+            score += 15
+        elif roe >= 10:
+            score += 10
+        elif roe >= 5:
+            score += 5
+    else:
+        missing.append("ROE")
+
+    # ⑤ 부채비율 (15점, 낮을수록 좋음)
+    if snap.get("liabilities_cur") is not None and snap.get("equity_cur"):
+        debt_ratio = snap["liabilities_cur"] / snap["equity_cur"] * 100 if snap["equity_cur"] else None
+        if debt_ratio is not None:
+            if debt_ratio <= 50:
+                score += 15
+            elif debt_ratio <= 100:
+                score += 10
+            elif debt_ratio <= 200:
+                score += 5
+        else:
+            missing.append("부채비율")
+    else:
+        missing.append("부채비율")
+
+    # ⑥ 영업현금흐름 (20점) - 이익보다 현금흐름이 더 크면(=이익의 질이 좋으면) 만점
+    op_cf = snap.get("op_cf_cur")
+    net_cur = snap.get("net_cur")
+    if op_cf is None:
+        missing.append("영업현금흐름")
+    elif op_cf <= 0:
+        pass  # 0점
+    elif net_cur is not None and op_cf >= net_cur:
+        score += 20
+    else:
+        score += 10
+
+    score = max(0, min(score, 100))
+
+    if score >= 80:
+        grade = "우수"
+    elif score >= 65:
+        grade = "양호"
+    elif score >= 50:
+        grade = "보통"
+    else:
+        grade = "주의"
+
+    return score, grade, missing
+
+
 def _dart_recent_revenue_eok(stock_code):
     """
     이 회사의 가장 최근 사업연도 매출액(억원)을 DART 재무제표 API에서 가져온다.
@@ -2947,46 +3172,8 @@ def _dart_recent_revenue_eok(stock_code):
     """
     if not stock_code or not DART_API_KEY:
         return None
-
-    now = time.time()
-    cached = _dart_revenue_cache.get(stock_code)
-    if cached and now - cached[1] < 6 * 3600:
-        return cached[0]
-
-    revenue = None
-    corp_code = _get_dart_corp_code_map().get(stock_code)
-    if corp_code:
-        # 최근 3개 연도를 순서대로 시도 (아직 사업보고서 미제출 시기엔 전년도로 대체)
-        this_year = datetime.datetime.now().year
-        for year in (this_year - 1, this_year - 2, this_year):
-            try:
-                res = requests.get(
-                    "https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json",
-                    params={
-                        "crtfc_key": DART_API_KEY,
-                        "corp_code": corp_code,
-                        "bsns_year": str(year),
-                        "reprt_code": "11011",  # 사업보고서(연간)
-                        "fs_div": "CFS",  # 연결재무제표 우선
-                    },
-                    timeout=10,
-                )
-                data = res.json()
-                if data.get("status") != "000":
-                    continue
-                for item in data.get("list", []):
-                    if item.get("account_nm") in ("매출액", "수익(매출액)") and item.get("fs_div") == "CFS":
-                        amt = item.get("thstrm_amount", "").replace(",", "")
-                        if amt and re.fullmatch(r"-?\d+", amt):
-                            revenue = float(amt) / 100000000  # 원 -> 억원
-                            break
-                if revenue is not None:
-                    break
-            except Exception as e:
-                print(f"[DART 매출액 조회 오류] {stock_code}/{year}: {e}")
-                continue
-
-    _dart_revenue_cache[stock_code] = (revenue, now)
+    items = _dart_fetch_financial_items(stock_code)
+    revenue, _ = _dart_get_account_amounts(items, ("매출액", "수익(매출액)"))
     return revenue
 
 
