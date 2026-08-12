@@ -1067,6 +1067,12 @@ def classify_telegram_channel_message(title):
     return matched_count, is_exclusive, is_breaking, is_feature, should_send
 
 
+# ─ 얇고 긴 구분선. 텔레그램 봇은 글자 색을 직접 지정할 수 없어서(굵게/기울임/
+# 밑줄/취소선/코드블럭 정도만 지원), <code> 태그로 감싸서 회색 배경의 흐린
+# 느낌을 내는 방식으로 "눈에 덜 띄게" 처리함 (제목이 상대적으로 더 부각됨).
+THIN_DIVIDER = "<code>" + "─" * 32 + "</code>"
+
+
 def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive, is_breaking,
                          is_feature, is_us_market, is_disclosure=False, is_rumor=False,
                          custom_source="", source_label="", highlight_suffix="",
@@ -1110,35 +1116,36 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     else:
         tag_line = "📌 [키워드]"
 
-    # 🔖 tag_line과 같은 우선순위지만, 이모지/괄호 없이 순수 텍스트만 (일반 뉴스
-    # 새 형식의 "[출처]" 자리에 그대로 넣기 위함)
+    # 🔖 tag_line과 같은 우선순위지만, "[출처]" 안에 그대로 넣기 위한 버전.
+    # 단독/속보/특징주처럼 강한 신호는 이모지를 살려서 눈에 띄게 하고,
+    # 그 외(일반 출처명 등)는 깔끔하게 순수 텍스트만 씀.
     if is_schedule:
-        source_bracket = "일정"
+        source_bracket = "⏰일정"
     elif is_rumor:
-        source_bracket = "조회공시(풍문)"
+        source_bracket = "👀조회공시(풍문)"
     elif is_disclosure:
-        source_bracket = "전자공시"
+        source_bracket = "✅전자공시"
     elif is_exclusive:
-        source_bracket = "단독"
+        source_bracket = "🔥단독"
     elif is_breaking:
-        source_bracket = "속보"
+        source_bracket = "🚨속보🚀"
     elif is_feature:
-        source_bracket = "특징주_해외" if is_us_market else "특징주"
+        source_bracket = "🚨특징주_해외" if is_us_market else "🚨특징주"
     elif is_us_market:
-        source_bracket = "해외시황/외신"
+        source_bracket = "🇺🇸해외시황/외신"
     elif is_money:
         if "금리" in title:
-            source_bracket = "금리"
+            source_bracket = "💰금리"
         elif "실적" in title or "어닝서프라이즈" in title or "어닝쇼크" in title:
-            source_bracket = "실적"
+            source_bracket = "💰실적"
         else:
-            source_bracket = "머니"
+            source_bracket = "💰머니"
     elif custom_source:
-        source_bracket = re.sub(r"[\[\]]", "", re.sub(r"^[^\w\uAC00-\uD7A3]+", "", custom_source)).strip()
+        source_bracket = "✅" + re.sub(r"[\[\]]", "", re.sub(r"^[^\w\uAC00-\uD7A3]+", "", custom_source)).strip()
     elif source_label:
-        source_bracket = source_label
+        source_bracket = f"✅{source_label}"
     else:
-        source_bracket = "키워드"
+        source_bracket = "📌키워드"
 
     is_us_related = is_us_market or any(kw.lower() in title.lower() for kw in US_CONTENT_KEYWORDS)
     is_pharma_related = any(kw in title for kw in PHARMA_KEYWORDS)
@@ -1208,9 +1215,9 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
 
     title_prefix = "📌"
     if is_mega_combo:
-        title_prefix = "🚀💯🚀"  # 위 5가지 조합 중 하나에 해당하는 최상위 재료
+        title_prefix = "🚀💯"  # 위 5가지 조합 중 하나에 해당하는 최상위 재료
     elif importance_score >= 5:
-        title_prefix = "🚀🚀"  # 중요도 5점 이상이면 다른 이모지 안 섞고 이것만 단독 표시
+        title_prefix = "🚀"  # 중요도 5점 이상이면 다른 이모지 안 섞고 이것만 단독 표시
     if is_us_related:
         title_prefix = "🇺🇸" + title_prefix
     if is_pharma_related:
@@ -1239,16 +1246,16 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             body_escaped = re.sub(r"(🎯괴리율[^\n]*)", r"<u>\1</u>", body_escaped)
         # 본문이 정말 비어있으면(구조적 이벤트라 %도 배당/병합비율도 못 찾은 경우)
         # 텅 빈 구분선 블록 자체를 아예 안 보이게 생략함
-        body_section = f"{body_escaped}\n━━━━━━━━━━━━━━━\n" if body_escaped else ""
+        body_section = f"{body_escaped}\n{THIN_DIVIDER}\n" if body_escaped else ""
         text_content = (
-            f"━━━━━━━━━━━━━━━\n"
-            f"{title_prefix} {tag_line} {corp_header}   ⏰ {time_str}\n"
-            f"━━━━━━━━━━━━━━━\n"
+            f"{THIN_DIVIDER}\n"
+            f"{title_prefix} {tag_line} {corp_header}          <i>⏰ {time_str}</i>\n"
+            f"{THIN_DIVIDER}\n"
             f"<b>{report_body}</b>\n"
-            f"━━━━━━━━━━━━━━━\n"
+            f"{THIN_DIVIDER}\n"
             f"{body_section}"
-            f"🔗 {html.escape(news_url, quote=True) if news_url else ''}\n"
-            f"━━━━━━━━━━━━━━━"
+            f"🔗 <i>{html.escape(news_url, quote=True) if news_url else ''}</i>\n"
+            f"{THIN_DIVIDER}"
         )
         reply_markup = None
     else:
@@ -1258,13 +1265,17 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         # (source_bracket은 위에서 tag_line과 같은 우선순위로 이미 순수 텍스트로 계산해둠)
 
         link_text_line = (
-            f'🔗 {html.escape(news_url, quote=True)}' if news_url else ""
+            f'🔗 <i>{html.escape(news_url, quote=True)}</i>' if news_url else ""
         )
 
         text_content = (
-            f"{title_prefix}[{source_bracket}] · ⏰ {time_str}\n\n"
-            f"<b>{display_title}</b>{highlight_line}\n\n"
-            f"{link_text_line}"
+            f"{THIN_DIVIDER}\n"
+            f"{title_prefix}[{source_bracket}]          <i>⏰ {time_str}</i>\n"
+            f"{THIN_DIVIDER}\n"
+            f"📌<b>{display_title}</b>{highlight_line}\n"
+            f"{THIN_DIVIDER}\n"
+            f"{link_text_line}\n"
+            f"{THIN_DIVIDER}"
         )
         reply_markup = None
 
