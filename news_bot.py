@@ -732,6 +732,110 @@ US_RSS_URLS = [
 NAVER_SEARCH_QUERIES = GLOBAL_AND_DOMESTIC_GIANTS
 
 # ============================================================
+# 🌅 아침 브리핑 - 한국장 열리기 전, 미국 지수/주요종목 시세로 오늘 시황 요약
+# ------------------------------------------------------------
+# 야후 파이낸스 시세 API(비공식이지만 API키 없이 무료로 씀)로 조회.
+# ============================================================
+US_MARKET_INDICES = [
+    ("나스닥", "^IXIC"),
+    ("S&P500", "^GSPC"),
+    ("다우", "^DJI"),
+    ("러셀2000", "^RUT"),
+    ("필라델피아반도체(SOX)", "^SOX"),
+    ("VIX(공포지수)", "^VIX"),
+]
+
+US_KEY_STOCKS = [
+    ("NVIDIA", "NVDA"), ("AMD", "AMD"), ("Micron", "MU"), ("Broadcom", "AVGO"),
+    ("Tesla", "TSLA"), ("Microsoft", "MSFT"), ("Amazon", "AMZN"),
+    ("Meta", "META"), ("Alphabet", "GOOGL"),
+]
+
+# ============================================================
+# 🔗 테마 정의표 - 미국 관련종목이 동반 강세면 그 테마로 판정하고,
+# 서술형 이유(reasons) + 국내 관련주(kr_stocks)로 바로 연결.
+# ------------------------------------------------------------
+# ⚠️ reasons는 "오늘 이 뉴스 때문에 올랐다"는 실시간 사실이 아니라, 이 테마가
+# 강세일 때 일반적으로 거론되는 배경을 정리해둔 것입니다(지어낸 오늘자 근거
+# 아님 - 그래서 브리핑에도 "일반적 배경"이라고 명시해서 보냄). 실제 오늘의
+# 구체적 사유까지 알고 싶으면 뉴스/공시 섹션을 같이 참고하시면 됩니다.
+# ⚠️ 조선(造船) 테마는 미국에 마땅한 대형 순수 조선주가 없어서(국내 조선업은
+# 미국지수보다 국내 발주/수주 뉴스에 더 크게 좌우됨) 이 표에서는 뺐습니다.
+# 조선 관련 종목 소식은 DART 공시/국내뉴스 쪽에서 잡힙니다.
+# ============================================================
+THEME_DEFINITIONS = [
+    {
+        "name": "반도체",
+        "us_symbols": ["NVDA", "AMD", "AVGO", "MU"],
+        "threshold": 2.0, "min_count": 2,
+        "reasons": ["AI 서버용 반도체 수요 지속", "메모리 가격 상승 흐름", "HBM(고대역폭메모리) 공급 기대"],
+        "kr_stocks": ["삼성전자", "SK하이닉스", "한미반도체", "리노공업"],
+    },
+    {
+        "name": "HBM/메모리",
+        "us_symbols": ["MU", "AVGO"],
+        "threshold": 3.0, "min_count": 1,
+        "reasons": ["메모리 현물가 상승", "HBM 공급 부족 우려/기대"],
+        "kr_stocks": ["삼성전자", "SK하이닉스"],
+    },
+    {
+        "name": "AI/빅테크",
+        "us_symbols": ["NVDA", "MSFT", "GOOGL", "META", "AMZN"],
+        "threshold": 2.0, "min_count": 3,
+        "reasons": ["빅테크 AI 인프라 투자 확대", "AI 서비스 수익화 기대감"],
+        "kr_stocks": ["네이버", "카카오", "삼성전자", "SK하이닉스"],
+    },
+    {
+        "name": "2차전지",
+        "us_symbols": ["TSLA", "ALB"],
+        "threshold": 3.0, "min_count": 1,
+        "reasons": ["전기차 수요 회복 기대", "리튬 등 배터리 소재 가격 반등"],
+        "kr_stocks": ["LG에너지솔루션", "삼성SDI", "에코프로", "포스코퓨처엠"],
+    },
+    {
+        "name": "전력",
+        "us_symbols": ["GEV", "VST", "NEE"],
+        "threshold": 2.0, "min_count": 1,
+        "reasons": ["AI 데이터센터발 전력수요 급증", "전력설비·그리드 투자 확대"],
+        "kr_stocks": ["HD현대일렉트릭", "LS일렉트릭", "효성중공업"],
+    },
+    {
+        "name": "원전",
+        "us_symbols": ["CEG", "SMR"],
+        "threshold": 3.0, "min_count": 1,
+        "reasons": ["원전 재가동/SMR(소형모듈원전) 투자 기대", "탈탄소 전력 수요 대응"],
+        "kr_stocks": ["두산에너빌리티", "한전기술", "우리기술"],
+    },
+    {
+        "name": "방산",
+        "us_symbols": ["LMT", "RTX", "NOC"],
+        "threshold": 2.0, "min_count": 2,
+        "reasons": ["지정학적 리스크 확대", "글로벌 국방예산 증가 흐름"],
+        "kr_stocks": ["한화에어로스페이스", "LIG넥스원", "한국항공우주"],
+    },
+    {
+        "name": "바이오",
+        "us_symbols": ["LLY", "MRNA", "PFE"],
+        "threshold": 2.0, "min_count": 1,
+        "reasons": ["신약 임상/허가 기대감", "헬스케어 섹터 자금유입"],
+        "kr_stocks": ["삼성바이오로직스", "셀트리온"],
+    },
+    {
+        "name": "로봇",
+        "us_symbols": ["TSLA", "ISRG"],
+        "threshold": 2.0, "min_count": 1,
+        "reasons": ["휴머노이드/자동화 투자 확대", "의료·산업용 로봇 응용분야 확대"],
+        "kr_stocks": ["레인보우로보틱스", "두산로보틱스"],
+    },
+]
+
+# 위 THEME_DEFINITIONS의 us_symbols를 전부 모아서, 시세를 한 번에 조회할 전체 종목 목록을 만듦
+# (US_KEY_STOCKS에 이미 있는 건 중복 조회 안 하도록 합침)
+_THEME_ALL_SYMBOLS = sorted({sym for theme in THEME_DEFINITIONS for sym in theme["us_symbols"]})
+
+MORNING_BRIEFING_HOUR = 8  # 이 시(KST 기준, 서버 로컬시간=KST 가정) 첫 실행 때 브리핑 발송
+
+# ============================================================
 # 💾 중복 방지 저장소 (Firestore, 무료)
 # ------------------------------------------------------------
 # Cloud Run은 실행이 끝나면 메모리가 초기화되기 때문에, 파이썬 변수(set)만으로는
@@ -1590,7 +1694,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         matched_count, is_exclusive, is_breaking, is_feature,
         has_listed_company_for_score, ratio_pct_for_score, novelty,
     )
-    score_line = f"✔️ 중요도 {score100}/100\n✔️ 등급 {grade100}"
+    score_line = f"✔️ 중요도 {score100} / 100\n✔️ 등급 {grade100}"
 
     # 🆕 신규/후속 표시 줄 (재탕은 애초에 여기까지 안 오고 발송 직전에 걸러짐)
     if novelty == "후속":
@@ -1657,7 +1761,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
                 fin_snap = _dart_financial_snapshot(stock_code)
                 fin_score, fin_grade, fin_missing = calculate_financial_score_100(fin_snap)
                 if fin_snap:  # 재무제표 자체를 못 가져온 경우(신규상장 등)는 아예 표시 안 함
-                    fin_line = f"✔️ 재무점수 {fin_score}/100 ✔️ {fin_grade}"
+                    fin_line = f"✔️ 재무점수 {fin_score} / 100\n✔️ 등급 {fin_grade}"
                     if fin_missing:
                         fin_line += f" (참고: {'/'.join(fin_missing)} 데이터 없음)"
                     snap_parts.append(fin_line)
@@ -1976,6 +2080,226 @@ def check_domestic_news(current_time_str):
 # ============================================================
 # 해외(미국장) 뉴스 체크
 # ============================================================
+# ============================================================
+# 🌅 아침 브리핑 (해외 지수/종목 시세 → 오늘의 테마 → 국내 관련주)
+# ============================================================
+_yahoo_quote_cache = {}
+
+
+def _fetch_yahoo_quote(symbol):
+    """
+    야후 파이낸스 비공식 API로 현재가/등락률을 가져온다. API키 불필요.
+    실패하면 (None, None). 5분 캐시 (아침 브리핑은 하루 한 번만 쓰지만,
+    혹시 재시도되는 경우를 대비해 짧게라도 캐싱).
+    """
+    now = time.time()
+    cached = _yahoo_quote_cache.get(symbol)
+    if cached and now - cached[2] < 300:
+        return cached[0], cached[1]
+
+    price, change_pct = None, None
+    try:
+        res = requests.get(
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+            headers={"User-Agent": USER_AGENT},
+            params={"range": "1d", "interval": "5m"},
+            timeout=8,
+        )
+        data = res.json()
+        result = data.get("chart", {}).get("result")
+        if result:
+            meta = result[0].get("meta", {})
+            price = meta.get("regularMarketPrice")
+            prev_close = meta.get("previousClose") or meta.get("chartPreviousClose")
+            if price is not None and prev_close:
+                change_pct = (price - prev_close) / prev_close * 100
+    except Exception as e:
+        print(f"[야후 시세 조회 오류] {symbol}: {e}")
+
+    _yahoo_quote_cache[symbol] = (price, change_pct, now)
+    return price, change_pct
+
+
+def _classify_us_themes(quote_map):
+    """
+    THEME_DEFINITIONS 전체를 훑어서, 조건(관련종목 중 threshold% 이상 오른 게
+    min_count개 이상)을 만족하는 테마를 전부 찾고, "강도" 순으로 정렬해서 반환.
+    강도 = (조건 만족 종목 수) × (그 종목들의 평균 상승률) - 단순하지만 명확한 규칙.
+    반환: [(테마dict, 강도, [(종목명, 등락률), ...]), ...] 강도 내림차순
+    """
+    results = []
+    for theme in THEME_DEFINITIONS:
+        up_stocks = []
+        for sym in theme["us_symbols"]:
+            price, chg = quote_map.get(sym, (None, None))
+            if chg is not None and chg >= theme["threshold"]:
+                up_stocks.append((sym, chg))
+        if len(up_stocks) >= theme["min_count"]:
+            strength = len(up_stocks) * (sum(c for _, c in up_stocks) / len(up_stocks))
+            results.append((theme, strength, up_stocks))
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
+
+
+def _rank_domestic_candidates(kr_stock_names, limit=3):
+    """
+    국내 관련주 후보들을 실제 거래대금/외국인수급/당일공시 여부로 점수 매겨서
+    상위 몇 개만 "최우선 관찰"로 추려낸다. 데이터를 못 가져온 종목은 0점으로
+    처리(밀려날 뿐, 후보에서 아예 빠지진 않음 - 데이터 부족이 곧 "나쁘다"는
+    뜻은 아니므로).
+    반환: [(종목명, 근거 문장 리스트), ...] 점수 내림차순, 최대 limit개
+    """
+    scored = []
+    for name in kr_stock_names:
+        stock_code = COMPANY_NAME_TO_CODE.get(name)
+        if not stock_code:
+            scored.append((name, 0, ["종목코드 미확인"]))
+            continue
+
+        reasons = []
+        score = 0
+
+        supply = _naver_supply_demand(stock_code)
+        if supply:
+            if supply.get("change_pct") is not None:
+                if supply["change_pct"] > 0:
+                    reasons.append(f"전일 주가 {supply['change_pct']:+.2f}%")
+                    score += 1
+            if supply.get("foreign_net") is not None:
+                if supply["foreign_net"] > 0:
+                    reasons.append(f"외국인 순매수 {supply['foreign_net']:,}주")
+                    score += 2
+                elif supply["foreign_net"] < 0:
+                    reasons.append(f"외국인 순매도 {abs(supply['foreign_net']):,}주")
+
+        has_disclosure = _dart_has_disclosure_today(stock_code)
+        if has_disclosure:
+            reasons.append("금일 DART 공시 있음")
+            score += 2
+
+        if not reasons:
+            reasons.append("현재 확인된 특이 수급/공시 없음")
+
+        scored.append((name, score, reasons))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [(name, reasons) for name, score, reasons in scored[:limit]]
+
+
+def build_morning_briefing_text():
+    """아침 브리핑 텍스트를 조립. 지수 시세를 전부 못 가져오면 None(발송 안 함)."""
+    index_lines = []
+    any_index_ok = False
+    for name, symbol in US_MARKET_INDICES:
+        price, chg = _fetch_yahoo_quote(symbol)
+        if price is None:
+            index_lines.append(f"{name}  조회 실패")
+            continue
+        any_index_ok = True
+        arrow = "🔺" if (chg or 0) >= 0 else "🔻"
+        index_lines.append(f"{name}  {price:,.2f}  {arrow}{chg:+.2f}%")
+
+    if not any_index_ok:
+        print("⚠️ [아침 브리핑] 지수 시세를 전부 못 가져와서 브리핑을 건너뜁니다.")
+        return None
+
+    # 📈 US_KEY_STOCKS + 모든 테마의 관련종목을 한 번에 조회(중복 없이)
+    all_symbols = sorted({sym for _, sym in US_KEY_STOCKS} | set(_THEME_ALL_SYMBOLS))
+    quote_map = {}
+    for sym in all_symbols:
+        quote_map[sym] = _fetch_yahoo_quote(sym)
+
+    stock_lines = []
+    for name, symbol in US_KEY_STOCKS:
+        price, chg = quote_map.get(symbol, (None, None))
+        if price is None:
+            continue
+        arrow = "🔺" if (chg or 0) >= 0 else "🔻"
+        stock_lines.append(f"{name}  {arrow}{chg:+.2f}%")
+
+    ranked_themes = _classify_us_themes(quote_map)
+
+    lines = ["🇺🇸 해외시장", ""]
+    lines.extend(index_lines)
+    lines.append("")
+    if stock_lines:
+        lines.append("⭐ 주요 종목")
+        lines.extend(stock_lines)
+        lines.append("")
+
+    if not ranked_themes:
+        lines.append("✔️ 오늘은 특별히 두드러진 테마 강세는 안 보입니다.")
+        return "\n".join(lines)
+
+    # 🥇 상위 3개 테마까지만 "N순위"로 표시
+    top_themes = ranked_themes[:3]
+    lines.append("✔️ 오늘 핵심 테마 (강도순)")
+    for i, (theme, strength, up_stocks) in enumerate(top_themes, start=1):
+        stock_desc = ", ".join(f"{sym}{c:+.1f}%" for sym, c in up_stocks)
+        lines.append(f"{i}순위 {theme['name']}  ({stock_desc})")
+    lines.append("")
+
+    # 1순위 테마에 대해서만 서술형 이유 + 국내 연결까지 자세히
+    top_theme, top_strength, top_up_stocks = top_themes[0]
+    lines.append(f"✔️ 오늘 1순위: {top_theme['name']} 강세")
+    lines.append("일반적 배경(참고용, 오늘자 확정 사실 아님):")
+    for i, reason in enumerate(top_theme["reasons"], start=1):
+        lines.append(f"  {i}. {reason}")
+    lines.append("")
+
+    lines.append("━━━━━━━━━━━━")
+    lines.append("🇰🇷 오늘 국내장 영향")
+    lines.append("━━━━━━━━━━━━")
+    for rank, (theme, strength, up_stocks) in enumerate(top_themes, start=1):
+        lines.append(f"{rank}순위 {theme['name']}")
+
+    lines.append("")
+    lines.append(f"✔️ 최우선 관찰 ({top_theme['name']} 관련주)")
+    top_candidates = _rank_domestic_candidates(top_theme["kr_stocks"], limit=3)
+    for name, reasons in top_candidates:
+        lines.append(f"• {name}")
+        lines.append("  이유: 미국 " + top_theme["name"] + " 강세 + " + " + ".join(reasons))
+    lines.append("")
+    lines.append("⚠️ 참고: \"미국에서 같은 테마가 강했다 + 국내 수급/공시\"를 연결한 것일 뿐,")
+    lines.append("국내 종목이 실제로 오른다는 보장은 아닙니다. 투자 판단은 본인 책임입니다.")
+
+    return "\n".join(lines)
+
+
+def send_morning_briefing():
+    text = build_morning_briefing_text()
+    if not text:
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "link_preview_options": {"is_disabled": True},
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=10)
+        if res.status_code == 200:
+            print("✅ [아침 브리핑] 발송 완료.")
+            return True
+        print(f"[아침 브리핑 전송 실패] status={res.status_code} body={res.text[:200]}")
+    except Exception as e:
+        print(f"[아침 브리핑 전송 오류] {e}")
+    return False
+
+
+def check_morning_briefing(now):
+    """
+    현재 시각이 MORNING_BRIEFING_HOUR(기본 8시)대이면, 오늘 하루 한 번만
+    아침 브리핑을 발송. should_run_task로 "오늘 이미 보냈는지"를 체크해서
+    같은 시간대에 여러 번 호출돼도(1분마다 깨어나므로) 중복 발송 안 되게 함.
+    """
+    if now.hour != MORNING_BRIEFING_HOUR:
+        return
+    today_key = f"morning_briefing_{now.strftime('%Y%m%d')}"
+    if should_run_task(today_key, 20 * 3600):  # 하루 한 번만 (20시간 이내 재실행 방지)
+        send_morning_briefing()
+
+
 def check_us_news(current_time_str):
     feedparser.USER_AGENT = USER_AGENT
     scanned = 0
@@ -2816,6 +3140,103 @@ def _dart_document_text(rcept_no):
     return ""
 
 _dart_snapshot_cache = {}
+
+# ============================================================
+# 📊 국내 종목 실시간 수급 (거래대금/외국인 순매매) + 당일 공시 여부
+# ------------------------------------------------------------
+# 아침 브리핑의 "최우선 관찰 종목" 랭킹에 씀 - 해외 테마만으로 관련주를
+# 나열하는 게 아니라, 실제 국내에서도 오늘 수급이 붙고 있는지/공시가
+# 있었는지까지 같이 봐서 근거를 붙임.
+# ============================================================
+_naver_supply_demand_cache = {}
+
+
+def _naver_supply_demand(stock_code):
+    """
+    네이버 금융의 "외국인/기관 매매동향" 페이지에서 가장 최근 거래일의
+    거래대금(억원)/외국인 순매매(주)/등락률을 가져온다. 실패하면 None.
+    10분 캐시.
+    """
+    if not stock_code:
+        return None
+    now = time.time()
+    cached = _naver_supply_demand_cache.get(stock_code)
+    if cached and now - cached[1] < 600:
+        return cached[0]
+
+    result = None
+    try:
+        res = requests.get(
+            f"https://finance.naver.com/item/frgn.naver?code={stock_code}",
+            headers={"User-Agent": USER_AGENT},
+            timeout=8,
+        )
+        if res.status_code == 200:
+            res.encoding = "euc-kr"
+            soup = BeautifulSoup(res.text, "html.parser")
+            # 페이지 안의 시세 표(가장 최근 거래일이 첫 데이터 행)에서 필요한 열만 뽑음
+            rows = soup.select("table.type2 tr")
+            for row in rows:
+                cells = row.select("td")
+                if len(cells) < 9:
+                    continue
+                texts = [c.get_text(strip=True).replace(",", "") for c in cells]
+                # 날짜가 있는(데이터) 행만: 첫 칸이 YYYY.MM.DD 형태
+                if not re.fullmatch(r"\d{4}\.\d{2}\.\d{2}", texts[0]):
+                    continue
+                try:
+                    change_pct_text = texts[3].replace("%", "")
+                    change_pct = float(change_pct_text) if change_pct_text not in ("", "-") else None
+                    volume = int(texts[4]) if texts[4].lstrip("-").isdigit() else None
+                    foreign_net = int(texts[7]) if texts[7].lstrip("-").isdigit() else None
+                except Exception:
+                    change_pct, volume, foreign_net = None, None, None
+                result = {"change_pct": change_pct, "volume": volume, "foreign_net": foreign_net}
+                break  # 가장 최근 거래일 한 줄만 필요
+    except Exception as e:
+        print(f"[네이버 수급 조회 오류] {stock_code}: {e}")
+
+    _naver_supply_demand_cache[stock_code] = (result, now)
+    return result
+
+
+_dart_today_disclosure_cache = {}
+
+
+def _dart_has_disclosure_today(stock_code):
+    """이 회사가 오늘 DART 공시를 냈는지(있음/없음/조회실패=None)를 확인. 10분 캐시."""
+    if not stock_code or not DART_API_KEY:
+        return None
+    now = time.time()
+    cached = _dart_today_disclosure_cache.get(stock_code)
+    if cached and now - cached[1] < 600:
+        return cached[0]
+
+    corp_code = _get_dart_corp_code_map().get(stock_code)
+    has_disclosure = None
+    if corp_code:
+        today_str = datetime.datetime.now().strftime("%Y%m%d")
+        try:
+            res = requests.get(
+                "https://opendart.fss.or.kr/api/list.json",
+                params={
+                    "crtfc_key": DART_API_KEY,
+                    "corp_code": corp_code,
+                    "bgn_de": today_str,
+                    "end_de": today_str,
+                },
+                timeout=8,
+            )
+            data = res.json()
+            if data.get("status") == "000":
+                has_disclosure = bool(data.get("list"))
+            elif data.get("status") == "013":  # 조회된 데이터 없음(정상 - 오늘 공시 없음)
+                has_disclosure = False
+        except Exception as e:
+            print(f"[DART 당일공시 조회 오류] {stock_code}: {e}")
+
+    _dart_today_disclosure_cache[stock_code] = (has_disclosure, now)
+    return has_disclosure
 
 
 def _dart_stock_snapshot(stock_code):
@@ -3914,6 +4335,8 @@ def main():
                     check_us_news(time_str)
                 last_rss = now
 
+            check_morning_briefing(now)
+
             if (now - last_custom).total_seconds() >= CUSTOM_SOURCE_INTERVAL:
                 check_custom_sources(time_str)
                 last_custom = now
@@ -4047,6 +4470,11 @@ def run_once():
                 check_us_news(time_str)
         except Exception as e:
             print(f"[국내/해외 RSS 오류] {e}")
+
+        try:
+            check_morning_briefing(now)
+        except Exception as e:
+            print(f"[아침 브리핑 오류] {e}")
 
         try:
             check_telegram_channels(time_str)
