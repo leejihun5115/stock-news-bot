@@ -1063,18 +1063,23 @@ CONTRACT_KEYWORDS = {"공급계약", "수주", "계약체결", "공급 계약", 
 
 def _build_key_point_line(title, is_disclosure, highlight_suffix):
     """
-    제목 밑에 붙일 "[요점]" 한 줄을 만든다. 계약/수주 관련 뉴스면 계약금액이
-    매출액(우선) 또는 시가총액(매출액을 못 구했을 때 대체) 대비 몇 %인지 계산해서
-    보여준다. 계산할 재료가 없으면 None (이 경우 [요점] 줄 자체를 안 붙임 -
-    숫자를 지어내지 않는다는 원칙).
+    제목 밑에 붙일 "💡[요점]" 한 줄을 만든다. 계약/수주 관련 뉴스면 계약금액이
+    무엇과 비교했을 때(비교기준: 매출액 우선, 없으면 시가총액) 몇 %인지
+    항상 "비교기준"을 명시해서 보여준다. 계산할 재료가 없으면 None (이 경우
+    [요점] 줄 자체를 안 붙임 - 숫자를 지어내지 않는다는 원칙).
+
+    형식: 💡[요점] 계약금액 {금액} · 비교기준 {매출액/시가총액} · 비율 {NN.N%}
     """
     # 📋 DART 공시는 이미 원문에서 "매출액대비" 비율을 직접 뽑아서
     # highlight_suffix에 넣어주고 있으므로(단일판매공급계약 공시는 법적으로
-    # 이 비율을 명시해야 함), 그걸 그대로 재사용한다 - 계산을 두 번 안 함.
+    # 이 비율을 명시해야 함), 그 안의 퍼센트 숫자만 재사용해서 같은 형식으로 통일.
     if is_disclosure and highlight_suffix and "매출액대비" in highlight_suffix:
         for line in highlight_suffix.split("\n"):
             if "매출액대비" in line:
-                return f"[요점] {line.strip()}"
+                pct_match = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
+                if pct_match:
+                    return f"💡[요점] 비교기준 매출액 · 비율 {float(pct_match.group(1)):.1f}%"
+                return f"💡[요점] {line.strip()}"
         return None
 
     if not any(kw in title for kw in CONTRACT_KEYWORDS):
@@ -1084,23 +1089,24 @@ def _build_key_point_line(title, is_disclosure, highlight_suffix):
     if not amounts:
         return None
     amount = max(amounts)
+    amount_label = _eok_comma_label(amount)
 
     matched_company = next((name for name in ALL_LISTED_COMPANIES if name in title), None)
     stock_code = COMPANY_NAME_TO_CODE.get(matched_company) if matched_company else None
     if not stock_code:
-        return f"[요점] 계약금액 {_eok_comma_label(amount)} 규모"
+        return f"💡[요점] 계약금액 {amount_label} · 비교기준 없음(종목 미확인)"
 
     revenue = _dart_recent_revenue_eok(stock_code)
     if revenue and revenue > 0:
         ratio = amount / revenue * 100
-        return f"[요점] 계약금액 {_eok_comma_label(amount)} → 최근 매출액 대비 {ratio:.1f}%"
+        return f"💡[요점] 계약금액 {amount_label} · 비교기준 매출액 · 비율 {ratio:.1f}%"
 
     mcap = _dart_market_cap_eok(stock_code)
     if mcap and mcap > 0:
         ratio = amount / mcap * 100
-        return f"[요점] 계약금액 {_eok_comma_label(amount)} → 시가총액 대비 {ratio:.1f}% (매출액 조회 실패로 시총 기준 대체)"
+        return f"💡[요점] 계약금액 {amount_label} · 비교기준 시가총액(매출액 미확인) · 비율 {ratio:.1f}%"
 
-    return f"[요점] 계약금액 {_eok_comma_label(amount)} 규모"
+    return f"💡[요점] 계약금액 {amount_label} · 비교기준 없음(매출액·시총 모두 미확인)"
 
 
 def _calculate_importance_100(matched_count, is_exclusive, is_breaking, is_feature,
@@ -1389,15 +1395,20 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     elif is_disclosure and highlight_suffix and "흑자전환" in highlight_suffix:
         is_mega_combo = True
 
-    title_prefix = "📌"
-    if is_mega_combo:
-        title_prefix = "🚀💯"  # 위 5가지 조합 중 하나에 해당하는 최상위 재료
-    elif importance_score >= 5:
-        title_prefix = "🚀"  # 중요도 5점 이상이면 다른 이모지 안 섞고 이것만 단독 표시
-    if is_us_related:
-        title_prefix = "🇺🇸" + title_prefix
-    if is_pharma_related:
-        title_prefix = title_prefix + "💊"
+    # ⏸️ [2026-08-13 임시 비활성화] 속보/단독 등을 이모지로 강조하던 아래 로직은
+    # 이제 100점 중요도 점수/등급(🧮→📌 중요도 XX/100)이 같은 역할을 하므로
+    # 일단 꺼둡니다. is_mega_combo 등 판단 자체는 그대로 계산해두되(나중에
+    # 다시 켜고 싶을 때를 위해 로직은 안 지움), title_prefix에는 반영하지 않음.
+    title_prefix = ""
+    # title_prefix = "📌"
+    # if is_mega_combo:
+    #     title_prefix = "🚀💯"  # 위 5가지 조합 중 하나에 해당하는 최상위 재료
+    # elif importance_score >= 5:
+    #     title_prefix = "🚀"  # 중요도 5점 이상이면 다른 이모지 안 섞고 이것만 단독 표시
+    # if is_us_related:
+    #     title_prefix = "🇺🇸" + title_prefix
+    # if is_pharma_related:
+    #     title_prefix = title_prefix + "💊"
 
 
     # 시가총액대비/매출액대비/전년비 등 근거를 제목 밑에 그대로 이어붙임
@@ -1422,7 +1433,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         matched_count, is_exclusive, is_breaking, is_feature,
         has_listed_company_for_score, ratio_pct_for_score,
     )
-    score_line = f"🧮 중요도 {score100}/100 {grade100}"
+    score_line = f"📌 중요도 {score100}/100 {grade100}"
     key_point_html = html.escape(key_point_line) + "\n" if key_point_line else ""
 
     if is_disclosure or is_rumor:
@@ -1440,9 +1451,10 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         disclosure_link_line = (
             f'🔗 <a href="{html.escape(news_url, quote=True)}">원문보기</a>' if news_url else ""
         )
+        header_line_prefix = f"{title_prefix} " if title_prefix else ""
         text_content = (
-            f"{title_prefix} {tag_line} {corp_header}          <i>⏰ {time_str}</i>\n\n"
-            f"<b>{report_body}</b>\n"
+            f"{header_line_prefix}{tag_line} {corp_header}          <i>⏰ {time_str}</i>\n\n"
+            f"<b>{report_body}</b>\n\n"
             f"{key_point_html}"
             f"{score_line}\n\n"
             f"{body_section}"
@@ -1492,7 +1504,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         header_prefix = "" if title_prefix == "📌" else title_prefix
         text_content = (
             f"{header_prefix}{source_emoji}[{source_bracket}]                    <i>⏰ {time_str}</i>\n\n"
-            f"📌<b>{display_title}</b>{highlight_line}\n"
+            f"📌<b>{display_title}</b>{highlight_line}\n\n"
             f"{key_point_html}"
             f"{score_line}\n"
             f"{company_snapshot_line}\n"
