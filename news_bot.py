@@ -813,29 +813,96 @@ def is_already_sent(title):
 #   - 길이 차이가 40% 넘게 나면 비교 자체를 건너뜀(애초에 같은 기사일 리 없음 -
 #     이 사전 필터 덕분에 매번 150건을 전부 정밀 비교하지 않아도 돼서 빠름)
 # ============================================================
-_recent_titles_for_fuzzy = []
+_recent_titles_for_fuzzy = []  # [(정규화텍스트, 원문제목), ...]
 FUZZY_DEDUP_WINDOW = 150
 FUZZY_DEDUP_THRESHOLD = 0.82
 
 
-def is_near_duplicate(title):
+def _find_near_duplicate(title, threshold=None):
+    """가장 비슷한 기존 기사의 "원문 제목"을 찾아서 반환. 없으면 None.
+    (후속/재탕 구분을 위해 숫자를 비교하려면 정규화된 텍스트가 아니라
+    원문이 필요해서, is_near_duplicate()의 True/False보다 한 단계 더 정보를 줌)
+
+    threshold를 따로 안 주면 기본값(FUZZY_DEDUP_THRESHOLD, 82%)을 씀 -
+    이건 "재탕이라 아예 발송 안 함"을 판단할 때처럼 엄격해야 하는 경우용.
+    반대로 "이게 이전 기사와 관련은 있는지"만 보고(관련 있으면 발송은 하되
+    후속/재탕만 가르는) classify_novelty()에서는 더 낮은 threshold를 넘겨서
+    씀 - 회사명이 새로 추가되는 등으로 문장이 꽤 달라져도 "관련 기사"로
+    인식되게 하기 위함 (어차피 신규/후속 둘 다 발송은 되니 위험 없음).
+    """
+    threshold = FUZZY_DEDUP_THRESHOLD if threshold is None else threshold
     norm = _normalize_for_dedup(title)
     if len(norm) < 8:
-        return False
-    for prev in _recent_titles_for_fuzzy:
-        if abs(len(prev) - len(norm)) > len(norm) * 0.4:
+        return None
+    best_ratio = 0.0
+    best_original = None
+    for prev_norm, prev_original in _recent_titles_for_fuzzy:
+        if abs(len(prev_norm) - len(norm)) > len(norm) * 0.6:
             continue
-        ratio = difflib.SequenceMatcher(None, norm, prev).ratio()
-        if ratio >= FUZZY_DEDUP_THRESHOLD:
-            return True
-    return False
+        ratio = difflib.SequenceMatcher(None, norm, prev_norm).ratio()
+        if ratio >= threshold and ratio > best_ratio:
+            best_ratio = ratio
+            best_original = prev_original
+    return best_original
+
+
+def is_near_duplicate(title):
+    return _find_near_duplicate(title) is not None
 
 
 def _remember_for_fuzzy(title):
     norm = _normalize_for_dedup(title)
-    _recent_titles_for_fuzzy.append(norm)
+    _recent_titles_for_fuzzy.append((norm, title))
     if len(_recent_titles_for_fuzzy) > FUZZY_DEDUP_WINDOW:
         del _recent_titles_for_fuzzy[0]
+
+
+# ============================================================
+# 🆕 뉴스 구분: 신규 / 후속 / 재탕
+# ------------------------------------------------------------
+# 완전중복(글자까지 똑같음)은 is_already_sent()에서 이미 걸러지므로 여기선
+# 다루지 않음. 여기는 "비슷하지만 완전히 같지는 않은" 기사를 구분함:
+#   🚀 신규 - 비슷한 기존 기사가 없음 (이 뉴스가 처음 나온 것)
+#   🔥 후속 - 비슷한 기존 기사가 이미 있었지만(=재탕 후보), 아래 중 하나라도
+#            "새로 추가된" 내용이 있어서 기사로서 효력이 있는 경우 → 발송함
+#              ① 금액이 새로 생기거나 바뀜 (예: "공급계약 체결" → "3,000억원 규모로 체결")
+#              ② 비율(%)이 새로 생기거나 바뀜
+#              ③ 거래 상대방/관련 회사명이 새로 명시됨
+#                 (예: "공급계약 체결 예정" → "LG에너지솔루션과 공급계약 체결")
+#   🚨 재탕 - 비슷한 기존 기사가 있고 위 ①②③ 전부 새로운 게 없음
+#            (다른 매체가 그대로 재전송) → 발송 안 함
+# ============================================================
+def classify_novelty(title):
+    """(구분, 이모지, 요점 노트) 튜플을 반환. 구분은 "신규"/"후속"/"재탕" 중 하나.
+    요점 노트는 후속일 때 "뭐가 새로 추가됐는지"를 사람이 바로 알 수 있게 요약한 문장."""
+    matched_original = _find_near_duplicate(title, threshold=0.6)
+    if matched_original is None:
+        return "신규", "🚀", None
+
+    cur_amounts = set(_dart_extract_eok_amounts(title))
+    prev_amounts = set(_dart_extract_eok_amounts(matched_original))
+    cur_pcts = set(_dart_extract_percentages(title))
+    prev_pcts = set(_dart_extract_percentages(matched_original))
+    # 🏢 이 기사에 언급된 상장기업명들 vs 이전 기사에 언급됐던 상장기업명들을 비교해서,
+    # "이번에 새로 이름이 나온 회사"(=거래 상대방이 새로 밝혀진 경우 등)를 찾음
+    cur_companies = {name for name in ALL_LISTED_COMPANIES if name in title}
+    prev_companies = {name for name in ALL_LISTED_COMPANIES if name in matched_original}
+
+    new_amounts = cur_amounts - prev_amounts
+    new_pcts = cur_pcts - prev_pcts
+    new_companies = cur_companies - prev_companies
+
+    if new_amounts or new_pcts or new_companies:
+        bits = []
+        if new_amounts:
+            bits.append("금액 " + "/".join(_eok_comma_label(a) for a in sorted(new_amounts, reverse=True)))
+        if new_pcts:
+            bits.append("비율 " + "/".join(f"{p:g}%" for p in sorted(new_pcts, reverse=True)))
+        if new_companies:
+            bits.append("관련 회사 " + "/".join(sorted(new_companies)) + " 명시")
+        return "후속", "🔥", "이전 보도 대비 새 정보: " + ", ".join(bits)
+
+    return "재탕", "🚨", None
 
 
 def mark_as_sent(title):
@@ -937,7 +1004,7 @@ COMPANY_NAME_TO_CODE = {}
 # 잘 알려진 사례를 골라 넣은 것이라 완전하지 않습니다. 실제로 받아보시다가
 # "이 종목명도 노이즈다" 싶은 게 있으면 알려주세요, 추가해드릴게요.
 NOISY_LISTED_COMPANY_NAMES = {
-    "대상", "국제", "동양", "신원", "진로", "조선", "대우", "한일", "화성", "아세아", "대성",
+    "대상", "국제", "동양", "신원", "진로", "조선", "대우", "한일", "화성", "아세아", "대성", "레이",
 }
 
 
@@ -1008,7 +1075,7 @@ def format_title(title):
     #    (해외 티커 + KRX 전체 상장사명. 4-a에서 이미 👍 처리된 이름은 제외해서 이중 표시 방지)
     #    한 패스로 처리하는 이유: 여러 번 나눠서 치환하면 이미 감싸진 태그 안쪽까지 건드려서 깨지는 문제가 생길 수 있음.
     company_terms = (
-        (UNIQUE_TARGET - money_macro_words - people_target_words) | ALL_LISTED_COMPANIES
+        (UNIQUE_TARGET - money_macro_words - people_target_words) | (ALL_LISTED_COMPANIES - NOISY_LISTED_COMPANY_NAMES)
     ) - already_highlighted
     if company_terms:
         sorted_terms = sorted(company_terms, key=len, reverse=True)
@@ -1110,7 +1177,7 @@ def _build_key_point_line(title, is_disclosure, highlight_suffix):
 
 
 def _calculate_importance_100(matched_count, is_exclusive, is_breaking, is_feature,
-                                has_listed_company, ratio_pct=None):
+                                has_listed_company, ratio_pct=None, novelty="신규"):
     """중요도를 100점 만점으로 환산하고, 등급(이모지+글자)을 같이 반환."""
     score = 10
     score += min(matched_count, 5) * 4
@@ -1131,7 +1198,11 @@ def _calculate_importance_100(matched_count, is_exclusive, is_breaking, is_featu
             score += 10
         else:
             score += 5
-    score = min(score, 100)
+    if novelty == "후속":
+        # 🔥 후속 기사는 완전히 새로운 소식이 아니라 "이미 알려진 사건의 갱신"이라,
+        # 신규 대비 살짝 낮게 책정 (그래도 새 숫자/정보가 있으니 여전히 유의미하게 높음)
+        score -= 8
+    score = max(1, min(score, 100))
 
     if score >= 90:
         grade = "🔥🔥🔥 S"
@@ -1314,7 +1385,7 @@ def _resolve_tag(title, is_schedule, is_rumor, is_disclosure, is_exclusive, is_b
 def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive, is_breaking,
                          is_feature, is_us_market, is_disclosure=False, is_rumor=False,
                          custom_source="", source_label="", highlight_suffix="",
-                         show_link_below=False, image_url=""):
+                         show_link_below=False, image_url="", novelty="신규", novelty_note=None):
     display_title = format_title(title)
 
     is_schedule = "일정" in title
@@ -1431,9 +1502,16 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             ratio_pct_for_score = float(pct_match.group(1))
     score100, grade100 = _calculate_importance_100(
         matched_count, is_exclusive, is_breaking, is_feature,
-        has_listed_company_for_score, ratio_pct_for_score,
+        has_listed_company_for_score, ratio_pct_for_score, novelty,
     )
     score_line = f"📌 중요도 {score100}/100 {grade100}"
+
+    # 🆕 신규/후속 표시 줄 (재탕은 애초에 여기까지 안 오고 발송 직전에 걸러짐)
+    if novelty == "후속":
+        novelty_line = f"🔥[후속] {novelty_note}\n" if novelty_note else "🔥[후속]\n"
+    else:
+        novelty_line = "🚀[신규]\n"
+
     key_point_html = html.escape(key_point_line) + "\n" if key_point_line else ""
 
     if is_disclosure or is_rumor:
@@ -1455,6 +1533,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         text_content = (
             f"{header_line_prefix}{tag_line} {corp_header}          <i>⏰ {time_str}</i>\n\n"
             f"<b>{report_body}</b>\n\n"
+            f"{novelty_line}"
             f"{key_point_html}"
             f"{score_line}\n\n"
             f"{body_section}"
@@ -1505,6 +1584,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         text_content = (
             f"{header_prefix}{source_emoji}[{source_bracket}]                    <i>⏰ {time_str}</i>\n\n"
             f"📌<b>{display_title}</b>{highlight_line}\n\n"
+            f"{novelty_line}"
             f"{key_point_html}"
             f"{score_line}\n"
             f"{company_snapshot_line}\n"
@@ -1769,9 +1849,12 @@ def check_domestic_news(current_time_str):
                 mark_as_sent(title)
                 continue
 
-            # 🕵️ 문자 그대로는 안 겹치지만 사실상 같은 기사(다른 매체가 다른 문구로
-            # 쓴 경우 등)면 여기서 걸러냄
-            if is_near_duplicate(title):
+            # 🆕 문자 그대로는 안 겹치지만 사실상 같은 기사(다른 매체가 다른 문구로
+            # 쓴 경우 등)면 여기서 신규/후속/재탕을 구분함. 재탕(새 정보 없음)만
+            # 걸러내고, 후속(새 숫자/정보 있음)은 표시를 붙여서 그대로 보냄.
+            novelty, novelty_emoji, novelty_note = classify_novelty(title)
+            if novelty == "재탕":
+                print(f"[재탕 감지] {title[:60]}")
                 mark_as_sent(title)
                 continue
 
@@ -1783,6 +1866,7 @@ def check_domestic_news(current_time_str):
                 title, link, current_time_str, matched_count,
                 is_exclusive, is_breaking, is_feature, False,
                 source_label=source_label,
+                novelty=novelty, novelty_note=novelty_note,
             )
             sent += 1
 
@@ -2019,10 +2103,12 @@ def check_naver_news(current_time_str):
                 mark_as_sent(title)
                 continue
 
-            # 🕵️ 문자 그대로는 안 겹치지만 사실상 같은 기사면 여기서 걸러냄
+            # 🆕 문자 그대로는 안 겹치지만 사실상 같은 기사면 여기서 신규/후속/재탕을 구분함
             # (네이버는 회사명별로 검색어를 여러 번 돌려서, 같은 기사가 다른 검색어에서
             #  조금 다른 스니펫으로 잡히는 경우가 특히 잦음)
-            if is_near_duplicate(title):
+            novelty, novelty_emoji, novelty_note = classify_novelty(title)
+            if novelty == "재탕":
+                print(f"[재탕 감지] {title[:60]}")
                 mark_as_sent(title)
                 continue
 
@@ -2036,6 +2122,7 @@ def check_naver_news(current_time_str):
                 title, link, current_time_str, matched_count,
                 is_exclusive, is_breaking, is_feature, False,
                 source_label=source_label,
+                novelty=novelty, novelty_note=novelty_note,
             ):
                 sent += 1
 
@@ -2227,9 +2314,12 @@ def check_telegram_channels(current_time_str):
                     mark_as_sent(headline)
                     continue
 
-                # 🕵️ 사실상 같은 기사(다른 표현)면 걸러냄 - 텔레그램 채널이 뉴스를
-                # 재전달하는 경우가 많아서, RSS/네이버에서 이미 보낸 것과 겹칠 수 있음
-                if is_near_duplicate(headline):
+                # 🆕 사실상 같은 기사(다른 표현)면 신규/후속/재탕을 구분함 - 텔레그램
+                # 채널이 뉴스를 재전달하는 경우가 많아서, RSS/네이버에서 이미 보낸
+                # 것과 겹칠 수 있음
+                novelty, novelty_emoji, novelty_note = classify_novelty(headline)
+                if novelty == "재탕":
+                    print(f"[재탕 감지] {headline[:60]}")
                     mark_as_sent(headline)
                     continue
 
@@ -2238,7 +2328,8 @@ def check_telegram_channels(current_time_str):
                 send_telegram_message(
                     headline, article_link, current_time_str, matched_count,
                     is_exclusive, is_breaking, is_feature, is_us_market=False,
-                    custom_source=f"✅ {channel_name}"
+                    custom_source=f"✅ {channel_name}",
+                    novelty=novelty, novelty_note=novelty_note,
                 )
                 sent += 1
         except Exception as e:
