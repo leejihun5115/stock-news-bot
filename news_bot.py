@@ -637,6 +637,17 @@ US_MARKET_KEYWORDS = {
 # 🇺🇸 미국 관련 내용인지 판단용 (제목 안에 이 중 하나라도 있으면 미국 국기 표시)
 US_CONTENT_KEYWORDS = UNIQUE_TARGET | GLOBAL_COMPANY_KEYWORDS | US_MARKET_KEYWORDS
 
+# 🚨 해외뉴스(영문 제목)용 "특징주"/"속보" 판정 단어.
+# ⚠️ "특징주"/"속보"는 한글 단어라 구글뉴스 영문검색(hl=en-US) 제목엔 아예 나올
+# 수가 없어서, 해외뉴스에서는 이 조건이 사실상 죽어있던 버그였음. 영어권에서
+# "이 종목이 오늘의 특징주다/속보다"에 해당하는 표현들로 대체함.
+US_FEATURE_STOCK_WORDS = {
+    "surge", "surges", "surging", "soar", "soars", "soaring", "jump", "jumps",
+    "rally", "rallies", "spike", "spikes", "plunge", "plunges", "plunging",
+    "tumble", "tumbles", "skyrocket", "skyrockets", "sink", "sinks", "slump",
+}
+US_BREAKING_WORDS = {"breaking", "just in", "alert"}
+
 # 💰 태그 판단용 - "돈이 보이는" 강한 재료 단어
 MONEY_STRONG_WORDS = {
     "흑자", "적자", "어닝서프라이즈", "어닝쇼크", "영업이익", "매출",
@@ -727,6 +738,17 @@ DOMESTIC_RSS_SOURCE_NAMES = {
 
 US_RSS_URLS = [
     "https://news.google.com/rss/search?q=US+Stock+Market+Trump+Earnings+SKHY+Nvidia+Semiconductor+Oil+Gold+Copper&hl=en-US&gl=US&ceid=US:en",
+    # 🎯 반도체/AI 관련 - 너무 광범위한 위 쿼리 하나로는 놓치기 쉬운 종목 뉴스 보완
+    "https://news.google.com/rss/search?q=(Nvidia+OR+AMD+OR+Micron+OR+Broadcom+OR+TSMC)+AND+(surge+OR+earnings+OR+guidance+OR+chip)&hl=en-US&gl=US&ceid=US:en",
+    # 🎯 연준/금리/거시경제 - 국내 시장에 파급력이 큰 매크로 뉴스 보완
+    "https://news.google.com/rss/search?q=(Fed+OR+\"Federal+Reserve\"+OR+\"interest+rate\"+OR+inflation)+AND+(rate+cut+OR+hike+OR+CPI)&hl=en-US&gl=US&ceid=US:en",
+    # 🎯 빅테크 실적/속보 - Microsoft/Amazon/Meta/Alphabet/Tesla 관련 대형 이벤트
+    "https://news.google.com/rss/search?q=(Tesla+OR+Microsoft+OR+Amazon+OR+Meta+OR+Alphabet)+AND+(earnings+OR+beats+OR+misses+OR+plunge+OR+surge)&hl=en-US&gl=US&ceid=US:en",
+    # 🇰🇷 국내 언론사가 한글로 보도하는 미국장 소식 (아침에 많이 나옴) - 영문 검색만
+    # 있으면 이런 국내 보도를 놓치므로 한글 검색도 별도로 추가
+    "https://news.google.com/rss/search?q=미국증시+나스닥+다우+S%26P500+반도체&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=미국+연준+금리+FOMC+인플레이션&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=테슬라+엔비디아+마이크론+애플+아마존+급등+급락&hl=ko&gl=KR&ceid=KR:ko",
 ]
 
 NAVER_SEARCH_QUERIES = GLOBAL_AND_DOMESTIC_GIANTS
@@ -832,6 +854,49 @@ THEME_DEFINITIONS = [
 # 위 THEME_DEFINITIONS의 us_symbols를 전부 모아서, 시세를 한 번에 조회할 전체 종목 목록을 만듦
 # (US_KEY_STOCKS에 이미 있는 건 중복 조회 안 하도록 합침)
 _THEME_ALL_SYMBOLS = sorted({sym for theme in THEME_DEFINITIONS for sym in theme["us_symbols"]})
+
+# 🔎 뉴스 제목(영문/한글 모두)에서 "이 종목이 언급됐다"를 인식하기 위한
+# 티커 -> 매칭용 이름 목록. US_KEY_STOCKS에 없는 티커(GEV/VST/NEE 등)도
+# 여기서 채워둠. 티커 자체(예: "MU")도 대문자 단어 경계 매칭으로 포함.
+SYMBOL_MATCH_NAMES = {
+    "NVDA": ["Nvidia", "엔비디아"], "AMD": ["AMD"], "MU": ["Micron", "마이크론"],
+    "AVGO": ["Broadcom", "브로드컴"], "TSLA": ["Tesla", "테슬라"],
+    "MSFT": ["Microsoft", "마이크로소프트"], "AMZN": ["Amazon", "아마존"],
+    "META": ["Meta", "메타"], "GOOGL": ["Alphabet", "Google", "구글", "알파벳"],
+    "ALB": ["Albemarle", "앨버말"],
+    "GEV": ["GE Vernova"], "VST": ["Vistra"], "NEE": ["NextEra"],
+    "CEG": ["Constellation Energy"], "SMR": ["NuScale"],
+    "LMT": ["Lockheed Martin", "록히드마틴"], "RTX": ["RTX", "Raytheon", "레이시온"],
+    "NOC": ["Northrop Grumman", "노스롭그루먼"],
+    "LLY": ["Eli Lilly", "일라이릴리"], "MRNA": ["Moderna", "모더나"], "PFE": ["Pfizer", "화이자"],
+    "ISRG": ["Intuitive Surgical"],
+}
+
+
+def _detect_theme_from_text(text):
+    """
+    뉴스 제목(영문/한글 모두) 안에서 THEME_DEFINITIONS 중 어떤 테마가 언급됐는지
+    판정. 종목명(티커/영문명/한글명)이나 IPO_THEME_KEYWORDS의 주제 키워드가
+    하나라도 있으면 그 테마로 판정. 여러 테마가 동시에 걸리면 THEME_DEFINITIONS에
+    정의된 순서상 가장 먼저 나오는 것(=더 구체적인 것부터 정의해둠)을 반환.
+    매칭 안 되면 None.
+    """
+    if not text:
+        return None
+    text_lower = text.lower()
+    for theme in THEME_DEFINITIONS:
+        # ① 이 테마의 종목이 티커/영문명/한글명 중 하나로 언급됐는지
+        for sym in theme["us_symbols"]:
+            names = SYMBOL_MATCH_NAMES.get(sym, [])
+            if any(n.lower() in text_lower for n in names):
+                return theme
+            if re.search(rf"\b{re.escape(sym)}\b", text):  # 티커 자체(대문자) 매칭
+                return theme
+        # ② 이 테마의 주제 키워드(반도체/배터리 등)가 언급됐는지
+        for kw in IPO_THEME_KEYWORDS.get(theme["name"], []):
+            if kw in text:
+                return theme
+    return None
 
 MORNING_BRIEFING_HOUR = 8  # 이 시(KST 기준, 서버 로컬시간=KST 가정) 첫 실행 때 브리핑 발송
 
@@ -1575,7 +1640,8 @@ def _resolve_tag(title, is_schedule, is_rumor, is_disclosure, is_exclusive, is_b
 def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive, is_breaking,
                          is_feature, is_us_market, is_disclosure=False, is_rumor=False,
                          custom_source="", source_label="", highlight_suffix="",
-                         show_link_below=False, image_url="", novelty="신규", novelty_note=None):
+                         show_link_below=False, image_url="", novelty="신규", novelty_note=None,
+                         related_theme=None):
     # 🔒 링크가 http(비보안)로 넘어오면 https로 자동 승격. 텔레그램은 http 링크에
     # (버튼이든 텍스트든) "이 링크를 열까요?" 보안 확인창을 띄우는 경우가 있어서,
     # 여기서 한 번 더 안전하게 막아줌 - 소스 목록에 또 http가 실수로 들어가도
@@ -1709,6 +1775,14 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     else:
         novelty_line = "✔️ [신규]\n"
 
+    # 🔗 이 뉴스가 특정 테마(반도체/2차전지 등)와 관련 있으면, 그 테마의 국내
+    # 관련주를 바로 붙여줌 (해외뉴스 하나하나에도 "그래서 국내에서 뭘 봐야
+    # 하지?"를 바로 답해주기 위함 - 아침 브리핑에서만 쓰던 로직을 재사용)
+    related_theme_line = ""
+    if related_theme:
+        stocks_str = ", ".join(related_theme["kr_stocks"])
+        related_theme_line = f"✔️ 관련 국내 테마주 [{related_theme['name']}]: {stocks_str}\n"
+
     key_point_html = html.escape(key_point_line) + "\n" if key_point_line else ""
 
     if is_disclosure or is_rumor:
@@ -1791,6 +1865,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             f"{header_prefix}{source_emoji}[{source_bracket}]                    <i>⏰ {time_str}</i>\n\n"
             f"📌<b>{display_title}</b>{highlight_line}\n\n"
             f"{novelty_line}"
+            f"{related_theme_line}"
             f"{key_point_html}"
             f"{score_line}\n"
             f"{company_snapshot_line}"
@@ -2422,21 +2497,40 @@ def check_us_news(current_time_str):
             scanned += 1
             target_hits = {kw for kw in UNIQUE_TARGET if kw.lower() in title.lower()}
             giant_hits = {kw for kw in UNIQUE_GIANTS if kw.lower() in title.lower()}
-            matched_count = len(target_hits | giant_hits)
+            # 🏢 영문 회사명(Samsung Electronics 등)으로만 언급된 경우도 놓치지 않도록
+            # 통합 종목 인식 함수도 같이 확인 (국내뉴스와 동일한 방식)
+            resolved_companies = resolve_companies_in_text(title)
+            matched_count = len(target_hits | giant_hits) + len(resolved_companies)
 
             has_macro_word = bool(target_hits & US_MACRO_STRONG_WORDS)
-            is_breaking = "속보" in title  # 🚨 속보 단어가 있으면 다른 조건 없이 무조건 전송
-            is_feature = "특징주" in title  # 🚨 특징주 단어가 있으면 다른 조건 없이 무조건 전송
-            should_send = has_macro_word or matched_count >= 2 or is_breaking or is_feature
+            title_lower = title.lower()
+            # 🚨 "속보"/"특징주"는 한글 단어라 영문 제목엔 나올 수 없어서, 영어권
+            # 표현(surge/plunge/breaking 등)도 같이 확인 (버그 수정)
+            is_breaking = "속보" in title or any(w in title_lower for w in US_BREAKING_WORDS)
+            is_feature = "특징주" in title or any(w in title_lower for w in US_FEATURE_STOCK_WORDS)
+            should_send = has_macro_word or matched_count >= 2 or is_breaking or is_feature or bool(resolved_companies)
 
             if not should_send:
                 mark_as_sent(title)
                 continue
 
+            # 🆕 국내뉴스와 동일하게 신규/후속/재탕을 구분함 - 재탕(새 정보 없음)만
+            # 걸러내고, 후속(새 숫자/정보 있음)은 표시를 붙여서 그대로 보냄.
+            novelty, novelty_emoji, novelty_note = classify_novelty(title)
+            if novelty == "재탕":
+                print(f"[재탕 감지] {title[:60]}")
+                mark_as_sent(title)
+                continue
+
             mark_as_sent(title)  # 🚫 먼저 등록해서 중복 전송 원천 차단
+            _remember_for_fuzzy(title)
+            # 🔗 이 뉴스가 특정 테마와 관련 있으면, 그 테마의 국내 관련주를 같이 붙임
+            related_theme = _detect_theme_from_text(title)
             send_telegram_message(
                 title, link, current_time_str, matched_count,
                 False, is_breaking, is_feature, True,
+                novelty=novelty, novelty_note=novelty_note,
+                related_theme=related_theme,
             )
             sent += 1
 
@@ -5064,14 +5158,6 @@ except ImportError:
     app = None
 
 
-if __name__ == "__main__":
-    if os.environ.get("RUN_MODE", "local") == "cloud" and app is not None:
-        # Cloud Run이 컨테이너를 시작할 때 이 경로로 들어옵니다 (PORT 환경변수는 자동 지정됨).
-        port = int(os.environ.get("PORT", 8080))
-        app.run(host="0.0.0.0", port=port, threaded=True)
-    else:
-        main()
-
 
 
 # ============================================================
@@ -5195,4 +5281,14 @@ def format_dart_schedule(text):
     for label, value in items:
         lines.append(f"• {label}: {value}")
     return "\n".join(lines)
+
+
+
+if __name__ == "__main__":
+    if os.environ.get("RUN_MODE", "local") == "cloud" and app is not None:
+        # Cloud Run이 컨테이너를 시작할 때 이 경로로 들어옵니다 (PORT 환경변수는 자동 지정됨).
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host="0.0.0.0", port=port, threaded=True)
+    else:
+        main()
 
