@@ -80,7 +80,14 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 #   "텔레그램2 전체" → 텔레그램2(무조건수신) 전체 일시정지
 # ============================================================
 PAUSED_SOURCES = {
-    "유튜브 전체",
+}
+
+# ⚡ 상장기업명 조건 없이 무조건 노출할 채널 (라이브/실시간 방송 채널처럼, 특정
+# 종목명이 안 나와도 "지금 상황 자체"가 중요한 채널). 이름을 넣으면 그 채널만
+# 상장기업명 필수 조건을 건너뛰고 무조건 노출됨. (텔레그램2, 유튜브에 적용)
+UNRESTRICTED_SOURCES = {
+    "시황맨TV",
+    "라르고TV 공식채널",
 }
 
 # ============================================================
@@ -155,6 +162,7 @@ YOUTUBE_CHANNELS = [
     ("와이스트릿", "Ystreet"),
     ("월가아재", "wsaj"),
     ("EZ KIPOST", "EZKIPOST-p4o"),
+    ("시황맨TV", "blueoak1004"),
 ]
 
 # ============================================================
@@ -291,7 +299,7 @@ KEYWORDS_2 = [
     "승인", "허가", "인가",
     "인수", "합병", "매각", "지분", "투자", "유치", "출자전환",
     "유상증자", "무상증자", "전환사채", "최대주주변경", "경영권분쟁",
-    "흑자", "적자", "어닝서프라이즈", "영업이익", "매출",
+    "흑자", "적자", "어닝서프라이즈", "어닝쇼크", "영업이익", "매출",
     "급등", "폭등", "급락", "폭락", "신고가", "신저가", "상한가", "하한가",
     "양산", "출시", "개발", "완료", "착수", "상용화", "완치",
     "타결", "협약", "합의", "제휴",
@@ -562,6 +570,18 @@ GLOBAL_COMPANY_KEYWORDS = {
     "팔란티어", "브로드컴", "퀄컴",
 }
 
+# 👍 우리나라 대기업 그룹명 (개별 상장 계열사명이 아니라 "그룹" 단위 이름).
+# 개별 상장사(삼성전자, SK하이닉스 등)는 어차피 KRX 상장사 명단에서 자동으로
+# 잡혀서 ⚡️로 표시되니, 여기는 "그룹" 이름 자체가 기사 제목에 나올 때만 씀.
+KOREAN_GROUP_NAMES = {
+    "삼성", "SK", "LG", "현대차", "현대중공업", "현대", "롯데", "포스코", "한화",
+    "GS", "농협", "신세계", "KT", "두산", "CJ", "한진", "카카오", "네이버",
+    "HD현대", "신한", "KB", "하나", "우리", "미래에셋", "코오롱", "효성",
+    "DL", "DB", "OCI", "금호아시아나", "이랜드", "태광", "세아", "부영",
+    "중흥건설", "아모레퍼시픽", "교보생명", "한국타이어", "애경", "KCC",
+    "삼천리", "영풍", "하림", "HMM", "S-Oil", "LS", "동원",
+}
+
 # 💊 제약/바이오 관련 뉴스인지 판단용 (KEYWORDS_1의 바이오/제약 테마 단어와 동일)
 PHARMA_KEYWORDS = {
     "신약", "임상", "백신", "치료제", "항암", "항체", "줄기세포", "유전자",
@@ -581,7 +601,7 @@ US_CONTENT_KEYWORDS = UNIQUE_TARGET | GLOBAL_COMPANY_KEYWORDS | US_MARKET_KEYWOR
 
 # 💰 태그 판단용 - "돈이 보이는" 강한 재료 단어
 MONEY_STRONG_WORDS = {
-    "흑자", "적자", "어닝서프라이즈", "영업이익", "매출",
+    "흑자", "적자", "어닝서프라이즈", "어닝쇼크", "영업이익", "매출",
     "급등", "폭등", "급락", "폭락", "신고가", "신저가", "상한가", "하한가",
 }
 
@@ -866,6 +886,18 @@ _last_telegram_send_ts = 0.0
 # (거래량처럼 매일 바뀌는 데이터가 아니라 종목명 자체는 안정적이라 시작할 때 한 번만 받아옵니다)
 ALL_LISTED_COMPANIES = set()
 
+# ⚠️ 상장사명인데 동시에 아주 흔한 일반 단어라서, "종목명이 있으면 무조건 노출"
+# 특혜를 주면 완전히 무관한 뉴스까지 쏟아지는 이름들. 삭제어로 완전히 막으면
+# "국제 유가 급등"처럼 그 회사랑 무관한 진짜 중요 뉴스까지 막히니까, 삭제어
+# 대신 "이름만 있어도 무조건 노출" 특혜만 빼는 방식으로 처리함 - 다른 진짜
+# 이벤트 키워드(계약/실적 등)랑 같이 나오면 여전히 정상적으로 노출됨.
+# ⚠️ 참고: 이 목록은 KRX 전체 2,757개 상장사를 실시간 스캔해서 뽑은 게 아니라,
+# 잘 알려진 사례를 골라 넣은 것이라 완전하지 않습니다. 실제로 받아보시다가
+# "이 종목명도 노이즈다" 싶은 게 있으면 알려주세요, 추가해드릴게요.
+NOISY_LISTED_COMPANY_NAMES = {
+    "대상", "국제", "동양", "신원", "진로", "조선", "대우", "한일", "화성", "아세아", "대성",
+}
+
 
 # ============================================================
 # 유틸 함수
@@ -881,42 +913,54 @@ def is_us_market_hour(now=None):
 def format_title(title):
     """
     제목 하이라이트 규칙:
-      - 유명인물(트럼프, 파월, 젠슨 황 등) -> ⭐ 접두사만
-      - 상장기업/대기업명(삼성, 엔비디아 등) -> ⚡️로 양쪽 감싸기
+      - 유명인물(트럼프, 파월, 젠슨 황 등) -> 🕵️ 접두사만
+      - 우리나라 대기업 그룹명(삼성, SK, LG, 한화 등) -> 👍 접두사만
+      - 해외 글로벌기업명(엔비디아, 애플 등) -> ⭐ 접두사만
+      - 그 외 상장기업/개별 계열사명(삼성전자 등) -> ⚡️로 양쪽 감싸기
       - FED/POWELL/EARNINGS 같은 금리·실적 매크로 단어 -> 💰 접두사
-      - TRUMP(영문 티커)는 회사가 아니라 인물이므로 ⭐로 처리
+      - TRUMP(영문 티커)는 회사가 아니라 인물이므로 🕵️로 처리
     """
     formatted = html.escape(title)
 
     money_macro_words = {"FED", "POWELL", "EARNINGS"}
     people_target_words = {"TRUMP"}
 
-    # 1) 유명인물 (한글) -> ⭐
+    # 1) 유명인물 (한글) -> 🕵️
     for term in sorted(UNIQUE_CELEBS, key=len, reverse=True):
         pattern = re.compile(re.escape(term), re.IGNORECASE)
-        formatted = pattern.sub(f"<b>⭐{term}</b>", formatted)
+        formatted = pattern.sub(f"<b>🕵️{term}</b>", formatted)
 
-    # 2) TRUMP(영문)도 인물이므로 ⭐
+    # 2) TRUMP(영문)도 인물이므로 🕵️
     for term in sorted(people_target_words):
         pattern = re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE)
-        formatted = pattern.sub(f"<b>⭐{term}</b>", formatted)
+        formatted = pattern.sub(f"<b>🕵️{term}</b>", formatted)
 
     # 3) 금리/실적 매크로 단어 -> 💰
     for term in sorted(money_macro_words):
         pattern = re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE)
         formatted = pattern.sub(f"<b>💰{term}</b>", formatted)
 
-    # 4-a) 대기업명/글로벌기업명(GIANTS) -> 👍 접두사
-    giants_terms = UNIQUE_GIANTS - UNIQUE_CELEBS
-    already_highlighted = set(giants_terms)
-    if giants_terms:
-        sorted_terms = sorted(giants_terms, key=len, reverse=True)
+    # 4-a) 우리나라 대기업 그룹명 -> 👍 / 해외 글로벌기업명 -> ⭐
+    already_highlighted = set()
+    if KOREAN_GROUP_NAMES:
+        sorted_terms = sorted(KOREAN_GROUP_NAMES, key=len, reverse=True)
         pattern_parts = [
             (r"\b" + re.escape(t) + r"\b") if t.isascii() else re.escape(t)
             for t in sorted_terms
         ]
         combined_pattern = re.compile("|".join(pattern_parts), re.IGNORECASE)
         formatted = combined_pattern.sub(lambda m: f"<b>👍{m.group(0)}</b>", formatted)
+        already_highlighted |= KOREAN_GROUP_NAMES
+
+    if GLOBAL_COMPANY_KEYWORDS:
+        sorted_terms = sorted(GLOBAL_COMPANY_KEYWORDS, key=len, reverse=True)
+        pattern_parts = [
+            (r"\b" + re.escape(t) + r"\b") if t.isascii() else re.escape(t)
+            for t in sorted_terms
+        ]
+        combined_pattern = re.compile("|".join(pattern_parts), re.IGNORECASE)
+        formatted = combined_pattern.sub(lambda m: f"<b>⭐{m.group(0)}</b>", formatted)
+        already_highlighted |= GLOBAL_COMPANY_KEYWORDS
 
     # 4-b) 그 외 상장기업명 -> ⚡️로 양쪽 감싸기
     #    (해외 티커 + KRX 전체 상장사명. 4-a에서 이미 👍 처리된 이름은 제외해서 이중 표시 방지)
@@ -943,7 +987,7 @@ def format_title(title):
     formatted = re.sub(re.escape("일정"), "<b>⏰일정</b>", formatted)
 
     # 7) KEYWORDS_1(내용 키워드1)의 테마 단어 -> 💡 접두사
-    #    (기업/인물 이름은 위에서 이미 👍⚡️⭐로 처리됐으니, 여기선 신약/임상/반도체 같은 순수 테마 단어만 대상)
+    #    (기업/인물 이름은 위에서 이미 👍⚡️🕵️로 처리됐으니, 여기선 신약/임상/반도체 같은 순수 테마 단어만 대상)
     #    ⚠️ 예전엔 🎯를 썼는데, DART 공시 카드의 "🎯괴리율"이랑 겹쳐서 헷갈려서 💡로 바꿈
     theme_only_keywords_1 = UNIQUE_KEYWORDS_1 - UNIQUE_GIANTS - UNIQUE_CELEBS - money_body_words - {"일정"}
     if theme_only_keywords_1:
@@ -962,7 +1006,7 @@ def classify_and_score(title):
     upper_hits = {kw for kw in STRONG_KEYWORDS_1 if kw in title}
     lower_hits = {kw for kw in STRONG_KEYWORDS_2 if kw in title}
     target_hits = {kw for kw in UNIQUE_TARGET if kw.lower() in title.lower()}
-    listed_company_hits = {name for name in ALL_LISTED_COMPANIES if name in title}
+    listed_company_hits = {name for name in (ALL_LISTED_COMPANIES - NOISY_LISTED_COMPANY_NAMES) if name in title}
 
     # 상장사명이 제목에 있으면 "상위" 조건으로 인정 (KEYWORDS_1의 30여 개 대기업 루트뿐 아니라
     # KRX 전체 상장사명 매칭도 포함해서, 하위(KEYWORDS_2) 이벤트 단어와 결합되면 전송됨)
@@ -1004,7 +1048,7 @@ def classify_telegram_channel_message(title):
     celeb_hits = {kw for kw in UNIQUE_CELEBS if kw in title}
     global_company_hits = {kw for kw in GLOBAL_COMPANY_KEYWORDS if kw in title}
     us_market_hits = {kw for kw in US_MARKET_KEYWORDS if kw in title}
-    listed_company_hits = {name for name in ALL_LISTED_COMPANIES if name in title}
+    listed_company_hits = {name for name in (ALL_LISTED_COMPANIES - NOISY_LISTED_COMPANY_NAMES) if name in title}
     upper_hits = upper_hits | listed_company_hits
 
     matched_count = len(upper_hits | lower_hits | target_hits | celeb_hits | global_company_hits | us_market_hits)
@@ -1055,7 +1099,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     elif is_money:
         if "금리" in title:
             tag_line = "💰 금리"
-        elif "실적" in title or "어닝서프라이즈" in title:
+        elif "실적" in title or "어닝서프라이즈" in title or "어닝쇼크" in title:
             tag_line = "💰 실적"
         else:
             tag_line = "💰 머니"
@@ -1085,7 +1129,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     elif is_money:
         if "금리" in title:
             source_bracket = "금리"
-        elif "실적" in title or "어닝서프라이즈" in title:
+        elif "실적" in title or "어닝서프라이즈" in title or "어닝쇼크" in title:
             source_bracket = "실적"
         else:
             source_bracket = "머니"
@@ -1131,15 +1175,16 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             else:
                 importance_score += 1
         else:
-            importance_score += 2  # 흑자전환처럼 %는 없지만 확실한 이벤트
+            importance_score += 5  # 흑자전환처럼 %는 없지만 확실한(=최고등급) 이벤트
     importance_score = max(1, min(importance_score, 10))
 
-    # 🚀🚨🚀 "이건 상한가 재료급이다" 싶은 특정 조합 - 5점 기준과 별개로,
-    # 아래 4가지 조합 중 하나라도 해당하면 최상위 표시로 따로 구분함.
+    # 🚀💯🚀 "이건 상한가 재료급이다" 싶은 특정 조합 - 5점 기준과 별개로,
+    # 아래 5가지 조합 중 하나라도 해당하면 최상위 표시로 따로 구분함.
     #  ① (상장기업 또는 유명인) + "세계최초" + 다른 키워드2 하나 더
     #  ② 유명인 + 유명기업(글로벌 대기업 포함) + 키워드1(상위) + 키워드2(하위)
     #  ③ M&A/합병 계열 단어 + 상장기업명 + 다른 신호(키워드 2개 이상 겹침)
     #  ④ FDA/임상 계열 단어 + 상장기업명 + 다른 신호(키워드 2개 이상 겹침)
+    #  ⑤ 흑자전환 (DART 공시 - highlight_suffix에 "흑자전환" 포함)
     has_listed_company_here = any(name in title for name in ALL_LISTED_COMPANIES)
     has_celeb_here = any(c in title for c in UNIQUE_CELEBS)
     has_global_company_here = any(g in title for g in UNIQUE_GIANTS)
@@ -1158,10 +1203,12 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         is_mega_combo = True
     elif any(w in title for w in MEGA_FDA_WORDS) and has_listed_company_here and matched_count >= 2:
         is_mega_combo = True
+    elif is_disclosure and highlight_suffix and "흑자전환" in highlight_suffix:
+        is_mega_combo = True
 
     title_prefix = "📌"
     if is_mega_combo:
-        title_prefix = "🚀🚀"  # 위 4가지 조합 중 하나에 해당하는 최상위 재료
+        title_prefix = "🚀💯🚀"  # 위 5가지 조합 중 하나에 해당하는 최상위 재료
     elif importance_score >= 5:
         title_prefix = "🚀🚀"  # 중요도 5점 이상이면 다른 이모지 안 섞고 이것만 단독 표시
     if is_us_related:
@@ -1169,12 +1216,6 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     if is_pharma_related:
         title_prefix = title_prefix + "💊"
 
-    # 🔗 제목 자체를 눌러서 바로 기사(원문)로 이동하도록 하이퍼링크 처리.
-    # news_url이 비어있는 예외 상황이면 링크 없이 굵은 글씨로만 표시 (에러 방지).
-    if news_url:
-        linked_title = f'<a href="{html.escape(news_url, quote=True)}"><b>{display_title}</b></a>'
-    else:
-        linked_title = f"<b>{display_title}</b>"
 
     # 시가총액대비/매출액대비/전년비 등 근거를 제목 밑에 그대로 이어붙임
     # (📊비교대상/🚨비율/💰금액 라벨은 dart 쪽에서 이미 붙여서 넘어옴)
@@ -1185,45 +1226,41 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         escaped = re.sub(r"(🎯괴리율[^\n]*)", r"<u>\1</u>", escaped)
         highlight_line = f"\n{escaped}"
 
-    # 🔗 요청에 따라 DART 공시류는 제목 밑에 링크 주소를 그대로(눈에 보이게) 한 줄 더 표시.
-    link_line = ""
-    if show_link_below and news_url:
-        link_line = f"\n{html.escape(news_url, quote=True)}"
 
     if is_disclosure or is_rumor:
-        # 📋 DART 공시류는 지금까지 만든 통계카드 형식을 그대로 유지.
+        # 📋 DART 공시류 - 요청하신 새 레이아웃:
+        # ━━━ / 🚀🚀 태그 🏢⚡️회사명(시총)   ⏰시간 / ━━━ / 👀실적유형(굵게) / ━━━ / 본문(괴리율·PER·EPS·매출등) / ━━━ / 🔗링크 / ━━━
+        # (display_title은 이미 맨 위에서 format_title()로 한 번 포맷팅된 HTML이라
+        #  여기서 또 escape/format하면 이중 처리가 되어 태그가 깨짐 - 그대로 잘라서만 씀)
+        corp_header, _, report_body = display_title.partition("\n")
+        body_escaped = ""
+        if highlight_suffix:
+            body_escaped = html.escape(highlight_suffix)
+            body_escaped = re.sub(r"(🎯괴리율[^\n]*)", r"<u>\1</u>", body_escaped)
         text_content = (
-            f"{title_prefix} {linked_title}{highlight_line}{link_line}\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"{tag_line} · ⏰ {time_str}\n"
+            f"{title_prefix} {tag_line} {corp_header}   ⏰ {time_str}\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"키워드: {matched_count}"
+            f"<b>{report_body}</b>\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"{body_escaped}\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🔗 {html.escape(news_url, quote=True) if news_url else ''}\n"
+            f"━━━━━━━━━━━━━━━"
         )
-        reply_markup = {
-            "inline_keyboard": [[{"text": "✅ 🔗기사링크", "url": news_url}]]
-        }
+        reply_markup = None
     else:
         # 📰 일반 뉴스(RSS/네이버/텔레그램 등)는 요청하신 간단한 형식으로:
-        # 📌[출처]_[키워드] / (빈줄) / 제목 / (빈줄) / ⏰시간 / 🔗기사 원문 보기
+        # 📌[출처] · ⏰시간 / (빈줄) / 제목 / (빈줄) / 🔗URL(그대로 노출 - "이 링크를 열까요?"
+        # 확인창을 피하려면 표시 글자와 실제 주소가 같아야 해서, 예쁜 글자 대신 URL 그대로 씀)
         # (source_bracket은 위에서 tag_line과 같은 우선순위로 이미 순수 텍스트로 계산해둠)
 
-        listed_matches = [name for name in ALL_LISTED_COMPANIES if name in title]
-        celeb_matches = [c for c in UNIQUE_CELEBS if c in title]
-        global_matches = [g for g in UNIQUE_GIANTS if g in title]
-        keyword_display = (
-            listed_matches[0] if listed_matches else
-            celeb_matches[0] if celeb_matches else
-            global_matches[0] if global_matches else
-            None
-        )
-        keyword_bracket = f"_[{keyword_display}]" if keyword_display else ""
-
         link_text_line = (
-            f'🔗 <a href="{html.escape(news_url, quote=True)}">기사 원문 보기</a>' if news_url else ""
+            f'🔗 {html.escape(news_url, quote=True)}' if news_url else ""
         )
 
         text_content = (
-            f"{title_prefix}[{source_bracket}]{keyword_bracket} · ⏰ {time_str}\n\n"
+            f"{title_prefix}[{source_bracket}] · ⏰ {time_str}\n\n"
             f"<b>{display_title}</b>{highlight_line}\n\n"
             f"{link_text_line}"
         )
@@ -1895,7 +1932,7 @@ def check_telegram_channels(current_time_str):
                     continue
 
                 # 🏢 텔레그램2와 동일하게: 상장기업명이 제목에 있을 때만 최종 노출
-                has_listed_company = any(name in headline for name in ALL_LISTED_COMPANIES)
+                has_listed_company = any(name in headline for name in (ALL_LISTED_COMPANIES - NOISY_LISTED_COMPANY_NAMES))
                 if not has_listed_company:
                     mark_as_sent(headline)
                     continue
@@ -1955,8 +1992,9 @@ def check_telegram_channels_unfiltered(current_time_str):
 
                 scanned += 1
                 # 🏢 상장기업명이 제목에 있을 때만 노출 (다른 키워드 조건은 아직 안 걸음)
-                has_listed_company = any(name in headline for name in ALL_LISTED_COMPANIES)
-                if not has_listed_company:
+                # ⚡ 단, UNRESTRICTED_SOURCES에 있는 채널(라르고TV 등)은 예외 없이 무조건 노출
+                has_listed_company = any(name in headline for name in (ALL_LISTED_COMPANIES - NOISY_LISTED_COMPANY_NAMES))
+                if not has_listed_company and channel_name not in UNRESTRICTED_SOURCES:
                     mark_as_sent(headline)
                     continue
 
@@ -2001,6 +2039,10 @@ def check_blogs(current_time_str):
         display_name = re.sub(r"\s*[:\-|]\s*네이버\s*블로그\s*$", "", feed_title).strip()
         if not display_name:
             display_name = blog_name
+        # ✂️ "전병서의 안정적인 성공투자", "메르의 블로그"처럼 제목이 길면 제목이
+        # 너무 길어져서, "의" 앞부분(필명)만 남기고 축약함
+        if "의" in display_name:
+            display_name = display_name.split("의", 1)[0].strip()
 
         for entry in feed.entries:
             title = getattr(entry, "title", "")
@@ -2021,7 +2063,7 @@ def check_blogs(current_time_str):
             send_telegram_message(
                 title, link, current_time_str, matched_count=0,
                 is_exclusive=False, is_breaking=False, is_feature=False, is_us_market=False,
-                custom_source=f"🕵️[블로그] {display_name}",
+                custom_source=f"🕵️[블로그_{display_name}]",
             )
             sent += 1
 
@@ -2117,6 +2159,13 @@ def check_youtube(current_time_str):
                 continue
 
             scanned += 1
+            # 🏢 텔레그램과 동일하게: 상장기업명이 제목에 있을 때만 최종 노출
+            # ⚡ 단, UNRESTRICTED_SOURCES에 있는 채널(시황맨TV 등)은 예외 없이 무조건 노출
+            has_listed_company = any(name in title for name in (ALL_LISTED_COMPANIES - NOISY_LISTED_COMPANY_NAMES))
+            if not has_listed_company and channel_name not in UNRESTRICTED_SOURCES:
+                mark_as_sent(title)
+                continue
+
             mark_as_sent(title)  # 🚫 먼저 등록해서 중복 전송 차단
             send_telegram_message(
                 title, link, current_time_str, matched_count=0,
@@ -2328,7 +2377,7 @@ def _dart_valuation_line(stock_code):
         parts.append(f"⚡️ROE {roe:g}%")
     if not parts:
         return None
-    return " · ".join(parts)
+    return "\n".join(parts)
 
 
 def _dart_market_cap_eok(stock_code):
@@ -2379,6 +2428,21 @@ def _keycap(n):
     """숫자 1~10을 이모지 번호로. 1~9는 N️⃣, 10은 🔟."""
     n = max(1, min(int(n), 10))
     return "🔟" if n == 10 else f"{n}\ufe0f\u20e3"
+
+
+def _dart_dividend_amount_label(report_nm, text):
+    """
+    배당결정 공시면 원문에서 '주당 배당금'을 찾아서 "💰주당배당금 500원" 형태로
+    반환. 배당 관련 공시가 아니거나 금액을 못 찾으면 None.
+    """
+    if "배당" not in report_nm or not text:
+        return None
+    chunk = _dart_find_near(text, ["주당 배당금", "1주당 배당금", "주당배당금"], window=100)
+    m = re.search(r"([\d,]+)\s*원", chunk)
+    if m:
+        amount = m.group(1)
+        return f"💰주당배당금 {amount}원"
+    return None
 
 
 def _dart_extract_quarter_label(text, report_nm):
@@ -2450,7 +2514,7 @@ def _dart_financial_strong(text, stock_code=None):
     if "흑자전환" in text and ("영업이익" in text or "당기순이익" in text):
         info_lines = [x for x in (_dart_gap_ratio_label(stock_code), _dart_valuation_line(stock_code)) if x]
         prefix = ("\n".join(info_lines) + "\n") if info_lines else ""
-        return True, f"{prefix}📊손익 🚨흑자전환 중요{_keycap(10)}"
+        return True, f"{prefix}📊손익 ⭐🚨흑자전환 중요{_keycap(10)}💯"
 
     def _comparison_basis_label(chunk):
         """비율이 전년동기 대비인지 직전분기 대비인지 원문에서 찾아 라벨을 반환.
@@ -2465,8 +2529,8 @@ def _dart_financial_strong(text, stock_code=None):
     def _metric_line(label, keywords):
         """레이블 근처에서 금액을 최대 2개(당기, 전기)와 증감률을 뽑아
         '당기(전기, 증감%(비교기준)) 중요N️⃣' 형태의 한 줄로 만든다. 5등급
-        이상이면 🚨를 붙인다. DART 실적 공시 원문은 보통 '당기금액 → 전기금액
-        (증감율%)' 순서로 나온다."""
+        이상이면 🚨를 붙이고, 뒤에 💯를 붙인다. DART 실적 공시 원문은 보통
+        '당기금액 → 전기금액(증감율%)' 순서로 나온다."""
         chunk = _dart_find_near(text, keywords, window=200)
         amounts = _dart_extract_eok_amounts(chunk)
         pcts = _dart_extract_percentages(chunk)
@@ -2478,7 +2542,7 @@ def _dart_financial_strong(text, stock_code=None):
         basis_tag = f"({basis})" if basis else ""
         arrow = "🔺" if (pct is not None and pct >= 0) else "▼"
         imp = _metric_importance(pct)
-        badge = f"{'🚨' if imp >= 5 else ''}중요{_keycap(imp)}"
+        badge = f"{'🔥' if imp >= 5 else ''}중요{_keycap(imp)}{'💯' if imp >= 5 else ''}"
         if len(amounts) >= 2:
             prior = amounts[1]
             if pct is not None:
@@ -2496,16 +2560,19 @@ def _dart_financial_strong(text, stock_code=None):
         if line:
             lines.append(line)
 
-    # 🚀 어닝서프라이즈: 컨센서스/시장예상치 대비 수치가 원문에 직접 적혀 있으면
-    # 매출/영업이익 실적 줄과 별개로 한 줄 더 추가 (둘 다 있을 수 있음)
+    # 🚀 어닝서프라이즈(컨센서스 상회)/어닝쇼크(컨센서스 하회): 원문에 컨센서스
+    # 대비 수치가 직접 적혀 있으면 매출/영업이익 실적 줄과 별개로 한 줄 더 추가
     surprise_chunk = _dart_find_near(
         text, ["컨센서스", "시장예상치", "시장 예상치", "증권사 전망", "예상 영업이익"]
     )
     surprise_pcts = _dart_extract_percentages(surprise_chunk)
     if surprise_pcts:
         imp = _metric_importance(surprise_pcts[0])
-        badge = f"{'🚨' if imp >= 5 else ''}중요{_keycap(imp)}"
-        lines.append(f"🚀어닝서프라이즈 컨센서스대비 {surprise_pcts[0]:+g}% {badge}")
+        badge = f"{'🔥' if imp >= 5 else ''}중요{_keycap(imp)}{'💯' if imp >= 5 else ''}"
+        if surprise_pcts[0] >= 0:
+            lines.append(f"⭐어닝서프라이즈 컨센서스대비 {surprise_pcts[0]:+g}% {badge}")
+        else:
+            lines.append(f"🚨⚠️어닝쇼크 컨센서스대비 {surprise_pcts[0]:+g}% {badge}")
 
     if lines:
         info_lines = [x for x in (_dart_gap_ratio_label(stock_code), _dart_valuation_line(stock_code)) if x]
@@ -2600,7 +2667,7 @@ def dart_should_expose(report_nm, text, stock_code):
         return True, None
 
     if any(k in report_nm for k in [
-        "영업(잠정)실적", "영업실적", "매출액또는손익구조", "손익구조", "어닝서프라이즈"
+        "영업(잠정)실적", "영업실적", "매출액또는손익구조", "손익구조", "어닝서프라이즈", "어닝쇼크"
     ]):
         # 실적 공시는 원문 수치가 있어야 강한 재료 여부를 정확히 판단한다.
         return _dart_financial_strong(text, stock_code)
@@ -2709,11 +2776,19 @@ def check_dart_disclosures(current_time_str):
             mcap = _dart_market_cap_eok(stock_code)
             # 🗓 "몇 분기 실적인지" 원문에서 찾아서 명확하게 붙임 (못 찾으면 report_nm만)
             quarter_label = _dart_extract_quarter_label(report_text, report_nm)
-            report_line = f"{quarter_label} {report_nm}" if quarter_label else report_nm
+            # 🧹 "현금ㆍ현물배당결정(자회사의 주요경영사항)"처럼 뒤에 괄호로 붙는 부가설명은
+            # 제목을 너무 길고 산만하게 만들어서 잘라냄 (핵심 공시 유형명만 남김)
+            clean_report_nm = re.sub(r"\([^)]*\)\s*$", "", report_nm).strip()
+            report_line = f"{quarter_label} {clean_report_nm}" if quarter_label else clean_report_nm
             if mcap:
-                display_title = f"🏢 {corp_name} (시가총액 {_eok_comma_label(mcap)})\n{report_line}"
+                display_title = f"🏢 {corp_name} (시가총액 {_eok_comma_label(mcap)})\n👀 {report_line}"
             else:
-                display_title = f"🏢 {corp_name}\n{report_line}"
+                display_title = f"🏢 {corp_name}\n👀 {report_line}"
+
+            # 💰 배당 결정 공시면 배당금액을 원문에서 찾아서 같이 보여줌
+            dividend_note = _dart_dividend_amount_label(report_nm, report_text)
+            if dividend_note:
+                display_title += f"\n{dividend_note}"
 
             send_telegram_message(
                 display_title, detail_url, current_time_str, 1,
