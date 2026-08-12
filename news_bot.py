@@ -12,6 +12,7 @@
 import sys
 import time
 import datetime
+import threading
 import traceback
 import feedparser
 import requests
@@ -40,6 +41,23 @@ try:
     sys.stderr.reconfigure(line_buffering=True)
 except Exception:
     pass  # 일부 실행 환경(예: 특정 IDE)에서는 reconfigure가 없을 수 있어 안전하게 무시
+
+# ------------------------------------------------------------
+# 🚨 더 확실한 이중 안전장치
+# 위 reconfigure()만으로 여전히 로그가 하나도 안 보이는 사례가 있어서,
+# 아예 이 파일의 모든 print()를 "stderr로 + 매번 즉시 flush" 하도록 덮어씁니다.
+# werkzeug 접속 로그(GET / HTTP/1.1 200)가 항상 바로바로 보였던 걸 보면
+# stderr 채널 자체는 문제없이 호스팅 로그창에 나오고 있다는 뜻이므로,
+# print()도 같은 채널을 타게 만들면 버퍼링 문제와 무관하게 무조건 보입니다.
+# ------------------------------------------------------------
+import builtins as _builtins
+_original_print = _builtins.print
+
+
+def print(*args, **kwargs):
+    kwargs.setdefault("file", sys.stderr)
+    kwargs.setdefault("flush", True)
+    _original_print(*args, **kwargs)
 
 # ============================================================
 # 환경설정 - BOT_TOKEN, CHAT_ID, DART_API_KEY 설정
@@ -2167,7 +2185,7 @@ def resolve_youtube_channel_id(handle):
     for path in ("", "/about"):
         url = f"https://www.youtube.com/@{quote(handle)}{path}"
         try:
-            res = requests.get(url, headers=headers, timeout=15)
+            res = requests.get(url, headers=headers, timeout=10)
             res.encoding = "utf-8"
             for pattern in patterns:
                 match = re.search(pattern, res.text)
@@ -2181,16 +2199,51 @@ def resolve_youtube_channel_id(handle):
 
 
 def resolve_all_youtube_channels():
-    """YOUTUBE_CHANNELS의 @핸들들을 전부 channel_id로 변환해서 RSS 주소 목록을 만듦"""
+    """YOUTUBE_CHANNELS의 @핸들들을 전부 channel_id로 변환해서 RSS 주소 목록을 만듦.
+
+    ⚠️ 예전엔 12개 채널을 하나씩 순서대로(직렬로) 처리해서, 채널 하나가 느리거나
+    응답이 없으면 최대 15초씩 쌓여서(About 페이지까지 합치면 채널당 최대 30초)
+    전체가 몇 분씩 걸릴 수 있었습니다. Render 같은 호스팅은 그 시간 동안 헬스체크가
+    응답을 못 받으면 "죽었다"고 판단해서 컨테이너를 재시작해버리는데, 그러면
+    startup_init()이 끝을 못 보고 처음부터 계속 다시 시작하는 크래시 루프에 빠집니다.
+    (실제로 로그에서 "KRX 목록 로드"는 매번 성공하는데 "유튜브 채널ID 확인"에서
+    계속 멈추고 재시작되는 패턴이 관찰됨.)
+
+    그래서 여러 채널을 동시에(병렬로) 처리하고, 전체 작업에 시간 상한선(45초)을
+    둬서 아무리 느려도 startup_init()이 그 안에는 반드시 끝나도록 합니다. 시간
+    안에 못 끝낸 채널은 이번엔 건너뛰고(RSS 연결 없이 시작), 다음 컨테이너
+    재시작/재배포 때 다시 시도됩니다.
+    """
+    import concurrent.futures
+
     global YOUTUBE_CHANNEL_RSS_URLS
-    resolved = []
-    for name, handle in YOUTUBE_CHANNELS:
-        channel_id = resolve_youtube_channel_id(handle)
-        if channel_id:
-            rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-            resolved.append((name, rss_url))
-    YOUTUBE_CHANNEL_RSS_URLS = resolved
-    return resolved
+    resolved = {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        future_to_name = {
+            executor.submit(resolve_youtube_channel_id, handle): name
+            for name, handle in YOUTUBE_CHANNELS
+        }
+        try:
+            for future in concurrent.futures.as_completed(future_to_name, timeout=45):
+                name = future_to_name[future]
+                try:
+                    channel_id = future.result()
+                except Exception as e:
+                    print(f"[유튜브 채널ID 오류] {name}: {e}")
+                    continue
+                if channel_id:
+                    resolved[name] = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+        except concurrent.futures.TimeoutError:
+            print("⚠️ 유튜브 채널ID 조회 45초 초과 - 아직 못 끝낸 채널은 이번엔 건너뜁니다.")
+        # ThreadPoolExecutor의 with 블록이 끝나면(=여기서 빠져나가면) 아직 안 끝난
+        # 작업이 있어도 더 이상 기다리지 않고(cancel_futures로 대기 없이) 진행합니다.
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    # YOUTUBE_CHANNELS에 정의된 순서를 최대한 유지해서 결과 리스트 구성
+    ordered = [(name, resolved[name]) for name, _ in YOUTUBE_CHANNELS if name in resolved]
+    YOUTUBE_CHANNEL_RSS_URLS = ordered
+    return ordered
 
 
 def check_youtube(current_time_str):
@@ -3218,37 +3271,46 @@ def main():
 #   should_run_task()로 "아직 시간이 안 됐으면 건너뛰기"를 적용합니다.
 # ============================================================
 _initialized = False
+_init_lock = threading.Lock()
 
 
 def startup_init():
     global ALL_LISTED_COMPANIES, COMPANY_NAME_TO_CODE, _initialized
     if _initialized:
         return
-    print("📋 KRX 상장법인 목록을 불러오는 중...")
-    ALL_LISTED_COMPANIES, COMPANY_NAME_TO_CODE = fetch_krx_company_names()
-    if ALL_LISTED_COMPANIES:
-        print(f"✅ 상장법인 {len(ALL_LISTED_COMPANIES)}개 종목명 로드 완료.")
-    else:
-        print("⚠️ 상장법인 목록을 못 가져왔습니다. 기존 대기업 리스트만으로 진행합니다.")
+    # 🔒 threaded=True 환경에서는 여러 요청이 동시에 들어올 수 있어서,
+    # Lock 없이 "if _initialized: return" 만 하면 두 요청이 거의 동시에
+    # 이 체크를 통과해 초기화를 중복으로(그것도 동시에) 실행할 수 있습니다.
+    # Lock으로 감싸서 딱 한 번만, 한 요청만 실제 초기화를 하도록 보장합니다.
+    with _init_lock:
+        if _initialized:  # Lock을 기다리는 동안 다른 요청이 이미 끝냈을 수 있으니 재확인
+            return
 
-    print("🎬 유튜브 채널ID를 확인하는 중...")
-    resolve_all_youtube_channels()
-    print(f"✅ 유튜브 채널 {len(YOUTUBE_CHANNEL_RSS_URLS)}/{len(YOUTUBE_CHANNELS)}개 연결 완료.")
+        print("📋 KRX 상장법인 목록을 불러오는 중...")
+        ALL_LISTED_COMPANIES, COMPANY_NAME_TO_CODE = fetch_krx_company_names()
+        if ALL_LISTED_COMPANIES:
+            print(f"✅ 상장법인 {len(ALL_LISTED_COMPANIES)}개 종목명 로드 완료.")
+        else:
+            print("⚠️ 상장법인 목록을 못 가져왔습니다. 기존 대기업 리스트만으로 진행합니다.")
 
-    load_recent_sent_titles(hours=6)
+        print("🎬 유튜브 채널ID를 확인하는 중...")
+        resolve_all_youtube_channels()
+        print(f"✅ 유튜브 채널 {len(YOUTUBE_CHANNEL_RSS_URLS)}/{len(YOUTUBE_CHANNELS)}개 연결 완료.")
 
-    global _init_batch_mode
-    _init_batch_mode = True  # 🚀 이 구간 동안은 Firestore에 하나씩 안 쓰고 모아둠
-    try:
-        initialize_existing_rss()
-        initialize_existing_telegram_channels()
-        initialize_existing_custom_sources()
-        initialize_existing_dart_disclosures()
-    finally:
-        _init_batch_mode = False
-        _flush_pending_batch_writes()  # 모아둔 걸 한꺼번에 저장
+        load_recent_sent_titles(hours=6)
 
-    _initialized = True
+        global _init_batch_mode
+        _init_batch_mode = True  # 🚀 이 구간 동안은 Firestore에 하나씩 안 쓰고 모아둠
+        try:
+            initialize_existing_rss()
+            initialize_existing_telegram_channels()
+            initialize_existing_custom_sources()
+            initialize_existing_dart_disclosures()
+        finally:
+            _init_batch_mode = False
+            _flush_pending_batch_writes()  # 모아둔 걸 한꺼번에 저장
+
+        _initialized = True
 
 
 def run_once():
@@ -3336,6 +3398,6 @@ if __name__ == "__main__":
     if os.environ.get("RUN_MODE", "local") == "cloud" and app is not None:
         # Cloud Run이 컨테이너를 시작할 때 이 경로로 들어옵니다 (PORT 환경변수는 자동 지정됨).
         port = int(os.environ.get("PORT", 8080))
-        app.run(host="0.0.0.0", port=port)
+        app.run(host="0.0.0.0", port=port, threaded=True)
     else:
         main()
