@@ -4351,7 +4351,7 @@ def check_dart_disclosures(current_time_str):
                     _dart_major_shareholder_change_label(report_nm, report_text),
                     _dart_free_stock_ratio_label(report_nm, report_text),
                     _dart_generic_amount_label(report_nm, report_text),
-                    _dart_schedule_label(report_text),  # 📅 유형 무관 공통 일정 정보
+                    format_dart_schedule(report_text),  # ⏰ 일정(V2) - 배당/납입/청약/임상 등 20여종 세분화 추출
                 ) if x
             ]
             if extra_notes:
@@ -4772,50 +4772,57 @@ def extract_dart_schedule(text):
     raw = re.sub(r"\s+", " ", str(text))
     found = []
     seen = set()
+    used_spans = []  # (start, end) - 이미 어떤 라벨이 이 위치의 날짜를 가져갔는지 기록해서 중복/교차매칭 방지
 
     def norm_date(s):
         s = re.sub(r"\s+", "", s)
-        return s.replace(".", "-").replace("/", "-").replace("년", "-").replace("월", "-").replace("일", "")
+        s = s.replace(".", "-").replace("/", "-").replace("년", "-").replace("월", "-").replace("일", "")
+        parts = s.split("-")
+        if len(parts) == 3 and all(p.isdigit() for p in parts):
+            y, mo, d = parts
+            return f"{y}-{mo.zfill(2)}-{d.zfill(2)}"
+        return s
+
+    def overlaps_used(start, end):
+        return any(not (end <= s or start >= e) for s, e in used_spans)
+
+    # ⚠️ 라벨과 날짜 사이에 콜론(:) 없이 조사("은/는/이/가")만 붙는 자연스러운
+    # 한국어 문장도 인식하도록("계약기간은 2026-01-01 ~ 2028-12-31" 같은 경우)
+    _SEP = r"\s*(?:은|는|이|가)?\s*[:：]?\s*"
 
     # 1) '계약기간: 2026-01-01 ~ 2028-12-31' 같은 범위
     for label in ("계약기간", "공급기간", "납품기간", "전환청구기간", "행사기간",
                   "청약기간", "주주명부 폐쇄기간"):
-        pat = rf"{re.escape(label)}\s*[:：]?\s*{_DART_DATE_RANGE}"
+        pat = rf"{re.escape(label)}{_SEP}{_DART_DATE_RANGE}"
         for m in re.finditer(pat, raw, re.I):
+            if overlaps_used(m.start(), m.end()):
+                continue
             val = f"{norm_date(m.group(2))} ~ {norm_date(m.group(3))}"
             key = (label, val)
             if key not in seen:
                 found.append(key); seen.add(key)
+                used_spans.append((m.start(), m.end()))
 
-    # 2) 의미가 명시된 단일 날짜
+    # 2) 의미가 명시된 단일 날짜 ("라벨: 날짜" 또는 "라벨은 날짜" 순서 - 한국어
+    # 공시 문서에서 압도적으로 흔한 순서라 이 방향만 안전하게 지원함.
+    # ⚠️ "날짜가 먼저 나오고 라벨이 뒤에 오는" 역방향 매칭은 일부러 지원하지
+    # 않습니다 - 시도해봤더니 전혀 상관없는 가까운 날짜를 엉뚱한 라벨로 잘못
+    # 붙잡는 경우가 많아서(예: 청약기간 끝 날짜를 신주상장일로 오인), 없는
+    # 것보다 위험하다고 판단했습니다.
     for label, patterns in _DART_SCHEDULE_PATTERNS:
         if label in {"계약기간", "공급기간", "납품기간", "전환청구기간", "행사기간",
                      "청약기간", "주주명부 폐쇄기간"}:
             continue
         for p in patterns:
-            pat = rf"{p}\s*[:：]?\s*({_DART_DATE})"
+            pat = rf"{p}{_SEP}({_DART_DATE})"
             for m in re.finditer(pat, raw, re.I):
+                if overlaps_used(m.start(), m.end()):
+                    continue
                 val = norm_date(m.group(1))
                 key = (label, val)
                 if key not in seen:
                     found.append(key); seen.add(key)
-
-    # 3) '2026년 8월 20일 납입'처럼 날짜가 앞에 오는 문장도 처리
-    reverse_patterns = [
-        ("납입일", r"납입"),
-        ("신주 상장일", r"신주.*?상장"),
-        ("변경상장일", r"변경상장"),
-        ("배당 기준일", r"배당.*?기준일"),
-        ("배당금 지급일", r"배당금.*?지급"),
-        ("재공시일", r"재공시"),
-    ]
-    for label, keyword in reverse_patterns:
-        pat = rf"({_DART_DATE})\s*(?:까지|부터|예정|경|에)?\s*{keyword}"
-        for m in re.finditer(pat, raw, re.I):
-            val = norm_date(m.group(1))
-            key = (label, val)
-            if key not in seen:
-                found.append(key); seen.add(key)
+                    used_spans.append((m.start(), m.end()))
 
     return found
 
