@@ -2583,7 +2583,11 @@ def _dart_shareholding_label(report_nm, text):
     if "대량보유상황보고서" not in report_nm or not text:
         return None
 
-    chunk = _dart_find_near(text, ["보유비율", "지분율", "보유 비율"], window=200)
+    chunk = _dart_find_near(
+        text,
+        ["보유비율", "지분율", "보유 비율", "보유주식등의 비율", "보유주식비율"],
+        window=600,
+    )
     pcts = _dart_extract_percentages(chunk)
     if not pcts:
         return None
@@ -3094,6 +3098,11 @@ def check_dart_disclosures(current_time_str):
                 continue
 
             report_text = _dart_document_text(rcept_no)
+            if not report_text:
+                # ⚠️ 원문 텍스트를 못 가져오면 지분율/배당금/비율 요약(extra_notes)이
+                # 전부 빈 채로 나갈 수밖에 없습니다. 왜 요약이 안 붙었는지 바로
+                # 알 수 있도록 로그를 남깁니다 (예전엔 조용히 넘어가서 원인 파악이 안 됐음).
+                print(f"[DART 원문 조회 실패] {corp_name} / {report_nm} (rcept_no={rcept_no}) - 원문을 못 가져와 요약 없이 발송됩니다.")
             should_expose, reason = dart_should_expose(report_nm, report_text, stock_code)
             if not should_expose:
                 mark_as_sent(full_title)
@@ -3134,6 +3143,11 @@ def check_dart_disclosures(current_time_str):
             ]
             if extra_notes:
                 reason = (reason + "\n" if reason else "") + "\n".join(extra_notes)
+            elif report_text and "대량보유상황보고서" in report_nm:
+                # 원문은 정상적으로 받아왔는데도 지분율을 못 찾은 경우 - 이 공시가
+                # 예상과 다른 문서 포맷(표 구조 등)일 수 있으므로 로그로 남겨서
+                # 다음에 패턴을 더 보강할 수 있게 합니다.
+                print(f"[DART 지분율 파싱 실패] {corp_name} (rcept_no={rcept_no}) - 원문은 받았지만 보유비율 패턴을 못 찾음.")
 
             send_telegram_message(
                 display_title, detail_url, current_time_str, 1,
@@ -3313,71 +3327,90 @@ def startup_init():
         _initialized = True
 
 
+_run_once_lock = threading.Lock()
+
+
 def run_once():
     """Cloud Scheduler가 호출할 때마다 한 번 실행되는 함수. 성공 여부와 무관하게 예외를 삼켜서
     Cloud Scheduler에는 항상 정상 응답을 준다 (재시도 폭주 방지)."""
-    try:
-        startup_init()
-    except Exception as e:
-        # ⚠️ 여기서 예외를 삼키지 않고 그냥 두면(try/except 없으면) run_once() 전체가
-        # 죽어버려서, 아래의 check_domestic_news() 등 실제 체크 로직들이
-        # 단 한 줄도 실행되지 못한 채 함수가 끝나버립니다. GET 요청 자체는 200으로
-        # 응답이 갈 수 있어도(예: 서버 설정/헬스체크 경로 차이), 실제 체크 로그는
-        # 전혀 안 찍히는 상태가 됩니다.
-        # 전체 스택트레이스를 남겨서 KRX 목록/유튜브 채널ID/Firestore 초기화 중
-        # 정확히 어디서 실패했는지 다음 로그에서 바로 확인할 수 있게 합니다.
-        print(f"[초기화 오류] startup_init() 실패: {e}")
-        traceback.print_exc()
-        # _initialized는 startup_init() 맨 마지막에만 True로 바뀌므로, 여기서 실패했다면
-        # 다음 run_once() 호출 때 자동으로 다시 시도됩니다(재시도를 위해 별도 처리 불필요).
-
-    now = datetime.datetime.now()
-    time_str = now.strftime("%H:%M:%S")
+    # 🔒 threaded=True로 바꾼 뒤로, Render 헬스체크/외부 핑이 겹쳐서 들어오면
+    # run_once()가 동시에 여러 번 실행되는 문제가 있었습니다. (로그에서 같은 시각에
+    # "국내 RSS 체크"가 2~3번씩 겹쳐 찍히고, 텔레그램/유튜브 쪽에서 Read timed out /
+    # RemoteDisconnected 같은 에러가 난 것도 여러 스레드가 같은 네트워크 자원을
+    # 동시에 두드려서 생긴 것으로 보입니다.)
+    # 이미 처리 중이면(Lock을 못 얻으면) 새 요청은 기다리지 않고 즉시 "처리 중"
+    # 응답을 주고 빠집니다. 이렇게 하면:
+    #   1) 같은 체크가 중복 실행되지 않고
+    #   2) 응답이 항상 빨라서(즉시 리턴) 헬스체크가 타임아웃날 일이 없습니다.
+    got_lock = _run_once_lock.acquire(blocking=False)
+    if not got_lock:
+        return "SKIPPED (already running)"
 
     try:
-        check_domestic_news(time_str)
-        if is_us_market_hour(now):
-            check_us_news(time_str)
-    except Exception as e:
-        print(f"[국내/해외 RSS 오류] {e}")
-
-    try:
-        check_telegram_channels(time_str)
-        check_telegram_channels_unfiltered(time_str)
-    except Exception as e:
-        print(f"[텔레그램 채널 오류] {e}")
-
-    if should_run_task("custom_sources", CUSTOM_SOURCE_INTERVAL):
         try:
-            check_custom_sources(time_str)
+            startup_init()
         except Exception as e:
-            print(f"[커스텀 소스 오류] {e}")
+            # ⚠️ 여기서 예외를 삼키지 않고 그냥 두면(try/except 없으면) run_once() 전체가
+            # 죽어버려서, 아래의 check_domestic_news() 등 실제 체크 로직들이
+            # 단 한 줄도 실행되지 못한 채 함수가 끝나버립니다. GET 요청 자체는 200으로
+            # 응답이 갈 수 있어도(예: 서버 설정/헬스체크 경로 차이), 실제 체크 로그는
+            # 전혀 안 찍히는 상태가 됩니다.
+            # 전체 스택트레이스를 남겨서 KRX 목록/유튜브 채널ID/Firestore 초기화 중
+            # 정확히 어디서 실패했는지 다음 로그에서 바로 확인할 수 있게 합니다.
+            print(f"[초기화 오류] startup_init() 실패: {e}")
+            traceback.print_exc()
+            # _initialized는 startup_init() 맨 마지막에만 True로 바뀌므로, 여기서 실패했다면
+            # 다음 run_once() 호출 때 자동으로 다시 시도됩니다(재시도를 위해 별도 처리 불필요).
 
-    if should_run_task("dart", DART_CHECK_INTERVAL):
+        now = datetime.datetime.now()
+        time_str = now.strftime("%H:%M:%S")
+
         try:
-            check_dart_disclosures(time_str)
+            check_domestic_news(time_str)
+            if is_us_market_hour(now):
+                check_us_news(time_str)
         except Exception as e:
-            print(f"[DART 오류] {e}")
+            print(f"[국내/해외 RSS 오류] {e}")
 
-    if should_run_task("naver", NAVER_CHECK_INTERVAL):
         try:
-            check_naver_news(time_str)
+            check_telegram_channels(time_str)
+            check_telegram_channels_unfiltered(time_str)
         except Exception as e:
-            print(f"[네이버 뉴스 오류] {e}")
+            print(f"[텔레그램 채널 오류] {e}")
 
-    if should_run_task("blog", BLOG_CHECK_INTERVAL):
-        try:
-            check_blogs(time_str)
-        except Exception as e:
-            print(f"[블로그 오류] {e}")
+        if should_run_task("custom_sources", CUSTOM_SOURCE_INTERVAL):
+            try:
+                check_custom_sources(time_str)
+            except Exception as e:
+                print(f"[커스텀 소스 오류] {e}")
 
-    if should_run_task("youtube", YOUTUBE_CHECK_INTERVAL):
-        try:
-            check_youtube(time_str)
-        except Exception as e:
-            print(f"[유튜브 오류] {e}")
+        if should_run_task("dart", DART_CHECK_INTERVAL):
+            try:
+                check_dart_disclosures(time_str)
+            except Exception as e:
+                print(f"[DART 오류] {e}")
 
-    return f"OK {time_str}"
+        if should_run_task("naver", NAVER_CHECK_INTERVAL):
+            try:
+                check_naver_news(time_str)
+            except Exception as e:
+                print(f"[네이버 뉴스 오류] {e}")
+
+        if should_run_task("blog", BLOG_CHECK_INTERVAL):
+            try:
+                check_blogs(time_str)
+            except Exception as e:
+                print(f"[블로그 오류] {e}")
+
+        if should_run_task("youtube", YOUTUBE_CHECK_INTERVAL):
+            try:
+                check_youtube(time_str)
+            except Exception as e:
+                print(f"[유튜브 오류] {e}")
+
+        return f"OK {time_str}"
+    finally:
+        _run_once_lock.release()
 
 
 # Cloud Run은 컨테이너가 특정 포트로 들어오는 HTTP 요청에 응답해야 살아있다고 인식합니다.
