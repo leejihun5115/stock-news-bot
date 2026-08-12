@@ -1044,6 +1044,104 @@ def format_title(title):
     return formatted
 
 
+# ============================================================
+# 🧮 중요도 점수 (100점 만점) + [요점] 한 줄 요약
+# ------------------------------------------------------------
+# 배점 구성 (합계 100점):
+#   기본 10점
+#   + 매칭 키워드 개수 × 4점 (최대 5개 = 20점)
+#   + 상장기업명 직접 언급 15점
+#   + 단독 15점 / 속보 15점 / 특징주 15점 (해당하는 것마다 누적)
+#   + 계약금액 비율 보너스 (매출액 또는 시가총액 대비, 최대 20점)
+#     30%이상 20점 / 15%이상 15점 / 5%이상 10점 / 5%미만 5점
+#   → 100점 넘으면 100으로 자름
+#
+# 등급: 90+ 🔥🔥🔥S   80+ 🔥🔥A+   70+ 🔥A   55+ 🟢B   40+ 🟡C   미만 ⚪D
+# ============================================================
+CONTRACT_KEYWORDS = {"공급계약", "수주", "계약체결", "공급 계약", "단일판매"}
+
+
+def _build_key_point_line(title, is_disclosure, highlight_suffix):
+    """
+    제목 밑에 붙일 "[요점]" 한 줄을 만든다. 계약/수주 관련 뉴스면 계약금액이
+    매출액(우선) 또는 시가총액(매출액을 못 구했을 때 대체) 대비 몇 %인지 계산해서
+    보여준다. 계산할 재료가 없으면 None (이 경우 [요점] 줄 자체를 안 붙임 -
+    숫자를 지어내지 않는다는 원칙).
+    """
+    # 📋 DART 공시는 이미 원문에서 "매출액대비" 비율을 직접 뽑아서
+    # highlight_suffix에 넣어주고 있으므로(단일판매공급계약 공시는 법적으로
+    # 이 비율을 명시해야 함), 그걸 그대로 재사용한다 - 계산을 두 번 안 함.
+    if is_disclosure and highlight_suffix and "매출액대비" in highlight_suffix:
+        for line in highlight_suffix.split("\n"):
+            if "매출액대비" in line:
+                return f"[요점] {line.strip()}"
+        return None
+
+    if not any(kw in title for kw in CONTRACT_KEYWORDS):
+        return None
+
+    amounts = _dart_extract_eok_amounts(title)
+    if not amounts:
+        return None
+    amount = max(amounts)
+
+    matched_company = next((name for name in ALL_LISTED_COMPANIES if name in title), None)
+    stock_code = COMPANY_NAME_TO_CODE.get(matched_company) if matched_company else None
+    if not stock_code:
+        return f"[요점] 계약금액 {_eok_comma_label(amount)} 규모"
+
+    revenue = _dart_recent_revenue_eok(stock_code)
+    if revenue and revenue > 0:
+        ratio = amount / revenue * 100
+        return f"[요점] 계약금액 {_eok_comma_label(amount)} → 최근 매출액 대비 {ratio:.1f}%"
+
+    mcap = _dart_market_cap_eok(stock_code)
+    if mcap and mcap > 0:
+        ratio = amount / mcap * 100
+        return f"[요점] 계약금액 {_eok_comma_label(amount)} → 시가총액 대비 {ratio:.1f}% (매출액 조회 실패로 시총 기준 대체)"
+
+    return f"[요점] 계약금액 {_eok_comma_label(amount)} 규모"
+
+
+def _calculate_importance_100(matched_count, is_exclusive, is_breaking, is_feature,
+                                has_listed_company, ratio_pct=None):
+    """중요도를 100점 만점으로 환산하고, 등급(이모지+글자)을 같이 반환."""
+    score = 10
+    score += min(matched_count, 5) * 4
+    if has_listed_company:
+        score += 15
+    if is_exclusive:
+        score += 15
+    if is_breaking:
+        score += 15
+    if is_feature:
+        score += 15
+    if ratio_pct is not None:
+        if ratio_pct >= 30:
+            score += 20
+        elif ratio_pct >= 15:
+            score += 15
+        elif ratio_pct >= 5:
+            score += 10
+        else:
+            score += 5
+    score = min(score, 100)
+
+    if score >= 90:
+        grade = "🔥🔥🔥 S"
+    elif score >= 80:
+        grade = "🔥🔥 A+"
+    elif score >= 70:
+        grade = "🔥 A"
+    elif score >= 55:
+        grade = "🟢 B"
+    elif score >= 40:
+        grade = "🟡 C"
+    else:
+        grade = "⚪ D"
+    return score, grade
+
+
 def classify_and_score(title):
     upper_hits = {kw for kw in STRONG_KEYWORDS_1 if kw in title}
     lower_hits = {kw for kw in STRONG_KEYWORDS_2 if kw in title}
@@ -1110,11 +1208,107 @@ def classify_telegram_channel_message(title):
 
 
 
+_og_image_cache = {}
+
+
+def _extract_og_image(article_url, timeout=8):
+    """기사 페이지에서 대표 이미지(og:image, 없으면 twitter:image) 주소를 찾아서 반환.
+    못 찾거나 오류가 나면 None. 같은 URL을 여러 번 조회하지 않도록 간단히 캐싱.
+
+    ⚠️ 왜 필요한가: 텔레그램의 자동 링크 미리보기는 텔레그램 서버가 그 사이트에
+    직접 접속해서 메타태그를 읽어오는 방식인데, 일부 언론사 사이트는 텔레그램 봇의
+    접근을 막아두거나 og:image 자체를 안 넣어둬서 미리보기가 안 뜨는 경우가 있음
+    (같은 사이트라도 기사마다 결과가 다르게 나오는 것도 이 때문). 그래서 우리가
+    직접 기사 페이지를 읽어서 이미지 주소를 찾아 sendPhoto로 확실하게 붙이는 방식으로
+    이 문제를 코드 쪽에서 통제 가능하게 만듦.
+    """
+    if article_url in _og_image_cache:
+        return _og_image_cache[article_url]
+
+    image_url = None
+    try:
+        res = requests.get(
+            article_url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=timeout,
+        )
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            for selector in (
+                {"property": "og:image"},
+                {"property": "og:image:secure_url"},
+                {"name": "twitter:image"},
+            ):
+                tag = soup.find("meta", attrs=selector)
+                if tag and tag.get("content"):
+                    candidate = tag["content"].strip()
+                    if candidate.startswith("//"):
+                        candidate = "https:" + candidate
+                    if candidate.startswith("http"):
+                        image_url = candidate
+                        break
+    except Exception:
+        image_url = None
+
+    _og_image_cache[article_url] = image_url  # 실패(None)도 캐싱해서 같은 URL 재시도 안 함
+    return image_url
+
+
+def _resolve_tag(title, is_schedule, is_rumor, is_disclosure, is_exclusive, is_breaking,
+                  is_feature, is_us_market, is_money, custom_source, source_label):
+    """
+    🔢 태그 우선순위 1~11번 표. 숫자가 작을수록 먼저 검사되고, 맨 처음 조건에
+    맞는 게 채택됩니다 (일정 > 조회공시 > 전자공시 > 단독 > 속보 > 특징주 >
+    해외시황 > 돈관련 > 커스텀소스 > RSS출처 > 기본).
+
+    ⚠️ 예전엔 이 우선순위를 tag_line용 if/elif와 source_bracket용 if/elif,
+    이렇게 완전히 똑같은 순서를 두 벌 따로 타고 있었습니다. 하나 고치면
+    다른 쪽도 손으로 맞춰야 했고, 깜빡하면 둘이 어긋나는 버그가 생기기
+    쉬운 구조였습니다. 이제 한 번의 판단으로 tag_line(공시류 메시지에 씀)과
+    (source_emoji, source_bracket)(일반 뉴스 메시지에 씀)을 동시에 반환해서,
+    구조적으로 절대 어긋날 수 없게 만들었습니다.
+
+    ✏️ 태그 우선순위를 바꾸고 싶으면: 아래 번호가 매겨진 줄들의 "순서"를
+    바꾸면 됩니다 (숫자가 작을수록 강한 우선순위). 문구만 바꾸고 싶으면
+    해당 번호 줄의 텍스트만 고치면 됩니다.
+
+    반환값: (tag_line, source_emoji, source_bracket)
+    """
+    if is_schedule:
+        return "⏰ 일정", "⏰", "일정"                                              # 1순위: 일정
+    if is_rumor:
+        return "👀 조회공시(풍문)", "👀", "조회공시(풍문)"                            # 2순위: 조회공시(풍문)
+    if is_disclosure:
+        return "✅ 전자공시", "✅", "전자공시"                                       # 3순위: 전자공시
+    if is_exclusive:
+        return "🔥 [단독]", "🔥", "단독"                                           # 4순위: 단독
+    if is_breaking:
+        return "🚨[속보]🚀", "🚨", "속보🚀"                                        # 5순위: 속보
+    if is_feature:
+        suffix = "특징주_해외" if is_us_market else "특징주"
+        return f"🚨[{suffix}]", "🚨", suffix                                      # 6순위: 특징주
+    if is_us_market:
+        return "🇺🇸 해외시황/외신", "🇺🇸", "해외시황/외신"                           # 7순위: 해외시황
+    if is_money:
+        if "금리" in title:
+            label = "금리"
+        elif "실적" in title or "어닝서프라이즈" in title or "어닝쇼크" in title:
+            label = "실적"
+        else:
+            label = "머니"
+        return f"💰 {label}", "💰", label                                        # 8순위: 돈관련
+    if custom_source:
+        bracket = re.sub(r"[\[\]]", "", re.sub(r"^[^\w\uAC00-\uD7A3]+", "", custom_source)).strip()
+        return custom_source, "✅", bracket                                       # 9순위: 커스텀소스(전자신문/약업신문)
+    if source_label:
+        return f"✅ {source_label}", "✅", source_label                           # 10순위: RSS 출처
+    return "📌 [키워드]", "📌", "키워드"                                            # 11순위: 기본값
+
+
 def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive, is_breaking,
                          is_feature, is_us_market, is_disclosure=False, is_rumor=False,
                          custom_source="", source_label="", highlight_suffix="",
-                         show_link_below=False):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+                         show_link_below=False, image_url=""):
     display_title = format_title(title)
 
     is_schedule = "일정" in title
@@ -1124,69 +1318,10 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         or any(kw in title for kw in MONEY_STRONG_WORDS)
     )
 
-    # 태그 우선순위: 일정 > 조회공시 > 전자공시 > 단독 > 속보 > 특징주 > 해외시황 > 돈관련 > 커스텀소스 > RSS출처 > 기본
-    if is_schedule:
-        tag_line = "⏰ 일정"
-    elif is_rumor:
-        tag_line = "👀 조회공시(풍문)"
-    elif is_disclosure:
-        tag_line = "✅ 전자공시"
-    elif is_exclusive:
-        tag_line = "🔥 [단독]"
-    elif is_breaking:
-        tag_line = "🚨[속보]🚀"
-    elif is_feature:
-        tag_line = "🚨[특징주_해외]" if is_us_market else "🚨[특징주]"
-    elif is_us_market:
-        tag_line = "🇺🇸 해외시황/외신"
-    elif is_money:
-        if "금리" in title:
-            tag_line = "💰 금리"
-        elif "실적" in title or "어닝서프라이즈" in title or "어닝쇼크" in title:
-            tag_line = "💰 실적"
-        else:
-            tag_line = "💰 머니"
-    elif custom_source:
-        tag_line = custom_source
-    elif source_label:
-        tag_line = f"✅ {source_label}"
-    else:
-        tag_line = "📌 [키워드]"
-
-    # 🔖 tag_line과 같은 우선순위지만, "[출처]" 안에 그대로 넣기 위한 버전.
-    # source_emoji는 대괄호 "바깥쪽"에 붙는 이모지, source_bracket은 대괄호 "안쪽" 순수 텍스트.
-    source_emoji = ""
-    if is_schedule:
-        source_emoji, source_bracket = "⏰", "일정"
-    elif is_rumor:
-        source_emoji, source_bracket = "👀", "조회공시(풍문)"
-    elif is_disclosure:
-        source_emoji, source_bracket = "✅", "전자공시"
-    elif is_exclusive:
-        source_emoji, source_bracket = "🔥", "단독"
-    elif is_breaking:
-        source_emoji, source_bracket = "🚨", "속보🚀"
-    elif is_feature:
-        source_emoji, source_bracket = "🚨", "특징주_해외" if is_us_market else "특징주"
-    elif is_us_market:
-        source_emoji, source_bracket = "🇺🇸", "해외시황/외신"
-    elif is_money:
-        source_emoji = "💰"
-        if "금리" in title:
-            source_bracket = "금리"
-        elif "실적" in title or "어닝서프라이즈" in title or "어닝쇼크" in title:
-            source_bracket = "실적"
-        else:
-            source_bracket = "머니"
-    elif custom_source:
-        source_emoji = "✅"
-        source_bracket = re.sub(r"[\[\]]", "", re.sub(r"^[^\w\uAC00-\uD7A3]+", "", custom_source)).strip()
-    elif source_label:
-        source_emoji = "✅"
-        source_bracket = source_label
-    else:
-        source_emoji = "📌"
-        source_bracket = "키워드"
+    tag_line, source_emoji, source_bracket = _resolve_tag(
+        title, is_schedule, is_rumor, is_disclosure, is_exclusive, is_breaking,
+        is_feature, is_us_market, is_money, custom_source, source_label,
+    )
 
     is_us_related = is_us_market or any(kw.lower() in title.lower() for kw in US_CONTENT_KEYWORDS)
     is_pharma_related = any(kw in title for kw in PHARMA_KEYWORDS)
@@ -1275,6 +1410,21 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         highlight_line = f"\n{escaped}"
 
 
+    # 🧮 100점 만점 중요도 점수 + [요점] 한 줄 (계약금액 매출대비 비율 등)
+    has_listed_company_for_score = any(name in title for name in ALL_LISTED_COMPANIES)
+    key_point_line = _build_key_point_line(title, is_disclosure, highlight_suffix)
+    ratio_pct_for_score = None
+    if key_point_line:
+        pct_match = re.search(r"(\d+(?:\.\d+)?)\s*%", key_point_line)
+        if pct_match:
+            ratio_pct_for_score = float(pct_match.group(1))
+    score100, grade100 = _calculate_importance_100(
+        matched_count, is_exclusive, is_breaking, is_feature,
+        has_listed_company_for_score, ratio_pct_for_score,
+    )
+    score_line = f"🧮 중요도 {score100}/100 {grade100}"
+    key_point_html = html.escape(key_point_line) + "\n" if key_point_line else ""
+
     if is_disclosure or is_rumor:
         # 📋 DART 공시류 - 구분선 없이 빈 줄로만 섹션을 나눔:
         # 🚀 태그 🏢⚡️회사명(시총)   ⏰시간 / (빈줄) / 👀실적유형(굵게) / (빈줄) / 본문(괴리율·PER·EPS·매출등) / (빈줄) / 🔗링크
@@ -1292,7 +1442,9 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         )
         text_content = (
             f"{title_prefix} {tag_line} {corp_header}          <i>⏰ {time_str}</i>\n\n"
-            f"<b>{report_body}</b>\n\n"
+            f"<b>{report_body}</b>\n"
+            f"{key_point_html}"
+            f"{score_line}\n\n"
             f"{body_section}"
             f"{disclosure_link_line}"
         )
@@ -1341,27 +1493,49 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         text_content = (
             f"{header_prefix}{source_emoji}[{source_bracket}]                    <i>⏰ {time_str}</i>\n\n"
             f"📌<b>{display_title}</b>{highlight_line}\n"
+            f"{key_point_html}"
+            f"{score_line}\n"
             f"{company_snapshot_line}\n"
             f"{link_text_line}"
         )
         reply_markup = None
 
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text_content,
-        "parse_mode": "HTML",
-    }
-    if is_disclosure or is_rumor:
-        # 📋 DART 공시는 이미 정보가 많아서, 미리보기 이미지 없이 깔끔하게 유지
-        payload["disable_web_page_preview"] = True  # 예전 방식(하위호환용)
-        payload["link_preview_options"] = {"is_disabled": True}  # 텔레그램 최신 방식
-    else:
-        # 📰 일반 뉴스는 링크가 URL 그대로 노출되는 형식이라(masking 없음)
-        # 미리보기를 켜도 "이 링크를 열까요?" 확인창이 다시 뜨지 않음 -
-        # 기사 썸네일 이미지가 카드로 자동 표시되도록 미리보기를 켜둠
-        payload["link_preview_options"] = {"is_disabled": False, "prefer_large_media": True}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
+    # 🖼️ 이미지 주소가 있으면(예: 전자신문/약업신문에서 직접 추출한 og:image) sendPhoto로
+    # 확실하게 사진을 첨부해서 보냄 - 텔레그램의 자동 미리보기(사이트가 봇 접근을
+    # 막아두면 실패)에 의존하지 않아서 훨씬 안정적으로 그림이 뜸.
+    # (DART 공시/조회공시는 원래 미리보기 없이 깔끔하게 유지하는 정책이라 이미지 첨부 제외.
+    #  캡션은 텔레그램 제한상 1024자를 넘으면 sendPhoto가 거부하므로 그 경우도 일반 방식으로.)
+    use_photo = bool(image_url) and not (is_disclosure or is_rumor) and len(text_content) <= 1024
+
+    def _build_request(as_photo):
+        endpoint = "sendPhoto" if as_photo else "sendMessage"
+        req_url = f"https://api.telegram.org/bot{BOT_TOKEN}/{endpoint}"
+        if as_photo:
+            req_payload = {
+                "chat_id": CHAT_ID,
+                "photo": image_url,
+                "caption": text_content,
+                "parse_mode": "HTML",
+            }
+        else:
+            req_payload = {
+                "chat_id": CHAT_ID,
+                "text": text_content,
+                "parse_mode": "HTML",
+            }
+            if is_disclosure or is_rumor:
+                # 📋 DART 공시는 이미 정보가 많아서, 미리보기 이미지 없이 깔끔하게 유지
+                req_payload["disable_web_page_preview"] = True  # 예전 방식(하위호환용)
+                req_payload["link_preview_options"] = {"is_disabled": True}  # 텔레그램 최신 방식
+            else:
+                # 📰 일반 뉴스는 이미지를 직접 못 구했을 때의 대체 경로 -
+                # 텔레그램 자체 미리보기라도 켜서 되면 다행이고, 안 되면 링크만 나감
+                req_payload["link_preview_options"] = {"is_disabled": False, "prefer_large_media": True}
+        if reply_markup:
+            req_payload["reply_markup"] = reply_markup
+        return req_url, req_payload
+
+    url, payload = _build_request(use_photo)
 
     # 메시지 사이 최소 간격 확보 (너무 빠르게 연속 전송하면 텔레그램이 429로 막음)
     global _last_telegram_send_ts
@@ -1390,6 +1564,15 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
                 continue
 
             print(f"[텔레그램 전송 실패] status={res.status_code} body={res.text[:200]}")
+
+            # 🔄 sendPhoto가 실패했다면(이미지 주소가 텔레그램 기준으로 유효하지 않은 경우 등,
+            # 보통 400) 이미지 없이 일반 메시지로 즉시 대체 전송을 시도함 - 이미지 하나 때문에
+            # 기사 자체가 아예 안 보내지는 것을 막기 위함.
+            if use_photo:
+                print(f"[텔레그램 이미지 전송 실패 → 일반 메시지로 대체] {title}")
+                use_photo = False
+                url, payload = _build_request(False)
+                continue
         except Exception as e:
             print(f"[텔레그램 전송 오류] {e}")
 
@@ -1917,9 +2100,10 @@ def check_custom_sources(current_time_str):
                             href = "https://www.etnews.com" + (href if href.startswith("/") else "/" + href)
 
                 mark_as_sent(title)  # 🚫 먼저 등록 (같은 페이지에 중복 링크가 있어도 한 번만 전송)
+                img_url = _extract_og_image(href)  # 🖼️ 기사 대표 이미지 직접 추출 (텔레그램 자동 미리보기에 안 기대고 확실하게)
                 send_telegram_message(title, href, current_time_str, matched_count,
                                    is_exclusive, is_breaking, is_feature, False,
-                                   custom_source=f"✅ {source_name}")
+                                   custom_source=f"✅ {source_name}", image_url=img_url or "")
         except Exception as e:
             print(f"[커스텀 소스 오류] {source_name}: {e}")
             continue
@@ -2339,6 +2523,11 @@ def _dart_extract_eok_amounts(text):
     if not text:
         return []
     out = []
+    # 조원 -> 억원 (1조 = 10,000억)
+    for x in re.findall(r'([0-9][0-9,]*(?:\.[0-9]+)?)\s*조\s*[0-9,]*\s*억?원?', text):
+        v = _dart_eok_number(x)
+        if v is not None:
+            out.append(v * 10000)
     # 억원
     for x in re.findall(r'([0-9][0-9,]*(?:\.[0-9]+)?)\s*억원', text):
         v = _dart_eok_number(x)
@@ -2512,6 +2701,106 @@ def _dart_valuation_line(stock_code):
 def _dart_market_cap_eok(stock_code):
     """현재 시가총액(억원). 실패하면 None. 10분 캐시."""
     return _dart_stock_snapshot(stock_code).get("mcap")
+
+
+# ============================================================
+# 💰 종목의 "최근 매출액" 조회 (공급계약 뉴스의 "매출액 대비 몇%" 계산용)
+# ------------------------------------------------------------
+# DART 재무제표 API(fnlttSinglAcntAll)는 종목코드(6자리, 예: 005930)가 아니라
+# DART 자체 기업고유번호(corp_code, 8자리)로 조회해야 합니다. 그래서 먼저
+# DART가 제공하는 전체 기업 매핑표(corpCode.xml, zip으로 압축돼 있음)를
+# 한 번 받아서 "종목코드 -> corp_code" 딕셔너리를 만들어둡니다.
+# ⚠️ 이 매핑표는 용량이 좀 있어서(수 MB), 봇 시작할 때 무조건 받지 않고
+# "공급계약 뉴스가 실제로 떠서 매출액이 필요해진 시점"에 딱 한 번만
+# 받아오는 지연 로딩 방식을 씁니다 (시작 속도를 늦추지 않기 위함).
+# ============================================================
+_dart_corp_code_map = None  # {"005930": "00126380", ...}
+_dart_revenue_cache = {}
+
+
+def _get_dart_corp_code_map():
+    global _dart_corp_code_map
+    if _dart_corp_code_map is not None:
+        return _dart_corp_code_map
+    import io, zipfile
+    import xml.etree.ElementTree as ET
+
+    mapping = {}
+    try:
+        res = requests.get(
+            "https://opendart.fss.or.kr/api/corpCode.xml",
+            params={"crtfc_key": DART_API_KEY},
+            timeout=20,
+        )
+        if res.status_code == 200:
+            with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+                with z.open(z.namelist()[0]) as f:
+                    tree = ET.parse(f)
+                    for el in tree.getroot().findall("list"):
+                        stock_code = (el.findtext("stock_code") or "").strip()
+                        corp_code = (el.findtext("corp_code") or "").strip()
+                        if stock_code and corp_code:
+                            mapping[stock_code] = corp_code
+            print(f"✅ [DART] 기업고유번호 매핑표 {len(mapping)}개 로드 완료.")
+        else:
+            print(f"⚠️ [DART] 기업고유번호 매핑표 요청 실패: status={res.status_code}")
+    except Exception as e:
+        print(f"⚠️ [DART] 기업고유번호 매핑표 로드 실패: {e}")
+
+    _dart_corp_code_map = mapping  # 실패해도 빈 dict로 캐싱해서 매번 재시도하지 않음
+    return _dart_corp_code_map
+
+
+def _dart_recent_revenue_eok(stock_code):
+    """
+    이 회사의 가장 최근 사업연도 매출액(억원)을 DART 재무제표 API에서 가져온다.
+    실패하거나 못 찾으면 None. 6시간 캐시 (매출액은 분기 단위로만 바뀌는
+    정보라 자주 갱신할 필요가 없음).
+    """
+    if not stock_code or not DART_API_KEY:
+        return None
+
+    now = time.time()
+    cached = _dart_revenue_cache.get(stock_code)
+    if cached and now - cached[1] < 6 * 3600:
+        return cached[0]
+
+    revenue = None
+    corp_code = _get_dart_corp_code_map().get(stock_code)
+    if corp_code:
+        # 최근 3개 연도를 순서대로 시도 (아직 사업보고서 미제출 시기엔 전년도로 대체)
+        this_year = datetime.datetime.now().year
+        for year in (this_year - 1, this_year - 2, this_year):
+            try:
+                res = requests.get(
+                    "https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json",
+                    params={
+                        "crtfc_key": DART_API_KEY,
+                        "corp_code": corp_code,
+                        "bsns_year": str(year),
+                        "reprt_code": "11011",  # 사업보고서(연간)
+                        "fs_div": "CFS",  # 연결재무제표 우선
+                    },
+                    timeout=10,
+                )
+                data = res.json()
+                if data.get("status") != "000":
+                    continue
+                for item in data.get("list", []):
+                    if item.get("account_nm") in ("매출액", "수익(매출액)") and item.get("fs_div") == "CFS":
+                        amt = item.get("thstrm_amount", "").replace(",", "")
+                        if amt and re.fullmatch(r"-?\d+", amt):
+                            revenue = float(amt) / 100000000  # 원 -> 억원
+                            break
+                if revenue is not None:
+                    break
+            except Exception as e:
+                print(f"[DART 매출액 조회 오류] {stock_code}/{year}: {e}")
+                continue
+
+    _dart_revenue_cache[stock_code] = (revenue, now)
+    return revenue
+
 
 def _dart_find_near(text, keywords, window=2500):
     """키워드 주변의 수치만 뽑아 엉뚱한 표의 숫자 오인식 최소화."""
@@ -3435,6 +3724,51 @@ try:
     def _cloud_run_entry():
         result = run_once()
         return result, 200
+
+    @app.route("/test_score", methods=["GET"])
+    def _test_score_route():
+        """
+        🧪 임시 테스트용 경로 - 실제 뉴스/공시가 뜰 때까지 기다리지 않고,
+        [요점]/100점 점수 기능이 텔레그램에 실제로 어떻게 나오는지 바로
+        확인하기 위한 것입니다. 브라우저로 "내주소/test_score"를 한 번
+        열면 가짜 샘플 뉴스 3건을 텔레그램으로 보내봅니다.
+
+        ⚠️ 확인 끝나면 이 라우트는 지워도 되고 그냥 둬도 상관없습니다
+        (별도 인증이 없어서 URL만 알면 누구나 호출은 가능하지만, 매번
+        똑같은 샘플만 보내는 거라 실제 위험은 없습니다).
+        """
+        startup_init()  # ALL_LISTED_COMPANIES 등이 비어있으면 요점 계산이 부실해지므로 먼저 초기화
+
+        now = datetime.datetime.now()
+        time_str = now.strftime("%H:%M:%S")
+        results = []
+
+        # 샘플 1: 일반 뉴스 + 공급계약(요점 라인 + 100점 점수 확인용)
+        matched, excl, brk, feat, _ = classify_and_score("삼성전자 신규 3,000억원 규모 공급계약 체결")
+        ok1 = send_telegram_message(
+            "[테스트] 삼성전자 신규 3,000억원 규모 공급계약 체결",
+            "https://example.com/test-news-1", time_str, matched, excl, brk, feat, False,
+            source_label="테스트발송",
+        )
+        results.append(f"샘플1(공급계약+요점): {'성공' if ok1 else '실패'}")
+
+        # 샘플 2: 속보 + 상장사 언급 (높은 점수 확인용)
+        ok2 = send_telegram_message(
+            "[테스트] 속보 SK하이닉스 실적 서프라이즈 발표",
+            "https://example.com/test-news-2", time_str, 3, False, True, False, False,
+            source_label="테스트발송",
+        )
+        results.append(f"샘플2(속보+상장사, 높은점수 확인용): {'성공' if ok2 else '실패'}")
+
+        # 샘플 3: 약한 뉴스 (낮은 등급 확인용)
+        ok3 = send_telegram_message(
+            "[테스트] 업계 전망 긍정적이라는 분석 나와",
+            "https://example.com/test-news-3", time_str, 0, False, False, False, False,
+            source_label="테스트발송",
+        )
+        results.append(f"샘플3(약한뉴스, 낮은등급 확인용): {'성공' if ok3 else '실패'}")
+
+        return "<br>".join(results), 200
 except ImportError:
     app = None
 
