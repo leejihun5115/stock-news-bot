@@ -2143,47 +2143,51 @@ def _classify_us_themes(quote_map):
 
 def _rank_domestic_candidates(kr_stock_names, limit=3):
     """
-    국내 관련주 후보들을 실제 거래대금/외국인수급/당일공시 여부로 점수 매겨서
-    상위 몇 개만 "최우선 관찰"로 추려낸다. 데이터를 못 가져온 종목은 0점으로
-    처리(밀려날 뿐, 후보에서 아예 빠지진 않음 - 데이터 부족이 곧 "나쁘다"는
-    뜻은 아니므로).
-    반환: [(종목명, 근거 문장 리스트), ...] 점수 내림차순, 최대 limit개
+    국내 관련주 후보들을 "상한가 여부 → 상승률" 순으로 우선 정렬해서 대장주를
+    가려낸다. 상한가에 오른 종목은 그 자체로 최우선(등락률과 무관하게 맨 위),
+    그 다음은 실제 상승률이 높은 순. 상승률 정보를 못 구한 종목은 맨 뒤로
+    밀리되(0으로 취급) 후보에서 아예 빠지진 않음 - 데이터 부족이 곧 "나쁘다"는
+    뜻은 아니므로. 외국인수급/당일공시는 순위와 별개로 "부가 근거"로만 붙임.
+    반환: [(종목명, 상한가여부, 등락률 또는 None, 근거 문장 리스트), ...]
+          정렬 완료, 최대 limit개. 맨 앞이 "대장주".
     """
+    upper_limit_names = _naver_upper_limit_stock_names()
+
     scored = []
     for name in kr_stock_names:
         stock_code = COMPANY_NAME_TO_CODE.get(name)
+        is_upper_limit = name in upper_limit_names
+        change_pct = None
+        reasons = []
+
         if not stock_code:
-            scored.append((name, 0, ["종목코드 미확인"]))
+            scored.append((name, is_upper_limit, None, ["종목코드 미확인"]))
             continue
 
-        reasons = []
-        score = 0
-
         supply = _naver_supply_demand(stock_code)
-        if supply:
-            if supply.get("change_pct") is not None:
-                if supply["change_pct"] > 0:
-                    reasons.append(f"전일 주가 {supply['change_pct']:+.2f}%")
-                    score += 1
-            if supply.get("foreign_net") is not None:
-                if supply["foreign_net"] > 0:
-                    reasons.append(f"외국인 순매수 {supply['foreign_net']:,}주")
-                    score += 2
-                elif supply["foreign_net"] < 0:
-                    reasons.append(f"외국인 순매도 {abs(supply['foreign_net']):,}주")
+        if supply and supply.get("change_pct") is not None:
+            change_pct = supply["change_pct"]
+            reasons.append(f"오늘 등락률 {change_pct:+.2f}%")
+        if supply and supply.get("foreign_net") is not None:
+            if supply["foreign_net"] > 0:
+                reasons.append(f"외국인 순매수 {supply['foreign_net']:,}주")
+            elif supply["foreign_net"] < 0:
+                reasons.append(f"외국인 순매도 {abs(supply['foreign_net']):,}주")
 
         has_disclosure = _dart_has_disclosure_today(stock_code)
         if has_disclosure:
             reasons.append("금일 DART 공시 있음")
-            score += 2
 
+        if is_upper_limit:
+            reasons.insert(0, "🔺상한가")
         if not reasons:
             reasons.append("현재 확인된 특이 수급/공시 없음")
 
-        scored.append((name, score, reasons))
+        scored.append((name, is_upper_limit, change_pct, reasons))
 
-    scored.sort(key=lambda x: x[1], reverse=True)
-    return [(name, reasons) for name, score, reasons in scored[:limit]]
+    # 정렬 기준: ① 상한가 여부(상한가가 최우선) ② 등락률 내림차순(모르면 맨 뒤)
+    scored.sort(key=lambda x: (x[1], x[2] if x[2] is not None else -999), reverse=True)
+    return scored[:limit]
 
 
 def build_morning_briefing_text():
@@ -2254,16 +2258,95 @@ def build_morning_briefing_text():
         lines.append(f"{rank}순위 {theme['name']}")
 
     lines.append("")
-    lines.append(f"✔️ 최우선 관찰 ({top_theme['name']} 관련주)")
-    top_candidates = _rank_domestic_candidates(top_theme["kr_stocks"], limit=3)
-    for name, reasons in top_candidates:
-        lines.append(f"• {name}")
-        lines.append("  이유: 미국 " + top_theme["name"] + " 강세 + " + " + ".join(reasons))
+    # 🔗 1위 테마만 보지 않고, 상위 테마들(최대 3개)의 관련종목을 전부 합쳐서
+    # 그 안에서 "이미 반응 중인 종목"과 "아직 안 오른 종목"을 둘 다 봄.
+    # 같은 종목이 여러 테마에 걸쳐 있으면 먼저 나온(=더 강한) 테마 이름을 씀.
+    combined_candidates = []
+    seen_names = set()
+    name_to_theme = {}
+    for theme, strength, up_stocks in top_themes:
+        for name in theme["kr_stocks"]:
+            if name not in seen_names:
+                seen_names.add(name)
+                combined_candidates.append(name)
+                name_to_theme[name] = theme["name"]
+
+    # ⚠️ 중요: 아래 두 목록은 "미래 상승 예측"이 아닙니다. 상한가/상승률이
+    # 높다는 건 "이미 그만큼 올랐다"는 과거·현재 사실일 뿐이고, 이게 앞으로
+    # 더 오른다는 근거는 못 됩니다(오히려 재료가 이미 반영돼서 상승 여력이
+    # 줄었을 수도 있음). 진짜 "이 테마가 뜨면 다음날 어느 종목이 잘 오르더라"
+    # 같은 예측력 있는 순위를 만들려면 과거 데이터(백테스트)가 필요한데,
+    # 아직 그 데이터가 없어서 지금은 "오늘 이미 반응한 종목이 뭔지 확인하는
+    # 용도"로만 씁니다. 그래서 아래에서 "아직 안 오른 관련주(순환매 후보)"도
+    # 같이 보여줍니다 - 테마가 진짜 강하면 이런 종목이 뒤늦게 따라 오르는
+    # 경우도 실제로 많기 때문에, 한쪽만 보여주면 오히려 왜곡될 수 있습니다.
+    all_ranked = _rank_domestic_candidates(combined_candidates, limit=len(combined_candidates))
+    already_moved = [x for x in all_ranked if x[1] or (x[2] is not None and x[2] >= 3.0)][:3]
+    not_yet_moved = [x for x in all_ranked if x not in already_moved and x[2] is not None]
+    not_yet_moved.sort(key=lambda x: x[2])  # 상승률 낮은(=아직 안 오른) 순
+    not_yet_moved = not_yet_moved[:3]
+
+    lines.append("✔️ 이미 반응 중인 종목 (모멘텀 확인용 - \"앞으로 오른다\"는 예측 아님)")
+    if already_moved:
+        for i, (name, is_upper_limit, change_pct, reasons) in enumerate(already_moved):
+            change_txt = f" ({change_pct:+.2f}%)" if change_pct is not None else ""
+            theme_name = name_to_theme.get(name, top_theme["name"])
+            lines.append(f"{i+1}. {name}{change_txt}")
+            lines.append("  근거: 미국 " + theme_name + " 강세 + " + " + ".join(reasons))
+    else:
+        lines.append("아직 뚜렷하게 반응한 종목 없음")
     lines.append("")
-    lines.append("⚠️ 참고: \"미국에서 같은 테마가 강했다 + 국내 수급/공시\"를 연결한 것일 뿐,")
-    lines.append("국내 종목이 실제로 오른다는 보장은 아닙니다. 투자 판단은 본인 책임입니다.")
+
+    lines.append("✔️ 아직 안 오른 관련주 (순환매 후보 - 참고용)")
+    if not_yet_moved:
+        for name, is_upper_limit, change_pct, reasons in not_yet_moved:
+            change_txt = f" ({change_pct:+.2f}%)" if change_pct is not None else ""
+            theme_name = name_to_theme.get(name, top_theme["name"])
+            lines.append(f"• {name}{change_txt}  [{theme_name}]")
+    else:
+        lines.append("데이터 부족으로 판단 어려움")
+    lines.append("")
+    lines.append("⚠️ 참고: 위 두 목록 다 \"미국에서 같은 테마가 강했다\"는 사실 연결일 뿐,")
+    lines.append("실제 미래 상승을 보장하지 않습니다. 특히 \"이미 반응 중인 종목\"은")
+    lines.append("이미 오른 뒤라는 뜻이라 추격매수 위험이 있고, \"순환매 후보\"는")
+    lines.append("아직 반응 안 했다는 뜻이라 아예 안 오를 수도 있습니다. 투자 판단은 본인 책임입니다.")
+
+    # 📚 나중에 "이 테마가 뜬 날 실제로 어느 종목이 다음날 올랐는지" 백테스트를
+    # 하려면, 지금부터 매일 기록을 쌓아둬야 합니다 (과거로 거슬러 만들 수는
+    # 없고, 오늘부터 쌓는 수밖에 없음). Firestore에 저장, 실패해도 브리핑
+    # 발송 자체는 계속 진행(기록은 부가기능이라 실패해도 안전).
+    try:
+        _log_briefing_for_backtest(top_theme["name"], already_moved, not_yet_moved)
+    except Exception as e:
+        print(f"[브리핑 기록 오류] {e}")
 
     return "\n".join(lines)
+
+
+def _log_briefing_for_backtest(theme_name, already_moved, not_yet_moved):
+    """
+    오늘 브리핑에서 어떤 테마가 1순위였고, 그때 "이미 반응한 종목"/"아직 안
+    오른 종목"이 뭐였는지 Firestore에 기록. 나중에(몇 주~몇 달 뒤) 이 기록과
+    실제 그날그날의 결과를 대조하면, "이 테마가 뜨면 어떤 유형의 종목이
+    실제로 잘 올랐는지" 통계를 낼 수 있습니다 - 지금 당장은 활용 못 하지만,
+    지금부터 쌓아두지 않으면 나중에도 절대 못 만드는 데이터라 미리 시작.
+    """
+    if not _firestore_client:
+        return
+    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    doc = {
+        "date": today_str,
+        "top_theme": theme_name,
+        "already_moved": [
+            {"name": n, "change_pct": c} for n, _, c, _ in already_moved
+        ],
+        "not_yet_moved": [
+            {"name": n, "change_pct": c} for n, _, c, _ in not_yet_moved
+        ],
+        "created_at": datetime.datetime.now(datetime.timezone.utc),
+    }
+    _firestore_client.collection("briefing_history").document(today_str).set(doc)
+    print(f"✅ [브리핑 기록] {today_str} 저장 완료 (나중에 백테스트용).")
 
 
 def send_morning_briefing():
@@ -3149,6 +3232,39 @@ _dart_snapshot_cache = {}
 # 있었는지까지 같이 봐서 근거를 붙임.
 # ============================================================
 _naver_supply_demand_cache = {}
+
+_naver_upper_limit_cache = {"data": None, "ts": 0}
+
+
+def _naver_upper_limit_stock_names():
+    """
+    오늘 상한가(가격제한폭까지 오른) 종목들의 이름 집합을 네이버 금융
+    "상한가" 페이지에서 가져온다. 실패하면 빈 집합. 5분 캐시.
+    """
+    now = time.time()
+    if _naver_upper_limit_cache["data"] is not None and now - _naver_upper_limit_cache["ts"] < 300:
+        return _naver_upper_limit_cache["data"]
+
+    names = set()
+    try:
+        res = requests.get(
+            "https://finance.naver.com/sise/sise_upper.naver",
+            headers={"User-Agent": USER_AGENT},
+            timeout=8,
+        )
+        if res.status_code == 200:
+            res.encoding = "euc-kr"
+            soup = BeautifulSoup(res.text, "html.parser")
+            for a in soup.select("a.tltle"):
+                name = a.get_text(strip=True)
+                if name:
+                    names.add(name)
+    except Exception as e:
+        print(f"[네이버 상한가 목록 조회 오류] {e}")
+
+    _naver_upper_limit_cache["data"] = names
+    _naver_upper_limit_cache["ts"] = now
+    return names
 
 
 def _naver_supply_demand(stock_code):
