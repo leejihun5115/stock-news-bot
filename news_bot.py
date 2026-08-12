@@ -885,8 +885,8 @@ def classify_novelty(title):
     prev_pcts = set(_dart_extract_percentages(matched_original))
     # 🏢 이 기사에 언급된 상장기업명들 vs 이전 기사에 언급됐던 상장기업명들을 비교해서,
     # "이번에 새로 이름이 나온 회사"(=거래 상대방이 새로 밝혀진 경우 등)를 찾음
-    cur_companies = {name for name in ALL_LISTED_COMPANIES if name in title}
-    prev_companies = {name for name in ALL_LISTED_COMPANIES if name in matched_original}
+    cur_companies = resolve_companies_in_text(title)
+    prev_companies = resolve_companies_in_text(matched_original)
 
     new_amounts = cur_amounts - prev_amounts
     new_pcts = cur_pcts - prev_pcts
@@ -994,6 +994,93 @@ ALL_LISTED_COMPANIES = set()
 # 🏢 회사명 -> 종목코드(6자리) 매핑. fetch_krx_company_names()로 채워짐.
 # 일반 뉴스에서 회사명이 매칭되면, 이 코드로 시가총액/PER/괴리율 등을 조회함.
 COMPANY_NAME_TO_CODE = {}
+
+# 🔁 종목코드 -> 공식 회사명 역매핑. COMPANY_NAME_TO_CODE가 채워질 때(startup_init)
+# 같이 자동으로 채워짐. "005930"처럼 텍스트에 코드가 그대로 나오는 경우를
+# 회사명으로 되돌리는 데 씀.
+STOCK_CODE_TO_NAME = {}
+
+# 🌐 영문명 -> 공식 한글 회사명 매핑. KRX 전체 2,700여 종목의 영문명을 다 갖추긴
+# 어려워서, 해외 뉴스/외신에 자주 등장하는 주요 대형주 위주로 수동 관리합니다.
+# ⚠️ 실제로 받아보시다가 "이 영문명도 인식 안 된다" 싶은 게 있으면 알려주세요, 추가해드릴게요.
+ENGLISH_ALIAS_TO_KR = {
+    "samsung electronics": "삼성전자", "samsung elec": "삼성전자",
+    "sk hynix": "SK하이닉스", "hynix": "SK하이닉스",
+    "lg energy solution": "LG에너지솔루션", "lg energy": "LG에너지솔루션",
+    "lg chem": "LG화학", "lg electronics": "LG전자",
+    "lg display": "LG디스플레이",
+    "lg innotek": "LG이노텍",
+    "lg uplus": "LG유플러스", "lg u+": "LG유플러스",
+    "lg household & health care": "LG생활건강", "lg h&h": "LG생활건강",
+    "lg corp": "LG", "lg group": "LG",
+    "hyundai motor": "현대차", "hyundai motors": "현대차",
+    "kia corp": "기아", "kia motors": "기아",
+    "posco holdings": "포스코홀딩스", "posco": "포스코홀딩스",
+    "naver corp": "네이버", "naver corporation": "네이버",
+    "kakao corp": "카카오",
+    "celltrion": "셀트리온",
+    "samsung biologics": "삼성바이오로직스",
+    "samsung sdi": "삼성SDI",
+    "sk innovation": "SK이노베이션",
+    "kb financial": "KB금융", "kb financial group": "KB금융",
+    "shinhan financial": "신한지주",
+    "hana financial": "하나금융지주",
+    "hanwha aerospace": "한화에어로스페이스",
+    "hd hyundai": "HD현대", "hyundai heavy industries": "HD현대중공업",
+    "korea zinc": "고려아연",
+    "hmm co": "HMM",
+    "coupang": "쿠팡",  # 뉴욕 상장이라 KRX 코드는 없지만 국내 투자자 관심이 커서 예외적으로 포함
+}
+
+
+def _get_stock_code_to_name_map():
+    """COMPANY_NAME_TO_CODE(이름→코드)로부터 코드→이름 역매핑을 만들어 캐싱.
+    한 종목코드에 이름이 여러 개 매핑되는 경우는 없다고 가정(KRX 데이터 특성상)."""
+    global STOCK_CODE_TO_NAME
+    if not STOCK_CODE_TO_NAME and COMPANY_NAME_TO_CODE:
+        STOCK_CODE_TO_NAME = {code: name for name, code in COMPANY_NAME_TO_CODE.items()}
+    return STOCK_CODE_TO_NAME
+
+
+def resolve_companies_in_text(text):
+    """
+    텍스트 안에서 언급된 상장기업을 최대한 폭넓게 찾아서, "KRX 공식 회사명"의
+    집합으로 통일해 반환한다 (삼성전자/005930/Samsung Electronics 전부 이걸 거치면
+    다 "삼성전자" 하나로 나옴). 아래 세 가지를 전부 확인:
+      ① KRX 공식 회사명이 텍스트에 그대로 있는 경우 (기존 방식)
+      ② 6자리 종목코드가 텍스트에 있는 경우 → 역매핑으로 회사명 찾음
+      ③ 영문명이 텍스트에 있는 경우 (대소문자 무시) → ENGLISH_ALIAS_TO_KR로 변환
+    """
+    if not text:
+        return set()
+
+    found = {name for name in ALL_LISTED_COMPANIES if name in text}
+
+    code_map = _get_stock_code_to_name_map()
+    if code_map:
+        for code in re.findall(r"\b\d{6}\b", text):
+            name = code_map.get(code)
+            if name:
+                found.add(name)
+
+    text_lower = text.lower()
+    for alias, official_name in ENGLISH_ALIAS_TO_KR.items():
+        if alias in text_lower and official_name in ALL_LISTED_COMPANIES:
+            found.add(official_name)
+
+    return found
+
+
+def resolve_primary_company(text):
+    """resolve_companies_in_text()의 결과 중 하나를 대표로 골라 (회사명, 종목코드)
+    튜플로 반환. 없으면 (None, None). 여러 개 매칭되면 "노이즈 아닌 것" 중 첫 번째."""
+    candidates = resolve_companies_in_text(text) - NOISY_LISTED_COMPANY_NAMES
+    if not candidates:
+        candidates = resolve_companies_in_text(text)  # 노이즈뿐이어도 없는 것보단 나음
+    if not candidates:
+        return None, None
+    name = next(iter(candidates))
+    return name, COMPANY_NAME_TO_CODE.get(name)
 
 # ⚠️ 상장사명인데 동시에 아주 흔한 일반 단어라서, "종목명이 있으면 무조건 노출"
 # 특혜를 주면 완전히 무관한 뉴스까지 쏟아지는 이름들. 삭제어로 완전히 막으면
@@ -1158,8 +1245,7 @@ def _build_key_point_line(title, is_disclosure, highlight_suffix):
     amount = max(amounts)
     amount_label = _eok_comma_label(amount)
 
-    matched_company = next((name for name in ALL_LISTED_COMPANIES if name in title), None)
-    stock_code = COMPANY_NAME_TO_CODE.get(matched_company) if matched_company else None
+    matched_company, stock_code = resolve_primary_company(title)
     if not stock_code:
         return f"💡[요점] 계약금액 {amount_label} · 비교기준 없음(종목 미확인)"
 
@@ -1223,7 +1309,7 @@ def classify_and_score(title):
     upper_hits = {kw for kw in STRONG_KEYWORDS_1 if kw in title}
     lower_hits = {kw for kw in STRONG_KEYWORDS_2 if kw in title}
     target_hits = {kw for kw in UNIQUE_TARGET if kw.lower() in title.lower()}
-    listed_company_hits = {name for name in (ALL_LISTED_COMPANIES - NOISY_LISTED_COMPANY_NAMES) if name in title}
+    listed_company_hits = resolve_companies_in_text(title) - NOISY_LISTED_COMPANY_NAMES
 
     # 상장사명이 제목에 있으면 "상위" 조건으로 인정 (KEYWORDS_1의 30여 개 대기업 루트뿐 아니라
     # KRX 전체 상장사명 매칭도 포함해서, 하위(KEYWORDS_2) 이벤트 단어와 결합되면 전송됨)
@@ -1265,7 +1351,7 @@ def classify_telegram_channel_message(title):
     celeb_hits = {kw for kw in UNIQUE_CELEBS if kw in title}
     global_company_hits = {kw for kw in GLOBAL_COMPANY_KEYWORDS if kw in title}
     us_market_hits = {kw for kw in US_MARKET_KEYWORDS if kw in title}
-    listed_company_hits = {name for name in (ALL_LISTED_COMPANIES - NOISY_LISTED_COMPANY_NAMES) if name in title}
+    listed_company_hits = resolve_companies_in_text(title) - NOISY_LISTED_COMPANY_NAMES
     upper_hits = upper_hits | listed_company_hits
 
     matched_count = len(upper_hits | lower_hits | target_hits | celeb_hits | global_company_hits | us_market_hits)
@@ -1493,7 +1579,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
 
 
     # 🧮 100점 만점 중요도 점수 + [요점] 한 줄 (계약금액 매출대비 비율 등)
-    has_listed_company_for_score = any(name in title for name in ALL_LISTED_COMPANIES)
+    has_listed_company_for_score = bool(resolve_companies_in_text(title))
     key_point_line = _build_key_point_line(title, is_disclosure, highlight_suffix)
     ratio_pct_for_score = None
     if key_point_line:
@@ -1535,7 +1621,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             f"<b>{report_body}</b>\n\n"
             f"{novelty_line}"
             f"{key_point_html}"
-            f"{score_line}\n\n"
+            f"\n{score_line}\n\n"
             f"{body_section}"
             f"{disclosure_link_line}"
         )
@@ -1563,9 +1649,8 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         # 시가총액/괴리율/PER·EPS·ROE를 붙여줌 - "출처가 확실한" 일반 뉴스도
         # 공시처럼 바로 참고할 기업분석 정보가 같이 오도록.
         company_snapshot_line = ""
-        matched_company = next((name for name in ALL_LISTED_COMPANIES if name in title), None)
+        matched_company, stock_code = resolve_primary_company(title)
         if matched_company:
-            stock_code = COMPANY_NAME_TO_CODE.get(matched_company)
             if stock_code:
                 mcap = _dart_market_cap_eok(stock_code)
                 snap_parts = [x for x in (
@@ -1586,7 +1671,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             f"📌<b>{display_title}</b>{highlight_line}\n\n"
             f"{novelty_line}"
             f"{key_point_html}"
-            f"{score_line}\n"
+            f"\n{score_line}\n"
             f"{company_snapshot_line}\n"
             f"{link_text_line}"
         )
@@ -2309,7 +2394,7 @@ def check_telegram_channels(current_time_str):
                     continue
 
                 # 🏢 텔레그램2와 동일하게: 상장기업명이 제목에 있을 때만 최종 노출
-                has_listed_company = any(name in headline for name in (ALL_LISTED_COMPANIES - NOISY_LISTED_COMPANY_NAMES))
+                has_listed_company = bool(resolve_companies_in_text(headline) - NOISY_LISTED_COMPANY_NAMES)
                 if not has_listed_company:
                     mark_as_sent(headline)
                     continue
@@ -2374,7 +2459,7 @@ def check_telegram_channels_unfiltered(current_time_str):
                 scanned += 1
                 # 🏢 상장기업명이 제목에 있을 때만 노출 (다른 키워드 조건은 아직 안 걸음)
                 # ⚡ 단, UNRESTRICTED_SOURCES에 있는 채널(라르고TV 등)은 예외 없이 무조건 노출
-                has_listed_company = any(name in headline for name in (ALL_LISTED_COMPANIES - NOISY_LISTED_COMPANY_NAMES))
+                has_listed_company = bool(resolve_companies_in_text(headline) - NOISY_LISTED_COMPANY_NAMES)
                 if not has_listed_company and channel_name not in UNRESTRICTED_SOURCES:
                     mark_as_sent(headline)
                     continue
@@ -2577,7 +2662,7 @@ def check_youtube(current_time_str):
             scanned += 1
             # 🏢 텔레그램과 동일하게: 상장기업명이 제목에 있을 때만 최종 노출
             # ⚡ 단, UNRESTRICTED_SOURCES에 있는 채널(시황맨TV 등)은 예외 없이 무조건 노출
-            has_listed_company = any(name in title for name in (ALL_LISTED_COMPANIES - NOISY_LISTED_COMPANY_NAMES))
+            has_listed_company = bool(resolve_companies_in_text(title) - NOISY_LISTED_COMPANY_NAMES)
             if not has_listed_company and channel_name not in UNRESTRICTED_SOURCES:
                 mark_as_sent(title)
                 continue
