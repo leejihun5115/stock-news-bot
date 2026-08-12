@@ -1270,9 +1270,16 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         "chat_id": CHAT_ID,
         "text": text_content,
         "parse_mode": "HTML",
-        "disable_web_page_preview": True,  # 예전 방식(하위호환용으로 같이 넣어둠)
-        "link_preview_options": {"is_disabled": True},  # 텔레그램 최신 방식
     }
+    if is_disclosure or is_rumor:
+        # 📋 DART 공시는 이미 정보가 많아서, 미리보기 이미지 없이 깔끔하게 유지
+        payload["disable_web_page_preview"] = True  # 예전 방식(하위호환용)
+        payload["link_preview_options"] = {"is_disabled": True}  # 텔레그램 최신 방식
+    else:
+        # 📰 일반 뉴스는 링크가 URL 그대로 노출되는 형식이라(masking 없음)
+        # 미리보기를 켜도 "이 링크를 열까요?" 확인창이 다시 뜨지 않음 -
+        # 기사 썸네일 이미지가 카드로 자동 표시되도록 미리보기를 켜둠
+        payload["link_preview_options"] = {"is_disabled": False, "prefer_large_media": True}
     if reply_markup:
         payload["reply_markup"] = reply_markup
 
