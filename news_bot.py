@@ -9,8 +9,10 @@
   4. 텔레그램 채널 메시지 전송 시 본문의 초록색 네모 기호 제거 및 원문 링크 버튼에 연두색 체크 표시(✅) 적용.
 """
 
+import sys
 import time
 import datetime
+import traceback
 import feedparser
 import requests
 import html
@@ -20,6 +22,24 @@ import difflib
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
+
+# ============================================================
+# 🪵 로그 버퍼링 문제 해결
+# ------------------------------------------------------------
+# Render 같은 호스팅 환경은 stdout이 터미널이 아니라 파이프로 연결되기 때문에,
+# Python이 기본적으로 stdout을 "블록 버퍼링"합니다. 그러면 print()로 찍은 로그가
+# 버퍼가 다 찰 때까지(혹은 프로세스가 종료될 때까지) 실제로 화면에 나타나지 않아서,
+# 코드는 정상 실행 중인데도 로그창에는 아무것도 안 찍히는 것처럼 보입니다.
+# (반면 werkzeug의 요청 로그 "GET / HTTP/1.1 200"은 logging 모듈로 stderr에 즉시
+# 나가기 때문에 항상 먼저/제대로 보입니다.)
+# 아래 두 줄로 stdout/stderr을 줄 단위 버퍼링으로 강제해서 print() 로그가
+# 지연 없이 바로바로 출력되게 합니다.
+# ============================================================
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass  # 일부 실행 환경(예: 특정 IDE)에서는 reconfigure가 없을 수 있어 안전하게 무시
 
 # ============================================================
 # 환경설정 - BOT_TOKEN, CHAT_ID, DART_API_KEY 설정
@@ -3234,7 +3254,21 @@ def startup_init():
 def run_once():
     """Cloud Scheduler가 호출할 때마다 한 번 실행되는 함수. 성공 여부와 무관하게 예외를 삼켜서
     Cloud Scheduler에는 항상 정상 응답을 준다 (재시도 폭주 방지)."""
-    startup_init()
+    try:
+        startup_init()
+    except Exception as e:
+        # ⚠️ 여기서 예외를 삼키지 않고 그냥 두면(try/except 없으면) run_once() 전체가
+        # 죽어버려서, 아래의 check_domestic_news() 등 실제 체크 로직들이
+        # 단 한 줄도 실행되지 못한 채 함수가 끝나버립니다. GET 요청 자체는 200으로
+        # 응답이 갈 수 있어도(예: 서버 설정/헬스체크 경로 차이), 실제 체크 로그는
+        # 전혀 안 찍히는 상태가 됩니다.
+        # 전체 스택트레이스를 남겨서 KRX 목록/유튜브 채널ID/Firestore 초기화 중
+        # 정확히 어디서 실패했는지 다음 로그에서 바로 확인할 수 있게 합니다.
+        print(f"[초기화 오류] startup_init() 실패: {e}")
+        traceback.print_exc()
+        # _initialized는 startup_init() 맨 마지막에만 True로 바뀌므로, 여기서 실패했다면
+        # 다음 run_once() 호출 때 자동으로 다시 시도됩니다(재시도를 위해 별도 처리 불필요).
+
     now = datetime.datetime.now()
     time_str = now.strftime("%H:%M:%S")
 
