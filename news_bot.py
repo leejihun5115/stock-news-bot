@@ -1576,6 +1576,13 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
                          is_feature, is_us_market, is_disclosure=False, is_rumor=False,
                          custom_source="", source_label="", highlight_suffix="",
                          show_link_below=False, image_url="", novelty="신규", novelty_note=None):
+    # 🔒 링크가 http(비보안)로 넘어오면 https로 자동 승격. 텔레그램은 http 링크에
+    # (버튼이든 텍스트든) "이 링크를 열까요?" 보안 확인창을 띄우는 경우가 있어서,
+    # 여기서 한 번 더 안전하게 막아줌 - 소스 목록에 또 http가 실수로 들어가도
+    # 이 방어선에서 자동으로 고쳐짐.
+    if news_url and news_url.startswith("http://"):
+        news_url = "https://" + news_url[len("http://"):]
+
     display_title = format_title(title)
 
     is_schedule = "일정" in title
@@ -1750,6 +1757,12 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         # 공시처럼 바로 참고할 기업분석 정보가 같이 오도록.
         company_snapshot_line = ""
         matched_company, stock_code = resolve_primary_company(title)
+
+        # ⏰ 특징주로 뜬 종목은 워치리스트에 등록 (나중에 DART에서 이 종목의
+        # 미래 일정이 나오면 리마인더로 알려주기 위함)
+        if is_feature and matched_company:
+            _add_to_watchlist(matched_company, "특징주")
+
         if matched_company:
             if stock_code:
                 mcap = _dart_market_cap_eok(stock_code)
@@ -2293,6 +2306,7 @@ def build_morning_briefing_text():
             theme_name = name_to_theme.get(name, top_theme["name"])
             lines.append(f"{i+1}. {name}{change_txt}")
             lines.append("  근거: 미국 " + theme_name + " 강세 + " + " + ".join(reasons))
+            _add_to_watchlist(name, "상한가" if is_upper_limit else "급등")  # ⏰ 급등종목도 워치리스트 등록
     else:
         lines.append("아직 뚜렷하게 반응한 종목 없음")
     lines.append("")
@@ -2651,7 +2665,7 @@ def _shorten_headline(text, max_len=60):
 
 
 CUSTOM_SCRAPE_SOURCES = [
-    ("http://www.yakup.com/news/index.html", "약업신문"),
+    ("https://www.yakup.com/news/index.html", "약업신문"),
     ("https://www.etnews.com/", "전자신문"),
 ]
 
@@ -2698,7 +2712,7 @@ def check_custom_sources(current_time_str):
 
                 if not href.startswith("http"):
                     if source_name == "약업신문":
-                        href = "http://www.yakup.com" + (href if href.startswith("/") else "/" + href)
+                        href = "https://www.yakup.com" + (href if href.startswith("/") else "/" + href)
                     else:
                         if href.startswith("//"):
                             href = "https:" + href
@@ -3231,6 +3245,330 @@ _dart_snapshot_cache = {}
 # 나열하는 게 아니라, 실제 국내에서도 오늘 수급이 붙고 있는지/공시가
 # 있었는지까지 같이 봐서 근거를 붙임.
 # ============================================================
+# ============================================================
+# ⏰ 특징주/급등종목 워치리스트 + 미래 일정 리마인더
+# ------------------------------------------------------------
+# "특징주"로 뜨거나 상한가를 간 종목을 워치리스트에 기록해두고, 그 종목의
+# DART 공시에서 아직 안 지난 미래 일정(청약일/납입일/임상발표일 등)이
+# 나오면 따로 저장해뒀다가, 그 날짜가 되면 리마인드 메시지를 보냅니다.
+# Firestore가 없으면(메모리 전용 모드) 이 기능은 컨테이너 재시작 시
+# 초기화되니 완전한 기록은 못 남지만, 켜져 있는 동안은 정상 작동합니다.
+# ============================================================
+WATCHLIST_VALID_DAYS = 21  # 특징주/급등으로 찍힌 뒤 이 기간 안의 공시까지만 "관련 있다"고 봄
+
+
+def _add_to_watchlist(stock_name, reason):
+    """이 종목을 워치리스트에 기록(또는 갱신). Firestore 없으면 조용히 무시."""
+    if not _firestore_client or not stock_name:
+        return
+    try:
+        _firestore_client.collection("feature_watchlist").document(stock_name).set({
+            "name": stock_name,
+            "reason": reason,
+            "flagged_at": datetime.datetime.now(datetime.timezone.utc),
+        })
+    except Exception as e:
+        print(f"[워치리스트 기록 오류] {stock_name}: {e}")
+
+
+def _is_in_watchlist(stock_name):
+    """이 종목이 최근(WATCHLIST_VALID_DAYS일 이내) 특징주/급등으로 찍힌 적 있는지 확인."""
+    if not _firestore_client or not stock_name:
+        return False
+    try:
+        doc = _firestore_client.collection("feature_watchlist").document(stock_name).get()
+        if not doc.exists:
+            return False
+        flagged_at = doc.to_dict().get("flagged_at")
+        if not flagged_at:
+            return False
+        age_days = (datetime.datetime.now(datetime.timezone.utc) - flagged_at).days
+        return age_days <= WATCHLIST_VALID_DAYS
+    except Exception as e:
+        print(f"[워치리스트 조회 오류] {stock_name}: {e}")
+        return False
+
+
+def _parse_schedule_date(date_str):
+    """'2026-10-05' 또는 '2026-09-01 ~ 2026-09-05'(범위면 시작일 기준) 문자열을
+    date 객체로 변환. 실패하면 None."""
+    try:
+        first_part = date_str.split("~")[0].strip()
+        y, mo, d = first_part.split("-")
+        return datetime.date(int(y), int(mo), int(d))
+    except Exception:
+        return None
+
+
+# ⏰ 매매에 참고할 수 있게 "당일"이 아니라 "며칠 전"에 미리 알려줌.
+# 7일 전(D-7)과 3일 전(D-3), 두 번 알려줍니다.
+SCHEDULE_REMINDER_LEAD_DAYS = [7, 3]
+
+
+def _save_upcoming_schedule_reminders(corp_name, stock_code, report_nm, report_text):
+    """
+    이 공시의 회사가 최근 특징주/급등 워치리스트에 있다면, 원문에서 뽑은 일정 중
+    아직 안 지난(오늘 이후) 것들을 리마인더 대상으로 저장.
+    """
+    if not _firestore_client or not corp_name:
+        return
+    if not _is_in_watchlist(corp_name):
+        return
+
+    schedule_items = extract_dart_schedule(report_text)
+    if not schedule_items:
+        return
+
+    today = datetime.date.today()
+    for label, value in schedule_items:
+        due_date = _parse_schedule_date(value)
+        if not due_date or due_date < today:
+            continue  # 이미 지난 일정이거나 날짜를 못 읽으면 건너뜀 (지어내지 않음)
+
+        doc_id = f"{corp_name}_{label}_{value}".replace(" ", "").replace("/", "-")[:200]
+        try:
+            doc_ref = _firestore_client.collection("pending_schedule_reminders").document(doc_id)
+            if doc_ref.get().exists:
+                continue  # 이미 저장된 일정
+            doc_ref.set({
+                "corp_name": corp_name,
+                "stock_code": stock_code,
+                "label": label,
+                "date": value,
+                "due_date": due_date.isoformat(),
+                "source_report": report_nm,
+                "notified_stages": [],  # 이미 보낸 D-N 알림 목록 (예: [7] -> D-7은 보냈고 D-3은 아직)
+                "created_at": datetime.datetime.now(datetime.timezone.utc),
+            })
+            print(f"✅ [일정 리마인더 등록] {corp_name} - {label}: {value}")
+        except Exception as e:
+            print(f"[일정 리마인더 저장 오류] {corp_name}: {e}")
+
+
+def check_upcoming_schedule_reminders(current_time_str):
+    """
+    저장해둔 미래 일정들을 훑어서, "오늘부터 며칠 남았는지" 계산 후
+    SCHEDULE_REMINDER_LEAD_DAYS(7일 전/3일 전)에 정확히 해당하면 미리 알림을
+    보냄. 이미 보낸 단계(D-7 등)는 notified_stages에 기록해서 중복 발송 안 함.
+    ⚠️ Firestore where 조건으로 "날짜 계산"까지 하기 어려워서, 아직 지나지
+    않은 일정을 전부 가져온 뒤 Python에서 날짜 계산을 합니다 (건수가 많지
+    않은 기능이라 성능 문제 없음).
+    """
+    if not _firestore_client:
+        return
+    today = datetime.date.today()
+    try:
+        docs = list(_firestore_client.collection("pending_schedule_reminders").stream())
+    except Exception as e:
+        print(f"[일정 리마인더 조회 오류] {e}")
+        return
+
+    for doc in docs:
+        data = doc.to_dict()
+        due_date_str = data.get("due_date", "")
+        try:
+            due_date = datetime.date.fromisoformat(due_date_str)
+        except Exception:
+            continue
+
+        days_left = (due_date - today).days
+        if days_left < 0:
+            continue  # 이미 지난 일정 (별도 정리 작업 없이 그냥 무시하고 넘어감)
+
+        notified_stages = data.get("notified_stages", [])
+        matched_stage = next(
+            (lead for lead in SCHEDULE_REMINDER_LEAD_DAYS if days_left == lead and lead not in notified_stages),
+            None,
+        )
+        if matched_stage is None:
+            continue
+
+        corp_name = data.get("corp_name", "")
+        label = data.get("label", "")
+        value = data.get("date", "")
+        source_report = data.get("source_report", "")
+        text = (
+            f"⏰ [일정 알림 D-{matched_stage}] {corp_name}\n\n"
+            f"✔️ {matched_stage}일 후 {label}입니다 ({value})\n"
+            f"✔️ 관련 공시: {source_report}\n\n"
+            f"(과거에 특징주/급등으로 주목받았던 종목이라 미리 등록해둔 일정입니다. "
+            f"매매 판단에 참고하시라고 미리 알려드리는 것뿐, 투자 조언이 아닙니다.)"
+        )
+        try:
+            payload = {"chat_id": CHAT_ID, "text": text, "link_preview_options": {"is_disabled": True}}
+            res = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload, timeout=10)
+            if res.status_code == 200:
+                doc.reference.update({"notified_stages": notified_stages + [matched_stage]})
+                print(f"✅ [일정 리마인더 발송] {corp_name} - {label}")
+        except Exception as e:
+            print(f"[일정 리마인더 발송 오류] {corp_name}: {e}")
+
+
+# ============================================================
+# 🆕 신규상장(IPO) 알림
+# ------------------------------------------------------------
+# DART에 "투자설명서"(공모/상장 전 필수 공시) 문서가 새로 올라오면, 그 안에서
+# 상장예정일/공모가/시장구분을 뽑아서, 상장예정일이 "내일"이면 알림을 보냄.
+# ⚠️ 한계 (정직하게 밝힘):
+#   - 업종비교는 못 넣었습니다. "이 회사가 어느 업종인지" 분류하는 데이터가
+#     지금 코드에 없어서, 억지로 비교하면 오히려 부정확한 정보가 될 수
+#     있다고 판단했습니다.
+#   - 재무점수 등 기업분석도 상장 당일엔 못 붙입니다. 신규상장사는 저희가
+#     쓰는 정기 재무제표(사업보고서)가 아직 DART에 없어서(상장 후 첫
+#     분기·사업보고서가 나와야 조회 가능), 상장 초기엔 데이터가 없습니다.
+#     상장 후 시간이 지나 첫 재무데이터가 잡히면, 기존 재무점수 기능이
+#     자동으로 적용됩니다(따로 설정 필요 없음).
+# ============================================================
+IPO_PROSPECTUS_KEYWORDS = ("투자설명서", "증권신고서")
+
+
+# 🔗 신규상장사의 사업 설명 텍스트를 훑어서 어떤 테마와 연결되는지 판정.
+# THEME_DEFINITIONS의 이름을 그대로 재사용해서, 나중에 아침 브리핑의 테마
+# 판정과 용어가 서로 다르게 나오는 일이 없도록 통일함.
+IPO_THEME_KEYWORDS = {
+    "반도체": ["반도체", "웨이퍼", "파운드리", "팹리스", "칩", "HBM"],
+    "2차전지": ["2차전지", "배터리", "양극재", "음극재", "전해질", "배터리셀"],
+    "바이오": ["바이오", "신약", "임상", "제약", "의약품", "치료제", "백신"],
+    "AI/빅테크": ["인공지능", "AI", "머신러닝", "딥러닝", "빅데이터"],
+    "로봇": ["로봇", "자동화설비", "협동로봇"],
+    "전력": ["전력", "변압기", "전선", "에너지저장장치", "ESS"],
+    "원전": ["원전", "원자력", "SMR"],
+    "방산": ["방산", "국방", "무기체계", "방위산업"],
+}
+
+
+def _extract_ipo_business_and_theme(text):
+    """
+    투자설명서 원문에서 주력사업 설명을 찾고(추측 안 함, 원문 문장 그대로),
+    그 안의 키워드로 연관 테마를 판정한다.
+    반환: (사업요약 또는 None, 연관테마 리스트)
+    """
+    business_summary = None
+    patterns = [
+        r"주요\s*(?:제품|사업|서비스)(?:\s*(?:및|,)\s*(?:제품|사업|서비스))?\s*[:：]\s*([^\n]{5,100})",
+        r"당사는\s*([^\n.]{5,100}?(?:영위|제공|생산|개발|제조)[^\n.]{0,30})",
+        r"주요\s*사업(?:\s*내용)?\s*[:：]\s*([^\n]{5,100})",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text)
+        if m:
+            business_summary = m.group(1).strip().rstrip(".,")
+            break
+
+    search_target = business_summary or text[:3000]  # 요약을 못 찾으면 원문 앞부분에서라도 테마 키워드를 찾아봄
+    matched_themes = [
+        theme for theme, keywords in IPO_THEME_KEYWORDS.items()
+        if any(kw in search_target for kw in keywords)
+    ]
+
+    return business_summary, matched_themes
+
+
+def _extract_ipo_info(text):
+    """투자설명서 원문에서 공모가/시장구분/업종을 최대한 뽑아본다. 못 찾으면 '확인필요'."""
+    offering_price = None
+    pct_match = re.search(r"(?:확정\s*)?공모가(?:액)?\s*[:：]?\s*([0-9][0-9,]*)\s*원", text)
+    if pct_match:
+        offering_price = pct_match.group(1) + "원"
+
+    market = "확인필요"
+    if "코스닥" in text:
+        market = "코스닥"
+    elif "코스피" in text or "유가증권시장" in text:
+        market = "코스피"
+    elif "코넥스" in text:
+        market = "코넥스"
+
+    # 🏭 업종 - 코드→이름 매핑표(통계청 표준산업분류) 없이, 투자설명서 원문에
+    # 보통 "업종: OOO제조업" 식으로 이미 적혀 있는 걸 그대로 뽑음(추측 안 함).
+    # 코드로 임의 변환하면 틀릴 위험이 있어서, 원문에 실제로 쓰인 문구만 사용.
+    industry = None
+    ind_match = re.search(r"업종(?:명)?\s*[:：]\s*([^\n,]{2,40}?)(?:\s{2,}|[\n,]|$)", text)
+    if ind_match:
+        candidate = ind_match.group(1).strip()
+        # "업종코드 C26" 같은 숫자/코드만 잡힌 경우는 사람이 읽기 어려우니 제외
+        if candidate and not re.fullmatch(r"[A-Z]?\d[\d\s]*", candidate):
+            industry = candidate
+
+    return offering_price, market, industry
+
+
+def check_ipo_listings(current_time_str):
+    """DART 투자설명서 공시를 훑어서, 내일 상장 예정인 종목이 있으면 알림."""
+    if not DART_API_KEY:
+        return
+    today_str = datetime.datetime.now().strftime("%Y%m%d")
+    tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+
+    try:
+        res = requests.get(
+            "https://opendart.fss.or.kr/api/list.json",
+            params={"crtfc_key": DART_API_KEY, "bgn_de": today_str, "page_count": 100},
+            timeout=10,
+        )
+        data = res.json()
+    except Exception as e:
+        print(f"[IPO 공시 조회 오류] {e}")
+        return
+    if data.get("status") != "000":
+        return
+
+    for item in data.get("list", []):
+        report_nm = item.get("report_nm", "")
+        corp_name = item.get("corp_name", "")
+        rcept_no = item.get("rcept_no", "")
+        full_title = f"[IPO확인] {corp_name} {rcept_no}"
+
+        if not any(kw in report_nm for kw in IPO_PROSPECTUS_KEYWORDS):
+            continue
+        if is_already_sent(full_title):
+            continue
+        mark_as_sent(full_title)  # 🚫 같은 공시로 중복 확인 안 하도록
+
+        report_text = _dart_document_text(rcept_no)
+        if not report_text:
+            continue
+
+        schedule_items = extract_dart_schedule(report_text)
+        listing_date = None
+        for label, value in schedule_items:
+            if label in ("신주 상장일", "변경상장일"):
+                d = _parse_schedule_date(value)
+                if d:
+                    listing_date = d
+                    break
+
+        if listing_date != tomorrow:
+            continue  # 내일 상장이 아니면(또는 날짜를 못 찾으면) 알림 안 보냄
+
+        offering_price, market, industry = _extract_ipo_info(report_text)
+        business_summary, matched_themes = _extract_ipo_business_and_theme(report_text)
+        detail_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
+        theme_line = " / ".join(matched_themes) if matched_themes else "확인필요(테마 키워드 미검출)"
+        text = (
+            f"🆕 [신규상장 알림] {corp_name}\n\n"
+            f"✔️ 내일({tomorrow.strftime('%Y-%m-%d')}) 상장 예정입니다\n"
+            f"✔️ 시장구분: {market}\n"
+            f"✔️ 업종: {industry or '확인필요(원문 참고)'}\n"
+            f"✔️ 주력사업: {business_summary or '확인필요(원문 참고)'}\n"
+            f"✔️ 연관 테마: {theme_line}\n"
+            f"✔️ 공모가: {offering_price or '확인필요(원문 참고)'}\n\n"
+            f"⚠️ 참고: 업종/주력사업/테마는 원문에서 뽑은 정보이며, 같은 업종 다른 "
+            f"상장사와의 정량 비교/재무점수는 신규상장 특성상(상장 전 정기 재무데이터가 "
+            f"아직 없음) 지금은 제공하지 않습니다."
+        )
+        try:
+            payload = {
+                "chat_id": CHAT_ID, "text": text, "link_preview_options": {"is_disabled": True},
+                "reply_markup": {"inline_keyboard": [[{"text": "🔗 투자설명서 원문", "url": detail_url}]]},
+            }
+            res2 = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload, timeout=10)
+            if res2.status_code == 200:
+                print(f"✅ [신규상장 알림 발송] {corp_name}")
+        except Exception as e:
+            print(f"[신규상장 알림 발송 오류] {corp_name}: {e}")
+
+
 _naver_supply_demand_cache = {}
 
 _naver_upper_limit_cache = {"data": None, "ts": 0}
@@ -4362,6 +4700,10 @@ def check_dart_disclosures(current_time_str):
                 # 다음에 패턴을 더 보강할 수 있게 합니다.
                 print(f"[DART 지분율 파싱 실패] {corp_name} (rcept_no={rcept_no}) - 원문은 받았지만 보유비율 패턴을 못 찾음.")
 
+            # ⏰ 이 회사가 최근 특징주/급등 워치리스트에 있으면, 이 공시의 미래
+            # 일정을 리마인더로 저장 (오늘이 그 날짜가 되면 자동으로 알림 발송)
+            _save_upcoming_schedule_reminders(corp_name, stock_code, report_nm, report_text)
+
             send_telegram_message(
                 display_title, detail_url, current_time_str, 1,
                 False, False, False, False,
@@ -4451,6 +4793,12 @@ def main():
                 last_rss = now
 
             check_morning_briefing(now)
+
+            if should_run_task("schedule_reminders", 3600):  # ⏰ 1시간에 한 번만 체크
+                check_upcoming_schedule_reminders(time_str)
+
+            if should_run_task("ipo_listings", 3600):  # 🆕 1시간에 한 번만 체크
+                check_ipo_listings(time_str)
 
             if (now - last_custom).total_seconds() >= CUSTOM_SOURCE_INTERVAL:
                 check_custom_sources(time_str)
@@ -4589,6 +4937,18 @@ def run_once():
             check_morning_briefing(now)
         except Exception as e:
             print(f"[아침 브리핑 오류] {e}")
+
+        if should_run_task("schedule_reminders", 3600):  # ⏰ 1시간에 한 번만 체크
+            try:
+                check_upcoming_schedule_reminders(time_str)
+            except Exception as e:
+                print(f"[일정 리마인더 오류] {e}")
+
+        if should_run_task("ipo_listings", 3600):  # 🆕 1시간에 한 번만 체크
+            try:
+                check_ipo_listings(time_str)
+            except Exception as e:
+                print(f"[IPO 알림 오류] {e}")
 
         try:
             check_telegram_channels(time_str)
