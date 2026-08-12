@@ -2438,10 +2438,59 @@ def _keycap(n):
     return "🔟" if n == 10 else f"{n}\ufe0f\u20e3"
 
 
+def _dart_major_shareholder_change_label(report_nm, text):
+    """
+    최대주주변경 공시면 원문에서 "변경 전 최대주주 → 변경 후 최대주주"를 찾아서
+    "📐최대주주 홍길동 → 김철수" 형태로 반환. 표현 방식이 공시마다 달라서
+    여러 패턴을 순서대로 시도하고, 다 실패하면 None.
+    """
+    if "최대주주변경" not in report_nm or not text:
+        return None
+
+    chunk = text[:3000]
+
+    patterns = [
+        # "변경전 최대주주 홍길동" ... "변경후 최대주주 김철수"
+        r"변경\s*전[:\s]*(?:최대주주)?[:\s]*([가-힣A-Za-z0-9\(\)㈜]{2,20}).{0,200}?변경\s*후[:\s]*(?:최대주주)?[:\s]*([가-힣A-Za-z0-9\(\)㈜]{2,20})",
+        # "종전 최대주주 홍길동" ... "신규(변경) 최대주주 김철수"
+        r"종전\s*최대주주[:\s]*([가-힣A-Za-z0-9\(\)㈜]{2,20}).{0,200}?신규\s*최대주주[:\s]*([가-힣A-Za-z0-9\(\)㈜]{2,20})",
+        # "최대주주 홍길동 → 김철수" / "홍길동에서 김철수로 변경"
+        r"최대주주[:\s]*([가-힣A-Za-z0-9\(\)㈜]{2,20}?)\s*(?:→|->|에서)\s*([가-힣A-Za-z0-9\(\)㈜]{2,20}?)\s*(?:로|으로)?\s*변경",
+    ]
+    for pat in patterns:
+        m = re.search(pat, chunk, re.DOTALL)
+        if m:
+            before, after = m.group(1).strip(), m.group(2).strip()
+            if before and after and before != after:
+                return f"📐최대주주 {before} → {after}"
+    return None
+
+
+def _dart_shareholding_label(report_nm, text):
+    """
+    대량보유상황보고서(5% 룰)면 원문에서 "보유비율"을 찾아서
+    "📐지분율 7.15% (직전 5.23% → 변동 +1.92%p)" 형태로 반환. 못 찾으면 None.
+    """
+    if "대량보유상황보고서" not in report_nm or not text:
+        return None
+
+    chunk = _dart_find_near(text, ["보유비율", "지분율", "보유 비율"], window=200)
+    pcts = _dart_extract_percentages(chunk)
+    if not pcts:
+        return None
+    if len(pcts) >= 2:
+        # 보통 "직전 보고서 비율 → 이번 보고서 비율" 순서로 등장함
+        prev_pct, cur_pct = pcts[0], pcts[1]
+        diff = round(cur_pct - prev_pct, 2)
+        arrow = "🔺" if diff >= 0 else "▼"
+        return f"📐지분율 {cur_pct:g}% (직전 {prev_pct:g}% → 변동 {arrow}{abs(diff):g}%p)"
+    return f"📐지분율 {pcts[0]:g}%"
+
+
 def _dart_merge_split_ratio_label(report_nm, text):
     """
-    주식병합/분할결정 공시면 원문에서 "N주를 1주로" 같은 병합·분할 비율을
-    찾아서 "📐병합비율 5:1 (5주 → 1주)" 형태로 반환. 못 찾으면 None.
+    주식병합/분할/감자결정 공시면 원문에서 "N주를 1주로" 같은 병합·분할·감자
+    비율을 찾아서 "📐병합비율 5:1 (5주 → 1주)" 형태로 반환. 못 찾으면 None.
     """
     if not text:
         return None
@@ -2449,10 +2498,12 @@ def _dart_merge_split_ratio_label(report_nm, text):
         label = "병합"
     elif "주식분할" in report_nm:
         label = "분할"
+    elif "감자결정" in report_nm:
+        label = "감자"
     else:
         return None
 
-    chunk = text[:3000]  # 병합/분할 관련 숫자는 보통 공시 앞부분에 나와서 앞쪽만 검사
+    chunk = text[:3000]  # 병합/분할/감자 관련 숫자는 보통 공시 앞부분에 나와서 앞쪽만 검사
     # "5주를 1주로" 같은 표현 탐색 (숫자가 키워드 "주를/주로" 앞에 오므로
     # _dart_find_near 대신 원문에서 직접 검색해야 숫자가 안 잘림)
     m = re.search(r"([\d,]+)\s*주를?\s*([\d,]+)\s*주(?:로)?", chunk)
@@ -2464,6 +2515,110 @@ def _dart_merge_split_ratio_label(report_nm, text):
     if m:
         a, b = m.group(1).replace(",", ""), m.group(2).replace(",", "")
         return f"📐{label}비율 {a}:{b}"
+    return None
+
+
+def _dart_free_stock_ratio_label(report_nm, text):
+    """
+    무상증자결정 공시면 원문에서 "배정비율"(%) 또는 "1주당 N주" 표현과,
+    "신주 발행주식수"를 찾아서 "📐배정비율 50% · 신주 500,000주" 형태로 반환.
+    (기준일은 별도로 _dart_schedule_label에서 공통으로 처리됨)
+    """
+    if "무상증자결정" not in report_nm or not text:
+        return None
+    chunk = _dart_find_near(text, ["배정비율", "무상증자비율", "신주배정"], window=150)
+    pcts = _dart_extract_percentages(chunk)
+    ratio_label = None
+    if pcts:
+        ratio_label = f"배정비율 {pcts[0]:g}%"
+    else:
+        m = re.search(r"1\s*주당\s*([\d.]+)\s*주", text[:3000])
+        if m:
+            ratio_label = f"배정비율 1주당 {m.group(1)}주"
+
+    # 신주 발행주식수(보통주식수) 탐색
+    qty_chunk = _dart_find_near(text, ["신주의 종류와 수", "발행주식수", "배정할 주식의 총수"], window=150)
+    qty_label = None
+    m = re.search(r"([\d,]{4,})\s*주", qty_chunk)
+    if m:
+        qty_label = f"신주 {m.group(1)}주"
+
+    parts = [x for x in (ratio_label, qty_label) if x]
+    if not parts:
+        return None
+    return "📐" + " · ".join(parts)
+
+
+def _dart_schedule_label(text):
+    """
+    공시 유형과 무관하게, 원문에 "신주배정기준일/이사회결의일/효력발생일/
+    상장예정일/청약일/납입일/지급일" 같은 일정 관련 날짜가 있으면 찾아서
+    "📅🚀납입일 2026.09.15 · 상장예정일 2026.10.05" 형태로 반환.
+    투자자 입장에서 특히 중요한 일정(납입일/신주배정기준일/상장예정일/청약일 -
+    다 실제 자금 납입·주식 배정·매매 타이밍에 직결됨)은 🚀를 붙여서 구분함.
+    못 찾으면 None. (최대 3개까지만 - 너무 많으면 오히려 지저분해짐)
+    """
+    if not text:
+        return None
+    schedule_keywords = [
+        "신주배정기준일", "권리락", "이사회결의일", "효력발생일", "상장예정일",
+        "청약일", "납입일", "배당기준일", "지급일", "명의개서정지",
+    ]
+    IMPORTANT_SCHEDULE_KEYWORDS = {"납입일", "신주배정기준일", "상장예정일", "청약일"}
+    found = []
+    for kw in schedule_keywords:
+        idx = text.find(kw)
+        if idx == -1:
+            continue
+        window = text[idx:idx + 60]
+        # "신주배정기준일은 없음" 처럼 해당 일정이 아예 없다고 명시된 경우는
+        # 엉뚱한(뒤에 나오는 다른 항목의) 날짜를 잘못 붙잡지 않도록 건너뜀
+        near_text = text[idx:idx + 15]
+        if any(k in near_text for k in ("없음", "해당없음", "미정")):
+            continue
+        m = re.search(r"(\d{4})[.\-년]\s*(\d{1,2})[.\-월]\s*(\d{1,2})", window)
+        if m:
+            y, mo, d = m.groups()
+            prefix = "🚀" if kw in IMPORTANT_SCHEDULE_KEYWORDS else ""
+            found.append(f"{prefix}{kw} {y}.{mo.zfill(2)}.{d.zfill(2)}")
+    if not found:
+        return None
+    seen, uniq = set(), []
+    for f in found:
+        if f not in seen:
+            seen.add(f)
+            uniq.append(f)
+    return "📅" + " · ".join(uniq[:3])
+
+
+# 📐 "이 유형이면 이 라벨로, 이 키워드 근처에서 금액을 찾아라" 매핑표.
+# 여러 "구조적 이벤트" 유형이 결국 다 "원문에서 금액 하나 찾아서 보여주기"라서
+# 함수를 하나하나 새로 안 만들고 표로 관리함 (report_nm 부분일치, 근처 키워드들, 표시 라벨).
+DART_GENERIC_AMOUNT_RULES = [
+    (["전환사채권발행결정"], ["사채총액", "발행금액", "권면총액"], "발행금액"),
+    (["신주인수권부사채권발행결정"], ["사채총액", "발행금액", "권면총액"], "발행금액"),
+    (["교환사채권발행결정"], ["사채총액", "발행금액", "권면총액"], "발행금액"),
+    (["유형자산양수결정"], ["양수금액", "자산가액", "거래금액"], "양수금액"),
+    (["유형자산양도결정"], ["양도금액", "자산가액", "거래금액"], "양도금액"),
+    (["신규시설투자"], ["투자금액", "시설투자금액", "총투자금액"], "투자금액"),
+    (["소송등의제기"], ["청구금액", "소송가액", "청구 금액"], "청구금액"),
+    (["공개매수"], ["매수예정가격", "매수가격", "공개매수가격"], "매수가격"),
+    (["양수결정"], ["양수금액", "거래금액"], "양수금액"),
+    (["양도결정"], ["양도금액", "거래금액"], "양도금액"),
+]
+
+
+def _dart_generic_amount_label(report_nm, text):
+    """위 DART_GENERIC_AMOUNT_RULES 표를 순서대로 확인해서, 해당하는 유형이면
+    근처 금액을 찾아 "📐발행금액 300억원" 형태로 반환. 못 찾으면 None."""
+    if not text:
+        return None
+    for report_keywords, near_keywords, label in DART_GENERIC_AMOUNT_RULES:
+        if any(k in report_nm for k in report_keywords):
+            chunk = _dart_find_near(text, near_keywords, window=200)
+            amounts = _dart_extract_eok_amounts(chunk)
+            if amounts:
+                return f"📐{label} {_eok_comma_label(max(amounts))}"
     return None
 
 
@@ -2822,13 +2977,21 @@ def check_dart_disclosures(current_time_str):
             else:
                 display_title = f"🏢 {corp_name}\n👀 {report_line}"
 
-            # 💰 배당결정이면 배당금액을, 📐 주식병합/분할결정이면 병합·분할비율을
+            # 💰 배당결정이면 배당금액을, 📐 주식병합/분할/감자결정이면 비율을,
+            # 📐 대량보유상황보고서면 지분율을, 📐 최대주주변경이면 누구→누구인지를,
+            # 📐 무상증자면 배정비율을, 📐 그 외 금액이 있는 구조적 이벤트(전환사채,
+            # 유형자산양수도, 신규시설투자, 소송제기, 공개매수 등)는 관련 금액을
             # 원문에서 찾아서 본문(highlight_suffix) 영역에 추가함. 이런 "구조적
             # 이벤트" 유형은 원래 %가 없어서 본문이 비어있었는데, 이제 채워짐.
             extra_notes = [
                 x for x in (
                     _dart_dividend_amount_label(report_nm, report_text),
                     _dart_merge_split_ratio_label(report_nm, report_text),
+                    _dart_shareholding_label(report_nm, report_text),
+                    _dart_major_shareholder_change_label(report_nm, report_text),
+                    _dart_free_stock_ratio_label(report_nm, report_text),
+                    _dart_generic_amount_label(report_nm, report_text),
+                    _dart_schedule_label(report_text),  # 📅 유형 무관 공통 일정 정보
                 ) if x
             ]
             if extra_notes:
