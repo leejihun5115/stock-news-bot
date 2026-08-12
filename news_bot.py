@@ -4711,3 +4711,121 @@ if __name__ == "__main__":
         app.run(host="0.0.0.0", port=port, threaded=True)
     else:
         main()
+
+
+
+# ============================================================
+# [DART V2] 공시 일정/날짜 추출 로직
+# - 공시 원문에 실제로 존재하는 날짜만 추출
+# - 배당/기준일/납입일/상장일/재공시일/계약기간 등 의미별 분류
+# - 없는 일정은 임의 생성하지 않음
+# ============================================================
+_DART_DATE = r"(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|20\d{2}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일)"
+_DART_DATE_RANGE = rf"({_DART_DATE})\s*(?:~|∼|-|부터)\s*({_DART_DATE})"
+
+_DART_SCHEDULE_PATTERNS = [
+    ("배당 기준일", [r"배당.*?기준일", r"기준일.*?배당"]),
+    ("배당금 지급일", [r"배당금.*?지급일", r"지급일.*?배당금"]),
+    ("배당락일", [r"배당락일"]),
+    ("주주명부 폐쇄기간", [r"주주명부.*?폐쇄", r"명의개서.*?정지"]),
+    ("신주배정 기준일", [r"신주.*?배정.*?기준일", r"배정기준일"]),
+    ("권리락일", [r"권리락일"]),
+    ("청약기간", [r"청약.*?(?:기간|일자)", r"청약일"]),
+    ("납입일", [r"납입일", r"납입기일"]),
+    ("신주 상장일", [r"신주.*?상장(?:예정)?일", r"상장예정일"]),
+    ("변경상장일", [r"변경상장(?:예정)?일"]),
+    ("전환청구기간", [r"전환청구.*?기간", r"전환청구.*?개시", r"전환청구.*?종료"]),
+    ("행사기간", [r"행사.*?기간"]),
+    ("전환가액 조정일", [r"전환가액.*?조정.*?일", r"조정일"]),
+    ("계약일", [r"계약체결일", r"계약일"]),
+    ("계약기간", [r"계약기간", r"공급기간", r"납품기간"]),
+    ("계약 시작일", [r"계약.*?시작일", r"계약.*?개시일"]),
+    ("계약 종료일", [r"계약.*?종료일", r"계약.*?만료일"]),
+    ("투자 시작일", [r"투자.*?시작일", r"투자.*?개시일"]),
+    ("투자 종료일", [r"투자.*?종료일", r"투자.*?완료일"]),
+    ("준공예정일", [r"준공.*?예정일"]),
+    ("잔금 지급일", [r"잔금.*?지급일"]),
+    ("거래종결일", [r"거래.*?종결일", r"클로징.*?일"]),
+    ("주식 취득일", [r"주식.*?취득일"]),
+    ("최대주주 변경일", [r"최대주주.*?변경일"]),
+    ("임상 신청일", [r"임상.*?신청일", r"IND.*?신청"]),
+    ("임상 승인일", [r"임상.*?승인일", r"IND.*?승인"]),
+    ("임상 개시일", [r"임상.*?개시일"]),
+    ("결과 발표일", [r"결과.*?발표일", r"결과.*?공개일"]),
+    ("허가 신청일", [r"허가.*?신청일"]),
+    ("허가 승인일", [r"허가.*?승인일"]),
+    ("최초 공시일", [r"최초.*?공시일", r"최초.*?제출일"]),
+    ("정정공시일", [r"정정.*?공시일", r"정정.*?제출일"]),
+    ("재공시일", [r"재공시일", r"재공시.*?예정일"]),
+    ("제출일", [r"공시.*?제출일", r"제출일"]),
+    ("기타 일정", [r"예정일", r"일정"]),
+]
+
+def extract_dart_schedule(text):
+    """DART 원문에서 일정 정보를 의미별로 추출한다.
+    원문에 없는 날짜는 생성하지 않는다.
+    반환: [(라벨, 값), ...]
+    """
+    if not text:
+        return []
+
+    raw = re.sub(r"\s+", " ", str(text))
+    found = []
+    seen = set()
+
+    def norm_date(s):
+        s = re.sub(r"\s+", "", s)
+        return s.replace(".", "-").replace("/", "-").replace("년", "-").replace("월", "-").replace("일", "")
+
+    # 1) '계약기간: 2026-01-01 ~ 2028-12-31' 같은 범위
+    for label in ("계약기간", "공급기간", "납품기간", "전환청구기간", "행사기간",
+                  "청약기간", "주주명부 폐쇄기간"):
+        pat = rf"{re.escape(label)}\s*[:：]?\s*{_DART_DATE_RANGE}"
+        for m in re.finditer(pat, raw, re.I):
+            val = f"{norm_date(m.group(2))} ~ {norm_date(m.group(3))}"
+            key = (label, val)
+            if key not in seen:
+                found.append(key); seen.add(key)
+
+    # 2) 의미가 명시된 단일 날짜
+    for label, patterns in _DART_SCHEDULE_PATTERNS:
+        if label in {"계약기간", "공급기간", "납품기간", "전환청구기간", "행사기간",
+                     "청약기간", "주주명부 폐쇄기간"}:
+            continue
+        for p in patterns:
+            pat = rf"{p}\s*[:：]?\s*({_DART_DATE})"
+            for m in re.finditer(pat, raw, re.I):
+                val = norm_date(m.group(1))
+                key = (label, val)
+                if key not in seen:
+                    found.append(key); seen.add(key)
+
+    # 3) '2026년 8월 20일 납입'처럼 날짜가 앞에 오는 문장도 처리
+    reverse_patterns = [
+        ("납입일", r"납입"),
+        ("신주 상장일", r"신주.*?상장"),
+        ("변경상장일", r"변경상장"),
+        ("배당 기준일", r"배당.*?기준일"),
+        ("배당금 지급일", r"배당금.*?지급"),
+        ("재공시일", r"재공시"),
+    ]
+    for label, keyword in reverse_patterns:
+        pat = rf"({_DART_DATE})\s*(?:까지|부터|예정|경|에)?\s*{keyword}"
+        for m in re.finditer(pat, raw, re.I):
+            val = norm_date(m.group(1))
+            key = (label, val)
+            if key not in seen:
+                found.append(key); seen.add(key)
+
+    return found
+
+def format_dart_schedule(text):
+    items = extract_dart_schedule(text)
+    if not items:
+        return ""
+
+    lines = ["⏰ 일정"]
+    for label, value in items:
+        lines.append(f"• {label}: {value}")
+    return "\n".join(lines)
+
