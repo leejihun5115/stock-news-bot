@@ -1286,21 +1286,33 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             body_escaped = html.escape(highlight_suffix)
             body_escaped = re.sub(r"(🎯괴리율[^\n]*)", r"<u>\1</u>", body_escaped)
         body_section = f"{body_escaped}\n\n" if body_escaped else ""
+        # 🔗 링크도 짧은 클릭형으로 (원문 이유는 위 일반 뉴스 쪽 주석 참고)
+        disclosure_link_line = (
+            f'🔗 <a href="{html.escape(news_url, quote=True)}">원문보기</a>' if news_url else ""
+        )
         text_content = (
             f"{title_prefix} {tag_line} {corp_header}          <i>⏰ {time_str}</i>\n\n"
             f"<b>{report_body}</b>\n\n"
             f"{body_section}"
-            f"🔗 <i>{html.escape(news_url, quote=True) if news_url else ''}</i>"
+            f"{disclosure_link_line}"
         )
         reply_markup = None
     else:
-        # 📰 일반 뉴스(RSS/네이버/텔레그램 등)는 요청하신 간단한 형식으로:
-        # 📌[출처] · ⏰시간 / (빈줄) / 제목 / (빈줄) / 🔗URL(그대로 노출 - "이 링크를 열까요?"
-        # 확인창을 피하려면 표시 글자와 실제 주소가 같아야 해서, 예쁜 글자 대신 URL 그대로 씀)
+        # 📰 일반 뉴스(RSS/네이버/텔레그램 등):
+        # 📌[출처] · ⏰시간 / (빈줄) / 제목 / (빈줄) / 🔗기사보기(짧은 클릭형 링크)
+        #
+        # ⚠️ 예전엔 여기서 URL을 통째로 텍스트에 그대로 노출했었습니다("이 링크를
+        # 열까요?" 확인창을 피하려고 일부러 그렇게 했던 것). 근데 그 확인창은
+        # "표시 글자가 URL처럼 생겼는데 실제 주소랑 다를 때"만 뜹니다(피싱 방지용).
+        # "🔗 기사보기"처럼 URL 모양이 아닌 짧은 글자를 링크로 걸면 확인창 없이
+        # 바로 열립니다. 그리고 미리보기(그림) 카드는 <a> 태그에 걸린 실제 URL을
+        # 그대로 사용해서 만들어지므로, 이렇게 바꿔도 그림 미리보기는 그대로 뜹니다
+        # (그림이 아예 안 뜨는 기사는, 그 기사 사이트가 애초에 미리보기용 썸네일
+        # 이미지(og:image)를 안 넣어둔 경우라 이건 이 코드로는 어떻게 할 수 없습니다).
         # (source_bracket은 위에서 tag_line과 같은 우선순위로 이미 순수 텍스트로 계산해둠)
 
         link_text_line = (
-            f'🔗 <i>{html.escape(news_url, quote=True)}</i>' if news_url else ""
+            f'🔗 <a href="{html.escape(news_url, quote=True)}">기사보기</a>' if news_url else ""
         )
 
         # 🏢 요청에 따라: 제목에서 상장기업명이 매칭되고, 그 회사의 종목코드를
