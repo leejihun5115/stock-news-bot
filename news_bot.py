@@ -886,6 +886,10 @@ _last_telegram_send_ts = 0.0
 # (거래량처럼 매일 바뀌는 데이터가 아니라 종목명 자체는 안정적이라 시작할 때 한 번만 받아옵니다)
 ALL_LISTED_COMPANIES = set()
 
+# 🏢 회사명 -> 종목코드(6자리) 매핑. fetch_krx_company_names()로 채워짐.
+# 일반 뉴스에서 회사명이 매칭되면, 이 코드로 시가총액/PER/괴리율 등을 조회함.
+COMPANY_NAME_TO_CODE = {}
+
 # ⚠️ 상장사명인데 동시에 아주 흔한 일반 단어라서, "종목명이 있으면 무조건 노출"
 # 특혜를 주면 완전히 무관한 뉴스까지 쏟아지는 이름들. 삭제어로 완전히 막으면
 # "국제 유가 급등"처럼 그 회사랑 무관한 진짜 중요 뉴스까지 막히니까, 삭제어
@@ -1112,35 +1116,39 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         tag_line = "📌 [키워드]"
 
     # 🔖 tag_line과 같은 우선순위지만, "[출처]" 안에 그대로 넣기 위한 버전.
-    # 단독/속보/특징주처럼 강한 신호는 이모지를 살려서 눈에 띄게 하고,
-    # 그 외(일반 출처명 등)는 깔끔하게 순수 텍스트만 씀.
+    # source_emoji는 대괄호 "바깥쪽"에 붙는 이모지, source_bracket은 대괄호 "안쪽" 순수 텍스트.
+    source_emoji = ""
     if is_schedule:
-        source_bracket = "⏰일정"
+        source_emoji, source_bracket = "⏰", "일정"
     elif is_rumor:
-        source_bracket = "👀조회공시(풍문)"
+        source_emoji, source_bracket = "👀", "조회공시(풍문)"
     elif is_disclosure:
-        source_bracket = "✅전자공시"
+        source_emoji, source_bracket = "✅", "전자공시"
     elif is_exclusive:
-        source_bracket = "🔥단독"
+        source_emoji, source_bracket = "🔥", "단독"
     elif is_breaking:
-        source_bracket = "🚨속보🚀"
+        source_emoji, source_bracket = "🚨", "속보🚀"
     elif is_feature:
-        source_bracket = "🚨특징주_해외" if is_us_market else "🚨특징주"
+        source_emoji, source_bracket = "🚨", "특징주_해외" if is_us_market else "특징주"
     elif is_us_market:
-        source_bracket = "🇺🇸해외시황/외신"
+        source_emoji, source_bracket = "🇺🇸", "해외시황/외신"
     elif is_money:
+        source_emoji = "💰"
         if "금리" in title:
-            source_bracket = "💰금리"
+            source_bracket = "금리"
         elif "실적" in title or "어닝서프라이즈" in title or "어닝쇼크" in title:
-            source_bracket = "💰실적"
+            source_bracket = "실적"
         else:
-            source_bracket = "💰머니"
+            source_bracket = "머니"
     elif custom_source:
-        source_bracket = "✅" + re.sub(r"[\[\]]", "", re.sub(r"^[^\w\uAC00-\uD7A3]+", "", custom_source)).strip()
+        source_emoji = "✅"
+        source_bracket = re.sub(r"[\[\]]", "", re.sub(r"^[^\w\uAC00-\uD7A3]+", "", custom_source)).strip()
     elif source_label:
-        source_bracket = f"✅{source_label}"
+        source_emoji = "✅"
+        source_bracket = source_label
     else:
-        source_bracket = "📌키워드"
+        source_emoji = "📌"
+        source_bracket = "키워드"
 
     is_us_related = is_us_market or any(kw.lower() in title.lower() for kw in US_CONTENT_KEYWORDS)
     is_pharma_related = any(kw in title for kw in PHARMA_KEYWORDS)
@@ -1257,12 +1265,33 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             f'🔗 <i>{html.escape(news_url, quote=True)}</i>' if news_url else ""
         )
 
+        # 🏢 요청에 따라: 제목에서 상장기업명이 매칭되고, 그 회사의 종목코드를
+        # 알고 있으면(KRX 목록에서 조회 가능하면) DART 실적카드와 같은 방식으로
+        # 시가총액/괴리율/PER·EPS·ROE를 붙여줌 - "출처가 확실한" 일반 뉴스도
+        # 공시처럼 바로 참고할 기업분석 정보가 같이 오도록.
+        company_snapshot_line = ""
+        matched_company = next((name for name in ALL_LISTED_COMPANIES if name in title), None)
+        if matched_company:
+            stock_code = COMPANY_NAME_TO_CODE.get(matched_company)
+            if stock_code:
+                mcap = _dart_market_cap_eok(stock_code)
+                snap_parts = [x for x in (
+                    _dart_gap_ratio_label(stock_code),
+                    _dart_valuation_line(stock_code),
+                ) if x]
+                header_bits = [f"🏢{matched_company}"]
+                if mcap:
+                    header_bits.append(f"(시가총액 {_eok_comma_label(mcap)})")
+                lines = [" ".join(header_bits)] + snap_parts
+                company_snapshot_line = "\n" + "\n".join(lines) + "\n"
+
         # 🚀/💊/🇺🇸 같은 특수 표시가 없는 기본값(📌)이면 헤더에서 아예 생략함
         # (어차피 제목 앞에도 📌가 따로 붙어서, 헤더에 또 있으면 중복이라 지저분함)
         header_prefix = "" if title_prefix == "📌" else title_prefix
         text_content = (
-            f"{header_prefix}[{source_bracket}]                    <i>⏰ {time_str}</i>\n\n"
-            f"📌<b>{display_title}</b>{highlight_line}\n\n"
+            f"{header_prefix}{source_emoji}[{source_bracket}]                    <i>⏰ {time_str}</i>\n\n"
+            f"📌<b>{display_title}</b>{highlight_line}\n"
+            f"{company_snapshot_line}\n"
             f"{link_text_line}"
         )
         reply_markup = None
@@ -1352,7 +1381,9 @@ def is_recent_article(entry, minutes=60, default_if_unknown=True):
 def fetch_krx_company_names():
     """
     KRX(한국거래소) 정보데이터시스템(KIND)에서 코스피+코스닥 상장법인 전체 명단을 받아와서
-    회사명만 추출. 실패하면 빈 set을 반환하고 조용히 넘어감 (이 기능 없이도 봇은 정상 작동).
+    회사명과 종목코드를 같이 추출. 실패하면 빈 값들을 반환하고 조용히 넘어감
+    (이 기능 없이도 봇은 정상 작동). 종목코드는 COMPANY_NAME_TO_CODE에 채워서,
+    일반 뉴스에서도 회사명만으로 시가총액/PER 등을 조회할 수 있게 함.
     """
     url = "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13"
     try:
@@ -1362,9 +1393,10 @@ def fetch_krx_company_names():
         table = soup.find("table")
         if not table:
             print("⚠️ KRX 상장법인 목록: 표를 찾지 못했습니다. (사이트 구조가 바뀌었을 수 있음)")
-            return set()
+            return set(), {}
 
         names = set()
+        name_to_code = {}
         rows = table.find_all("tr")[1:]  # 첫 행은 헤더(회사명, 종목코드, 업종...)
         for row in rows:
             cells = row.find_all("td")
@@ -1374,10 +1406,14 @@ def fetch_krx_company_names():
             # 너무 짧은 이름(1글자)은 오매칭 위험이 커서 제외
             if name and len(name) >= 2:
                 names.add(name)
-        return names
+                if len(cells) >= 2:
+                    code = cells[1].get_text(strip=True)
+                    if re.fullmatch(r"\d{6}", code):
+                        name_to_code[name] = code
+        return names, name_to_code
     except Exception as e:
         print(f"⚠️ KRX 상장법인 목록을 가져오지 못했습니다: {e}")
-        return set()
+        return set(), {}
 
 
 def initialize_existing_rss():
@@ -2681,7 +2717,13 @@ def _metric_importance(pct):
     return 1
 
 
-def _dart_financial_strong(text, stock_code=None):
+# 📌 반기/분기/사업보고서(정기보고서)는 원래 다 제외했었는데, 절충안으로
+# "YoY(전년대비) N% 이상 뚜렷하게 변동한 경우만" 열어줌 - 이 값을 조절하면
+# 기준을 더 빡빡하게/느슨하게 바꿀 수 있음.
+DART_PERIODIC_REPORT_MIN_YOY = 30.0
+
+
+def _dart_financial_strong(text, stock_code=None, report_nm=""):
     """
     반환값: (통과여부, 근거설명 또는 None)
     근거설명은 매출/영업이익/순이익을 각각 "당기(전기, 증감%) 중요N️⃣" 형태로
@@ -2689,8 +2731,11 @@ def _dart_financial_strong(text, stock_code=None):
     높아지고(1~10, 기준은 METRIC_IMPORTANCE_THRESHOLDS 참고), 5등급부터 🚨가
     붙는다. 어닝서프라이즈(컨센서스 대비)가 원문에 있으면 별도 줄로 추가한다.
 
-    🎯 "몇 % 이상이어야만 통과"하는 문턱값은 없습니다 - 실제 수치를 그대로
-    보여주기 때문에 크고 작은 건 보는 사람이 직접 판단하면 됩니다.
+    🎯 "몇 % 이상이어야만 통과"하는 문턱값은 기본적으로 없습니다 - 실제 수치를
+    그대로 보여주기 때문에 크고 작은 건 보는 사람이 직접 판단하면 됩니다.
+    단, "반기보고서/분기보고서/사업보고서"(정기보고서)는 원래 다 제외했던 걸
+    절충안으로 열어준 거라, 노이즈 방지를 위해 "YoY 30% 이상 뚜렷하게 변동한
+    경우만" 통과시킵니다 (DART_PERIODIC_REPORT_MIN_YOY 참고).
     원문에서 관련 수치를 아예 못 찾으면(순수 정기 보고서 등) 노출하지 않습니다.
 
     ⚠️ 참고: 괴리율(목표주가 대비)/PER/POR/전분기(QoQ)/최근 5분기 히스토리/내부자
@@ -2702,7 +2747,10 @@ def _dart_financial_strong(text, stock_code=None):
     if not text:
         return False, None
 
+    is_periodic_report = any(k in report_nm for k in ("반기보고서", "분기보고서", "사업보고서"))
+
     # 흑자전환은 부호가 명확한 이벤트라 그대로 우선 노출 (최고 등급 10)
+    # (정기보고서라도 흑자전환 자체는 문턱값 없이 통과 - 부호가 명확한 강한 신호라서)
     if "흑자전환" in text and ("영업이익" in text or "당기순이익" in text):
         info_lines = [x for x in (_dart_gap_ratio_label(stock_code), _dart_valuation_line(stock_code)) if x]
         prefix = ("\n".join(info_lines) + "\n") if info_lines else ""
@@ -2734,14 +2782,14 @@ def _dart_financial_strong(text, stock_code=None):
         basis_tag = f"({basis})" if basis else ""
         arrow = "🔺" if (pct is not None and pct >= 0) else "▼"
         imp = _metric_importance(pct)
-        badge = f"{'🔥' if imp >= 5 else ''}중요{_keycap(imp)}{'💯' if imp >= 5 else ''}"
+        badge = f"🔥중요{'💯' if imp >= 10 else _keycap(imp)}" if imp >= 5 else ""
         if len(amounts) >= 2:
             prior = amounts[1]
             if pct is not None:
-                return f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)}, {arrow}{abs(pct):g}%{basis_tag}) {badge}"
+                return f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)}, {arrow}{abs(pct):g}%{basis_tag}) {badge}".rstrip()
             return f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)})"
         if pct is not None:
-            return f"{label}: {_eok_comma_label(cur)} ({arrow}{abs(pct):g}%{basis_tag}) {badge}"
+            return f"{label}: {_eok_comma_label(cur)} ({arrow}{abs(pct):g}%{basis_tag}) {badge}".rstrip()
         return f"{label}: {_eok_comma_label(cur)}"
 
     lines = []
@@ -2760,13 +2808,26 @@ def _dart_financial_strong(text, stock_code=None):
     surprise_pcts = _dart_extract_percentages(surprise_chunk)
     if surprise_pcts:
         imp = _metric_importance(surprise_pcts[0])
-        badge = f"{'🔥' if imp >= 5 else ''}중요{_keycap(imp)}{'💯' if imp >= 5 else ''}"
+        badge = f"🔥중요{'💯' if imp >= 10 else _keycap(imp)}" if imp >= 5 else ""
         if surprise_pcts[0] >= 0:
-            lines.append(f"⭐어닝서프라이즈 컨센서스대비 {surprise_pcts[0]:+g}% {badge}")
+            lines.append(f"⭐어닝서프라이즈 컨센서스대비 {surprise_pcts[0]:+g}% {badge}".rstrip())
         else:
-            lines.append(f"🚨⚠️어닝쇼크 컨센서스대비 {surprise_pcts[0]:+g}% {badge}")
+            lines.append(f"🚨⚠️어닝쇼크 컨센서스대비 {surprise_pcts[0]:+g}% {badge}".rstrip())
 
     if lines:
+        # 📌 정기보고서(반기/분기/사업)는 절충안 - YoY(전년대비) 30% 이상 뚜렷하게
+        # 변동한 경우만 통과시킴. 매출/영업이익 둘 다 "전년대비"라고 원문에
+        # 명시된 %를 확인해서, 그중 하나라도 30% 이상이면 통과.
+        if is_periodic_report:
+            op_chunk_yoy = _dart_find_near(text, ["영업이익", "영업이익(손실)"], window=200)
+            rev_chunk_yoy = _dart_find_near(text, ["매출액", "매출"], window=200)
+            yoy_pcts = []
+            for chunk in (op_chunk_yoy, rev_chunk_yoy):
+                if re.search(r"전년\s*동기|전년\s*대비|전기\s*대비", chunk):
+                    yoy_pcts.extend(_dart_extract_percentages(chunk))
+            if not any(abs(p) >= DART_PERIODIC_REPORT_MIN_YOY for p in yoy_pcts):
+                return False, None
+
         info_lines = [x for x in (_dart_gap_ratio_label(stock_code), _dart_valuation_line(stock_code)) if x]
         prefix = ("\n".join(info_lines) + "\n") if info_lines else ""
         return True, f"{prefix}📊" + "\n".join(lines)
@@ -2859,10 +2920,14 @@ def dart_should_expose(report_nm, text, stock_code):
         return True, None
 
     if any(k in report_nm for k in [
-        "영업(잠정)실적", "영업실적", "매출액또는손익구조", "손익구조", "어닝서프라이즈", "어닝쇼크"
+        "영업(잠정)실적", "영업실적", "매출액또는손익구조", "손익구조", "어닝서프라이즈", "어닝쇼크",
+        "반기보고서", "분기보고서", "사업보고서",
     ]):
         # 실적 공시는 원문 수치가 있어야 강한 재료 여부를 정확히 판단한다.
-        return _dart_financial_strong(text, stock_code)
+        # 🎯 반기/분기/사업보고서(정기보고서)는 원래 다 제외했었는데, 요청에 따라
+        # "YoY 30% 이상 뚜렷하게 변동한 경우만" 절충안으로 열어둠 (아래
+        # _dart_financial_strong 안에서 report_nm을 보고 이 기준을 적용함).
+        return _dart_financial_strong(text, stock_code, report_nm)
 
     # 🎯 [연결 완료] "결정 자체가 재료"인 유형은 원문 텍스트 성공/실패와 무관하게
     # 항상 노출한다. 예전에는 DART_STRONG_REPORT_KEYWORDS를 만들어두고도 실제로는
@@ -3136,11 +3201,11 @@ _initialized = False
 
 
 def startup_init():
-    global ALL_LISTED_COMPANIES, _initialized
+    global ALL_LISTED_COMPANIES, COMPANY_NAME_TO_CODE, _initialized
     if _initialized:
         return
     print("📋 KRX 상장법인 목록을 불러오는 중...")
-    ALL_LISTED_COMPANIES = fetch_krx_company_names()
+    ALL_LISTED_COMPANIES, COMPANY_NAME_TO_CODE = fetch_krx_company_names()
     if ALL_LISTED_COMPANIES:
         print(f"✅ 상장법인 {len(ALL_LISTED_COMPANIES)}개 종목명 로드 완료.")
     else:
