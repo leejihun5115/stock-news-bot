@@ -1067,11 +1067,6 @@ def classify_telegram_channel_message(title):
     return matched_count, is_exclusive, is_breaking, is_feature, should_send
 
 
-# ─ 얇고 긴 구분선. 텔레그램 봇은 글자 색을 직접 지정할 수 없어서(굵게/기울임/
-# 밑줄/취소선/코드블럭 정도만 지원), <code> 태그로 감싸서 회색 배경의 흐린
-# 느낌을 내는 방식으로 "눈에 덜 띄게" 처리함 (제목이 상대적으로 더 부각됨).
-THIN_DIVIDER = "<code>" + "─" * 32 + "</code>"
-
 
 def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive, is_breaking,
                          is_feature, is_us_market, is_disclosure=False, is_rumor=False,
@@ -1235,8 +1230,8 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
 
 
     if is_disclosure or is_rumor:
-        # 📋 DART 공시류 - 요청하신 새 레이아웃:
-        # ━━━ / 🚀🚀 태그 🏢⚡️회사명(시총)   ⏰시간 / ━━━ / 👀실적유형(굵게) / ━━━ / 본문(괴리율·PER·EPS·매출등) / ━━━ / 🔗링크 / ━━━
+        # 📋 DART 공시류 - 구분선 없이 빈 줄로만 섹션을 나눔:
+        # 🚀 태그 🏢⚡️회사명(시총)   ⏰시간 / (빈줄) / 👀실적유형(굵게) / (빈줄) / 본문(괴리율·PER·EPS·매출등) / (빈줄) / 🔗링크
         # (display_title은 이미 맨 위에서 format_title()로 한 번 포맷팅된 HTML이라
         #  여기서 또 escape/format하면 이중 처리가 되어 태그가 깨짐 - 그대로 잘라서만 씀)
         corp_header, _, report_body = display_title.partition("\n")
@@ -1244,18 +1239,12 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         if highlight_suffix:
             body_escaped = html.escape(highlight_suffix)
             body_escaped = re.sub(r"(🎯괴리율[^\n]*)", r"<u>\1</u>", body_escaped)
-        # 본문이 정말 비어있으면(구조적 이벤트라 %도 배당/병합비율도 못 찾은 경우)
-        # 텅 빈 구분선 블록 자체를 아예 안 보이게 생략함
-        body_section = f"{body_escaped}\n{THIN_DIVIDER}\n" if body_escaped else ""
+        body_section = f"{body_escaped}\n\n" if body_escaped else ""
         text_content = (
-            f"{THIN_DIVIDER}\n"
-            f"{title_prefix} {tag_line} {corp_header}          <i>⏰ {time_str}</i>\n"
-            f"{THIN_DIVIDER}\n"
-            f"<b>{report_body}</b>\n"
-            f"{THIN_DIVIDER}\n"
+            f"{title_prefix} {tag_line} {corp_header}          <i>⏰ {time_str}</i>\n\n"
+            f"<b>{report_body}</b>\n\n"
             f"{body_section}"
-            f"🔗 <i>{html.escape(news_url, quote=True) if news_url else ''}</i>\n"
-            f"{THIN_DIVIDER}"
+            f"🔗 <i>{html.escape(news_url, quote=True) if news_url else ''}</i>"
         )
         reply_markup = None
     else:
@@ -1268,14 +1257,13 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             f'🔗 <i>{html.escape(news_url, quote=True)}</i>' if news_url else ""
         )
 
+        # 🚀/💊/🇺🇸 같은 특수 표시가 없는 기본값(📌)이면 헤더에서 아예 생략함
+        # (어차피 제목 앞에도 📌가 따로 붙어서, 헤더에 또 있으면 중복이라 지저분함)
+        header_prefix = "" if title_prefix == "📌" else title_prefix
         text_content = (
-            f"{THIN_DIVIDER}\n"
-            f"{title_prefix}[{source_bracket}]          <i>⏰ {time_str}</i>\n"
-            f"{THIN_DIVIDER}\n"
-            f"📌<b>{display_title}</b>{highlight_line}\n"
-            f"{THIN_DIVIDER}\n"
-            f"{link_text_line}\n"
-            f"{THIN_DIVIDER}"
+            f"{header_prefix}[{source_bracket}]                    <i>⏰ {time_str}</i>\n\n"
+            f"📌<b>{display_title}</b>{highlight_line}\n\n"
+            f"{link_text_line}"
         )
         reply_markup = None
 
