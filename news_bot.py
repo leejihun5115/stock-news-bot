@@ -4331,8 +4331,7 @@ def main():
 
             if (now - last_rss).total_seconds() >= RSS_CHECK_INTERVAL:
                 check_domestic_news(time_str)
-                if is_us_market_hour(now):
-                    check_us_news(time_str)
+                check_us_news(time_str)  # ⏰ 시간제한 없이 항상 체크 (예전엔 미국장 시간대에만 돌았음)
                 last_rss = now
 
             check_morning_briefing(now)
@@ -4466,8 +4465,7 @@ def run_once():
 
         try:
             check_domestic_news(time_str)
-            if is_us_market_hour(now):
-                check_us_news(time_str)
+            check_us_news(time_str)  # ⏰ 시간제한 없이 항상 체크 (예전엔 미국장 시간대에만 돌았음)
         except Exception as e:
             print(f"[국내/해외 RSS 오류] {e}")
 
@@ -4527,6 +4525,20 @@ try:
     def _cloud_run_entry():
         result = run_once()
         return result, 200
+
+    @app.route("/test_briefing", methods=["GET"])
+    def _test_briefing_route():
+        """
+        🧪 임시 테스트용 경로 - 아침 8시까지 기다리지 않고, 지금 당장
+        실제 미국 시세로 아침 브리핑을 만들어서 텔레그램으로 보내봅니다.
+        (실제 야후 파이낸스 시세를 그대로 조회하는 거라, 지금 이 순간
+        미국장이 열려있지 않으면 "전일 종가" 기준으로 나올 수 있습니다.)
+        """
+        startup_init()
+        ok = send_morning_briefing()
+        if ok:
+            return "아침 브리핑 발송 성공! 텔레그램을 확인하세요.", 200
+        return "발송 실패 또는 지수 시세를 못 가져옴 (로그 확인 필요)", 200
 
     @app.route("/test_score", methods=["GET"])
     def _test_score_route():
