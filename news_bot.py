@@ -1,6 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-# 수정25 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정27 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정27] 🎯 SOLO_MODE에 콤마로 여러 개 나열 가능해짐 - 예:
+#            SOLO_MODE=US_NEWS,DART 로 넣으면 해외RSS+아침브리핑+DART공시가
+#            동시에 켜지고 나머지는 자동으로 꺼짐 (예전엔 딱 하나만 가능했음).
+#   [수정26] 🐛 [전체 점검] DART에서 발견한 "502 타임아웃 위험"이 다른
+#            /test_XXX_now 라우트에도 똑같이 있을 수 있어서 전부 점검함.
+#            10개 소스 함수(국내RSS/해외RSS/네이버/약업전자/텔레그램1/텔레그램2/
+#            블로그/유튜브/IPO/DART) 전부에 max_sent_override 파라미터를
+#            추가하고, 모든 /test_XXX_now 라우트가 3건 제한으로 빠르게
+#            응답하도록 통일. 대량 데이터(800건) 시나리오로 실제 검증 완료.
 #   [수정25] 🐛 /test_dart_now가 "어제부터+중복무시"로 수백 건을 훑으면서
 #            하나하나 원문조회하다가 응답이 너무 오래 걸려 502(타임아웃) 나던
 #            문제 수정. max_sent_override로 소수 건(원문조회 최대 30건, 발송
@@ -203,8 +212,11 @@ ENABLE_IPO_ALERTS = _env_flag("ENABLE_IPO_ALERTS")               # 신규상장(
 #   SOLO_MODE=NAVER           → 네이버뉴스만
 #   SOLO_MODE=BLOG            → 분석블로그만
 #   SOLO_MODE=YOUTUBE         → 유튜브만
-_SOLO_MODE = os.environ.get("SOLO_MODE", "").strip().upper()
-if _SOLO_MODE:
+# 🎯 SOLO_MODE=DART 처럼 하나만 넣어도 되고, SOLO_MODE=US_NEWS,DART 처럼
+# 콤마로 여러 개 나열하면 그것들만 동시에 켜집니다 (나머지는 자동으로 꺼짐).
+_SOLO_MODE_RAW = os.environ.get("SOLO_MODE", "").strip().upper()
+_SOLO_MODES = {m.strip() for m in _SOLO_MODE_RAW.split(",") if m.strip()}
+if _SOLO_MODES:
     # 일단 전부 끄고, SOLO_MODE에 해당하는 것만 켬
     ENABLE_DOMESTIC_NEWS = False
     ENABLE_US_NEWS = False
@@ -218,26 +230,31 @@ if _SOLO_MODE:
     ENABLE_SCHEDULE_REMINDERS = False
     ENABLE_IPO_ALERTS = False
 
-    if _SOLO_MODE == "DOMESTIC_NEWS":
-        ENABLE_DOMESTIC_NEWS = True
-    elif _SOLO_MODE == "US_NEWS":
-        ENABLE_US_NEWS = True
-        ENABLE_MORNING_BRIEFING = True
-    elif _SOLO_MODE == "DART":
-        ENABLE_DART = True
-    elif _SOLO_MODE == "TELEGRAM":
-        ENABLE_TELEGRAM_CHANNELS = True
-    elif _SOLO_MODE == "CUSTOM_SOURCES":
-        ENABLE_CUSTOM_SOURCES = True
-    elif _SOLO_MODE == "NAVER":
-        ENABLE_NAVER_NEWS = True
-    elif _SOLO_MODE == "BLOG":
-        ENABLE_BLOG = True
-    elif _SOLO_MODE == "YOUTUBE":
-        ENABLE_YOUTUBE = True
-    else:
-        print(f"⚠️ SOLO_MODE='{_SOLO_MODE}'는 알 수 없는 값입니다. 전부 꺼진 상태로 시작합니다. "
-              f"(DOMESTIC_NEWS/US_NEWS/DART/TELEGRAM/CUSTOM_SOURCES/NAVER/BLOG/YOUTUBE 중 하나로 입력해주세요)")
+    _KNOWN_SOLO_MODES = {
+        "DOMESTIC_NEWS", "US_NEWS", "DART", "TELEGRAM", "CUSTOM_SOURCES",
+        "NAVER", "BLOG", "YOUTUBE",
+    }
+    for _mode in _SOLO_MODES:
+        if _mode == "DOMESTIC_NEWS":
+            ENABLE_DOMESTIC_NEWS = True
+        elif _mode == "US_NEWS":
+            ENABLE_US_NEWS = True
+            ENABLE_MORNING_BRIEFING = True
+        elif _mode == "DART":
+            ENABLE_DART = True
+        elif _mode == "TELEGRAM":
+            ENABLE_TELEGRAM_CHANNELS = True
+        elif _mode == "CUSTOM_SOURCES":
+            ENABLE_CUSTOM_SOURCES = True
+        elif _mode == "NAVER":
+            ENABLE_NAVER_NEWS = True
+        elif _mode == "BLOG":
+            ENABLE_BLOG = True
+        elif _mode == "YOUTUBE":
+            ENABLE_YOUTUBE = True
+        else:
+            print(f"⚠️ SOLO_MODE 항목 '{_mode}'는 알 수 없는 값입니다(무시함). "
+                  f"({'/'.join(sorted(_KNOWN_SOLO_MODES))} 중에서 골라 콤마로 나열해주세요)")
 
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
 NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
@@ -2403,12 +2420,14 @@ def _fetch_rss_feed(rss_url, timeout=10):
     return feedparser.parse(rss_url)
 
 
-def check_domestic_news(current_time_str):
+def check_domestic_news(current_time_str, max_sent_override=None):
     feedparser.USER_AGENT = USER_AGENT
     scanned = 0
     sent = 0
     diag_counts = {"raw": 0, "already_sent": 0, "blocked": 0, "too_old": 0}
     for rss_url in DOMESTIC_RSS_URLS:
+        if max_sent_override and sent >= max_sent_override:
+            break
         try:
             feed = _fetch_rss_feed(rss_url)
         except Exception as e:
@@ -2427,6 +2446,8 @@ def check_domestic_news(current_time_str):
                 source_label = "뉴스"
 
         for entry in feed.entries:
+            if max_sent_override and sent >= max_sent_override:
+                break
             title = getattr(entry, "title", "")
             link = getattr(entry, "link", "")
             if not title:
@@ -2785,7 +2806,7 @@ def check_morning_briefing(now):
             send_morning_briefing()
 
 
-def check_us_news(current_time_str):
+def check_us_news(current_time_str, max_sent_override=None):
     feedparser.USER_AGENT = USER_AGENT
     scanned = 0
     sent = 0
@@ -2804,6 +2825,8 @@ def check_us_news(current_time_str):
             print(f"[해외 RSS 파싱경고] {rss_url}: {getattr(feed, 'bozo_exception', '알 수 없음')}")
 
         for entry in feed.entries:
+            if max_sent_override and sent >= max_sent_override:
+                break
             title = getattr(entry, "title", "")
             link = getattr(entry, "link", "")
             if not title:
@@ -2964,7 +2987,7 @@ def get_news_source_name(link):
 _naver_auth_error_reported = False
 _naver_rate_limit_until = 0.0
 
-def check_naver_news(current_time_str):
+def check_naver_news(current_time_str, max_sent_override=None):
     """네이버 API 오류가 나도 봇 전체가 흔들리지 않도록 인증/속도제한을 별도 처리."""
     global _naver_auth_error_reported, _naver_rate_limit_until
 
@@ -2988,6 +3011,8 @@ def check_naver_news(current_time_str):
     error_queries = 0
 
     for idx, query in enumerate(NAVER_SEARCH_QUERIES):
+        if max_sent_override and sent >= max_sent_override:
+            break
         # 한꺼번에 30여 건을 쏘지 않도록 요청 사이에 간격을 둔다.
         if idx:
             time.sleep(1.0)
@@ -3037,6 +3062,8 @@ def check_naver_news(current_time_str):
         _naver_auth_error_reported = False
 
         for item in data.get("items", []):
+            if max_sent_override and sent >= max_sent_override:
+                break
             raw_title = item.get("title", "")
             title = re.sub(r"</?b>", "", html.unescape(raw_title))
             link = item.get("originallink") or item.get("link", "")
@@ -3126,12 +3153,15 @@ def _extract_custom_source_headline(a_tag):
     return _shorten_headline(headline_line) if headline_line else ""
 
 
-def check_custom_sources(current_time_str):
+def check_custom_sources(current_time_str, max_sent_override=None):
     sources = CUSTOM_SCRAPE_SOURCES
+    sent = 0
 
     headers = {"User-Agent": USER_AGENT}
 
     for target_url, source_name in sources:
+        if max_sent_override and sent >= max_sent_override:
+            break
         try:
             res = requests.get(target_url, headers=headers, timeout=10)
             if res.status_code != 200:
@@ -3139,6 +3169,8 @@ def check_custom_sources(current_time_str):
             soup = BeautifulSoup(res.text, "html.parser")
 
             for a_tag in soup.select("a"):
+                if max_sent_override and sent >= max_sent_override:
+                    break
                 title = _extract_custom_source_headline(a_tag)
 
                 href = a_tag.get("href", "")
@@ -3169,6 +3201,7 @@ def check_custom_sources(current_time_str):
                 send_telegram_message(title, href, current_time_str, matched_count,
                                    is_exclusive, is_breaking, is_feature, False,
                                    custom_source=f"✅ {source_name}", image_url=img_url or "")
+                sent += 1
         except Exception as e:
             print(f"[커스텀 소스 오류] {source_name}: {e}")
             continue
@@ -3236,7 +3269,7 @@ def _is_within_last_hour(msg_time):
         return True
 
 
-def check_telegram_channels(current_time_str):
+def check_telegram_channels(current_time_str, max_sent_override=None):
     if "텔레그램1 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
         return
     headers = {"User-Agent": USER_AGENT}
@@ -3244,6 +3277,8 @@ def check_telegram_channels(current_time_str):
     sent = 0
 
     for channel_name, channel_url in TARGET_TELEGRAM_CHANNELS:
+        if max_sent_override and sent >= max_sent_override:
+            break
         if channel_name in PAUSED_SOURCES:  # ⏸️ 일시정지된 채널은 건너뜀
             continue
         try:
@@ -3254,6 +3289,8 @@ def check_telegram_channels(current_time_str):
             messages = soup.select(".tgme_widget_message_text")
 
             for msg in messages:
+                if max_sent_override and sent >= max_sent_override:
+                    break
                 headline, article_link, msg_time = extract_telegram_headline_and_link(msg, channel_url)
                 # 📎 미리보기 제목도 못 찾아서 여전히 링크 자체가 제목인 경우는 건너뜀
                 # (내용을 알 수 없는 "링크만 온 메시지"를 방지)
@@ -3305,7 +3342,7 @@ def check_telegram_channels(current_time_str):
     print(f"[{current_time_str}] 텔레그램1(필터적용): 신규 {scanned}건 확인, {sent}건 전송")
 
 
-def check_telegram_channels_unfiltered(current_time_str):
+def check_telegram_channels_unfiltered(current_time_str, max_sent_override=None):
     """텔레그램2 - 공부용, 조건 없이 업데이트되면 무조건 전송"""
     if "텔레그램2 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
         return
@@ -3314,6 +3351,8 @@ def check_telegram_channels_unfiltered(current_time_str):
     sent = 0
 
     for channel_name, channel_url in TARGET_TELEGRAM_CHANNELS_UNFILTERED:
+        if max_sent_override and sent >= max_sent_override:
+            break
         if channel_name in PAUSED_SOURCES:  # ⏸️ 일시정지된 채널은 건너뜀
             continue
         try:
@@ -3324,6 +3363,8 @@ def check_telegram_channels_unfiltered(current_time_str):
             messages = soup.select(".tgme_widget_message_text")
 
             for msg in messages:
+                if max_sent_override and sent >= max_sent_override:
+                    break
                 headline, article_link, msg_time = extract_telegram_headline_and_link(msg, channel_url)
                 # 📎 미리보기 제목도 못 찾아서 여전히 링크 자체가 제목인 경우는 건너뜀
                 if headline and re.fullmatch(r"https?://\S+", headline):
@@ -3362,7 +3403,7 @@ def check_telegram_channels_unfiltered(current_time_str):
 # ============================================================
 # 📝 분석 블로그 (매일 올라오는 게 아니므로 키워드 필터 없이 새 글이면 무조건 전송)
 # ============================================================
-def check_blogs(current_time_str):
+def check_blogs(current_time_str, max_sent_override=None):
     if "블로그 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
         return
     feedparser.USER_AGENT = USER_AGENT
@@ -3392,6 +3433,8 @@ def check_blogs(current_time_str):
             display_name = display_name.split("의", 1)[0].strip()
 
         for entry in feed.entries:
+            if max_sent_override and sent >= max_sent_override:
+                break
             title = getattr(entry, "title", "")
             link = getattr(entry, "link", "")
             if not title or is_already_sent(title):
@@ -3511,7 +3554,7 @@ def resolve_all_youtube_channels():
     return ordered
 
 
-def check_youtube(current_time_str):
+def check_youtube(current_time_str, max_sent_override=None):
     if "유튜브 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
         return
     feedparser.USER_AGENT = USER_AGENT
@@ -3528,6 +3571,8 @@ def check_youtube(current_time_str):
             continue
 
         for entry in feed.entries:
+            if max_sent_override and sent >= max_sent_override:
+                break
             title = getattr(entry, "title", "")
             link = getattr(entry, "link", "")
             if not title or is_already_sent(title):
@@ -3950,7 +3995,7 @@ def _extract_ipo_info(text):
     return offering_price, market, industry
 
 
-def check_ipo_listings(current_time_str, bgn_date_override=None):
+def check_ipo_listings(current_time_str, bgn_date_override=None, max_sent_override=None):
     """DART 투자설명서 공시를 훑어서, 내일 상장 예정인 종목이 있으면 알림."""
     if not DART_API_KEY:
         return
@@ -3970,7 +4015,10 @@ def check_ipo_listings(current_time_str, bgn_date_override=None):
     if data.get("status") != "000":
         return
 
+    sent = 0
     for item in data.get("list", []):
+        if max_sent_override and sent >= max_sent_override:
+            break
         report_nm = item.get("report_nm", "")
         corp_name = item.get("corp_name", "")
         rcept_no = item.get("rcept_no", "")
@@ -4022,6 +4070,7 @@ def check_ipo_listings(current_time_str, bgn_date_override=None):
             res2 = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload, timeout=10)
             if res2.status_code == 200:
                 print(f"✅ [신규상장 알림 발송] {corp_name}")
+                sent += 1
         except Exception as e:
             print(f"[신규상장 알림 발송 오류] {corp_name}: {e}")
 
@@ -5528,7 +5577,7 @@ try:
         _recent_titles_for_fuzzy.clear()
 
         try:
-            check_us_news(datetime.datetime.now().strftime("%H:%M:%S"))
+            check_us_news(datetime.datetime.now().strftime("%H:%M:%S"), max_sent_override=3)
         finally:
             # 3) 테스트 끝나면 원래대로 복구 (실제 운영 로직에 영향 안 주도록)
             globals()["is_recent_article"] = original_is_recent
@@ -5602,36 +5651,36 @@ try:
     def _test_domestic_news_now_route():
         """🧪 국내 RSS 강제 테스트 - 최근 24시간 + 중복무시로 즉시 발송해봄."""
         startup_init()
-        _run_forced_test(check_domestic_news, loosen_recency=True)
+        _run_forced_test(check_domestic_news, loosen_recency=True, max_sent_override=3)
         return "국내RSS 강제 테스트 완료! 텔레그램을 확인하세요.", 200
 
     @app.route("/test_telegram_now", methods=["GET"])
     def _test_telegram_now_route():
         """🧪 텔레그램1(필터)+2(무조건) 채널 강제 테스트 - 중복무시로 즉시 발송해봄."""
         startup_init()
-        _run_forced_test(check_telegram_channels)
-        _run_forced_test(check_telegram_channels_unfiltered)
+        _run_forced_test(check_telegram_channels, max_sent_override=3)
+        _run_forced_test(check_telegram_channels_unfiltered, max_sent_override=3)
         return "텔레그램 채널 강제 테스트 완료! 텔레그램을 확인하세요.", 200
 
     @app.route("/test_custom_sources_now", methods=["GET"])
     def _test_custom_sources_now_route():
         """🧪 약업신문/전자신문 강제 테스트 - 중복무시로 즉시 발송해봄."""
         startup_init()
-        _run_forced_test(check_custom_sources)
+        _run_forced_test(check_custom_sources, max_sent_override=3)
         return "약업신문/전자신문 강제 테스트 완료! 텔레그램을 확인하세요.", 200
 
     @app.route("/test_naver_now", methods=["GET"])
     def _test_naver_now_route():
         """🧪 네이버 뉴스 강제 테스트 - 중복무시로 즉시 발송해봄."""
         startup_init()
-        _run_forced_test(check_naver_news)
+        _run_forced_test(check_naver_news, max_sent_override=3)
         return "네이버 뉴스 강제 테스트 완료! 텔레그램을 확인하세요 (401 오류면 네이버 키 문제입니다).", 200
 
     @app.route("/test_blog_now", methods=["GET"])
     def _test_blog_now_route():
         """🧪 분석 블로그 강제 테스트 - 최근 24시간 + 중복무시로 즉시 발송해봄."""
         startup_init()
-        _run_forced_test(check_blogs, loosen_recency=True)
+        _run_forced_test(check_blogs, loosen_recency=True, max_sent_override=3)
         return "분석 블로그 강제 테스트 완료! 텔레그램을 확인하세요.", 200
 
     @app.route("/test_youtube_now", methods=["GET"])
@@ -5641,7 +5690,7 @@ try:
         startup_init()
         if not YOUTUBE_CHANNEL_RSS_URLS:
             resolve_all_youtube_channels()
-        _run_forced_test(check_youtube, loosen_recency=True)
+        _run_forced_test(check_youtube, loosen_recency=True, max_sent_override=3)
         return "유튜브 강제 테스트 완료! 텔레그램을 확인하세요.", 200
 
     @app.route("/test_ipo_now", methods=["GET"])
@@ -5650,7 +5699,7 @@ try:
         넓히고, 중복무시로 즉시 발송해봄."""
         startup_init()
         yesterday_str = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
-        _run_forced_test(check_ipo_listings, bgn_date_override=yesterday_str)
+        _run_forced_test(check_ipo_listings, bgn_date_override=yesterday_str, max_sent_override=3)
         return "IPO 알림 강제 테스트 완료! 텔레그램을 확인하세요 (내일 상장 예정 종목이 없으면 0건이 정상).", 200
 
     @app.route("/test_schedule_reminders_now", methods=["GET"])
