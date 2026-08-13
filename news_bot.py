@@ -1,6 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-# 수정12 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정15 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정15] 해외뉴스 라벨 "해외시황/외신"→"해외_외신"으로 변경. 해외뉴스 매칭
+#            조건 다시 1개로 완화(확인용).
+#   [수정14] 🎯 SOLO_MODE 단축 스위치 추가! Render 환경변수에 SOLO_MODE=DART
+#            처럼 딱 하나만 넣으면, 그것만 켜고 나머지 전부 자동으로 꺼짐.
+#            (예전엔 10개 스위치를 하나씩 다 바꿔야 했음). 값: DOMESTIC_NEWS /
+#            US_NEWS / DART / TELEGRAM / CUSTOM_SOURCES / NAVER / BLOG / YOUTUBE.
+#            안 쓰면(빈 값) 기존처럼 ENABLE_XXX 개별 스위치가 각자 적용됨.
+#   [수정13] /test_dart_now 테스트 라우트 추가 - DART 공시도 해외뉴스처럼
+#            "어제부터 + 중복무시"로 즉시 강제 발송 테스트 가능. 테스트 끝나면
+#            자동으로 원래대로("오늘 날짜만") 복구됨.
 #   [수정12] 뉴스 판정 조건을 다시 엄격하게(2개 키워드 필요) 복구 - 수정7의 완화를 되돌림.
 #            /test_us_news_now 테스트용 라우트 추가 (24시간+중복무시로 즉시 발송 테스트)
 #   [수정10] 해외뉴스/아침브리핑을 별도 텔레그램 채팅방(CHAT_ID_OVERSEAS)으로 분리 발송 가능
@@ -141,6 +151,55 @@ ENABLE_BLOG = _env_flag("ENABLE_BLOG")                           # 분석 블로
 ENABLE_YOUTUBE = _env_flag("ENABLE_YOUTUBE")                     # 유튜브
 ENABLE_SCHEDULE_REMINDERS = _env_flag("ENABLE_SCHEDULE_REMINDERS")  # 일정 D-7/D-3 리마인더
 ENABLE_IPO_ALERTS = _env_flag("ENABLE_IPO_ALERTS")               # 신규상장(IPO) 알림
+
+# 🎛️🎯 [단축 스위치] 매번 10개씩 하나하나 끄고 켜는 게 번거로우니, 환경변수
+# SOLO_MODE에 딱 하나만 넣으면 "그것만 켜고 나머지는 자동으로 다 끔".
+# 예: Render 환경변수에 SOLO_MODE=DART 하나만 넣으면 공시만 켜집니다.
+# 다시 전체 모드로 돌아가려면 SOLO_MODE를 지우거나 빈 값으로 두면 됩니다.
+#   SOLO_MODE=DOMESTIC_NEWS   → 국내RSS만
+#   SOLO_MODE=US_NEWS         → 해외RSS + 아침브리핑만 (같이 다루는 게 자연스러워서 묶음)
+#   SOLO_MODE=DART            → DART공시만
+#   SOLO_MODE=TELEGRAM        → 텔레그램1+2만
+#   SOLO_MODE=CUSTOM_SOURCES  → 약업신문/전자신문만
+#   SOLO_MODE=NAVER           → 네이버뉴스만
+#   SOLO_MODE=BLOG            → 분석블로그만
+#   SOLO_MODE=YOUTUBE         → 유튜브만
+_SOLO_MODE = os.environ.get("SOLO_MODE", "").strip().upper()
+if _SOLO_MODE:
+    # 일단 전부 끄고, SOLO_MODE에 해당하는 것만 켬
+    ENABLE_DOMESTIC_NEWS = False
+    ENABLE_US_NEWS = False
+    ENABLE_MORNING_BRIEFING = False
+    ENABLE_TELEGRAM_CHANNELS = False
+    ENABLE_CUSTOM_SOURCES = False
+    ENABLE_DART = False
+    ENABLE_NAVER_NEWS = False
+    ENABLE_BLOG = False
+    ENABLE_YOUTUBE = False
+    ENABLE_SCHEDULE_REMINDERS = False
+    ENABLE_IPO_ALERTS = False
+
+    if _SOLO_MODE == "DOMESTIC_NEWS":
+        ENABLE_DOMESTIC_NEWS = True
+    elif _SOLO_MODE == "US_NEWS":
+        ENABLE_US_NEWS = True
+        ENABLE_MORNING_BRIEFING = True
+    elif _SOLO_MODE == "DART":
+        ENABLE_DART = True
+    elif _SOLO_MODE == "TELEGRAM":
+        ENABLE_TELEGRAM_CHANNELS = True
+    elif _SOLO_MODE == "CUSTOM_SOURCES":
+        ENABLE_CUSTOM_SOURCES = True
+    elif _SOLO_MODE == "NAVER":
+        ENABLE_NAVER_NEWS = True
+    elif _SOLO_MODE == "BLOG":
+        ENABLE_BLOG = True
+    elif _SOLO_MODE == "YOUTUBE":
+        ENABLE_YOUTUBE = True
+    else:
+        print(f"⚠️ SOLO_MODE='{_SOLO_MODE}'는 알 수 없는 값입니다. 전부 꺼진 상태로 시작합니다. "
+              f"(DOMESTIC_NEWS/US_NEWS/DART/TELEGRAM/CUSTOM_SOURCES/NAVER/BLOG/YOUTUBE 중 하나로 입력해주세요)")
+
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
 NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
 NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
@@ -1740,7 +1799,7 @@ def _resolve_tag(title, is_schedule, is_rumor, is_disclosure, is_exclusive, is_b
         suffix = "특징주_해외" if is_us_market else "특징주"
         return f"🚨[{suffix}]", "🚨", suffix                                      # 6순위: 특징주
     if is_us_market:
-        return "🇺🇸 해외시황/외신", "🇺🇸", "해외시황/외신"                           # 7순위: 해외시황
+        return "🇺🇸 해외_외신", "🇺🇸", "해외_외신"                                    # 7순위: 해외
     if is_money:
         if "금리" in title:
             label = "금리"
@@ -2703,7 +2762,7 @@ def check_us_news(current_time_str):
             is_earnings_worth_sending = earnings_info[0] and (related_theme or resolved_companies)
 
             should_send = (
-                has_macro_word or matched_count >= 2 or is_breaking or is_feature  # ✏️[복구] 다시 2개로
+                has_macro_word or matched_count >= 1 or is_breaking or is_feature  # ✏️[다시 완화] 확인용, 1개로
                 or bool(resolved_companies) or is_earnings_worth_sending
             )
 
@@ -4900,11 +4959,13 @@ def dart_should_expose(report_nm, text, stock_code):
 # ============================================================
 # DART 전자공시
 # ============================================================
-def check_dart_disclosures(current_time_str):
+def check_dart_disclosures(current_time_str, bgn_date_override=None):
     if not DART_API_KEY:
         return
 
-    today_str = datetime.datetime.now().strftime("%Y%m%d")
+    # 🧪 테스트용으로 시작일을 넓히고 싶을 때(예: 하루 전부터) bgn_date_override를
+    # "YYYYMMDD" 문자열로 넘기면 됨. 평소엔 None이라 오늘 날짜 그대로 씀.
+    today_str = bgn_date_override or datetime.datetime.now().strftime("%Y%m%d")
     page_no = 1
     max_pages = 5
     scanned = 0
@@ -5352,6 +5413,32 @@ try:
             _recent_titles_for_fuzzy.extend(backup_fuzzy)
 
         return "해외뉴스 강제 테스트 완료! 텔레그램을 확인하세요 (0건이었다면 로그의 원본 건수를 확인해주세요).", 200
+
+    @app.route("/test_dart_now", methods=["GET"])
+    def _test_dart_now_route():
+        """
+        🧪 임시 테스트용 경로 - DART 공시 버전. "오늘 날짜"만 보던 걸
+        "어제부터"로 넓히고, "이미 봤다"고 등록된 공시도 이번만 무시하고
+        강제로 실제 발송까지 시켜봅니다. 끝나면 자동으로 원래대로 복구됩니다.
+        ⚠️ 실제로 텔레그램에 메시지가 몇 건 갈 수 있습니다 (진짜 발송임).
+        """
+        startup_init()
+
+        yesterday_str = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
+
+        backup_sent_titles = set(sent_news_titles)
+        sent_news_titles.clear()
+
+        try:
+            check_dart_disclosures(
+                datetime.datetime.now().strftime("%H:%M:%S"),
+                bgn_date_override=yesterday_str,
+            )
+        finally:
+            sent_news_titles.clear()
+            sent_news_titles.update(backup_sent_titles)
+
+        return "DART 공시 강제 테스트 완료! 텔레그램을 확인하세요 (0건이었다면 로그의 신규/강한재료 건수를 확인해주세요).", 200
 
     @app.route("/test_briefing", methods=["GET"])
     def _test_briefing_route():
