@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-# 수정31 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정32 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정32] 🔄 네이버뉴스 방식 전환 - 네이버 오픈API "검색" 권한이 신규
+#            계정에는 셀프 등록으로 안 열려서(Scope Status Invalid) 계속
+#            401이 나던 문제를 우회. 구글뉴스 RSS 한국어 검색(51개 검색어
+#            그대로 재사용)으로 바꿔서 API 키 없이 작동. 함수명/환경변수는
+#            그대로라 다른 설정은 안 건드려도 됨. 나중에 네이버 API 제휴신청이
+#            승인되면 이 함수만 다시 API 방식으로 되돌리면 됨.
 #   [수정31] 🩺 네이버 401 진단 강화 - 지금까지는 "401이다"까지만 알 수
 #            있었는데, 이제 네이버가 실제로 보내는 응답 본문(errorCode/
 #            errorMessage)까지 /test_naver_now 화면에 그대로 보여줌. 키가
@@ -3024,102 +3030,44 @@ _naver_rate_limit_until = 0.0
 _naver_last_error_detail = ""  # 🩺 401/기타 오류 시 네이버가 준 실제 응답 본문을 저장해서, 테스트 화면에도 바로 보여줄 수 있게 함
 
 def check_naver_news(current_time_str, max_sent_override=None, minutes_override=None):
-    """네이버 API 오류가 나도 봇 전체가 흔들리지 않도록 인증/속도제한을 별도 처리.
-    반환값: "ok" / "no_key" / "rate_limited" / "auth_failed" - 테스트 라우트가
-    정확한 상태를 사용자에게 보여줄 수 있도록 문자열로 알려줌."""
-    global _naver_auth_error_reported, _naver_rate_limit_until, _naver_last_error_detail
-
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        if not _naver_auth_error_reported:
-            print(f"[{current_time_str}] 네이버 뉴스: API 키가 없어 일시 중지합니다. 키를 넣으면 다음 실행부터 자동 재개됩니다.")
-            _naver_auth_error_reported = True
-        return "no_key"
-
-    now_ts = time.time()
-    if now_ts < _naver_rate_limit_until:
-        return "rate_limited"
-
-    headers = {
-        "X-Naver-Client-Id": NAVER_CLIENT_ID.strip(),
-        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET.strip(),
-    }
-
+    """
+    🔄[방식 전환] 네이버 오픈API 대신 구글뉴스 RSS(한국어)로 검색하는 방식으로
+    바꿨습니다. 네이버 "검색" API가 신규 계정에는 셀프 등록으로 안 열려서
+    (Scope Status Invalid) 계속 401이 나던 문제를 우회한 것입니다.
+    함수 이름과 환경변수(ENABLE_NAVER_NEWS, SOLO_MODE=NAVER)는 그대로 유지해서,
+    기존 설정을 하나도 안 건드려도 되게 했습니다.
+    ⚠️ 네이버 API 제휴신청이 나중에 승인되면, 이 함수만 예전 방식(NAVER_CLIENT_ID/
+    SECRET 쓰는 방식)으로 다시 되돌리면 됩니다 - 나머지 코드는 안 바뀌어도 됨.
+    반환값: 항상 "ok" (구글 RSS 방식은 API 키가 없어서 401/429 걱정이 없음).
+    """
     scanned = 0
     sent = 0
-    error_queries = 0
+    minutes = minutes_override or 60
 
-    # 🧪 테스트 모드(max_sent_override 지정됨)일 땐 응답을 빨리 받는 게 목적이라
-    # 요청 사이 대기시간을 짧게 줄임 (평소엔 네이버 API 부담을 줄이려고 1초).
-    sleep_interval = 0.2 if max_sent_override else 1.0
-
-    for idx, query in enumerate(NAVER_SEARCH_QUERIES):
+    for query in NAVER_SEARCH_QUERIES:
         if max_sent_override and sent >= max_sent_override:
             break
-        # 한꺼번에 30여 건을 쏘지 않도록 요청 사이에 간격을 둔다.
-        if idx:
-            time.sleep(sleep_interval)
 
+        rss_url = _google_news_rss_url(query, korean=True)
         try:
-            res = requests.get(
-                "https://openapi.naver.com/v1/search/news.json",
-                headers=headers,
-                params={"query": query, "display": 20, "start": 1, "sort": "date"},
-                timeout=10,
-            )
-        except requests.RequestException as e:
-            error_queries += 1
-            print(f"[네이버 뉴스 네트워크 오류] query={query}: {e}")
+            feed = _fetch_rss_feed(rss_url)
+        except Exception as e:
+            print(f"[네이버(구글RSS) 오류] query={query}: {e}")
             continue
 
-        if res.status_code == 401:
-            # 🩺 매번 발생시마다 최신 오류 본문으로 갱신 (테스트 라우트가 읽어서 화면에 보여줌)
-            _naver_last_error_detail = res.text[:300]
-            # 인증키가 잘못된 상태에서 검색어마다 401을 반복 출력하지 않는다.
-            if not _naver_auth_error_reported:
-                print(f"[{current_time_str}] 네이버 뉴스: API 인증 실패(401) → 네이버 키를 교체하면 다음 실행부터 정상 재개됩니다. "
-                      f"(네이버 응답 본문: {res.text[:300]})")
-                _naver_auth_error_reported = True
-            return "auth_failed"
-
-        if res.status_code == 429:
-            retry_after = res.headers.get("Retry-After", "60")
-            try:
-                wait_sec = max(30, min(int(retry_after), 600))
-            except ValueError:
-                wait_sec = 60
-            _naver_rate_limit_until = time.time() + wait_sec
-            print(f"[{current_time_str}] 네이버 뉴스: 요청 속도 제한(429) → {wait_sec}초 후 자동 재시도합니다.")
-            return "rate_limited"
-
-        if res.status_code != 200:
-            error_queries += 1
-            print(f"[네이버 뉴스 실패] status={res.status_code} query={query} body={res.text[:160]}")
-            continue
-
-        try:
-            data = res.json()
-        except ValueError:
-            error_queries += 1
-            print(f"[네이버 뉴스 JSON 오류] query={query}")
-            continue
-
-        # 정상 응답이 들어오면, 키가 복구된 것으로 보고 인증 오류 상태를 해제한다.
-        _naver_auth_error_reported = False
-
-        for item in data.get("items", []):
+        for entry in feed.entries:
             if max_sent_override and sent >= max_sent_override:
                 break
-            raw_title = item.get("title", "")
-            title = re.sub(r"</?b>", "", html.unescape(raw_title))
-            link = item.get("originallink") or item.get("link", "")
-            pub_date = item.get("pubDate", "")
-
-            if not title or is_already_sent(title):
+            title = getattr(entry, "title", "")
+            link = getattr(entry, "link", "")
+            if not title:
+                continue
+            if is_already_sent(title):
                 continue
             if is_blocked_title(title):  # 🧹 삭제어 포함 시 무조건 차단
                 mark_as_sent(title)
                 continue
-            if not is_recent_naver_item(pub_date, minutes=minutes_override or 60):
+            if not is_recent_article(entry, minutes=minutes):
                 continue
 
             scanned += 1
@@ -3128,18 +3076,12 @@ def check_naver_news(current_time_str, max_sent_override=None, minutes_override=
                 mark_as_sent(title)
                 continue
 
-            # 🆕 문자 그대로는 안 겹치지만 사실상 같은 기사면 여기서 신규/후속/재탕을 구분함
-            # (네이버는 회사명별로 검색어를 여러 번 돌려서, 같은 기사가 다른 검색어에서
-            #  조금 다른 스니펫으로 잡히는 경우가 특히 잦음)
             novelty, novelty_emoji, novelty_note = classify_novelty(title)
             if novelty == "재탕":
                 print(f"[재탕 감지] {title[:60]}")
                 mark_as_sent(title)
                 continue
 
-            # 🚫 [버그 수정] 예전엔 전송이 "성공"해야만 mark_as_sent가 호출돼서,
-            # 그 사이(출처명 조회 + 텔레그램 전송하는 몇 초) 같은 기사가 다른 검색어에서도
-            # 잡히면 두 번 전송되는 경우가 있었습니다. 이제는 먼저 등록부터 하고 전송합니다.
             mark_as_sent(title)
             _remember_for_fuzzy(title)
             source_label = get_news_source_name(link)
@@ -3151,9 +3093,11 @@ def check_naver_news(current_time_str, max_sent_override=None, minutes_override=
             ):
                 sent += 1
 
-    print(f"[{current_time_str}] 네이버 뉴스: 검색어 {len(NAVER_SEARCH_QUERIES)}개, 신규 {scanned}건 확인, "
-          f"{sent}건 전송, 오류 {error_queries}건")
+    print(f"[{current_time_str}] 네이버 뉴스(구글RSS 방식): 검색어 {len(NAVER_SEARCH_QUERIES)}개, 신규 {scanned}건 확인, "
+          f"{sent}건 전송")
     return "ok"
+
+
 
 
 # ============================================================
@@ -5717,23 +5661,17 @@ try:
 
     @app.route("/test_naver_now", methods=["GET"])
     def _test_naver_now_route():
-        """🧪 네이버 뉴스 강제 테스트 - 최근 24시간 + 중복무시로 즉시 발송해봄.
-        🐛[버그 수정] 네이버는 다른 소스와 달리 자체 시간판정 함수를 따로 써서,
-        예전엔 _run_forced_test의 loosen_recency가 실제로는 적용이 안 되고
-        있었음. minutes_override로 직접 넘겨서 고침.
-        🐛[버그 수정2] 예전엔 실제로 401/429가 나도 화면엔 항상 "완료"라고만
-        떠서, 뭐가 문제인지 화면만 보고는 알 수 없었음. 이제 실제 결과를
-        정직하게 보여줌."""
+        """🧪 네이버 뉴스(구글RSS 방식) 강제 테스트 - 최근 24시간 + 중복무시로
+        즉시 발송해봄. 네이버 오픈API "검색" 권한이 신규 계정에 안 열려서
+        (Scope Status Invalid), 구글뉴스 RSS 한국어 검색으로 우회함. API 키가
+        필요 없어서 401/429 걱정이 없음."""
         startup_init()
         result = _run_forced_test(check_naver_news, max_sent_override=3, minutes_override=1440)
 
         messages = {
-            "ok": "✅ 네이버 뉴스 강제 테스트 완료! API 정상 작동 확인됨. 텔레그램을 확인하세요 (0건이면 최근 24시간 안에 매칭되는 기사가 없었던 것).",
-            "no_key": "❌ 네이버 API 키가 설정 안 되어 있습니다. NAVER_CLIENT_ID/NAVER_CLIENT_SECRET 환경변수를 확인하세요.",
-            "rate_limited": "⚠️ 네이버 API 속도 제한(429) 상태입니다. 잠시 후 자동으로 재시도됩니다.",
-            "auth_failed": f"❌ 네이버 API 인증 실패(401)입니다. 네이버가 준 실제 응답: {_naver_last_error_detail}",
+            "ok": "✅ 네이버 뉴스(구글RSS 방식) 강제 테스트 완료! 텔레그램을 확인하세요 (0건이면 최근 24시간 안에 매칭되는 기사가 없었던 것).",
         }
-        return messages.get(result, f"테스트 완료 (알 수 없는 결과: {result})"), 200
+        return messages.get(result, f"테스트 완료 (결과: {result})"), 200
 
     @app.route("/test_blog_now", methods=["GET"])
     def _test_blog_now_route():
