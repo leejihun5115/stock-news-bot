@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-# 수정21 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정22 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정22] 🎛️ /panel 컨트롤 패널 추가 - 매번 주소 외워서 칠 필요 없이,
+#            이 페이지 하나에서 지금 뭐가 켜져있는지 보고 버튼 클릭으로
+#            바로 테스트 가능. https://<주소>/panel 로 접속.
 #   [수정21] 🧪 모든 소스별 즉시 테스트 라우트 추가 (총 12개):
 #            /test_domestic_news_now, /test_us_news_now, /test_dart_now,
 #            /test_telegram_now, /test_custom_sources_now, /test_naver_now,
@@ -5620,6 +5623,54 @@ try:
         if ok:
             return "아침 브리핑 발송 성공! 텔레그램을 확인하세요.", 200
         return "발송 실패 또는 지수 시세를 못 가져옴 (로그 확인 필요)", 200
+
+    @app.route("/panel", methods=["GET"])
+    def _panel_route():
+        """
+        🎛️ 컨트롤 패널 - 매번 주소를 외워서 치는 대신, 이 페이지 하나에서
+        지금 뭐가 켜져있는지 보고, 각 소스를 버튼 클릭으로 바로 테스트할 수
+        있게 함. /status + /test_XXX_now 링크 모음.
+        """
+        solo = os.environ.get("SOLO_MODE", "").strip().upper() or "(설정 안 함 - 전체 다 켜진 기본 모드)"
+
+        rows = []
+        test_routes = [
+            ("국내RSS", "/test_domestic_news_now", ENABLE_DOMESTIC_NEWS),
+            ("해외RSS", "/test_us_news_now", ENABLE_US_NEWS),
+            ("DART공시", "/test_dart_now", ENABLE_DART),
+            ("텔레그램1+2", "/test_telegram_now", ENABLE_TELEGRAM_CHANNELS),
+            ("약업/전자신문", "/test_custom_sources_now", ENABLE_CUSTOM_SOURCES),
+            ("네이버뉴스", "/test_naver_now", ENABLE_NAVER_NEWS),
+            ("분석블로그", "/test_blog_now", ENABLE_BLOG),
+            ("유튜브", "/test_youtube_now", ENABLE_YOUTUBE),
+            ("IPO알림", "/test_ipo_now", ENABLE_IPO_ALERTS),
+            ("일정리마인더", "/test_schedule_reminders_now", ENABLE_SCHEDULE_REMINDERS),
+            ("아침브리핑", "/test_briefing", ENABLE_MORNING_BRIEFING),
+            ("100점점수 샘플", "/test_score", True),
+        ]
+        for name, path, enabled in test_routes:
+            badge = "✅ 켜짐" if enabled else "⏸️ 꺼짐"
+            rows.append(
+                f"<tr><td>{badge} {name}</td>"
+                f"<td><a href='{path}' target='_blank' "
+                f"style='display:inline-block;padding:6px 14px;background:#2563eb;color:white;"
+                f"border-radius:6px;text-decoration:none;'>지금 테스트</a></td></tr>"
+            )
+
+        html_page = (
+            "<html><body style='font-family:sans-serif;max-width:600px;margin:20px auto;'>"
+            "<h2>🎛️ 뉴스봇 컨트롤 패널</h2>"
+            f"<p><b>현재 SOLO_MODE:</b> {solo}</p>"
+            f"<p><b>Firestore:</b> {'✅ 연결됨' if _firestore_client else '❌ 미연결(메모리 전용)'}</p>"
+            "<table border='1' cellpadding='8' style='border-collapse:collapse;width:100%;'>"
+            "<tr><th>소스</th><th>테스트</th></tr>"
+            + "".join(rows) + "</table>"
+            "<p style='margin-top:20px;'><a href='/status'>📋 상세 상태(/status) 보기</a></p>"
+            "<p style='color:gray;font-size:12px;'>버튼을 누르면 실제로 텔레그램에 메시지가 발송될 수 있습니다. "
+            "'⏸️ 꺼짐'인 소스도 버튼을 누르면 이번 한 번은 강제로 실행됩니다(SOLO_MODE와 무관하게 테스트 라우트는 항상 작동).</p>"
+            "</body></html>"
+        )
+        return html_page, 200
 
     @app.route("/status", methods=["GET"])
     def _status_route():
