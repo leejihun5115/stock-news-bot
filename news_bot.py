@@ -2766,8 +2766,8 @@ def check_naver_news(current_time_str):
         return
 
     headers = {
-        "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID.strip(),
-        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET.strip(),
+        "X-Naver-Client-Id": NAVER_CLIENT_ID.strip(),
+        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET.strip(),
     }
 
     scanned = 0
@@ -2781,9 +2781,9 @@ def check_naver_news(current_time_str):
 
         try:
             res = requests.get(
-                "https://naverapihub.apigw.ntruss.com/search/v1/news",
+                "https://openapi.naver.com/v1/search/news.json",
                 headers=headers,
-                params={"query": query, "display": 20, "start": 1, "sort": "date", "format": "json"},
+                params={"query": query, "display": 20, "start": 1, "sort": "date"},
                 timeout=10,
             )
         except requests.RequestException as e:
