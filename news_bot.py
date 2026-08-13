@@ -1,6 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-# 수정27 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정29 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정29] 🐛 /test_naver_now가 실제로 401/429가 나도 화면엔 항상 "완료"
+#            라고만 떠서, 뭐가 문제인지 화면만 보고는 알 수 없던 문제 수정.
+#            이제 check_naver_news가 상태("ok"/"no_key"/"rate_limited"/
+#            "auth_failed")를 반환하고, 화면에 정확한 원인을 보여줌.
+#   [수정28] 🐛 네이버뉴스 전용 버그 수정 - is_recent_naver_item이 다른 소스와
+#            달리 별도 함수라서, /test_naver_now의 "24시간까지 넓히기"가 실제로
+#            안 먹히고 있었음. minutes_override로 진짜 반영되게 고침.
+#            + 테스트 모드일 땐 쿼리 사이 대기시간도 1초→0.2초로 줄여서 응답
+#            속도 개선 (34개 검색어 다 훑어도 약 7초).
 #   [수정27] 🎯 SOLO_MODE에 콤마로 여러 개 나열 가능해짐 - 예:
 #            SOLO_MODE=US_NEWS,DART 로 넣으면 해외RSS+아침브리핑+DART공시가
 #            동시에 켜지고 나머지는 자동으로 꺼짐 (예전엔 딱 하나만 가능했음).
@@ -2901,14 +2910,15 @@ def check_us_news(current_time_str, max_sent_override=None):
 # ============================================================
 # 네이버 뉴스검색 API
 # ============================================================
-def is_recent_naver_item(pub_date_str):
-    """네이버 뉴스 테스트 범위: 최근 60분(1시간)."""
+def is_recent_naver_item(pub_date_str, minutes=60):
+    """네이버 뉴스 시간 판정. 기본은 최근 60분이지만, 테스트할 때는 minutes를
+    크게 넘겨서(예: 1440=24시간) 더 넉넉하게 볼 수 있음."""
     if not pub_date_str:
         return True
     try:
         article_time = parsedate_to_datetime(pub_date_str).replace(tzinfo=None)
         diff_minutes = (datetime.datetime.now() - article_time).total_seconds() / 60
-        return 0 <= diff_minutes <= 60
+        return 0 <= diff_minutes <= minutes
     except Exception:
         return True
 
@@ -2987,19 +2997,21 @@ def get_news_source_name(link):
 _naver_auth_error_reported = False
 _naver_rate_limit_until = 0.0
 
-def check_naver_news(current_time_str, max_sent_override=None):
-    """네이버 API 오류가 나도 봇 전체가 흔들리지 않도록 인증/속도제한을 별도 처리."""
+def check_naver_news(current_time_str, max_sent_override=None, minutes_override=None):
+    """네이버 API 오류가 나도 봇 전체가 흔들리지 않도록 인증/속도제한을 별도 처리.
+    반환값: "ok" / "no_key" / "rate_limited" / "auth_failed" - 테스트 라우트가
+    정확한 상태를 사용자에게 보여줄 수 있도록 문자열로 알려줌."""
     global _naver_auth_error_reported, _naver_rate_limit_until
 
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         if not _naver_auth_error_reported:
             print(f"[{current_time_str}] 네이버 뉴스: API 키가 없어 일시 중지합니다. 키를 넣으면 다음 실행부터 자동 재개됩니다.")
             _naver_auth_error_reported = True
-        return
+        return "no_key"
 
     now_ts = time.time()
     if now_ts < _naver_rate_limit_until:
-        return
+        return "rate_limited"
 
     headers = {
         "X-Naver-Client-Id": NAVER_CLIENT_ID.strip(),
@@ -3010,12 +3022,16 @@ def check_naver_news(current_time_str, max_sent_override=None):
     sent = 0
     error_queries = 0
 
+    # 🧪 테스트 모드(max_sent_override 지정됨)일 땐 응답을 빨리 받는 게 목적이라
+    # 요청 사이 대기시간을 짧게 줄임 (평소엔 네이버 API 부담을 줄이려고 1초).
+    sleep_interval = 0.2 if max_sent_override else 1.0
+
     for idx, query in enumerate(NAVER_SEARCH_QUERIES):
         if max_sent_override and sent >= max_sent_override:
             break
         # 한꺼번에 30여 건을 쏘지 않도록 요청 사이에 간격을 둔다.
         if idx:
-            time.sleep(1.0)
+            time.sleep(sleep_interval)
 
         try:
             res = requests.get(
@@ -3034,7 +3050,7 @@ def check_naver_news(current_time_str, max_sent_override=None):
             if not _naver_auth_error_reported:
                 print(f"[{current_time_str}] 네이버 뉴스: API 인증 실패(401) → 네이버 키를 교체하면 다음 실행부터 정상 재개됩니다.")
                 _naver_auth_error_reported = True
-            return
+            return "auth_failed"
 
         if res.status_code == 429:
             retry_after = res.headers.get("Retry-After", "60")
@@ -3044,7 +3060,7 @@ def check_naver_news(current_time_str, max_sent_override=None):
                 wait_sec = 60
             _naver_rate_limit_until = time.time() + wait_sec
             print(f"[{current_time_str}] 네이버 뉴스: 요청 속도 제한(429) → {wait_sec}초 후 자동 재시도합니다.")
-            return
+            return "rate_limited"
 
         if res.status_code != 200:
             error_queries += 1
@@ -3074,7 +3090,7 @@ def check_naver_news(current_time_str, max_sent_override=None):
             if is_blocked_title(title):  # 🧹 삭제어 포함 시 무조건 차단
                 mark_as_sent(title)
                 continue
-            if not is_recent_naver_item(pub_date):
+            if not is_recent_naver_item(pub_date, minutes=minutes_override or 60):
                 continue
 
             scanned += 1
@@ -3108,6 +3124,7 @@ def check_naver_news(current_time_str, max_sent_override=None):
 
     print(f"[{current_time_str}] 네이버 뉴스: 검색어 {len(NAVER_SEARCH_QUERIES)}개, 신규 {scanned}건 확인, "
           f"{sent}건 전송, 오류 {error_queries}건")
+    return "ok"
 
 
 # ============================================================
@@ -5608,7 +5625,7 @@ try:
         _recent_titles_for_fuzzy.clear()
 
         try:
-            fn(datetime.datetime.now().strftime("%H:%M:%S"), **fn_kwargs)
+            return fn(datetime.datetime.now().strftime("%H:%M:%S"), **fn_kwargs)
         finally:
             if loosen_recency:
                 globals()["is_recent_article"] = original_is_recent
@@ -5671,10 +5688,23 @@ try:
 
     @app.route("/test_naver_now", methods=["GET"])
     def _test_naver_now_route():
-        """🧪 네이버 뉴스 강제 테스트 - 중복무시로 즉시 발송해봄."""
+        """🧪 네이버 뉴스 강제 테스트 - 최근 24시간 + 중복무시로 즉시 발송해봄.
+        🐛[버그 수정] 네이버는 다른 소스와 달리 자체 시간판정 함수를 따로 써서,
+        예전엔 _run_forced_test의 loosen_recency가 실제로는 적용이 안 되고
+        있었음. minutes_override로 직접 넘겨서 고침.
+        🐛[버그 수정2] 예전엔 실제로 401/429가 나도 화면엔 항상 "완료"라고만
+        떠서, 뭐가 문제인지 화면만 보고는 알 수 없었음. 이제 실제 결과를
+        정직하게 보여줌."""
         startup_init()
-        _run_forced_test(check_naver_news, max_sent_override=3)
-        return "네이버 뉴스 강제 테스트 완료! 텔레그램을 확인하세요 (401 오류면 네이버 키 문제입니다).", 200
+        result = _run_forced_test(check_naver_news, max_sent_override=3, minutes_override=1440)
+
+        messages = {
+            "ok": "✅ 네이버 뉴스 강제 테스트 완료! API 정상 작동 확인됨. 텔레그램을 확인하세요 (0건이면 최근 24시간 안에 매칭되는 기사가 없었던 것).",
+            "no_key": "❌ 네이버 API 키가 설정 안 되어 있습니다. NAVER_CLIENT_ID/NAVER_CLIENT_SECRET 환경변수를 확인하세요.",
+            "rate_limited": "⚠️ 네이버 API 속도 제한(429) 상태입니다. 잠시 후 자동으로 재시도됩니다.",
+            "auth_failed": "❌ 네이버 API 인증 실패(401)입니다. developers.naver.com에서 발급받은 키가 맞는지, 해당 앱에 '검색' API가 추가되어 있는지 확인하세요.",
+        }
+        return messages.get(result, f"테스트 완료 (알 수 없는 결과: {result})"), 200
 
     @app.route("/test_blog_now", methods=["GET"])
     def _test_blog_now_route():
