@@ -1,6 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-# 수정19 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정21 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정21] 🧪 모든 소스별 즉시 테스트 라우트 추가 (총 12개):
+#            /test_domestic_news_now, /test_us_news_now, /test_dart_now,
+#            /test_telegram_now, /test_custom_sources_now, /test_naver_now,
+#            /test_blog_now, /test_youtube_now, /test_ipo_now,
+#            /test_schedule_reminders_now, /test_briefing, /test_score
+#            각각 "이미본것 무시 + (해당하면) 최근 24시간까지 허용"으로 즉시
+#            강제 발송해보고, 끝나면 자동으로 원래 상태 복구됨.
+#   [수정20] KRX 상장법인 목록 조회 실패 시 진단 로그 강화 (응답코드/길이/
+#            앞부분 출력) + Referer 헤더 추가. 다음 로그로 정확한 실패 원인
+#            파악 예정 (계속 실패하는 상태 - 대안 필요할 수도 있음).
 #   [수정19] 지분변동 공시에 "몇 주"까지 추가 - 이제 "누가 몇주 몇%" 전부
 #            근거로 표시됨. (공급계약은 이미 [요점]에서 매출액 대비 비율로
 #            근거 제시하고 있음 - 별도 수정 불필요, 기존 기능이 이미 담당)
@@ -2225,12 +2235,22 @@ def fetch_krx_company_names():
     """
     url = "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13"
     try:
-        res = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=15)
+        # 🩺 일부 사이트는 Referer가 없으면 봇으로 보고 차단/다른 응답을 줌 -
+        # 실제 브라우저처럼 보이도록 Referer도 같이 보냄
+        res = requests.get(
+            url,
+            headers={"User-Agent": USER_AGENT, "Referer": "https://kind.krx.co.kr/corpgeneral/corpList.do"},
+            timeout=15,
+        )
         res.encoding = "euc-kr"
         soup = BeautifulSoup(res.text, "html.parser")
         table = soup.find("table")
         if not table:
-            print("⚠️ KRX 상장법인 목록: 표를 찾지 못했습니다. (사이트 구조가 바뀌었을 수 있음)")
+            # 🩺 진단 정보를 최대한 남겨서, 다음 로그에서 "왜 실패했는지"
+            # (차단됐는지/구조가 바뀌었는지/빈 응답인지) 바로 알 수 있게 함
+            snippet = res.text[:300].replace("\n", " ").strip()
+            print(f"⚠️ KRX 상장법인 목록: 표를 찾지 못했습니다. "
+                  f"(status={res.status_code}, 응답길이={len(res.text)}자, 앞부분='{snippet}')")
             return set(), {}
 
         names = set()
@@ -3892,11 +3912,11 @@ def _extract_ipo_info(text):
     return offering_price, market, industry
 
 
-def check_ipo_listings(current_time_str):
+def check_ipo_listings(current_time_str, bgn_date_override=None):
     """DART 투자설명서 공시를 훑어서, 내일 상장 예정인 종목이 있으면 알림."""
     if not DART_API_KEY:
         return
-    today_str = datetime.datetime.now().strftime("%Y%m%d")
+    today_str = bgn_date_override or datetime.datetime.now().strftime("%Y%m%d")
     tomorrow = datetime.date.today() + datetime.timedelta(days=1)
 
     try:
@@ -5468,6 +5488,35 @@ try:
 
         return "해외뉴스 강제 테스트 완료! 텔레그램을 확인하세요 (0건이었다면 로그의 원본 건수를 확인해주세요).", 200
 
+    def _run_forced_test(fn, loosen_recency=False, **fn_kwargs):
+        """
+        🧪 공용 강제테스트 실행기 - 모든 /test_XXX_now 라우트가 공통으로 씀.
+        "이미 봤다"고 기록된 걸 이번만 비우고(끝나면 복구), 필요하면 "최근
+        60분" 기준도 "최근 24시간"으로 느슨하게 바꿔서(끝나면 복구) fn을
+        한 번 실행합니다.
+        """
+        original_is_recent = None
+        if loosen_recency:
+            original_is_recent = globals()["is_recent_article"]
+            def _loose(entry, minutes=60, default_if_unknown=True):
+                return original_is_recent(entry, minutes=1440, default_if_unknown=default_if_unknown)
+            globals()["is_recent_article"] = _loose
+
+        backup_sent = set(sent_news_titles)
+        backup_fuzzy = list(_recent_titles_for_fuzzy)
+        sent_news_titles.clear()
+        _recent_titles_for_fuzzy.clear()
+
+        try:
+            fn(datetime.datetime.now().strftime("%H:%M:%S"), **fn_kwargs)
+        finally:
+            if loosen_recency:
+                globals()["is_recent_article"] = original_is_recent
+            sent_news_titles.clear()
+            sent_news_titles.update(backup_sent)
+            _recent_titles_for_fuzzy.clear()
+            _recent_titles_for_fuzzy.extend(backup_fuzzy)
+
     @app.route("/test_dart_now", methods=["GET"])
     def _test_dart_now_route():
         """
@@ -5493,6 +5542,70 @@ try:
             sent_news_titles.update(backup_sent_titles)
 
         return "DART 공시 강제 테스트 완료! 텔레그램을 확인하세요 (0건이었다면 로그의 신규/강한재료 건수를 확인해주세요).", 200
+
+    @app.route("/test_domestic_news_now", methods=["GET"])
+    def _test_domestic_news_now_route():
+        """🧪 국내 RSS 강제 테스트 - 최근 24시간 + 중복무시로 즉시 발송해봄."""
+        startup_init()
+        _run_forced_test(check_domestic_news, loosen_recency=True)
+        return "국내RSS 강제 테스트 완료! 텔레그램을 확인하세요.", 200
+
+    @app.route("/test_telegram_now", methods=["GET"])
+    def _test_telegram_now_route():
+        """🧪 텔레그램1(필터)+2(무조건) 채널 강제 테스트 - 중복무시로 즉시 발송해봄."""
+        startup_init()
+        _run_forced_test(check_telegram_channels)
+        _run_forced_test(check_telegram_channels_unfiltered)
+        return "텔레그램 채널 강제 테스트 완료! 텔레그램을 확인하세요.", 200
+
+    @app.route("/test_custom_sources_now", methods=["GET"])
+    def _test_custom_sources_now_route():
+        """🧪 약업신문/전자신문 강제 테스트 - 중복무시로 즉시 발송해봄."""
+        startup_init()
+        _run_forced_test(check_custom_sources)
+        return "약업신문/전자신문 강제 테스트 완료! 텔레그램을 확인하세요.", 200
+
+    @app.route("/test_naver_now", methods=["GET"])
+    def _test_naver_now_route():
+        """🧪 네이버 뉴스 강제 테스트 - 중복무시로 즉시 발송해봄."""
+        startup_init()
+        _run_forced_test(check_naver_news)
+        return "네이버 뉴스 강제 테스트 완료! 텔레그램을 확인하세요 (401 오류면 네이버 키 문제입니다).", 200
+
+    @app.route("/test_blog_now", methods=["GET"])
+    def _test_blog_now_route():
+        """🧪 분석 블로그 강제 테스트 - 최근 24시간 + 중복무시로 즉시 발송해봄."""
+        startup_init()
+        _run_forced_test(check_blogs, loosen_recency=True)
+        return "분석 블로그 강제 테스트 완료! 텔레그램을 확인하세요.", 200
+
+    @app.route("/test_youtube_now", methods=["GET"])
+    def _test_youtube_now_route():
+        """🧪 유튜브 강제 테스트 - 채널ID를 아직 못 가져왔으면 먼저 가져오고,
+        최근 24시간 + 중복무시로 즉시 발송해봄."""
+        startup_init()
+        if not YOUTUBE_CHANNEL_RSS_URLS:
+            resolve_all_youtube_channels()
+        _run_forced_test(check_youtube, loosen_recency=True)
+        return "유튜브 강제 테스트 완료! 텔레그램을 확인하세요.", 200
+
+    @app.route("/test_ipo_now", methods=["GET"])
+    def _test_ipo_now_route():
+        """🧪 신규상장(IPO) 알림 강제 테스트 - "오늘 날짜"만 보던 걸 "어제부터"로
+        넓히고, 중복무시로 즉시 발송해봄."""
+        startup_init()
+        yesterday_str = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
+        _run_forced_test(check_ipo_listings, bgn_date_override=yesterday_str)
+        return "IPO 알림 강제 테스트 완료! 텔레그램을 확인하세요 (내일 상장 예정 종목이 없으면 0건이 정상).", 200
+
+    @app.route("/test_schedule_reminders_now", methods=["GET"])
+    def _test_schedule_reminders_now_route():
+        """🧪 일정 D-7/D-3 리마인더 테스트 - Firestore에 저장된 기존 일정 중
+        오늘 알림 보낼 게 있는지 즉시 확인해봄 (강제로 새 데이터를 만들진
+        않음 - 실제로 저장된 일정이 있어야 뭔가 옵니다)."""
+        startup_init()
+        check_upcoming_schedule_reminders(datetime.datetime.now().strftime("%H:%M:%S"))
+        return "일정 리마인더 체크 완료! (Firestore에 D-7/D-3 해당하는 일정이 있어야 발송됩니다. 없으면 0건이 정상)", 200
 
     @app.route("/test_briefing", methods=["GET"])
     def _test_briefing_route():
