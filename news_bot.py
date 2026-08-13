@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-# 수정30 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정31 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정31] 🩺 네이버 401 진단 강화 - 지금까지는 "401이다"까지만 알 수
+#            있었는데, 이제 네이버가 실제로 보내는 응답 본문(errorCode/
+#            errorMessage)까지 /test_naver_now 화면에 그대로 보여줌. 키가
+#            틀린 건지, IP제한인지, 다른 사유인지 이제 정확히 알 수 있음.
 #   [수정30] 네이버 검색어 34개→51개로 확장. 누락됐던 대기업 그룹명(네이버/
 #            카카오/두산/한화/HD현대/LS) 추가 + 산업 테마 키워드(반도체/HBM/
 #            이차전지/AI반도체/로봇/방산/원전/조선/바이오/양자컴퓨팅/우주항공)
@@ -3017,12 +3021,13 @@ def get_news_source_name(link):
 
 _naver_auth_error_reported = False
 _naver_rate_limit_until = 0.0
+_naver_last_error_detail = ""  # 🩺 401/기타 오류 시 네이버가 준 실제 응답 본문을 저장해서, 테스트 화면에도 바로 보여줄 수 있게 함
 
 def check_naver_news(current_time_str, max_sent_override=None, minutes_override=None):
     """네이버 API 오류가 나도 봇 전체가 흔들리지 않도록 인증/속도제한을 별도 처리.
     반환값: "ok" / "no_key" / "rate_limited" / "auth_failed" - 테스트 라우트가
     정확한 상태를 사용자에게 보여줄 수 있도록 문자열로 알려줌."""
-    global _naver_auth_error_reported, _naver_rate_limit_until
+    global _naver_auth_error_reported, _naver_rate_limit_until, _naver_last_error_detail
 
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         if not _naver_auth_error_reported:
@@ -3067,9 +3072,12 @@ def check_naver_news(current_time_str, max_sent_override=None, minutes_override=
             continue
 
         if res.status_code == 401:
+            # 🩺 매번 발생시마다 최신 오류 본문으로 갱신 (테스트 라우트가 읽어서 화면에 보여줌)
+            _naver_last_error_detail = res.text[:300]
             # 인증키가 잘못된 상태에서 검색어마다 401을 반복 출력하지 않는다.
             if not _naver_auth_error_reported:
-                print(f"[{current_time_str}] 네이버 뉴스: API 인증 실패(401) → 네이버 키를 교체하면 다음 실행부터 정상 재개됩니다.")
+                print(f"[{current_time_str}] 네이버 뉴스: API 인증 실패(401) → 네이버 키를 교체하면 다음 실행부터 정상 재개됩니다. "
+                      f"(네이버 응답 본문: {res.text[:300]})")
                 _naver_auth_error_reported = True
             return "auth_failed"
 
@@ -5723,7 +5731,7 @@ try:
             "ok": "✅ 네이버 뉴스 강제 테스트 완료! API 정상 작동 확인됨. 텔레그램을 확인하세요 (0건이면 최근 24시간 안에 매칭되는 기사가 없었던 것).",
             "no_key": "❌ 네이버 API 키가 설정 안 되어 있습니다. NAVER_CLIENT_ID/NAVER_CLIENT_SECRET 환경변수를 확인하세요.",
             "rate_limited": "⚠️ 네이버 API 속도 제한(429) 상태입니다. 잠시 후 자동으로 재시도됩니다.",
-            "auth_failed": "❌ 네이버 API 인증 실패(401)입니다. developers.naver.com에서 발급받은 키가 맞는지, 해당 앱에 '검색' API가 추가되어 있는지 확인하세요.",
+            "auth_failed": f"❌ 네이버 API 인증 실패(401)입니다. 네이버가 준 실제 응답: {_naver_last_error_detail}",
         }
         return messages.get(result, f"테스트 완료 (알 수 없는 결과: {result})"), 200
 
