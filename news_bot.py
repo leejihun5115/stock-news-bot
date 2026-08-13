@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-# 수정29 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정30 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정30] 네이버 검색어 34개→51개로 확장. 누락됐던 대기업 그룹명(네이버/
+#            카카오/두산/한화/HD현대/LS) 추가 + 산업 테마 키워드(반도체/HBM/
+#            이차전지/AI반도체/로봇/방산/원전/조선/바이오/양자컴퓨팅/우주항공)
+#            신설. 테마 키워드는 GLOBAL_AND_DOMESTIC_GIANTS(다른 곳의 점수
+#            계산에도 쓰이는 목록)를 오염시키지 않도록 별도 목록으로 분리해서
+#            네이버 검색어에서만 합침.
 #   [수정29] 🐛 /test_naver_now가 실제로 401/429가 나도 화면엔 항상 "완료"
 #            라고만 떠서, 뭐가 문제인지 화면만 보고는 알 수 없던 문제 수정.
 #            이제 check_naver_news가 상태("ok"/"no_key"/"rate_limited"/
@@ -776,11 +782,26 @@ def is_blocked_title(title):
 
 
 GLOBAL_AND_DOMESTIC_GIANTS = [
+    # 국내 대기업 그룹
     "삼성", "SK", "LG", "현대", "기아", "포스코", "에코프로", "셀트리온", "한미반도체",
+    # 🆕 누락돼있던 주요 그룹명 추가 (KOREAN_GROUP_NAMES엔 있었는데 검색어에서 빠져있었음)
+    "네이버", "카카오", "두산", "한화", "HD현대", "LS",
+    # 해외 빅테크/반도체
     "엔비디아", "테슬라", "애플", "마이크로소프트", "구글", "아마존", "메타",
     "AMD", "ASML", "TSMC", "인텔", "마이크론", "넷플릭스", "오픈AI",
     "팔란티어", "브로드컴", "퀄컴",
+    # 인물
     "트럼프", "바이든", "파월", "젠슨 황", "일론 머스크", "정의선", "이재용", "이재명",
+]
+
+# 🆕 네이버 뉴스 검색 전용 테마 키워드 - GLOBAL_AND_DOMESTIC_GIANTS(=UNIQUE_GIANTS)에
+# 섞으면 안 됨! UNIQUE_GIANTS는 다른 곳(has_global_company_here, giant_hits 등)에서
+# "회사/인물 언급"으로 취급되기 때문에, "반도체"/"HBM" 같은 산업 테마 단어를 거기
+# 섞으면 theme_only_keywords_1 계산 등이 오염됨. 그래서 네이버 검색어 조합
+# (NAVER_SEARCH_QUERIES)에서만 별도로 합쳐서 씀.
+NAVER_EXTRA_THEME_QUERIES = [
+    "반도체", "HBM", "이차전지", "AI 반도체", "로봇", "방산", "원전",
+    "조선", "바이오", "양자컴퓨팅", "우주항공",
 ]
 
 UNIQUE_KEYWORDS_1 = set(KEYWORDS_1)
@@ -995,7 +1016,7 @@ US_RSS_URLS = [
     _google_news_rss_url("테슬라 엔비디아 마이크론 애플 아마존 급등 급락", korean=True),
 ]
 
-NAVER_SEARCH_QUERIES = GLOBAL_AND_DOMESTIC_GIANTS
+NAVER_SEARCH_QUERIES = GLOBAL_AND_DOMESTIC_GIANTS + NAVER_EXTRA_THEME_QUERIES
 
 # ============================================================
 # 🌅 아침 브리핑 - 한국장 열리기 전, 미국 지수/주요종목 시세로 오늘 시황 요약
