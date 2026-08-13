@@ -1,19 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-# 🌏 [해외 전용 봇] news_bot.py(메인 봇, 수정6 기준)를 통째로 복사해서,
-#    run_once()/main()에서 해외RSS + 아침브리핑만 남기고 나머지(국내RSS,
-#    텔레그램, 약업전자신문, DART공시, 네이버뉴스, 분석블로그, 유튜브)는
-#    "삭제"가 아니라 "주석 처리"만 해뒀습니다.
-#    ⚠️ 나중에 메인 봇과 다시 합치고 싶으면, run_once()/main()/startup_init()
-#       안의 주석(#)만 풀면 원래 코드가 그대로 살아있어서 바로 복원됩니다.
-#    이 파일 자체에 새로 손댄 부분은 이 파일에서만 관리하고, 메인 봇에는
-#    영향 없습니다(완전히 독립된 별도 배포).
-#
-# 수정6 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다.
+# 수정11 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정10] 해외뉴스/아침브리핑을 별도 텔레그램 채팅방(CHAT_ID_OVERSEAS)으로 분리 발송 가능
+#   [수정11] 🎛️ 기능별 ON/OFF 스위치 추가 (ENABLE_DOMESTIC_NEWS, ENABLE_US_NEWS,
+#            ENABLE_DART 등). Render 환경변수로 "이번엔 해외뉴스만 켜서 검증",
+#            "이번엔 DART만 켜서 검증" 식으로 한 파일 안에서 부분별로 테스트
+#            가능. 환경변수 안 건드리면 전부 켜진 기존 상태 그대로 유지됨.
 #   ⚠️ 앞으로 수정할 때마다 이 번호를 올리고, 무엇이 바뀌었는지 여기 한 줄씩
 #      추가해주세요. 다른 AI/도구로 고친 파일을 다시 합칠 때는, 이 번호가
 #      낮으면(예: 수정2, 수정3) "예전 버전"이라는 뜻이니 절대 이걸로 덮어쓰지
 #      말고, 먼저 어느 버전이 최신인지부터 확인하세요.
+#
+#   ⚠️⚠️ 중요: "해외시황 전용 봇"(국내RSS/DART/텔레그램 등 대부분 기능이
+#      꺼진 가벼운 버전)은 이 파일과 절대 같은 저장소에 올리면 안 됩니다!
+#      실수로 한 번 이 파일이 해외전용판으로 덮어써졌다가 복구한 적이
+#      있습니다 - 해외시황 봇은 반드시 "새로운, 별도의" GitHub 저장소를
+#      만들어서 거기에만 올려주세요.
 #
 #   [수정2] 약업/전자신문 중복버그, 해외뉴스 테마연결, 실적발표 구조화,
 #           IPO 알림, 일정 D-7/D-3 리마인더, 아침 브리핑, 진단로그,
@@ -24,6 +26,9 @@
 #   [수정5] 네이버 뉴스 API를 NCP 방식 → developers.naver.com 오픈API 방식으로 수정
 #   [수정6] RSS를 requests로 먼저 가져온 뒤 feedparser에 넘기는 방식으로 통일
 #           (_fetch_rss_feed 공용함수) - 인코딩 선언 불일치로 인한 파싱 실패 감소
+#   [수정7] 국내/해외/텔레그램 뉴스 판정 조건 완화 (AND→OR, matched_count 2→1)
+#   [수정8] 반기/사업/분기보고서 등 대형 DART 문서 타임아웃 15초→30초로 연장
+#   [수정9] 해외시황 전용 파일이 실수로 이 파일을 덮어썼던 사고 이후 복구
 #
 주식/공시 및 외부 텔레그램 채널 수신/중계 알림 봇 (최종 완성본)
 
@@ -99,6 +104,41 @@ def print(*args, **kwargs):
 # ============================================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
+# 🌏 해외뉴스/아침브리핑을 별도 채팅방으로 보내고 싶으면 이 환경변수를 설정.
+# 설정 안 하면(빈 값이면) 기존처럼 메인 CHAT_ID로 그대로 감 - 안 건드리면 안전.
+CHAT_ID_OVERSEAS = os.environ.get("CHAT_ID_OVERSEAS", "") or CHAT_ID
+
+
+# ============================================================
+# 🎛️ 기능별 ON/OFF 스위치
+# ------------------------------------------------------------
+# 한 파일 안에서, "이번엔 해외뉴스만 켜서 완성될 때까지 고치고, 그 다음엔
+# 해외뉴스 끄고 DART공시만 켜서 고치고..." 이런 식으로 부분별로 하나씩
+# 검증하고 싶을 때 씀. 전부 True로 두면 지금까지처럼 다 켜진 원래 봇 그대로.
+#
+# 🔧 Render 환경변수로 켜고 끕니다 (코드를 안 고쳐도 됨):
+#   ENABLE_US_NEWS=true, ENABLE_DOMESTIC_NEWS=false, ... 이런 식으로 설정.
+#   환경변수를 안 넣으면 기본값(아래 default)을 따름 - 기본값은 전부 True라서,
+#   아무것도 안 건드리면 지금까지와 완전히 동일하게 작동합니다.
+# ============================================================
+def _env_flag(name, default=True):
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("true", "1", "yes", "on")
+
+
+ENABLE_DOMESTIC_NEWS = _env_flag("ENABLE_DOMESTIC_NEWS")         # 국내 RSS
+ENABLE_US_NEWS = _env_flag("ENABLE_US_NEWS")                     # 해외 RSS
+ENABLE_MORNING_BRIEFING = _env_flag("ENABLE_MORNING_BRIEFING")   # 아침 브리핑(해외지수/테마)
+ENABLE_TELEGRAM_CHANNELS = _env_flag("ENABLE_TELEGRAM_CHANNELS") # 텔레그램1(필터)+2(무조건)
+ENABLE_CUSTOM_SOURCES = _env_flag("ENABLE_CUSTOM_SOURCES")       # 약업신문/전자신문
+ENABLE_DART = _env_flag("ENABLE_DART")                           # DART 공시
+ENABLE_NAVER_NEWS = _env_flag("ENABLE_NAVER_NEWS")               # 네이버 뉴스
+ENABLE_BLOG = _env_flag("ENABLE_BLOG")                           # 분석 블로그
+ENABLE_YOUTUBE = _env_flag("ENABLE_YOUTUBE")                     # 유튜브
+ENABLE_SCHEDULE_REMINDERS = _env_flag("ENABLE_SCHEDULE_REMINDERS")  # 일정 D-7/D-3 리마인더
+ENABLE_IPO_ALERTS = _env_flag("ENABLE_IPO_ALERTS")               # 신규상장(IPO) 알림
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
 NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
 NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
@@ -494,9 +534,7 @@ BLOCKED_KEYWORDS_BY_CATEGORY = {
         "추천", "추천종목", "추천주", "주간추천종목", "주간추천주", "장마감후종목뉴스",
         "증권거래현황", "증권사별", "주간업종등락률", "투자記", "투자자별", "투자주체",
         "투자주체를", "현재가", "꺾고", "'上'진입", "놓치면", "즐기세요",
-        "아듀", "증시일정",
-        # 🌏 [해외시황 전용 봇] "시황"은 원래 여기 삭제어로 있었지만, 이 봇 자체가
-        # "해외시황"을 다루는 봇이라 핵심 단어를 막으면 안 되므로 제거했습니다.
+        "아듀", "시황", "증시일정",
     ],
     # 🧹 지역·지자체 행정
     "🧹 지역·지자체 행정": [
@@ -1721,7 +1759,11 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
                          is_feature, is_us_market, is_disclosure=False, is_rumor=False,
                          custom_source="", source_label="", highlight_suffix="",
                          show_link_below=False, image_url="", novelty="신규", novelty_note=None,
-                         related_theme=None, earnings_info=None):
+                         related_theme=None, earnings_info=None, target_chat_id=None):
+    # 🌏 별도 채팅방(예: 해외전용)으로 보내고 싶으면 target_chat_id를 지정.
+    # 안 넘기면 기존처럼 메인 CHAT_ID로 감 - 다른 호출부는 전혀 안 바뀜.
+    target_chat_id = target_chat_id or CHAT_ID
+
     # 🔒 링크가 http(비보안)로 넘어오면 https로 자동 승격. 텔레그램은 http 링크에
     # (버튼이든 텍스트든) "이 링크를 열까요?" 보안 확인창을 띄우는 경우가 있어서,
     # 여기서 한 번 더 안전하게 막아줌 - 소스 목록에 또 http가 실수로 들어가도
@@ -1981,14 +2023,14 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         req_url = f"https://api.telegram.org/bot{BOT_TOKEN}/{endpoint}"
         if as_photo:
             req_payload = {
-                "chat_id": CHAT_ID,
+                "chat_id": target_chat_id,
                 "photo": image_url,
                 "caption": text_content,
                 "parse_mode": "HTML",
             }
         else:
             req_payload = {
-                "chat_id": CHAT_ID,
+                "chat_id": target_chat_id,
                 "text": text_content,
                 "parse_mode": "HTML",
             }
@@ -2573,7 +2615,7 @@ def send_morning_briefing():
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
-        "chat_id": CHAT_ID,
+        "chat_id": CHAT_ID_OVERSEAS,  # 🌏 해외뉴스와 같은 채팅방으로
         "text": text,
         "link_preview_options": {"is_disabled": True},
     }
@@ -2650,12 +2692,18 @@ def check_us_news(current_time_str):
             is_breaking = "속보" in title or any(w in title_lower for w in US_BREAKING_WORDS)
             is_feature = "특징주" in title or any(w in title_lower for w in US_FEATURE_STOCK_WORDS)
 
-            # 🌏 [해외시황 전용 봇] 조건 없이 최대한 다 통과시킴 - 매크로/매칭개수/
-            # 테마감지 같은 조건을 아예 안 봄. 이미 위에서 걸러진 것(삭제어 포함,
-            # 너무 오래된 기사, 이미 보낸 것)만 빼면 나머지는 전부 전송.
+            # 🔗 테마/실적발표 판정을 should_send 결정 "전"에 미리 해둠 - "beats
+            # estimates"처럼 급등락 단어 없이 실적 얘기만 하는 제목도, 관련 테마·
+            # 기업이 식별되면 그 자체로 보낼 이유가 되도록 함(막연한 "실적시즌"
+            # 총평 기사까지 다 보내면 스팸이 되니, 테마/기업이 잡힐 때만 인정).
             related_theme = _detect_theme_from_text(title)
             earnings_info = _extract_earnings_info(title)
-            should_send = True  # ✏️[해외시황 전용] 조건 전부 해제 - 무조건 통과
+            is_earnings_worth_sending = earnings_info[0] and (related_theme or resolved_companies)
+
+            should_send = (
+                has_macro_word or matched_count >= 1 or is_breaking or is_feature  # ✏️[완화] 2→1
+                or bool(resolved_companies) or is_earnings_worth_sending
+            )
 
             if not should_send:
                 mark_as_sent(title)
@@ -2676,6 +2724,7 @@ def check_us_news(current_time_str):
                 False, is_breaking, is_feature, True,
                 novelty=novelty, novelty_note=novelty_note,
                 related_theme=related_theme, earnings_info=earnings_info,
+                target_chat_id=CHAT_ID_OVERSEAS,  # 🌏 별도 채팅방으로 보냄(설정 안 했으면 메인과 동일)
             )
             sent += 1
 
@@ -5041,31 +5090,62 @@ def initialize_existing_dart_disclosures():
 # 🖥️ 로컬 실행용 (내 컴퓨터에서 python news_bot.py 로 직접 돌릴 때)
 # ============================================================
 def main():
-    print("🚀 해외뉴스 전용 봇을 시작합니다... (로컬 상시실행 모드)")
+    print("🚀 뉴스/공시 및 외부 텔레그램 연동 봇을 시작합니다... (로컬 상시실행 모드)")
+    print("🧪 뉴스 테스트 검색 범위: 최근 60분(1시간)")
 
     startup_init()
 
     now = datetime.datetime.now()
-    last_rss = now
+    last_rss = last_custom = last_tg_channel = last_tg_unfiltered = last_dart = last_naver = last_blog = last_youtube = now
 
     while True:
         try:
             now = datetime.datetime.now()
             time_str = now.strftime("%H:%M:%S")
 
-            # 🌏 [해외 전용 봇] 국내 소스들은 주석 처리로 꺼뒀습니다 (메인 봇에
-            # 합칠 때는 주석만 풀면 됨).
             if (now - last_rss).total_seconds() >= RSS_CHECK_INTERVAL:
-                check_us_news(time_str)
+                if ENABLE_DOMESTIC_NEWS:
+                    check_domestic_news(time_str)
+                if ENABLE_US_NEWS:
+                    check_us_news(time_str)
                 last_rss = now
 
-            check_morning_briefing(now)
+            if ENABLE_MORNING_BRIEFING:
+                check_morning_briefing(now)
 
-            # if should_run_task("schedule_reminders", 3600):
-            #     check_upcoming_schedule_reminders(time_str)
-            # if should_run_task("ipo_listings", 3600):
-            #     check_ipo_listings(time_str)
-            # (국내RSS/텔레그램/약업전자신문/DART/네이버/블로그/유튜브도 동일하게 꺼둠)
+            if ENABLE_SCHEDULE_REMINDERS and should_run_task("schedule_reminders", 3600):
+                check_upcoming_schedule_reminders(time_str)
+
+            if ENABLE_IPO_ALERTS and should_run_task("ipo_listings", 3600):
+                check_ipo_listings(time_str)
+
+            if ENABLE_CUSTOM_SOURCES and (now - last_custom).total_seconds() >= CUSTOM_SOURCE_INTERVAL:
+                check_custom_sources(time_str)
+                last_custom = now
+
+            if ENABLE_TELEGRAM_CHANNELS and (now - last_tg_channel).total_seconds() >= TELEGRAM_CHANNEL_INTERVAL:
+                check_telegram_channels(time_str)
+                last_tg_channel = now
+
+            if ENABLE_TELEGRAM_CHANNELS and (now - last_tg_unfiltered).total_seconds() >= TELEGRAM_UNFILTERED_INTERVAL:
+                check_telegram_channels_unfiltered(time_str)
+                last_tg_unfiltered = now
+
+            if ENABLE_DART and (now - last_dart).total_seconds() >= DART_CHECK_INTERVAL:
+                check_dart_disclosures(time_str)
+                last_dart = now
+
+            if ENABLE_NAVER_NEWS and (now - last_naver).total_seconds() >= NAVER_CHECK_INTERVAL:
+                check_naver_news(time_str)
+                last_naver = now
+
+            if ENABLE_BLOG and (now - last_blog).total_seconds() >= BLOG_CHECK_INTERVAL:
+                check_blogs(time_str)
+                last_blog = now
+
+            if ENABLE_YOUTUBE and (now - last_youtube).total_seconds() >= YOUTUBE_CHECK_INTERVAL:
+                check_youtube(time_str)
+                last_youtube = now
 
         except Exception as e:
             print(f"[메인 루프 오류] {e}")
@@ -5107,20 +5187,29 @@ def startup_init():
             print(f"✅ 상장법인 {len(ALL_LISTED_COMPANIES)}개 종목명 로드 완료.")
         else:
             print("⚠️ 상장법인 목록을 못 가져왔습니다. 기존 대기업 리스트만으로 진행합니다.")
-        # 🌏 [해외 전용 봇] 유튜브 채널ID 조회는 국내 전용 기능이라 건너뜀
-        # (필요하면 메인 봇처럼 resolve_all_youtube_channels() 다시 켜면 됨)
+
+        # 🎛️ 유튜브가 꺼져있으면 채널ID 조회(시간 걸림)를 건너뜀
+        if ENABLE_YOUTUBE:
+            print("🎬 유튜브 채널ID를 확인하는 중...")
+            resolve_all_youtube_channels()
+            print(f"✅ 유튜브 채널 {len(YOUTUBE_CHANNEL_RSS_URLS)}/{len(YOUTUBE_CHANNELS)}개 연결 완료.")
+        else:
+            print("⏸️ 유튜브 꺼짐(ENABLE_YOUTUBE=false) - 채널ID 조회 건너뜀")
 
         load_recent_sent_titles(hours=6)
 
         global _init_batch_mode
         _init_batch_mode = True  # 🚀 이 구간 동안은 Firestore에 하나씩 안 쓰고 모아둠
         try:
-            initialize_existing_rss()  # 국내+해외 RSS 전부 등록하지만, 실제 체크는 해외RSS만 돌아감(무해함)
-            # 🌏 [해외 전용 봇] 텔레그램채널/약업전자신문/DART 초기화는 국내 전용
-            # 기능이라 건너뜀 (필요하면 아래 주석 풀면 됨)
-            # initialize_existing_telegram_channels()
-            # initialize_existing_custom_sources()
-            # initialize_existing_dart_disclosures()
+            # 🎛️ 국내RSS 또는 해외RSS 중 하나라도 켜져있으면 RSS 초기화는 필요함
+            if ENABLE_DOMESTIC_NEWS or ENABLE_US_NEWS:
+                initialize_existing_rss()
+            if ENABLE_TELEGRAM_CHANNELS:
+                initialize_existing_telegram_channels()
+            if ENABLE_CUSTOM_SOURCES:
+                initialize_existing_custom_sources()
+            if ENABLE_DART:
+                initialize_existing_dart_disclosures()
         finally:
             _init_batch_mode = False
             _flush_pending_batch_writes()  # 모아둔 걸 한꺼번에 저장
@@ -5180,26 +5269,27 @@ def run_once():
         # ⚠️ 로그를 스크롤하며 "뭐가 문제인지" 찾는 대신, /status 페이지 하나로
         # 소스별 마지막 실행시각/성공여부/에러메시지를 바로 확인할 수 있게 함
         # (파일을 파트별로 쪼개는 것보다 훨씬 적은 위험으로 같은 효과를 냄).
-        # 🌏 [해외 전용 봇] 이 파일은 메인 봇에서 "해외 관련 기능만" 켜둔
-        # 버전입니다. 국내 소스들은 지워버린 게 아니라 주석 처리만 해뒀으니,
-        # 나중에 메인 봇에 다시 합칠 때는 이 주석들만 풀면 원상복구됩니다.
+        # 🎛️ 각 항목의 4번째 값(enabled)이 False면 아예 실행 안 하고 건너뜀 -
+        # Render 환경변수(ENABLE_XXX)로 조절.
         tasks = [
-            ("해외RSS", lambda: check_us_news(time_str), None),
-            ("아침브리핑", lambda: check_morning_briefing(now), None),
-            # --- 아래는 국내 전용 기능이라 이 봇에서는 꺼둠 (필요하면 주석 해제) ---
-            # ("국내RSS", lambda: check_domestic_news(time_str), None),
-            # ("일정리마인더", lambda: check_upcoming_schedule_reminders(time_str), ("schedule_reminders", 3600)),
-            # ("IPO알림", lambda: check_ipo_listings(time_str), ("ipo_listings", 3600)),
-            # ("텔레그램1(필터)", lambda: check_telegram_channels(time_str), None),
-            # ("텔레그램2(무조건)", lambda: check_telegram_channels_unfiltered(time_str), None),
-            # ("약업전자신문", lambda: check_custom_sources(time_str), ("custom_sources", CUSTOM_SOURCE_INTERVAL)),
-            # ("DART공시", lambda: check_dart_disclosures(time_str), ("dart", DART_CHECK_INTERVAL)),
-            # ("네이버뉴스", lambda: check_naver_news(time_str), ("naver", NAVER_CHECK_INTERVAL)),
-            # ("분석블로그", lambda: check_blogs(time_str), ("blog", BLOG_CHECK_INTERVAL)),
-            # ("유튜브", lambda: check_youtube(time_str), ("youtube", YOUTUBE_CHECK_INTERVAL)),
+            ("국내RSS", lambda: check_domestic_news(time_str), None, ENABLE_DOMESTIC_NEWS),
+            ("해외RSS", lambda: check_us_news(time_str), None, ENABLE_US_NEWS),
+            ("아침브리핑", lambda: check_morning_briefing(now), None, ENABLE_MORNING_BRIEFING),
+            ("일정리마인더", lambda: check_upcoming_schedule_reminders(time_str), ("schedule_reminders", 3600), ENABLE_SCHEDULE_REMINDERS),
+            ("IPO알림", lambda: check_ipo_listings(time_str), ("ipo_listings", 3600), ENABLE_IPO_ALERTS),
+            ("텔레그램1(필터)", lambda: check_telegram_channels(time_str), None, ENABLE_TELEGRAM_CHANNELS),
+            ("텔레그램2(무조건)", lambda: check_telegram_channels_unfiltered(time_str), None, ENABLE_TELEGRAM_CHANNELS),
+            ("약업전자신문", lambda: check_custom_sources(time_str), ("custom_sources", CUSTOM_SOURCE_INTERVAL), ENABLE_CUSTOM_SOURCES),
+            ("DART공시", lambda: check_dart_disclosures(time_str), ("dart", DART_CHECK_INTERVAL), ENABLE_DART),
+            ("네이버뉴스", lambda: check_naver_news(time_str), ("naver", NAVER_CHECK_INTERVAL), ENABLE_NAVER_NEWS),
+            ("분석블로그", lambda: check_blogs(time_str), ("blog", BLOG_CHECK_INTERVAL), ENABLE_BLOG),
+            ("유튜브", lambda: check_youtube(time_str), ("youtube", YOUTUBE_CHECK_INTERVAL), ENABLE_YOUTUBE),
         ]
 
-        for name, fn, gate in tasks:
+        for name, fn, gate, enabled in tasks:
+            if not enabled:
+                _update_source_status(name, ok=True, error="⏸️ 꺼짐(ENABLE_ 환경변수로 켤 수 있음)")
+                continue
             if gate and not should_run_task(*gate):
                 continue
             try:
