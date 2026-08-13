@@ -5315,6 +5315,42 @@ try:
         result = run_once()
         return result, 200
 
+    @app.route("/test_us_news_now", methods=["GET"])
+    def _test_us_news_now_route():
+        """
+        🧪 임시 테스트용 경로 - 진짜 새 기사가 나올 때까지 기다리지 않고,
+        지금 피드에 있는 기사를 "최근 1일 이내"로 넉넉하게 봐서 강제로
+        실제 발송까지 시켜봅니다. 이미 "이미 봤다"고 등록된 기사도 이번
+        테스트에서만 예외적으로 다시 보내봅니다.
+        ⚠️ 실제로 텔레그램에 메시지가 몇 건 갈 수 있습니다 (진짜 발송임).
+        """
+        startup_init()
+
+        # 1) "최근 60분" 기준을 "최근 24시간"으로 임시로 늘림
+        original_is_recent = is_recent_article
+        def _loose_is_recent(entry, minutes=60, default_if_unknown=True):
+            return original_is_recent(entry, minutes=1440, default_if_unknown=default_if_unknown)
+        globals()["is_recent_article"] = _loose_is_recent
+
+        # 2) 해외뉴스 관련해서 "이미 봤다"고 등록된 기록을 이번만 비워서,
+        # 지금 피드에 있는 기사가 "새 기사"로 인식되게 함
+        backup_sent_titles = set(sent_news_titles)
+        backup_fuzzy = list(_recent_titles_for_fuzzy)
+        sent_news_titles.clear()
+        _recent_titles_for_fuzzy.clear()
+
+        try:
+            check_us_news(datetime.datetime.now().strftime("%H:%M:%S"))
+        finally:
+            # 3) 테스트 끝나면 원래대로 복구 (실제 운영 로직에 영향 안 주도록)
+            globals()["is_recent_article"] = original_is_recent
+            sent_news_titles.clear()
+            sent_news_titles.update(backup_sent_titles)
+            _recent_titles_for_fuzzy.clear()
+            _recent_titles_for_fuzzy.extend(backup_fuzzy)
+
+        return "해외뉴스 강제 테스트 완료! 텔레그램을 확인하세요 (0건이었다면 로그의 원본 건수를 확인해주세요).", 200
+
     @app.route("/test_briefing", methods=["GET"])
     def _test_briefing_route():
         """
