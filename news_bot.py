@@ -1559,7 +1559,7 @@ def classify_and_score(title):
     is_breaking = "속보" in title
     is_feature = "특징주" in title
 
-    is_strong_signal = bool(upper_hits) and bool(lower_hits)
+    is_strong_signal = bool(upper_hits) or bool(lower_hits)  # ✏️[완화] AND→OR, 더 많은 뉴스 수신용
     # 🎯 상장 종목명이 제목에 있으면, 다른 이벤트 단어(계약/실적 등)가 없어도
     # 그 자체로 무조건 전송 (예전에는 이벤트 단어가 같이 있어야만 전송됐음)
     has_listed_company = bool(listed_company_hits)
@@ -1598,7 +1598,7 @@ def classify_telegram_channel_message(title):
     is_breaking = "속보" in title
     is_feature = "특징주" in title
 
-    is_strong_signal = bool(upper_hits) and bool(lower_hits)  # 국내 뉴스식 AND 조건
+    is_strong_signal = bool(upper_hits) or bool(lower_hits)  # ✏️[완화] AND→OR (텔레그램 채널도 동일하게 완화)
     has_important_topic = bool(celeb_hits) or bool(global_company_hits) or bool(target_hits) or bool(us_market_hits)
     # 🎯 상장 종목명이 제목에 있으면 그 자체로 무조건 전송
     has_listed_company = bool(listed_company_hits)
@@ -2648,7 +2648,7 @@ def check_us_news(current_time_str):
             is_earnings_worth_sending = earnings_info[0] and (related_theme or resolved_companies)
 
             should_send = (
-                has_macro_word or matched_count >= 2 or is_breaking or is_feature
+                has_macro_word or matched_count >= 1 or is_breaking or is_feature  # ✏️[완화] 2→1
                 or bool(resolved_companies) or is_earnings_worth_sending
             )
 
