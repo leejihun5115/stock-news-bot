@@ -2130,7 +2130,7 @@ def initialize_existing_rss():
     )
     for rss_url in all_urls:
         try:
-            feed = feedparser.parse(rss_url)
+            feed = _fetch_rss_feed(rss_url)
             for entry in feed.entries:
                 title = getattr(entry, "title", "")
                 if title:
@@ -2194,6 +2194,25 @@ def initialize_existing_custom_sources():
 # ============================================================
 # 국내 뉴스 체크
 # ============================================================
+def _fetch_rss_feed(rss_url, timeout=10):
+    """
+    RSS를 안정적으로 가져와서 파싱한다. feedparser가 URL을 직접 받아서 자체
+    fetch하면(과거 방식) 인코딩 선언 불일치("declared as us-ascii, but parsed
+    as utf-8")나 일부 서버의 리다이렉트/압축 처리 문제로 파싱이 깨지는 경우가
+    있어서, requests로 먼저 제대로 가져온 뒤(res.content, 원본 바이트) 그걸
+    feedparser에 넘기는 방식이 훨씬 안정적이다. 그래도 실패하면 feedparser의
+    자체 fetch로 한 번 더 시도(완전히 포기하지 않음).
+    """
+    try:
+        res = requests.get(rss_url, headers={"User-Agent": USER_AGENT}, timeout=timeout)
+        if res.status_code == 200:
+            return feedparser.parse(res.content)
+    except Exception as e:
+        print(f"[RSS 요청 오류] {rss_url}: {e}")
+    # 위에서 실패했으면 feedparser 자체 fetch로 마지막 시도
+    return feedparser.parse(rss_url)
+
+
 def check_domestic_news(current_time_str):
     feedparser.USER_AGENT = USER_AGENT
     scanned = 0
@@ -2201,7 +2220,7 @@ def check_domestic_news(current_time_str):
     diag_counts = {"raw": 0, "already_sent": 0, "blocked": 0, "too_old": 0}
     for rss_url in DOMESTIC_RSS_URLS:
         try:
-            feed = feedparser.parse(rss_url)
+            feed = _fetch_rss_feed(rss_url)
         except Exception as e:
             print(f"[국내 RSS 오류] {rss_url}: {e}")
             continue
@@ -2580,7 +2599,7 @@ def check_us_news(current_time_str):
     diag_counts = {"raw": 0, "already_sent": 0, "blocked": 0, "too_old": 0, "no_match": 0}
     for rss_url in US_RSS_URLS:
         try:
-            feed = feedparser.parse(rss_url)
+            feed = _fetch_rss_feed(rss_url)
         except Exception as e:
             print(f"[해외 RSS 오류] {rss_url}: {e}")
             continue
@@ -3160,7 +3179,7 @@ def check_blogs(current_time_str):
         if blog_name in PAUSED_SOURCES:  # ⏸️ 일시정지된 블로그는 건너뜀
             continue
         try:
-            feed = feedparser.parse(rss_url)
+            feed = _fetch_rss_feed(rss_url)
         except Exception as e:
             print(f"[블로그 오류] {blog_name}: {e}")
             continue
@@ -3309,7 +3328,7 @@ def check_youtube(current_time_str):
         if channel_name in PAUSED_SOURCES:  # ⏸️ 일시정지된 채널은 건너뜀
             continue
         try:
-            feed = feedparser.parse(rss_url)
+            feed = _fetch_rss_feed(rss_url)
         except Exception as e:
             print(f"[유튜브 오류] {channel_name}: {e}")
             continue
