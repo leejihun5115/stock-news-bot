@@ -637,59 +637,6 @@ US_MARKET_KEYWORDS = {
 # 🇺🇸 미국 관련 내용인지 판단용 (제목 안에 이 중 하나라도 있으면 미국 국기 표시)
 US_CONTENT_KEYWORDS = UNIQUE_TARGET | GLOBAL_COMPANY_KEYWORDS | US_MARKET_KEYWORDS
 
-# 🚨 해외뉴스(영문 제목)용 "특징주"/"속보" 판정 단어.
-# ⚠️ "특징주"/"속보"는 한글 단어라 구글뉴스 영문검색(hl=en-US) 제목엔 아예 나올
-# 수가 없어서, 해외뉴스에서는 이 조건이 사실상 죽어있던 버그였음. 영어권에서
-# "이 종목이 오늘의 특징주다/속보다"에 해당하는 표현들로 대체함.
-US_FEATURE_STOCK_WORDS = {
-    "surge", "surges", "surging", "soar", "soars", "soaring", "jump", "jumps",
-    "rally", "rallies", "spike", "spikes", "plunge", "plunges", "plunging",
-    "tumble", "tumbles", "skyrocket", "skyrockets", "sink", "sinks", "slump",
-}
-US_BREAKING_WORDS = {"breaking", "just in", "alert"}
-
-# 📊 실적발표(어닝) 관련 단어 - 이게 있으면 "실적발표" 유형으로 태그를 붙이고,
-# beat(상회)/miss(하회) 여부와 구체적 숫자(매출/EPS)를 제목에서 최대한 뽑아봄.
-US_EARNINGS_WORDS = {
-    "earnings", "quarterly results", "q1 results", "q2 results", "q3 results",
-    "q4 results", "guidance", "revenue", "eps",
-}
-US_EARNINGS_BEAT_WORDS = {"beats", "beat", "tops", "exceeds", "surpasses"}
-US_EARNINGS_MISS_WORDS = {"misses", "miss", "falls short", "below estimates"}
-
-
-def _extract_earnings_info(title):
-    """
-    영문 제목에서 실적발표 관련 정보를 최대한 뽑아본다 (제목만 갖고 하는 거라
-    한계가 뚜렷함 - 본문을 안 읽으므로 숫자가 제목에 직접 없으면 못 찾음).
-    반환: (is_earnings: bool, beat_or_miss: "beat"/"miss"/None, revenue: str나 None, eps: str나 None)
-    """
-    title_lower = title.lower()
-    is_earnings = any(w in title_lower for w in US_EARNINGS_WORDS) or "실적" in title
-
-    if not is_earnings:
-        return False, None, None, None
-
-    beat_or_miss = None
-    if any(w in title_lower for w in US_EARNINGS_BEAT_WORDS) or "어닝서프라이즈" in title:
-        beat_or_miss = "beat"
-    elif any(w in title_lower for w in US_EARNINGS_MISS_WORDS) or "어닝쇼크" in title:
-        beat_or_miss = "miss"
-
-    # 💵 매출/EPS 숫자는 제목에 이미 박혀 있을 때만 뽑을 수 있음 (본문을 안 읽음)
-    revenue = None
-    rev_match = re.search(r"revenue[^\d]{0,10}\$?([\d,.]+)\s*(billion|million|B|M)", title, re.I)
-    if rev_match:
-        unit = "billion" if rev_match.group(2).lower().startswith("b") else "million"
-        revenue = f"${rev_match.group(1)} {unit}"
-
-    eps = None
-    eps_match = re.search(r"EPS[^\d]{0,10}\$?([\d.]+)", title, re.I)
-    if eps_match:
-        eps = f"${eps_match.group(1)}"
-
-    return True, beat_or_miss, revenue, eps
-
 # 💰 태그 판단용 - "돈이 보이는" 강한 재료 단어
 MONEY_STRONG_WORDS = {
     "흑자", "적자", "어닝서프라이즈", "어닝쇼크", "영업이익", "매출",
@@ -780,17 +727,6 @@ DOMESTIC_RSS_SOURCE_NAMES = {
 
 US_RSS_URLS = [
     "https://news.google.com/rss/search?q=US+Stock+Market+Trump+Earnings+SKHY+Nvidia+Semiconductor+Oil+Gold+Copper&hl=en-US&gl=US&ceid=US:en",
-    # 🎯 반도체/AI 관련 - 너무 광범위한 위 쿼리 하나로는 놓치기 쉬운 종목 뉴스 보완
-    "https://news.google.com/rss/search?q=(Nvidia+OR+AMD+OR+Micron+OR+Broadcom+OR+TSMC)+AND+(surge+OR+earnings+OR+guidance+OR+chip)&hl=en-US&gl=US&ceid=US:en",
-    # 🎯 연준/금리/거시경제 - 국내 시장에 파급력이 큰 매크로 뉴스 보완
-    "https://news.google.com/rss/search?q=(Fed+OR+\"Federal+Reserve\"+OR+\"interest+rate\"+OR+inflation)+AND+(rate+cut+OR+hike+OR+CPI)&hl=en-US&gl=US&ceid=US:en",
-    # 🎯 빅테크 실적/속보 - Microsoft/Amazon/Meta/Alphabet/Tesla 관련 대형 이벤트
-    "https://news.google.com/rss/search?q=(Tesla+OR+Microsoft+OR+Amazon+OR+Meta+OR+Alphabet)+AND+(earnings+OR+beats+OR+misses+OR+plunge+OR+surge)&hl=en-US&gl=US&ceid=US:en",
-    # 🇰🇷 국내 언론사가 한글로 보도하는 미국장 소식 (아침에 많이 나옴) - 영문 검색만
-    # 있으면 이런 국내 보도를 놓치므로 한글 검색도 별도로 추가
-    "https://news.google.com/rss/search?q=미국증시+나스닥+다우+S%26P500+반도체&hl=ko&gl=KR&ceid=KR:ko",
-    "https://news.google.com/rss/search?q=미국+연준+금리+FOMC+인플레이션&hl=ko&gl=KR&ceid=KR:ko",
-    "https://news.google.com/rss/search?q=테슬라+엔비디아+마이크론+애플+아마존+급등+급락&hl=ko&gl=KR&ceid=KR:ko",
 ]
 
 NAVER_SEARCH_QUERIES = GLOBAL_AND_DOMESTIC_GIANTS
@@ -896,49 +832,6 @@ THEME_DEFINITIONS = [
 # 위 THEME_DEFINITIONS의 us_symbols를 전부 모아서, 시세를 한 번에 조회할 전체 종목 목록을 만듦
 # (US_KEY_STOCKS에 이미 있는 건 중복 조회 안 하도록 합침)
 _THEME_ALL_SYMBOLS = sorted({sym for theme in THEME_DEFINITIONS for sym in theme["us_symbols"]})
-
-# 🔎 뉴스 제목(영문/한글 모두)에서 "이 종목이 언급됐다"를 인식하기 위한
-# 티커 -> 매칭용 이름 목록. US_KEY_STOCKS에 없는 티커(GEV/VST/NEE 등)도
-# 여기서 채워둠. 티커 자체(예: "MU")도 대문자 단어 경계 매칭으로 포함.
-SYMBOL_MATCH_NAMES = {
-    "NVDA": ["Nvidia", "엔비디아"], "AMD": ["AMD"], "MU": ["Micron", "마이크론"],
-    "AVGO": ["Broadcom", "브로드컴"], "TSLA": ["Tesla", "테슬라"],
-    "MSFT": ["Microsoft", "마이크로소프트"], "AMZN": ["Amazon", "아마존"],
-    "META": ["Meta", "메타"], "GOOGL": ["Alphabet", "Google", "구글", "알파벳"],
-    "ALB": ["Albemarle", "앨버말"],
-    "GEV": ["GE Vernova"], "VST": ["Vistra"], "NEE": ["NextEra"],
-    "CEG": ["Constellation Energy"], "SMR": ["NuScale"],
-    "LMT": ["Lockheed Martin", "록히드마틴"], "RTX": ["RTX", "Raytheon", "레이시온"],
-    "NOC": ["Northrop Grumman", "노스롭그루먼"],
-    "LLY": ["Eli Lilly", "일라이릴리"], "MRNA": ["Moderna", "모더나"], "PFE": ["Pfizer", "화이자"],
-    "ISRG": ["Intuitive Surgical"],
-}
-
-
-def _detect_theme_from_text(text):
-    """
-    뉴스 제목(영문/한글 모두) 안에서 THEME_DEFINITIONS 중 어떤 테마가 언급됐는지
-    판정. 종목명(티커/영문명/한글명)이나 IPO_THEME_KEYWORDS의 주제 키워드가
-    하나라도 있으면 그 테마로 판정. 여러 테마가 동시에 걸리면 THEME_DEFINITIONS에
-    정의된 순서상 가장 먼저 나오는 것(=더 구체적인 것부터 정의해둠)을 반환.
-    매칭 안 되면 None.
-    """
-    if not text:
-        return None
-    text_lower = text.lower()
-    for theme in THEME_DEFINITIONS:
-        # ① 이 테마의 종목이 티커/영문명/한글명 중 하나로 언급됐는지
-        for sym in theme["us_symbols"]:
-            names = SYMBOL_MATCH_NAMES.get(sym, [])
-            if any(n.lower() in text_lower for n in names):
-                return theme
-            if re.search(rf"\b{re.escape(sym)}\b", text):  # 티커 자체(대문자) 매칭
-                return theme
-        # ② 이 테마의 주제 키워드(반도체/배터리 등)가 언급됐는지
-        for kw in IPO_THEME_KEYWORDS.get(theme["name"], []):
-            if kw in text:
-                return theme
-    return None
 
 MORNING_BRIEFING_HOUR = 8  # 이 시(KST 기준, 서버 로컬시간=KST 가정) 첫 실행 때 브리핑 발송
 
@@ -1682,15 +1575,7 @@ def _resolve_tag(title, is_schedule, is_rumor, is_disclosure, is_exclusive, is_b
 def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive, is_breaking,
                          is_feature, is_us_market, is_disclosure=False, is_rumor=False,
                          custom_source="", source_label="", highlight_suffix="",
-                         show_link_below=False, image_url="", novelty="신규", novelty_note=None,
-                         related_theme=None, earnings_info=None):
-    # 🔒 링크가 http(비보안)로 넘어오면 https로 자동 승격. 텔레그램은 http 링크에
-    # (버튼이든 텍스트든) "이 링크를 열까요?" 보안 확인창을 띄우는 경우가 있어서,
-    # 여기서 한 번 더 안전하게 막아줌 - 소스 목록에 또 http가 실수로 들어가도
-    # 이 방어선에서 자동으로 고쳐짐.
-    if news_url and news_url.startswith("http://"):
-        news_url = "https://" + news_url[len("http://"):]
-
+                         show_link_below=False, image_url="", novelty="신규", novelty_note=None):
     display_title = format_title(title)
 
     is_schedule = "일정" in title
@@ -1817,28 +1702,6 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     else:
         novelty_line = "✔️ [신규]\n"
 
-    # 🔗 이 뉴스가 특정 테마(반도체/2차전지 등)와 관련 있으면, 그 테마의 국내
-    # 관련주를 바로 붙여줌 (해외뉴스 하나하나에도 "그래서 국내에서 뭘 봐야
-    # 하지?"를 바로 답해주기 위함 - 아침 브리핑에서만 쓰던 로직을 재사용)
-    related_theme_line = ""
-    if related_theme:
-        stocks_str = ", ".join(related_theme["kr_stocks"])
-        related_theme_line = f"✔️ 관련 국내 테마주 [{related_theme['name']}]: {stocks_str}\n"
-
-    # 📊 실적발표(어닝) 표시 - beat/miss와 매출·EPS는 제목에 직접 숫자가 있을 때만
-    # 채워짐(본문을 안 읽으므로). 없으면 "실적발표"라는 사실만 표시.
-    earnings_line = ""
-    if earnings_info:
-        is_earnings, beat_or_miss, revenue, eps = earnings_info
-        if is_earnings:
-            beat_label = {"beat": "📈 예상 상회(beat)", "miss": "📉 예상 하회(miss)"}.get(beat_or_miss, "확인필요")
-            parts = [f"실적발표 - {beat_label}"]
-            if revenue:
-                parts.append(f"매출 {revenue}")
-            if eps:
-                parts.append(f"EPS {eps}")
-            earnings_line = f"✔️ {' · '.join(parts)}\n"
-
     key_point_html = html.escape(key_point_line) + "\n" if key_point_line else ""
 
     if is_disclosure or is_rumor:
@@ -1887,12 +1750,6 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         # 공시처럼 바로 참고할 기업분석 정보가 같이 오도록.
         company_snapshot_line = ""
         matched_company, stock_code = resolve_primary_company(title)
-
-        # ⏰ 특징주로 뜬 종목은 워치리스트에 등록 (나중에 DART에서 이 종목의
-        # 미래 일정이 나오면 리마인더로 알려주기 위함)
-        if is_feature and matched_company:
-            _add_to_watchlist(matched_company, "특징주")
-
         if matched_company:
             if stock_code:
                 mcap = _dart_market_cap_eok(stock_code)
@@ -1921,8 +1778,6 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             f"{header_prefix}{source_emoji}[{source_bracket}]                    <i>⏰ {time_str}</i>\n\n"
             f"📌<b>{display_title}</b>{highlight_line}\n\n"
             f"{novelty_line}"
-            f"{related_theme_line}"
-            f"{earnings_line}"
             f"{key_point_html}"
             f"{score_line}\n"
             f"{company_snapshot_line}"
@@ -2139,10 +1994,7 @@ def initialize_existing_telegram_channels():
 
 
 def initialize_existing_custom_sources():
-    """약업신문/전자신문도 지금 걸려있는 기사들을 미리 등록 (위와 같은 이유).
-    ⚠️ check_custom_sources()와 반드시 동일한 제목 추출 로직(_extract_custom_source_headline)을
-    써야 함 - 다르면 등록이 무용지물이 되어 재시작할 때마다 기존 기사가 전부
-    "새 기사"로 쏟아지는 버그가 남(과거에 실제로 이 버그가 있었음)."""
+    """약업신문/전자신문도 지금 걸려있는 기사들을 미리 등록 (위와 같은 이유)"""
     headers = {"User-Agent": USER_AGENT}
     registered = 0
     for target_url, source_name in CUSTOM_SCRAPE_SOURCES:
@@ -2152,7 +2004,7 @@ def initialize_existing_custom_sources():
                 continue
             soup = BeautifulSoup(res.text, "html.parser")
             for a_tag in soup.select("a"):
-                title = _extract_custom_source_headline(a_tag)
+                title = a_tag.get_text(strip=True)
                 if title and len(title) > 4:
                     mark_as_sent(title)
                     registered += 1
@@ -2441,7 +2293,6 @@ def build_morning_briefing_text():
             theme_name = name_to_theme.get(name, top_theme["name"])
             lines.append(f"{i+1}. {name}{change_txt}")
             lines.append("  근거: 미국 " + theme_name + " 강세 + " + " + ".join(reasons))
-            _add_to_watchlist(name, "상한가" if is_upper_limit else "급등")  # ⏰ 급등종목도 워치리스트 등록
     else:
         lines.append("아직 뚜렷하게 반응한 종목 없음")
     lines.append("")
@@ -2557,50 +2408,21 @@ def check_us_news(current_time_str):
             scanned += 1
             target_hits = {kw for kw in UNIQUE_TARGET if kw.lower() in title.lower()}
             giant_hits = {kw for kw in UNIQUE_GIANTS if kw.lower() in title.lower()}
-            # 🏢 영문 회사명(Samsung Electronics 등)으로만 언급된 경우도 놓치지 않도록
-            # 통합 종목 인식 함수도 같이 확인 (국내뉴스와 동일한 방식)
-            resolved_companies = resolve_companies_in_text(title)
-            matched_count = len(target_hits | giant_hits) + len(resolved_companies)
+            matched_count = len(target_hits | giant_hits)
 
             has_macro_word = bool(target_hits & US_MACRO_STRONG_WORDS)
-            title_lower = title.lower()
-            # 🚨 "속보"/"특징주"는 한글 단어라 영문 제목엔 나올 수 없어서, 영어권
-            # 표현(surge/plunge/breaking 등)도 같이 확인 (버그 수정)
-            is_breaking = "속보" in title or any(w in title_lower for w in US_BREAKING_WORDS)
-            is_feature = "특징주" in title or any(w in title_lower for w in US_FEATURE_STOCK_WORDS)
-
-            # 🔗 테마/실적발표 판정을 should_send 결정 "전"에 미리 해둠 - "beats
-            # estimates"처럼 급등락 단어 없이 실적 얘기만 하는 제목도, 관련 테마·
-            # 기업이 식별되면 그 자체로 보낼 이유가 되도록 함(막연한 "실적시즌"
-            # 총평 기사까지 다 보내면 스팸이 되니, 테마/기업이 잡힐 때만 인정).
-            related_theme = _detect_theme_from_text(title)
-            earnings_info = _extract_earnings_info(title)
-            is_earnings_worth_sending = earnings_info[0] and (related_theme or resolved_companies)
-
-            should_send = (
-                has_macro_word or matched_count >= 2 or is_breaking or is_feature
-                or bool(resolved_companies) or is_earnings_worth_sending
-            )
+            is_breaking = "속보" in title  # 🚨 속보 단어가 있으면 다른 조건 없이 무조건 전송
+            is_feature = "특징주" in title  # 🚨 특징주 단어가 있으면 다른 조건 없이 무조건 전송
+            should_send = has_macro_word or matched_count >= 2 or is_breaking or is_feature
 
             if not should_send:
                 mark_as_sent(title)
                 continue
 
-            # 🆕 국내뉴스와 동일하게 신규/후속/재탕을 구분함 - 재탕(새 정보 없음)만
-            # 걸러내고, 후속(새 숫자/정보 있음)은 표시를 붙여서 그대로 보냄.
-            novelty, novelty_emoji, novelty_note = classify_novelty(title)
-            if novelty == "재탕":
-                print(f"[재탕 감지] {title[:60]}")
-                mark_as_sent(title)
-                continue
-
             mark_as_sent(title)  # 🚫 먼저 등록해서 중복 전송 원천 차단
-            _remember_for_fuzzy(title)
             send_telegram_message(
                 title, link, current_time_str, matched_count,
                 False, is_breaking, is_feature, True,
-                novelty=novelty, novelty_note=novelty_note,
-                related_theme=related_theme, earnings_info=earnings_info,
             )
             sent += 1
 
@@ -2829,33 +2651,9 @@ def _shorten_headline(text, max_len=60):
 
 
 CUSTOM_SCRAPE_SOURCES = [
-    ("https://www.yakup.com/news/index.html", "약업신문"),
+    ("http://www.yakup.com/news/index.html", "약업신문"),
     ("https://www.etnews.com/", "전자신문"),
 ]
-
-
-def _extract_custom_source_headline(a_tag):
-    """
-    커스텀 소스(약업신문/전자신문) <a> 태그에서 실제 제목 줄을 뽑아내는 공용 로직.
-    ⚠️ 이 함수를 check_custom_sources()와 initialize_existing_custom_sources()가
-    "반드시 똑같이" 써야 합니다. 예전엔 두 곳이 제목을 서로 다른 방식으로 계산해서
-    ("초기화 때 등록한 제목"과 "실제 체크 때 계산한 제목"이 문자열 자체가 달랐음),
-    초기화가 사실상 무용지물이 되어 봇이 재시작될 때마다 기존 기사들이 전부
-    "새 기사"인 것처럼 한꺼번에 쏟아지는 버그가 있었습니다. 반드시 이 함수
-    하나로 통일해서 재발을 막습니다.
-    """
-    # 링크 안에 카테고리/제목/요약이 통째로 들어있는 경우가 있어서,
-    # 줄바꿈 기준 첫 줄만 뽑고 그래도 길면 잘라냄 (텔레그램 헤드라인 추출과 동일 방식)
-    raw_text = a_tag.get_text(separator="\n", strip=True)
-    lines = [ln.strip() for ln in raw_text.split("\n") if ln.strip()]
-    # 첫 줄이 "약사·약학" 같은 짧은 카테고리 라벨이면 두 번째 줄(진짜 제목)을 사용
-    if lines and len(lines[0]) <= 10 and len(lines) > 1:
-        headline_line = lines[1]
-    elif lines:
-        headline_line = lines[0]
-    else:
-        headline_line = ""
-    return _shorten_headline(headline_line) if headline_line else ""
 
 
 def check_custom_sources(current_time_str):
@@ -2871,7 +2669,18 @@ def check_custom_sources(current_time_str):
             soup = BeautifulSoup(res.text, "html.parser")
 
             for a_tag in soup.select("a"):
-                title = _extract_custom_source_headline(a_tag)
+                # 링크 안에 카테고리/제목/요약이 통째로 들어있는 경우가 있어서,
+                # 줄바꿈 기준 첫 줄만 뽑고 그래도 길면 잘라냄 (텔레그램 헤드라인 추출과 동일 방식)
+                raw_text = a_tag.get_text(separator="\n", strip=True)
+                lines = [ln.strip() for ln in raw_text.split("\n") if ln.strip()]
+                # 첫 줄이 "약사·약학" 같은 짧은 카테고리 라벨이면 두 번째 줄(진짜 제목)을 사용
+                if lines and len(lines[0]) <= 10 and len(lines) > 1:
+                    headline_line = lines[1]
+                elif lines:
+                    headline_line = lines[0]
+                else:
+                    headline_line = ""
+                title = _shorten_headline(headline_line) if headline_line else ""
 
                 href = a_tag.get("href", "")
                 if not href or len(title) <= 4:
@@ -2889,7 +2698,7 @@ def check_custom_sources(current_time_str):
 
                 if not href.startswith("http"):
                     if source_name == "약업신문":
-                        href = "https://www.yakup.com" + (href if href.startswith("/") else "/" + href)
+                        href = "http://www.yakup.com" + (href if href.startswith("/") else "/" + href)
                     else:
                         if href.startswith("//"):
                             href = "https:" + href
@@ -3422,330 +3231,6 @@ _dart_snapshot_cache = {}
 # 나열하는 게 아니라, 실제 국내에서도 오늘 수급이 붙고 있는지/공시가
 # 있었는지까지 같이 봐서 근거를 붙임.
 # ============================================================
-# ============================================================
-# ⏰ 특징주/급등종목 워치리스트 + 미래 일정 리마인더
-# ------------------------------------------------------------
-# "특징주"로 뜨거나 상한가를 간 종목을 워치리스트에 기록해두고, 그 종목의
-# DART 공시에서 아직 안 지난 미래 일정(청약일/납입일/임상발표일 등)이
-# 나오면 따로 저장해뒀다가, 그 날짜가 되면 리마인드 메시지를 보냅니다.
-# Firestore가 없으면(메모리 전용 모드) 이 기능은 컨테이너 재시작 시
-# 초기화되니 완전한 기록은 못 남지만, 켜져 있는 동안은 정상 작동합니다.
-# ============================================================
-WATCHLIST_VALID_DAYS = 21  # 특징주/급등으로 찍힌 뒤 이 기간 안의 공시까지만 "관련 있다"고 봄
-
-
-def _add_to_watchlist(stock_name, reason):
-    """이 종목을 워치리스트에 기록(또는 갱신). Firestore 없으면 조용히 무시."""
-    if not _firestore_client or not stock_name:
-        return
-    try:
-        _firestore_client.collection("feature_watchlist").document(stock_name).set({
-            "name": stock_name,
-            "reason": reason,
-            "flagged_at": datetime.datetime.now(datetime.timezone.utc),
-        })
-    except Exception as e:
-        print(f"[워치리스트 기록 오류] {stock_name}: {e}")
-
-
-def _is_in_watchlist(stock_name):
-    """이 종목이 최근(WATCHLIST_VALID_DAYS일 이내) 특징주/급등으로 찍힌 적 있는지 확인."""
-    if not _firestore_client or not stock_name:
-        return False
-    try:
-        doc = _firestore_client.collection("feature_watchlist").document(stock_name).get()
-        if not doc.exists:
-            return False
-        flagged_at = doc.to_dict().get("flagged_at")
-        if not flagged_at:
-            return False
-        age_days = (datetime.datetime.now(datetime.timezone.utc) - flagged_at).days
-        return age_days <= WATCHLIST_VALID_DAYS
-    except Exception as e:
-        print(f"[워치리스트 조회 오류] {stock_name}: {e}")
-        return False
-
-
-def _parse_schedule_date(date_str):
-    """'2026-10-05' 또는 '2026-09-01 ~ 2026-09-05'(범위면 시작일 기준) 문자열을
-    date 객체로 변환. 실패하면 None."""
-    try:
-        first_part = date_str.split("~")[0].strip()
-        y, mo, d = first_part.split("-")
-        return datetime.date(int(y), int(mo), int(d))
-    except Exception:
-        return None
-
-
-# ⏰ 매매에 참고할 수 있게 "당일"이 아니라 "며칠 전"에 미리 알려줌.
-# 7일 전(D-7)과 3일 전(D-3), 두 번 알려줍니다.
-SCHEDULE_REMINDER_LEAD_DAYS = [7, 3]
-
-
-def _save_upcoming_schedule_reminders(corp_name, stock_code, report_nm, report_text):
-    """
-    이 공시의 회사가 최근 특징주/급등 워치리스트에 있다면, 원문에서 뽑은 일정 중
-    아직 안 지난(오늘 이후) 것들을 리마인더 대상으로 저장.
-    """
-    if not _firestore_client or not corp_name:
-        return
-    if not _is_in_watchlist(corp_name):
-        return
-
-    schedule_items = extract_dart_schedule(report_text)
-    if not schedule_items:
-        return
-
-    today = datetime.date.today()
-    for label, value in schedule_items:
-        due_date = _parse_schedule_date(value)
-        if not due_date or due_date < today:
-            continue  # 이미 지난 일정이거나 날짜를 못 읽으면 건너뜀 (지어내지 않음)
-
-        doc_id = f"{corp_name}_{label}_{value}".replace(" ", "").replace("/", "-")[:200]
-        try:
-            doc_ref = _firestore_client.collection("pending_schedule_reminders").document(doc_id)
-            if doc_ref.get().exists:
-                continue  # 이미 저장된 일정
-            doc_ref.set({
-                "corp_name": corp_name,
-                "stock_code": stock_code,
-                "label": label,
-                "date": value,
-                "due_date": due_date.isoformat(),
-                "source_report": report_nm,
-                "notified_stages": [],  # 이미 보낸 D-N 알림 목록 (예: [7] -> D-7은 보냈고 D-3은 아직)
-                "created_at": datetime.datetime.now(datetime.timezone.utc),
-            })
-            print(f"✅ [일정 리마인더 등록] {corp_name} - {label}: {value}")
-        except Exception as e:
-            print(f"[일정 리마인더 저장 오류] {corp_name}: {e}")
-
-
-def check_upcoming_schedule_reminders(current_time_str):
-    """
-    저장해둔 미래 일정들을 훑어서, "오늘부터 며칠 남았는지" 계산 후
-    SCHEDULE_REMINDER_LEAD_DAYS(7일 전/3일 전)에 정확히 해당하면 미리 알림을
-    보냄. 이미 보낸 단계(D-7 등)는 notified_stages에 기록해서 중복 발송 안 함.
-    ⚠️ Firestore where 조건으로 "날짜 계산"까지 하기 어려워서, 아직 지나지
-    않은 일정을 전부 가져온 뒤 Python에서 날짜 계산을 합니다 (건수가 많지
-    않은 기능이라 성능 문제 없음).
-    """
-    if not _firestore_client:
-        return
-    today = datetime.date.today()
-    try:
-        docs = list(_firestore_client.collection("pending_schedule_reminders").stream())
-    except Exception as e:
-        print(f"[일정 리마인더 조회 오류] {e}")
-        return
-
-    for doc in docs:
-        data = doc.to_dict()
-        due_date_str = data.get("due_date", "")
-        try:
-            due_date = datetime.date.fromisoformat(due_date_str)
-        except Exception:
-            continue
-
-        days_left = (due_date - today).days
-        if days_left < 0:
-            continue  # 이미 지난 일정 (별도 정리 작업 없이 그냥 무시하고 넘어감)
-
-        notified_stages = data.get("notified_stages", [])
-        matched_stage = next(
-            (lead for lead in SCHEDULE_REMINDER_LEAD_DAYS if days_left == lead and lead not in notified_stages),
-            None,
-        )
-        if matched_stage is None:
-            continue
-
-        corp_name = data.get("corp_name", "")
-        label = data.get("label", "")
-        value = data.get("date", "")
-        source_report = data.get("source_report", "")
-        text = (
-            f"⏰ [일정 알림 D-{matched_stage}] {corp_name}\n\n"
-            f"✔️ {matched_stage}일 후 {label}입니다 ({value})\n"
-            f"✔️ 관련 공시: {source_report}\n\n"
-            f"(과거에 특징주/급등으로 주목받았던 종목이라 미리 등록해둔 일정입니다. "
-            f"매매 판단에 참고하시라고 미리 알려드리는 것뿐, 투자 조언이 아닙니다.)"
-        )
-        try:
-            payload = {"chat_id": CHAT_ID, "text": text, "link_preview_options": {"is_disabled": True}}
-            res = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload, timeout=10)
-            if res.status_code == 200:
-                doc.reference.update({"notified_stages": notified_stages + [matched_stage]})
-                print(f"✅ [일정 리마인더 발송] {corp_name} - {label}")
-        except Exception as e:
-            print(f"[일정 리마인더 발송 오류] {corp_name}: {e}")
-
-
-# ============================================================
-# 🆕 신규상장(IPO) 알림
-# ------------------------------------------------------------
-# DART에 "투자설명서"(공모/상장 전 필수 공시) 문서가 새로 올라오면, 그 안에서
-# 상장예정일/공모가/시장구분을 뽑아서, 상장예정일이 "내일"이면 알림을 보냄.
-# ⚠️ 한계 (정직하게 밝힘):
-#   - 업종비교는 못 넣었습니다. "이 회사가 어느 업종인지" 분류하는 데이터가
-#     지금 코드에 없어서, 억지로 비교하면 오히려 부정확한 정보가 될 수
-#     있다고 판단했습니다.
-#   - 재무점수 등 기업분석도 상장 당일엔 못 붙입니다. 신규상장사는 저희가
-#     쓰는 정기 재무제표(사업보고서)가 아직 DART에 없어서(상장 후 첫
-#     분기·사업보고서가 나와야 조회 가능), 상장 초기엔 데이터가 없습니다.
-#     상장 후 시간이 지나 첫 재무데이터가 잡히면, 기존 재무점수 기능이
-#     자동으로 적용됩니다(따로 설정 필요 없음).
-# ============================================================
-IPO_PROSPECTUS_KEYWORDS = ("투자설명서", "증권신고서")
-
-
-# 🔗 신규상장사의 사업 설명 텍스트를 훑어서 어떤 테마와 연결되는지 판정.
-# THEME_DEFINITIONS의 이름을 그대로 재사용해서, 나중에 아침 브리핑의 테마
-# 판정과 용어가 서로 다르게 나오는 일이 없도록 통일함.
-IPO_THEME_KEYWORDS = {
-    "반도체": ["반도체", "웨이퍼", "파운드리", "팹리스", "칩", "HBM"],
-    "2차전지": ["2차전지", "배터리", "양극재", "음극재", "전해질", "배터리셀"],
-    "바이오": ["바이오", "신약", "임상", "제약", "의약품", "치료제", "백신"],
-    "AI/빅테크": ["인공지능", "AI", "머신러닝", "딥러닝", "빅데이터"],
-    "로봇": ["로봇", "자동화설비", "협동로봇"],
-    "전력": ["전력", "변압기", "전선", "에너지저장장치", "ESS"],
-    "원전": ["원전", "원자력", "SMR"],
-    "방산": ["방산", "국방", "무기체계", "방위산업"],
-}
-
-
-def _extract_ipo_business_and_theme(text):
-    """
-    투자설명서 원문에서 주력사업 설명을 찾고(추측 안 함, 원문 문장 그대로),
-    그 안의 키워드로 연관 테마를 판정한다.
-    반환: (사업요약 또는 None, 연관테마 리스트)
-    """
-    business_summary = None
-    patterns = [
-        r"주요\s*(?:제품|사업|서비스)(?:\s*(?:및|,)\s*(?:제품|사업|서비스))?\s*[:：]\s*([^\n]{5,100})",
-        r"당사는\s*([^\n.]{5,100}?(?:영위|제공|생산|개발|제조)[^\n.]{0,30})",
-        r"주요\s*사업(?:\s*내용)?\s*[:：]\s*([^\n]{5,100})",
-    ]
-    for pat in patterns:
-        m = re.search(pat, text)
-        if m:
-            business_summary = m.group(1).strip().rstrip(".,")
-            break
-
-    search_target = business_summary or text[:3000]  # 요약을 못 찾으면 원문 앞부분에서라도 테마 키워드를 찾아봄
-    matched_themes = [
-        theme for theme, keywords in IPO_THEME_KEYWORDS.items()
-        if any(kw in search_target for kw in keywords)
-    ]
-
-    return business_summary, matched_themes
-
-
-def _extract_ipo_info(text):
-    """투자설명서 원문에서 공모가/시장구분/업종을 최대한 뽑아본다. 못 찾으면 '확인필요'."""
-    offering_price = None
-    pct_match = re.search(r"(?:확정\s*)?공모가(?:액)?\s*[:：]?\s*([0-9][0-9,]*)\s*원", text)
-    if pct_match:
-        offering_price = pct_match.group(1) + "원"
-
-    market = "확인필요"
-    if "코스닥" in text:
-        market = "코스닥"
-    elif "코스피" in text or "유가증권시장" in text:
-        market = "코스피"
-    elif "코넥스" in text:
-        market = "코넥스"
-
-    # 🏭 업종 - 코드→이름 매핑표(통계청 표준산업분류) 없이, 투자설명서 원문에
-    # 보통 "업종: OOO제조업" 식으로 이미 적혀 있는 걸 그대로 뽑음(추측 안 함).
-    # 코드로 임의 변환하면 틀릴 위험이 있어서, 원문에 실제로 쓰인 문구만 사용.
-    industry = None
-    ind_match = re.search(r"업종(?:명)?\s*[:：]\s*([^\n,]{2,40}?)(?:\s{2,}|[\n,]|$)", text)
-    if ind_match:
-        candidate = ind_match.group(1).strip()
-        # "업종코드 C26" 같은 숫자/코드만 잡힌 경우는 사람이 읽기 어려우니 제외
-        if candidate and not re.fullmatch(r"[A-Z]?\d[\d\s]*", candidate):
-            industry = candidate
-
-    return offering_price, market, industry
-
-
-def check_ipo_listings(current_time_str):
-    """DART 투자설명서 공시를 훑어서, 내일 상장 예정인 종목이 있으면 알림."""
-    if not DART_API_KEY:
-        return
-    today_str = datetime.datetime.now().strftime("%Y%m%d")
-    tomorrow = datetime.date.today() + datetime.timedelta(days=1)
-
-    try:
-        res = requests.get(
-            "https://opendart.fss.or.kr/api/list.json",
-            params={"crtfc_key": DART_API_KEY, "bgn_de": today_str, "page_count": 100},
-            timeout=10,
-        )
-        data = res.json()
-    except Exception as e:
-        print(f"[IPO 공시 조회 오류] {e}")
-        return
-    if data.get("status") != "000":
-        return
-
-    for item in data.get("list", []):
-        report_nm = item.get("report_nm", "")
-        corp_name = item.get("corp_name", "")
-        rcept_no = item.get("rcept_no", "")
-        full_title = f"[IPO확인] {corp_name} {rcept_no}"
-
-        if not any(kw in report_nm for kw in IPO_PROSPECTUS_KEYWORDS):
-            continue
-        if is_already_sent(full_title):
-            continue
-        mark_as_sent(full_title)  # 🚫 같은 공시로 중복 확인 안 하도록
-
-        report_text = _dart_document_text(rcept_no)
-        if not report_text:
-            continue
-
-        schedule_items = extract_dart_schedule(report_text)
-        listing_date = None
-        for label, value in schedule_items:
-            if label in ("신주 상장일", "변경상장일"):
-                d = _parse_schedule_date(value)
-                if d:
-                    listing_date = d
-                    break
-
-        if listing_date != tomorrow:
-            continue  # 내일 상장이 아니면(또는 날짜를 못 찾으면) 알림 안 보냄
-
-        offering_price, market, industry = _extract_ipo_info(report_text)
-        business_summary, matched_themes = _extract_ipo_business_and_theme(report_text)
-        detail_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
-        theme_line = " / ".join(matched_themes) if matched_themes else "확인필요(테마 키워드 미검출)"
-        text = (
-            f"🆕 [신규상장 알림] {corp_name}\n\n"
-            f"✔️ 내일({tomorrow.strftime('%Y-%m-%d')}) 상장 예정입니다\n"
-            f"✔️ 시장구분: {market}\n"
-            f"✔️ 업종: {industry or '확인필요(원문 참고)'}\n"
-            f"✔️ 주력사업: {business_summary or '확인필요(원문 참고)'}\n"
-            f"✔️ 연관 테마: {theme_line}\n"
-            f"✔️ 공모가: {offering_price or '확인필요(원문 참고)'}\n\n"
-            f"⚠️ 참고: 업종/주력사업/테마는 원문에서 뽑은 정보이며, 같은 업종 다른 "
-            f"상장사와의 정량 비교/재무점수는 신규상장 특성상(상장 전 정기 재무데이터가 "
-            f"아직 없음) 지금은 제공하지 않습니다."
-        )
-        try:
-            payload = {
-                "chat_id": CHAT_ID, "text": text, "link_preview_options": {"is_disabled": True},
-                "reply_markup": {"inline_keyboard": [[{"text": "🔗 투자설명서 원문", "url": detail_url}]]},
-            }
-            res2 = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload, timeout=10)
-            if res2.status_code == 200:
-                print(f"✅ [신규상장 알림 발송] {corp_name}")
-        except Exception as e:
-            print(f"[신규상장 알림 발송 오류] {corp_name}: {e}")
-
-
 _naver_supply_demand_cache = {}
 
 _naver_upper_limit_cache = {"data": None, "ts": 0}
@@ -4866,7 +4351,7 @@ def check_dart_disclosures(current_time_str):
                     _dart_major_shareholder_change_label(report_nm, report_text),
                     _dart_free_stock_ratio_label(report_nm, report_text),
                     _dart_generic_amount_label(report_nm, report_text),
-                    format_dart_schedule(report_text),  # ⏰ 일정(V2) - 배당/납입/청약/임상 등 20여종 세분화 추출
+                    _dart_schedule_label(report_text),  # 📅 유형 무관 공통 일정 정보
                 ) if x
             ]
             if extra_notes:
@@ -4876,10 +4361,6 @@ def check_dart_disclosures(current_time_str):
                 # 예상과 다른 문서 포맷(표 구조 등)일 수 있으므로 로그로 남겨서
                 # 다음에 패턴을 더 보강할 수 있게 합니다.
                 print(f"[DART 지분율 파싱 실패] {corp_name} (rcept_no={rcept_no}) - 원문은 받았지만 보유비율 패턴을 못 찾음.")
-
-            # ⏰ 이 회사가 최근 특징주/급등 워치리스트에 있으면, 이 공시의 미래
-            # 일정을 리마인더로 저장 (오늘이 그 날짜가 되면 자동으로 알림 발송)
-            _save_upcoming_schedule_reminders(corp_name, stock_code, report_nm, report_text)
 
             send_telegram_message(
                 display_title, detail_url, current_time_str, 1,
@@ -4970,12 +4451,6 @@ def main():
                 last_rss = now
 
             check_morning_briefing(now)
-
-            if should_run_task("schedule_reminders", 3600):  # ⏰ 1시간에 한 번만 체크
-                check_upcoming_schedule_reminders(time_str)
-
-            if should_run_task("ipo_listings", 3600):  # 🆕 1시간에 한 번만 체크
-                check_ipo_listings(time_str)
 
             if (now - last_custom).total_seconds() >= CUSTOM_SOURCE_INTERVAL:
                 check_custom_sources(time_str)
@@ -5115,18 +4590,6 @@ def run_once():
         except Exception as e:
             print(f"[아침 브리핑 오류] {e}")
 
-        if should_run_task("schedule_reminders", 3600):  # ⏰ 1시간에 한 번만 체크
-            try:
-                check_upcoming_schedule_reminders(time_str)
-            except Exception as e:
-                print(f"[일정 리마인더 오류] {e}")
-
-        if should_run_task("ipo_listings", 3600):  # 🆕 1시간에 한 번만 체크
-            try:
-                check_ipo_listings(time_str)
-            except Exception as e:
-                print(f"[IPO 알림 오류] {e}")
-
         try:
             check_telegram_channels(time_str)
             check_telegram_channels_unfiltered(time_str)
@@ -5241,6 +4704,14 @@ except ImportError:
     app = None
 
 
+if __name__ == "__main__":
+    if os.environ.get("RUN_MODE", "local") == "cloud" and app is not None:
+        # Cloud Run이 컨테이너를 시작할 때 이 경로로 들어옵니다 (PORT 환경변수는 자동 지정됨).
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host="0.0.0.0", port=port, threaded=True)
+    else:
+        main()
+
 
 
 # ============================================================
@@ -5301,57 +4772,50 @@ def extract_dart_schedule(text):
     raw = re.sub(r"\s+", " ", str(text))
     found = []
     seen = set()
-    used_spans = []  # (start, end) - 이미 어떤 라벨이 이 위치의 날짜를 가져갔는지 기록해서 중복/교차매칭 방지
 
     def norm_date(s):
         s = re.sub(r"\s+", "", s)
-        s = s.replace(".", "-").replace("/", "-").replace("년", "-").replace("월", "-").replace("일", "")
-        parts = s.split("-")
-        if len(parts) == 3 and all(p.isdigit() for p in parts):
-            y, mo, d = parts
-            return f"{y}-{mo.zfill(2)}-{d.zfill(2)}"
-        return s
-
-    def overlaps_used(start, end):
-        return any(not (end <= s or start >= e) for s, e in used_spans)
-
-    # ⚠️ 라벨과 날짜 사이에 콜론(:) 없이 조사("은/는/이/가")만 붙는 자연스러운
-    # 한국어 문장도 인식하도록("계약기간은 2026-01-01 ~ 2028-12-31" 같은 경우)
-    _SEP = r"\s*(?:은|는|이|가)?\s*[:：]?\s*"
+        return s.replace(".", "-").replace("/", "-").replace("년", "-").replace("월", "-").replace("일", "")
 
     # 1) '계약기간: 2026-01-01 ~ 2028-12-31' 같은 범위
     for label in ("계약기간", "공급기간", "납품기간", "전환청구기간", "행사기간",
                   "청약기간", "주주명부 폐쇄기간"):
-        pat = rf"{re.escape(label)}{_SEP}{_DART_DATE_RANGE}"
+        pat = rf"{re.escape(label)}\s*[:：]?\s*{_DART_DATE_RANGE}"
         for m in re.finditer(pat, raw, re.I):
-            if overlaps_used(m.start(), m.end()):
-                continue
             val = f"{norm_date(m.group(2))} ~ {norm_date(m.group(3))}"
             key = (label, val)
             if key not in seen:
                 found.append(key); seen.add(key)
-                used_spans.append((m.start(), m.end()))
 
-    # 2) 의미가 명시된 단일 날짜 ("라벨: 날짜" 또는 "라벨은 날짜" 순서 - 한국어
-    # 공시 문서에서 압도적으로 흔한 순서라 이 방향만 안전하게 지원함.
-    # ⚠️ "날짜가 먼저 나오고 라벨이 뒤에 오는" 역방향 매칭은 일부러 지원하지
-    # 않습니다 - 시도해봤더니 전혀 상관없는 가까운 날짜를 엉뚱한 라벨로 잘못
-    # 붙잡는 경우가 많아서(예: 청약기간 끝 날짜를 신주상장일로 오인), 없는
-    # 것보다 위험하다고 판단했습니다.
+    # 2) 의미가 명시된 단일 날짜
     for label, patterns in _DART_SCHEDULE_PATTERNS:
         if label in {"계약기간", "공급기간", "납품기간", "전환청구기간", "행사기간",
                      "청약기간", "주주명부 폐쇄기간"}:
             continue
         for p in patterns:
-            pat = rf"{p}{_SEP}({_DART_DATE})"
+            pat = rf"{p}\s*[:：]?\s*({_DART_DATE})"
             for m in re.finditer(pat, raw, re.I):
-                if overlaps_used(m.start(), m.end()):
-                    continue
                 val = norm_date(m.group(1))
                 key = (label, val)
                 if key not in seen:
                     found.append(key); seen.add(key)
-                    used_spans.append((m.start(), m.end()))
+
+    # 3) '2026년 8월 20일 납입'처럼 날짜가 앞에 오는 문장도 처리
+    reverse_patterns = [
+        ("납입일", r"납입"),
+        ("신주 상장일", r"신주.*?상장"),
+        ("변경상장일", r"변경상장"),
+        ("배당 기준일", r"배당.*?기준일"),
+        ("배당금 지급일", r"배당금.*?지급"),
+        ("재공시일", r"재공시"),
+    ]
+    for label, keyword in reverse_patterns:
+        pat = rf"({_DART_DATE})\s*(?:까지|부터|예정|경|에)?\s*{keyword}"
+        for m in re.finditer(pat, raw, re.I):
+            val = norm_date(m.group(1))
+            key = (label, val)
+            if key not in seen:
+                found.append(key); seen.add(key)
 
     return found
 
@@ -5364,14 +4828,4 @@ def format_dart_schedule(text):
     for label, value in items:
         lines.append(f"• {label}: {value}")
     return "\n".join(lines)
-
-
-
-if __name__ == "__main__":
-    if os.environ.get("RUN_MODE", "local") == "cloud" and app is not None:
-        # Cloud Run이 컨테이너를 시작할 때 이 경로로 들어옵니다 (PORT 환경변수는 자동 지정됨).
-        port = int(os.environ.get("PORT", 8080))
-        app.run(host="0.0.0.0", port=port, threaded=True)
-    else:
-        main()
 
