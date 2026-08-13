@@ -1,6 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-# 수정22 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정25 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정25] 🐛 /test_dart_now가 "어제부터+중복무시"로 수백 건을 훑으면서
+#            하나하나 원문조회하다가 응답이 너무 오래 걸려 502(타임아웃) 나던
+#            문제 수정. max_sent_override로 소수 건(원문조회 최대 30건, 발송
+#            최대 3건)만 확인하고 빨리 응답하도록 제한.
+#   [수정24] 🐛🔥 [중대] should_run_task()가 Firestore 없으면(지금 상태!)
+#            무조건 True만 반환해서, DART/네이버/블로그/유튜브/일정리마인더/
+#            IPO알림/브리핑 등 "N분/하루 한 번만" 주기 제한이 전부 사실상
+#            작동을 안 하고 있던 버그 수정. 메모리 폴백 추가함.
+#            + 아침브리핑을 오전 8시/오후 15시 하루 두 번으로 분리 발송.
+#   [수정23] 아침브리핑 "8시대에만 발송" 시간 제한 제거 - 이제 언제 체크되든
+#            (하루 한 번만) 발송됨. 아침브리핑 관련 버그 전수 테스트 완료
+#            (KRX목록없음/야후전면실패/부분실패 전부 안전하게 처리 확인).
 #   [수정22] 🎛️ /panel 컨트롤 패널 추가 - 매번 주소 외워서 칠 필요 없이,
 #            이 페이지 하나에서 지금 뭐가 켜져있는지 보고 버튼 클릭으로
 #            바로 테스트 가능. https://<주소>/panel 로 접속.
@@ -1104,7 +1116,8 @@ def _detect_theme_from_text(text):
                 return theme
     return None
 
-MORNING_BRIEFING_HOUR = 8  # 이 시(KST 기준, 서버 로컬시간=KST 가정) 첫 실행 때 브리핑 발송
+MORNING_BRIEFING_HOUR = 8    # 오전 브리핑 (한국장 열리기 전) - KST 기준, 서버 로컬시간=KST 가정
+AFTERNOON_BRIEFING_HOUR = 15  # 오후 브리핑 (한국장 마감 무렵) - 필요하면 이 숫자만 바꾸면 됨
 
 # ============================================================
 # 💾 중복 방지 저장소 (Firestore, 무료)
@@ -1334,27 +1347,46 @@ def _flush_pending_batch_writes():
     print(f"✅ [Firestore] 초기화 기록 {saved}건을 일괄 저장했습니다.")
 
 
+_task_last_run_memory = {}  # task_name -> datetime (Firestore 없을 때 쓰는 메모리 전용 폴백)
+
+
 def should_run_task(task_name, interval_seconds):
     """
     Cloud Scheduler로 짧은 주기(예: 1분)마다 깨어나더라도, 원래 설계된 주기
     (예: 네이버 5분, DART 1분, 블로그 30분)보다 자주 실행되지 않도록 막아주는 함수.
     Firestore에 "마지막 실행 시각"을 저장해두고, 아직 주기가 안 지났으면 False.
-    Firestore를 못 쓰는 상황(로컬 실행 등)이면 항상 True(원래처럼 매번 실행).
+
+    🐛[버그 수정] 예전엔 Firestore가 없으면(메모리 전용 모드) 무조건 True를
+    반환해서, "하루 한 번만"/"N분에 한 번만" 같은 주기 제한이 사실상 전혀
+    작동을 안 하고 있었습니다(DART/네이버/블로그/유튜브/일정리마인더/IPO알림/
+    아침·오후브리핑 전부 영향받음). 메모리 폴백을 추가해서, Firestore가 없어도
+    최소한 이 컨테이너가 재시작되기 전까지는 주기가 지켜지게 했습니다.
+    (컨테이너 재시작되면 메모리가 날아가서 다시 풀리는 건 어쩔 수 없음 -
+    완전한 해결은 Firestore 연결이 필요함)
     """
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    last_run_mem = _task_last_run_memory.get(task_name)
+    if last_run_mem and (now - last_run_mem).total_seconds() < interval_seconds:
+        return False
+
     if not _firestore_client:
+        _task_last_run_memory[task_name] = now
         return True
     try:
         doc_ref = _firestore_client.collection("task_state").document(task_name)
         doc = doc_ref.get()
-        now = datetime.datetime.now(datetime.timezone.utc)
         if doc.exists:
             last_run = doc.to_dict().get("last_run")
             if last_run and (now - last_run).total_seconds() < interval_seconds:
+                _task_last_run_memory[task_name] = last_run
                 return False
         doc_ref.set({"last_run": now})
+        _task_last_run_memory[task_name] = now
         return True
     except Exception as e:
         print(f"⚠️ [Firestore] 실행주기 확인 실패 (이번엔 그냥 실행함): {e}")
+        _task_last_run_memory[task_name] = now
         return True
 
 
@@ -2739,15 +2771,18 @@ def send_morning_briefing():
 
 def check_morning_briefing(now):
     """
-    현재 시각이 MORNING_BRIEFING_HOUR(기본 8시)대이면, 오늘 하루 한 번만
-    아침 브리핑을 발송. should_run_task로 "오늘 이미 보냈는지"를 체크해서
-    같은 시간대에 여러 번 호출돼도(1분마다 깨어나므로) 중복 발송 안 되게 함.
+    ⏰ 오전(8시대)과 오후(15시대) 두 번, 하루에 각각 한 번씩 브리핑을 발송.
+    두 슬롯은 서로 독립적인 쿨다운 키를 써서, 오전 걸 보냈다고 오후 게
+    막히지 않게 함(반대도 마찬가지).
     """
-    if now.hour != MORNING_BRIEFING_HOUR:
-        return
-    today_key = f"morning_briefing_{now.strftime('%Y%m%d')}"
-    if should_run_task(today_key, 20 * 3600):  # 하루 한 번만 (20시간 이내 재실행 방지)
-        send_morning_briefing()
+    if now.hour == MORNING_BRIEFING_HOUR:
+        today_key = f"morning_briefing_am_{now.strftime('%Y%m%d')}"
+        if should_run_task(today_key, 20 * 3600):
+            send_morning_briefing()
+    elif now.hour == AFTERNOON_BRIEFING_HOUR:
+        today_key = f"morning_briefing_pm_{now.strftime('%Y%m%d')}"
+        if should_run_task(today_key, 20 * 3600):
+            send_morning_briefing()
 
 
 def check_us_news(current_time_str):
@@ -5032,19 +5067,24 @@ def dart_should_expose(report_nm, text, stock_code):
 # ============================================================
 # DART 전자공시
 # ============================================================
-def check_dart_disclosures(current_time_str, bgn_date_override=None):
+def check_dart_disclosures(current_time_str, bgn_date_override=None, max_sent_override=None):
     if not DART_API_KEY:
         return
 
     # 🧪 테스트용으로 시작일을 넓히고 싶을 때(예: 하루 전부터) bgn_date_override를
     # "YYYYMMDD" 문자열로 넘기면 됨. 평소엔 None이라 오늘 날짜 그대로 씀.
+    # 🧪 max_sent_override: 테스트할 때 몇 건 보내면 바로 멈출지(응답이 빨리
+    # 오게 하기 위함) - 안 넘기면 원래처럼 끝까지 다 훑음.
     today_str = bgn_date_override or datetime.datetime.now().strftime("%Y%m%d")
     page_no = 1
     max_pages = 5
     scanned = 0
     sent = 0
+    _budget_exceeded = False  # 🧪 scanned 상한 도달 시 바깥 while 루프까지 확실히 멈추기 위한 플래그
 
     while page_no <= max_pages:
+        if _budget_exceeded or (max_sent_override and sent >= max_sent_override):
+            break
         url = (
             "https://opendart.fss.or.kr/api/list.json"
             f"?crtfc_key={DART_API_KEY}&bgn_de={today_str}"
@@ -5065,6 +5105,8 @@ def check_dart_disclosures(current_time_str, bgn_date_override=None):
             break
 
         for item in data.get("list", []):
+            if max_sent_override and sent >= max_sent_override:
+                break
             corp_name = item.get("corp_name", "")
             report_nm = item.get("report_nm", "")
             rcept_no = item.get("rcept_no", "")
@@ -5079,6 +5121,12 @@ def check_dart_disclosures(current_time_str, bgn_date_override=None):
                 continue
 
             scanned += 1
+            if max_sent_override and scanned > max_sent_override * 10:
+                # 🧪 "보낸 건수"가 아니라 "훑은 건수" 기준으로도 상한을 둠 -
+                # 강한재료가 아니라서 결국 안 보내지는 항목도 원문 조회(느린
+                # 작업)까지는 가므로, 이것도 제한 안 하면 응답이 계속 느림.
+                _budget_exceeded = True
+                break
             is_rumor = any(k in report_nm for k in DART_RUMOR_KEYWORDS)
             is_listed = (
                 corp_name in ALL_LISTED_COMPANIES
@@ -5527,6 +5575,9 @@ try:
         "어제부터"로 넓히고, "이미 봤다"고 등록된 공시도 이번만 무시하고
         강제로 실제 발송까지 시켜봅니다. 끝나면 자동으로 원래대로 복구됩니다.
         ⚠️ 실제로 텔레그램에 메시지가 몇 건 갈 수 있습니다 (진짜 발송임).
+        🐛[버그 수정] 어제부터+중복무시로 훑으면 대상이 수백 건이 될 수 있어서,
+        하나하나 원문을 조회하다가 응답이 너무 오래 걸려 502(타임아웃)가
+        나던 문제가 있었음. max_sent_override로 소수 건만 빠르게 확인하도록 제한.
         """
         startup_init()
 
@@ -5539,6 +5590,7 @@ try:
             check_dart_disclosures(
                 datetime.datetime.now().strftime("%H:%M:%S"),
                 bgn_date_override=yesterday_str,
+                max_sent_override=3,  # 🧪 응답 빨리 오게 3건만 보내면 멈춤
             )
         finally:
             sent_news_titles.clear()
