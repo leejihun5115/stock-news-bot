@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-# 수정11 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정12 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정12] 뉴스 판정 조건을 다시 엄격하게(2개 키워드 필요) 복구 - 수정7의 완화를 되돌림.
+#            /test_us_news_now 테스트용 라우트 추가 (24시간+중복무시로 즉시 발송 테스트)
 #   [수정10] 해외뉴스/아침브리핑을 별도 텔레그램 채팅방(CHAT_ID_OVERSEAS)으로 분리 발송 가능
 #   [수정11] 🎛️ 기능별 ON/OFF 스위치 추가 (ENABLE_DOMESTIC_NEWS, ENABLE_US_NEWS,
 #            ENABLE_DART 등). Render 환경변수로 "이번엔 해외뉴스만 켜서 검증",
@@ -1608,7 +1610,7 @@ def classify_and_score(title):
     is_breaking = "속보" in title
     is_feature = "특징주" in title
 
-    is_strong_signal = bool(upper_hits) or bool(lower_hits)  # ✏️[완화] AND→OR, 더 많은 뉴스 수신용
+    is_strong_signal = bool(upper_hits) and bool(lower_hits)  # ✏️[복구] 다시 AND로 (2개 키워드 다 필요)
     # 🎯 상장 종목명이 제목에 있으면, 다른 이벤트 단어(계약/실적 등)가 없어도
     # 그 자체로 무조건 전송 (예전에는 이벤트 단어가 같이 있어야만 전송됐음)
     has_listed_company = bool(listed_company_hits)
@@ -1647,7 +1649,7 @@ def classify_telegram_channel_message(title):
     is_breaking = "속보" in title
     is_feature = "특징주" in title
 
-    is_strong_signal = bool(upper_hits) or bool(lower_hits)  # ✏️[완화] AND→OR (텔레그램 채널도 동일하게 완화)
+    is_strong_signal = bool(upper_hits) and bool(lower_hits)  # ✏️[복구] 다시 AND로
     has_important_topic = bool(celeb_hits) or bool(global_company_hits) or bool(target_hits) or bool(us_market_hits)
     # 🎯 상장 종목명이 제목에 있으면 그 자체로 무조건 전송
     has_listed_company = bool(listed_company_hits)
@@ -2701,7 +2703,7 @@ def check_us_news(current_time_str):
             is_earnings_worth_sending = earnings_info[0] and (related_theme or resolved_companies)
 
             should_send = (
-                has_macro_word or matched_count >= 1 or is_breaking or is_feature  # ✏️[완화] 2→1
+                has_macro_word or matched_count >= 2 or is_breaking or is_feature  # ✏️[복구] 다시 2개로
                 or bool(resolved_companies) or is_earnings_worth_sending
             )
 
