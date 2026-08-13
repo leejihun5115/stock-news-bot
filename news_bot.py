@@ -1,6 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-# 수정15 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정19 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정19] 지분변동 공시에 "몇 주"까지 추가 - 이제 "누가 몇주 몇%" 전부
+#            근거로 표시됨. (공급계약은 이미 [요점]에서 매출액 대비 비율로
+#            근거 제시하고 있음 - 별도 수정 불필요, 기존 기능이 이미 담당)
+#   [수정18] 🐛 대량보유상황보고서에서 "누가"(제출인) 정보가 빠져있던 문제 수정
+#            - DART가 API로 이미 주는 flr_nm(제출인) 필드를 안 쓰고 있었음.
+#            이제 "🙋제출인명 📐지분율 X%" 형태로 누가 몇% 보유하게 됐는지 표시.
+#   [수정17] 🐛 DART 재무실적(매출/영업이익/순이익) 증감률이 지금까지 중요도
+#            100점 점수에 전혀 반영이 안 되던 버그 수정 - 순이익 50% 늘어도
+#            점수가 낮게 나오던 원인. 이제 [요점] 비율과 재무실적 증감률 중
+#            더 강한 신호를 점수에 반영함.
+#   [수정16] 🐛 DART 재무수치 이상치 안전장치 - 영업이익/순이익이 매출보다 크게
+#            잘못 뽑히면(표가 텍스트로 펼쳐지며 엉뚱한 숫자를 집어온 경우)
+#            "확인필요"로 정직하게 표시. 재무수치 카드와 "⏰일정" 섹션 사이
+#            줄간격도 정리(빈 줄 추가).
 #   [수정15] 해외뉴스 라벨 "해외시황/외신"→"해외_외신"으로 변경. 해외뉴스 매칭
 #            조건 다시 1개로 완화(확인용).
 #   [수정14] 🎯 SOLO_MODE 단축 스위치 추가! Render 환경변수에 SOLO_MODE=DART
@@ -1941,11 +1955,20 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     # 🧮 100점 만점 중요도 점수 + [요점] 한 줄 (계약금액 매출대비 비율 등)
     has_listed_company_for_score = bool(resolve_companies_in_text(title))
     key_point_line = _build_key_point_line(title, is_disclosure, highlight_suffix)
-    ratio_pct_for_score = None
+    ratio_pct_candidates = []
     if key_point_line:
         pct_match = re.search(r"(\d+(?:\.\d+)?)\s*%", key_point_line)
         if pct_match:
-            ratio_pct_for_score = float(pct_match.group(1))
+            ratio_pct_candidates.append(float(pct_match.group(1)))
+    # 🐛[버그 수정] 매출/영업이익/순이익 증감률(highlight_suffix 안의 재무실적
+    # 카드)이 지금까지 중요도 점수 계산에 전혀 반영이 안 되고 있었음 - 순이익이
+    # 50% 늘어도 점수가 낮게 나오던 원인. 재무실적 줄에 있는 증감률 중 가장 큰
+    # 걸 [요점] 비율과 같이 후보에 넣어서, 둘 중 더 강한 신호를 점수에 씀.
+    if is_disclosure and highlight_suffix:
+        for m in re.finditer(r"🔺(\d+(?:\.\d+)?)%|▼(\d+(?:\.\d+)?)%", highlight_suffix):
+            val = float(m.group(1) or m.group(2))
+            ratio_pct_candidates.append(val)
+    ratio_pct_for_score = max(ratio_pct_candidates) if ratio_pct_candidates else None
     score100, grade100 = _calculate_importance_100(
         matched_count, is_exclusive, is_breaking, is_feature,
         has_listed_company_for_score, ratio_pct_for_score, novelty,
@@ -4502,10 +4525,13 @@ def _dart_major_shareholder_change_label(report_nm, text):
     return None
 
 
-def _dart_shareholding_label(report_nm, text):
+def _dart_shareholding_label(report_nm, text, filer_name=""):
     """
-    대량보유상황보고서(5% 룰)면 원문에서 "보유비율"을 찾아서
-    "📐지분율 7.15% (직전 5.23% → 변동 +1.92%p)" 형태로 반환. 못 찾으면 None.
+    대량보유상황보고서(5% 룰)면 원문에서 "보유비율"과 "보유주식수"를 찾아서
+    "🙋홍길동 📐지분율 7.15%(1,234,567주) (직전 5.23% → 변동 +1.92%p)" 형태로
+    반환. 제출인 이름(filer_name)이 있으면 "누가"인지, 원문에 주식수가 있으면
+    "몇 주"인지까지 근거로 같이 보여줌 - "누가 몇주 몇%"를 한 줄로 확인 가능.
+    비율을 못 찾으면 None (숫자를 지어내지 않음).
     """
     if "대량보유상황보고서" not in report_nm or not text:
         return None
@@ -4518,13 +4544,24 @@ def _dart_shareholding_label(report_nm, text):
     pcts = _dart_extract_percentages(chunk)
     if not pcts:
         return None
+
+    # 📊 "몇 주"인지 - 보유주식수 관련 키워드 근처에서 콤마 섞인 숫자+"주" 패턴을
+    # 전부 찾아서, 비율과 같은 순서 규칙("직전 → 이번" 순서로 등장)을 적용해
+    # 가장 마지막(=최신) 것을 현재 주식수로 사용함.
+    share_chunk = _dart_find_near(
+        text, ["보유주식수", "보유 주식수", "보유주식등의 수", "소유주식수"], window=300
+    )
+    share_matches = re.findall(r"([\d][\d,]{2,})\s*주", share_chunk)
+    shares_txt = f"({share_matches[-1]}주)" if share_matches else ""
+
+    who = f"🙋{filer_name} " if filer_name else ""
     if len(pcts) >= 2:
         # 보통 "직전 보고서 비율 → 이번 보고서 비율" 순서로 등장함
         prev_pct, cur_pct = pcts[0], pcts[1]
         diff = round(cur_pct - prev_pct, 2)
         arrow = "🔺" if diff >= 0 else "▼"
-        return f"📐지분율 {cur_pct:g}% (직전 {prev_pct:g}% → 변동 {arrow}{abs(diff):g}%p)"
-    return f"📐지분율 {pcts[0]:g}%"
+        return f"{who}📐지분율 {cur_pct:g}%{shares_txt} (직전 {prev_pct:g}% → 변동 {arrow}{abs(diff):g}%p)"
+    return f"{who}📐지분율 {pcts[0]:g}%{shares_txt}"
 
 
 def _dart_merge_split_ratio_label(report_nm, text):
@@ -4774,12 +4811,15 @@ def _dart_financial_strong(text, stock_code=None, report_nm=""):
         """레이블 근처에서 금액을 최대 2개(당기, 전기)와 증감률을 뽑아
         '당기(전기, 증감%(비교기준)) 중요N️⃣' 형태의 한 줄로 만든다. 5등급
         이상이면 🚨를 붙이고, 뒤에 💯를 붙인다. DART 실적 공시 원문은 보통
-        '당기금액 → 전기금액(증감율%)' 순서로 나온다."""
+        '당기금액 → 전기금액(증감율%)' 순서로 나온다.
+        반환값: (당기금액 숫자 또는 None, 조립된 줄 문자열 또는 None) - 숫자는
+        매출/영업이익 크기를 서로 비교해서 "표가 텍스트로 펼쳐지며 엉뚱한 값을
+        잘못 집어온" 경우를 걸러내는 안전장치에 씀."""
         chunk = _dart_find_near(text, keywords, window=200)
         amounts = _dart_extract_eok_amounts(chunk)
         pcts = _dart_extract_percentages(chunk)
         if not amounts:
-            return None
+            return None, None
         cur = amounts[0]
         pct = pcts[0] if pcts else None
         basis = _comparison_basis_label(chunk)
@@ -4790,16 +4830,26 @@ def _dart_financial_strong(text, stock_code=None, report_nm=""):
         if len(amounts) >= 2:
             prior = amounts[1]
             if pct is not None:
-                return f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)}, {arrow}{abs(pct):g}%{basis_tag}) {badge}".rstrip()
-            return f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)})"
+                return cur, f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)}, {arrow}{abs(pct):g}%{basis_tag}) {badge}".rstrip()
+            return cur, f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)})"
         if pct is not None:
-            return f"{label}: {_eok_comma_label(cur)} ({arrow}{abs(pct):g}%{basis_tag}) {badge}".rstrip()
-        return f"{label}: {_eok_comma_label(cur)}"
+            return cur, f"{label}: {_eok_comma_label(cur)} ({arrow}{abs(pct):g}%{basis_tag}) {badge}".rstrip()
+        return cur, f"{label}: {_eok_comma_label(cur)}"
 
     lines = []
-    rev_line = _metric_line("매출", ["매출액", "매출"])
-    op_line = _metric_line("영업", ["영업이익", "영업이익(손실)"])
-    net_line = _metric_line("순이익", ["당기순이익", "순이익"])
+    rev_amount, rev_line = _metric_line("매출", ["매출액", "매출"])
+    op_amount, op_line = _metric_line("영업", ["영업이익", "영업이익(손실)"])
+    net_amount, net_line = _metric_line("순이익", ["당기순이익", "순이익"])
+
+    # 🛡️ 안전장치: 표가 텍스트로 납작하게 펼쳐지면서 "영업이익" 근처에서
+    # 엉뚱한(다른 항목의) 숫자를 잘못 집어오는 경우가 있음. 영업이익이나
+    # 순이익이 매출액보다 큰 건 사실상 불가능(영업이익률 100% 초과)하므로,
+    # 이런 경우는 자신 없는 숫자를 보여주는 대신 "확인필요"로 정직하게 표시.
+    if rev_amount and op_amount and abs(op_amount) > abs(rev_amount):
+        op_line = "영업: 원문에서 정확한 값을 못 뽑음(확인필요 - 매출보다 커서 이상치로 판단)"
+    if rev_amount and net_amount and abs(net_amount) > abs(rev_amount):
+        net_line = "순이익: 원문에서 정확한 값을 못 뽑음(확인필요 - 매출보다 커서 이상치로 판단)"
+
     for line in (rev_line, op_line, net_line):
         if line:
             lines.append(line)
@@ -4996,6 +5046,10 @@ def check_dart_disclosures(current_time_str, bgn_date_override=None):
             report_nm = item.get("report_nm", "")
             rcept_no = item.get("rcept_no", "")
             stock_code = item.get("stock_code", "")
+            # 🙋 제출인(신고인) 이름 - 대량보유상황보고서(5%룰)에서 "누가" 보유하게
+            # 됐는지 알려주는 핵심 필드. DART가 이미 API 응답에 주는데 지금까지
+            # 안 쓰고 있었음(대상 회사명 corp_name과는 다른 필드).
+            filer_name = item.get("flr_nm", "")
             full_title = f"[{corp_name}] {report_nm}"
 
             if not full_title or is_already_sent(full_title):
@@ -5064,7 +5118,7 @@ def check_dart_disclosures(current_time_str, bgn_date_override=None):
                 x for x in (
                     _dart_dividend_amount_label(report_nm, report_text),
                     _dart_merge_split_ratio_label(report_nm, report_text),
-                    _dart_shareholding_label(report_nm, report_text),
+                    _dart_shareholding_label(report_nm, report_text, filer_name=filer_name),
                     _dart_major_shareholder_change_label(report_nm, report_text),
                     _dart_free_stock_ratio_label(report_nm, report_text),
                     _dart_generic_amount_label(report_nm, report_text),
@@ -5072,7 +5126,7 @@ def check_dart_disclosures(current_time_str, bgn_date_override=None):
                 ) if x
             ]
             if extra_notes:
-                reason = (reason + "\n" if reason else "") + "\n".join(extra_notes)
+                reason = (reason + "\n\n" if reason else "") + "\n\n".join(extra_notes)
             elif report_text and "대량보유상황보고서" in report_nm:
                 # 원문은 정상적으로 받아왔는데도 지분율을 못 찾은 경우 - 이 공시가
                 # 예상과 다른 문서 포맷(표 구조 등)일 수 있으므로 로그로 남겨서
