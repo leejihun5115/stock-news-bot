@@ -1,6 +1,81 @@
 # -*- coding: utf-8 -*-
 """
-# 수정32 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+# 수정43 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
+#   [수정43] 🔥 [단독]/[속보] 표시를 🔥[단독], 🔥[속보🚀] 형태로 통일 - 태그
+#            줄과 판정근거 줄 둘 다 전체 적용됨 (검증 완료).
+#   [수정42] 🎓 "재탕이어도 발송" 범위 확장 - 예전엔 급등/폭등/상한가 "단어"가
+#            제목에 직접 있어야만 예외였는데, 이제 단독/속보/특징주처럼
+#            "급등·상한가로 이어질 만한" 강한 재료거나 강한 키워드가 3개
+#            이상 겹치면 그 단어가 없어도 재탕 예외로 인정해서 발송함
+#            (검증: 단독/특징주는 True, 무관한 시황은 False로 정확히 구분).
+#            + 상장기업/일정이 있는 뉴스에 일정줄/5W1H요약/판정근거가 빠짐없이
+#            같이 붙는 것도 재검증 완료.
+#   [수정41] 3가지 수정:
+#            (1) 🕐🔥[중대] datetime.datetime.now()가 서버 시스템 시간대를
+#                그대로 썼는데, Render는 보통 UTC로 돌아서 KST 대비 9시간이
+#                밀려 나오는 문제였을 가능성이 높음 - "시간이 전혀 안 맞다"는
+#                증상과 일치. _now_kst() 헬퍼를 만들어 서버 시간대와 무관하게
+#                항상 정확한 KST를 반환하도록 전체 18곳 교체(검증 완료:
+#                UTC 서버 흉내내도 정확히 9시간 보정됨).
+#            (2) "Google News" 출처 표시를 "Google"로 단축 (해외RSS/네이버
+#                둘 다 적용 - 둘 다 구글뉴스RSS를 쓰므로 자동으로 같이 적용됨).
+#            (3) 🎓 급등/폭등/상한가/빅이슈급 강한 재료는 재탕으로 판정돼도
+#                억제하지 않고 "🚨[재탕이지만 강한재료라 참고용 발송]"으로
+#                표시해서 그대로 발송 (공부용으로 다 받아보고 싶다는 요청 반영).
+#   [수정40] 🔥 "빅이슈" 자동 감지 및 가산점 추가 - 상한가/세계최초·국내최초/
+#            사상최대/글로벌기업(엔비디아·애플 등)·삼성과의 제휴·합병·MOU/
+#            1조원 이상 대규모 금액 중 하나라도 해당하면 큰 가산점(+15~22,
+#            중복시 최대 40)을 줘서 A등급까지 자연스럽게 도달하도록 함
+#            (검증: "세계최초 3나노 양산" 사례 70점/A등급 확인).
+#            판정근거 줄에 "🔥빅이슈(사유)"로 항상 표시됨.
+#   [수정39] 🐛🔥 [중대] 점수 재조정 - 가장 흔한 케이스(키워드2개+회사명,
+#            발송조건을 최소한으로 통과한 뉴스)가 33점(D등급)에 몰려있던
+#            문제 수정. 기본점수 10→18, 키워드당 가중치 4→5로 올려서, 이제
+#            같은 케이스가 43점(C등급)으로 상향됨. 특징주/단독 등은 자연스럽게
+#            B등급까지 도달. + 📊 "판정근거" 줄 신설 - 왜 이 점수/등급이
+#            나왔는지(단독/속보/특징주/키워드개수/비율 등) 항상 요약해서
+#            보여줌(전체 뉴스 공통 적용).
+#   [수정38] 🔥 [후속] 표시 문구 개선 - 예전엔 "비율 5.15%"처럼 맨숫자만
+#            보여줘서 뭘 의미하는지 애매했음. 이제 제목 근처 단어(상승/급등/
+#            하락/급락 등)로 맥락을 붙여 "상승률 5.15% 확인됨"처럼 사람이
+#            바로 이해할 수 있게 바꿈 + 이전 보도 제목도 같이 보여줘서 비교
+#            가능하게 함.
+#   [수정37] 📅 일반 뉴스(RSS/네이버/텔레그램)에도 제목 안의 일정(날짜/시기)
+#            표현을 뽑아 "⏰ 일정: ..." 줄로 표시. + 🔎 제목 기반 "누가/무엇을/
+#            언제" 요약 줄 추가 (완전한 6하원칙은 본문 전체를 읽어야 해서
+#            제목만으로 가능한 만큼만 함 - 어디서/왜/어떻게는 제외).
+#            🐛 만드는 중 발견한 버그: KEYWORDS_1에 회사명(SK 등)이 섞여있어서
+#            "무엇을" 자리에 회사명이 잘못 들어가던 것도 같이 수정.
+#   [수정36] 🎯 유사뉴스 중 "강한 내용"(확정적 표현) 우선 발송 - 이전 기사가
+#            "검토/추진/전망" 같은 미확정 표현이었는데, 이번 기사에 "체결/확정/
+#            승인" 같은 확정 단어가 새로 생기면 재료 강도가 완전히 달라진
+#            것으로 보고 후속 발송함(금액/비율/회사명 새로 생긴 것과 동급으로
+#            취급). 이미 확정된 걸 또 확정이라고만 반복하면 여전히 재탕으로
+#            억제됨(검증 완료).
+#   [수정35] 🐛 같은 뉴스가 매체마다 제목만 살짝 바뀌어 도배되던 문제 개선:
+#            (1) 글자순서 기반(SequenceMatcher) 유사도만 쓰던 걸, 단어(토큰)
+#                겹침 비율도 같이 확인하도록 보강 - 기자마다 문장을 재구성해도
+#                (어순만 바뀐 경우) 이제 잡힘.
+#            (2) 제목 끝의 "- 매체명" 접미사를 비교 전에 제거 - 매체마다 다른
+#                접미사 때문에 유사도가 깎이던 문제 해결.
+#            오탐(완전히 다른 삼성전자 뉴스 2건) 검증도 통과함 - 무관한 뉴스를
+#            잘못 걸러내지 않음.
+#   [수정34] 🐛🔥 [중대] 점수/등급 재검증 - DART 공시는 단독/속보/특징주
+#            가산점(+15)이 구조적으로 아예 안 붙어서, 순이익이 50% 늘든
+#            500% 늘든 항상 C등급(45점)에 막혀있던 문제 발견. 비율 보너스
+#            구간을 세분화(30/50/100% 문턱)해서 극단적 실적변동이 최대
+#            B등급까지 오를 수 있게 개선. (뉴스는 여전히 S등급까지 도달 가능,
+#            검증 완료)
+#   [수정33] 🔍 전체 점검 (텔레그램/블로그/유튜브/보안):
+#            - 🐛 텔레그램 시간판정(_is_within_last_hour)도 네이버와 같은
+#              버그 - 별도 하드코딩 함수라 테스트 시 "24시간 넓히기"가 실제로
+#              안 먹히고 있었음. minutes 파라미터 추가해서 수정.
+#            - 🐛🔥 [중대] 블로그/유튜브 - 주석은 "최근 3일(4320분)"인데 실제
+#              코드는 60분만 보고 있던 버그. 블로그/유튜브가 유독 결과가 적었던
+#              진짜 원인으로 보임. 4320분으로 수정.
+#            - 🔒 보안 강화 - DART API 키가 URL 문자열에 직접 박혀있던 걸
+#              params 딕셔너리로 분리 (로그 노출 위험 방지). /status, /panel
+#              화면에 민감정보 노출 없음을 확인.
 #   [수정32] 🔄 네이버뉴스 방식 전환 - 네이버 오픈API "검색" 권한이 신규
 #            계정에는 셀프 등록으로 안 열려서(Scope Status Invalid) 계속
 #            401이 나던 문제를 우회. 구글뉴스 RSS 한국어 검색(51개 검색어
@@ -138,6 +213,26 @@ import difflib
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
+
+# ============================================================
+# 🕐 [중대 버그 수정] 서버 시간대와 무관한 정확한 한국시간(KST)
+# ------------------------------------------------------------
+# 지금까지 _now_kst()를 곳곳에서 그대로 썼는데, 이건 "서버의
+# 시스템 시간대"를 그대로 반환함. Render 같은 클라우드는 보통 UTC로 돌아가서,
+# 만약 그렇다면 텔레그램 메시지에 찍히는 시각, DART "오늘 날짜" 조회, 아침
+# 브리핑 발송 시각(8시/15시) 판정 등이 전부 9시간씩 밀려서 나오는 문제가
+# 있었을 수 있음. 서버 시간대가 뭐든 상관없이 항상 정확한 KST를 반환하는
+# 함수로 통일함.
+# ============================================================
+_KST = datetime.timezone(datetime.timedelta(hours=9))
+
+
+def _now_kst():
+    """서버 시스템 시간대와 무관하게 항상 정확한 한국시간(KST)을 naive
+    datetime으로 반환. UTC 기준으로 정확히 계산한 뒤 tzinfo만 떼어내므로,
+    기존 코드에서 datetime.datetime.now()를 쓰던 자리에 그대로 대체 가능."""
+    return datetime.datetime.now(datetime.timezone.utc).astimezone(_KST).replace(tzinfo=None)
+
 
 # ============================================================
 # 🪵 로그 버퍼링 문제 해결
@@ -1206,12 +1301,21 @@ if FIRESTORE_ENABLED:
         _firestore_client = None
 
 
+def _strip_source_suffix(text):
+    """제목 끝에 붙은 ' - 매체명' 부분을 제거. 구글뉴스RSS 등은 제목에 출처가
+    그대로 붙어서 오는 경우가 많은데(예: '...허용 - 매일일보'), 이걸 안 떼고
+    비교하면 매체마다 접미사가 달라서 "같은 기사인데 다른 기사"로 오판정되기
+    쉬움 - 중복 판정 정확도를 떨어뜨리는 주범이었음."""
+    return re.sub(r"\s*-\s*[^-]{1,25}$", "", text)
+
+
 def _normalize_for_dedup(text):
     """
-    중복 판정용 정규화: 공백/기호 제거 + 소문자화.
-    같은 기사가 출처마다 사소하게 다른 표기(공백, 특수문자, 대소문자)로 실려서
-    문자열이 완전히 똑같지 않아 중복으로 못 걸러지는 걸 방지.
+    중복 판정용 정규화: 출처 접미사 제거 + 공백/기호 제거 + 소문자화.
+    같은 기사가 출처마다 사소하게 다른 표기(공백, 특수문자, 대소문자, 매체명
+    접미사)로 실려서 문자열이 완전히 똑같지 않아 중복으로 못 걸러지는 걸 방지.
     """
+    text = _strip_source_suffix(text)
     return re.sub(r"[^\w가-힣]", "", text).lower()
 
 
@@ -1263,6 +1367,25 @@ FUZZY_DEDUP_WINDOW = 150
 FUZZY_DEDUP_THRESHOLD = 0.82
 
 
+def _tokenize_for_overlap(text):
+    """공백 기준으로 단어를 뽑아서 집합으로 반환 (2글자 이상만, 노이즈 방지).
+    SequenceMatcher(글자 순서 기반)는 기자마다 문장을 재구성하면(예: '트럼프,
+    조선사에 2척 허용' vs '조선사 2척 허용...트럼프') 유사도가 낮게 나오는
+    한계가 있어서, 순서와 무관하게 "같은 핵심 단어를 얼마나 공유하는지"를
+    보는 이 방식을 보조 신호로 같이 씀."""
+    text = _strip_source_suffix(text)
+    cleaned = re.sub(r"[^\w가-힣\s]", " ", text)
+    return {w for w in cleaned.split() if len(w) >= 2}
+
+
+def _jaccard_similarity(set_a, set_b):
+    if not set_a or not set_b:
+        return 0.0
+    inter = len(set_a & set_b)
+    union = len(set_a | set_b)
+    return inter / union if union else 0.0
+
+
 def _find_near_duplicate(title, threshold=None):
     """가장 비슷한 기존 기사의 "원문 제목"을 찾아서 반환. 없으면 None.
     (후속/재탕 구분을 위해 숫자를 비교하려면 정규화된 텍스트가 아니라
@@ -1274,19 +1397,33 @@ def _find_near_duplicate(title, threshold=None):
     후속/재탕만 가르는) classify_novelty()에서는 더 낮은 threshold를 넘겨서
     씀 - 회사명이 새로 추가되는 등으로 문장이 꽤 달라져도 "관련 기사"로
     인식되게 하기 위함 (어차피 신규/후속 둘 다 발송은 되니 위험 없음).
+
+    🐛[버그 수정] 글자 순서 기반(SequenceMatcher) 유사도만 쓰면, 기자마다
+    문장을 재구성해서 쓴 "사실상 같은 뉴스"를 놓치는 경우가 많았음(예: 여러
+    매체가 같은 사건을 다른 어순으로 보도 → 유사도가 낮게 나와서 전부 "신규"로
+    통과됨). 단어(토큰) 겹침 비율도 같이 계산해서, 둘 중 하나라도 기준을
+    넘으면 "관련 기사"로 인정하도록 보강함.
     """
     threshold = FUZZY_DEDUP_THRESHOLD if threshold is None else threshold
+    # 단어 기준 임계값은 글자기준보다 자연스럽게 낮게 나오는 경향이 있어서
+    # 비율을 낮춰서 씀 (예: 82% 글자기준 → 약 55% 단어기준)
+    token_threshold = threshold * 0.67
     norm = _normalize_for_dedup(title)
     if len(norm) < 8:
         return None
+    tokens = _tokenize_for_overlap(title)
     best_ratio = 0.0
     best_original = None
     for prev_norm, prev_original in _recent_titles_for_fuzzy:
         if abs(len(prev_norm) - len(norm)) > len(norm) * 0.6:
             continue
-        ratio = difflib.SequenceMatcher(None, norm, prev_norm).ratio()
-        if ratio >= threshold and ratio > best_ratio:
-            best_ratio = ratio
+        seq_ratio = difflib.SequenceMatcher(None, norm, prev_norm).ratio()
+        tok_ratio = _jaccard_similarity(tokens, _tokenize_for_overlap(prev_original))
+        is_match = seq_ratio >= threshold or tok_ratio >= token_threshold
+        # 두 신호 중 더 강한 쪽으로 "가장 비슷한 기존 기사"를 고름
+        effective_ratio = max(seq_ratio, tok_ratio)
+        if is_match and effective_ratio > best_ratio:
+            best_ratio = effective_ratio
             best_original = prev_original
     return best_original
 
@@ -1314,9 +1451,50 @@ def _remember_for_fuzzy(title):
 #              ② 비율(%)이 새로 생기거나 바뀜
 #              ③ 거래 상대방/관련 회사명이 새로 명시됨
 #                 (예: "공급계약 체결 예정" → "LG에너지솔루션과 공급계약 체결")
-#   🚨 재탕 - 비슷한 기존 기사가 있고 위 ①②③ 전부 새로운 게 없음
+#              ④ 미확정 → 확정 표현으로 격상됨 (예: "검토 중" → "체결 확정")
+#   🚨 재탕 - 비슷한 기존 기사가 있고 위 ①②③④ 전부 새로운 게 없음
 #            (다른 매체가 그대로 재전송) → 발송 안 함
 # ============================================================
+# 🎯 확정적 표현 vs 미확정 표현 - 같은 사건이라도 "검토 중"이던 게 "체결 확정"으로
+# 바뀌면 재료 강도가 완전히 달라지므로, 이것도 "새로운 정보"로 인정해서 후속 발송함.
+CONFIRMED_WORDS = {
+    "확정", "체결", "승인", "완료", "타결", "성사", "결정", "선정",
+    "낙찰", "수주", "합의", "발표", "공식화", "가결",
+}
+TENTATIVE_WORDS = {
+    "검토", "추진", "전망", "가능성", "예정", "고려", "논의", "타진",
+    "관측", "점쳐", "물망", "유력", "촉각", "주목",
+}
+
+
+def _has_confirmed_upgrade(cur_title, prev_title):
+    """이전 제목은 미확정 표현이었는데 이번 제목엔 확정적 표현이 새로 생겼으면
+    True. (예: 이전="공급계약 검토" → 이번="공급계약 체결 확정")"""
+    cur_confirmed = {w for w in CONFIRMED_WORDS if w in cur_title}
+    prev_confirmed = {w for w in CONFIRMED_WORDS if w in prev_title}
+    new_confirmed = cur_confirmed - prev_confirmed
+    prev_was_tentative = any(w in prev_title for w in TENTATIVE_WORDS)
+    # 이전 기사가 미확정 표현이었고, 이번에 확정 단어가 새로 등장했으면 "격상"으로 인정.
+    # (이전에도 이미 확정 표현이 있었다면 굳이 다시 강조할 필요 없어서 제외)
+    return bool(new_confirmed) and (prev_was_tentative or not prev_confirmed)
+
+
+def _describe_percentage_context(title, pct):
+    """제목 안의 비율(%) 숫자가 뭘 의미하는지, 근처 단어로 맥락을 붙여서
+    "상승률 5.15% 확인됨" 처럼 사람이 바로 이해할 수 있는 문장으로 만듦.
+    근처에 특별한 단어가 없으면 그냥 "비율 5.15% 새로 확인됨"으로 표시."""
+    context_words = {
+        "상승": ["상승", "급등", "강세", "올라", "뛰어"],
+        "하락": ["하락", "급락", "약세", "떨어", "내려"],
+        "증가": ["증가", "확대", "성장", "늘어"],
+        "감소": ["감소", "축소", "줄어"],
+    }
+    for label, words in context_words.items():
+        if any(w in title for w in words):
+            return f"{label}률 {pct:g}% 확인됨"
+    return f"비율 {pct:g}% 새로 확인됨"
+
+
 def classify_novelty(title):
     """(구분, 이모지, 요점 노트) 튜플을 반환. 구분은 "신규"/"후속"/"재탕" 중 하나.
     요점 노트는 후속일 때 "뭐가 새로 추가됐는지"를 사람이 바로 알 수 있게 요약한 문장."""
@@ -1336,16 +1514,27 @@ def classify_novelty(title):
     new_amounts = cur_amounts - prev_amounts
     new_pcts = cur_pcts - prev_pcts
     new_companies = cur_companies - prev_companies
+    confirmed_upgrade = _has_confirmed_upgrade(title, matched_original)
 
-    if new_amounts or new_pcts or new_companies:
+    if new_amounts or new_pcts or new_companies or confirmed_upgrade:
         bits = []
         if new_amounts:
-            bits.append("금액 " + "/".join(_eok_comma_label(a) for a in sorted(new_amounts, reverse=True)))
+            bits.append("계약/거래금액 " + "/".join(_eok_comma_label(a) for a in sorted(new_amounts, reverse=True)) + " 새로 명시")
         if new_pcts:
-            bits.append("비율 " + "/".join(f"{p:g}%" for p in sorted(new_pcts, reverse=True)))
+            # 🎯 그냥 "비율 X%"만 보여주면 뭘 의미하는지 애매해서, 제목에 같이
+            # 나온 단어(상승/급등/하락/급락 등)를 붙여서 맥락을 살림.
+            pct_bits = []
+            for p in sorted(new_pcts, reverse=True):
+                label = _describe_percentage_context(title, p)
+                pct_bits.append(label)
+            bits.append(", ".join(pct_bits))
         if new_companies:
-            bits.append("관련 회사 " + "/".join(sorted(new_companies)) + " 명시")
-        return "후속", "🔥", "이전 보도 대비 새 정보: " + ", ".join(bits)
+            bits.append("관련 회사 " + "/".join(sorted(new_companies)) + " 새로 명시")
+        if confirmed_upgrade:
+            bits.append("미확정('검토/추진' 등) → 확정('체결/승인' 등) 표현으로 격상")
+        # 📰 이전 기사 제목도 짧게 같이 보여줘서, "뭐가 이전 보도였는지" 바로 비교 가능하게 함
+        prev_short = matched_original if len(matched_original) <= 40 else matched_original[:40] + "…"
+        return "후속", "🔥", f"이전 보도(\"{prev_short}\") 대비 새 정보: " + " / ".join(bits)
 
     return "재탕", "🚨", None
 
@@ -1563,7 +1752,7 @@ NOISY_LISTED_COMPANY_NAMES = {
 # 유틸 함수
 # ============================================================
 def is_us_market_hour(now=None):
-    now = now or datetime.datetime.now()
+    now = now or _now_kst()
     hour = now.hour
     if US_MARKET_START_HOUR > US_MARKET_END_HOUR:
         return hour >= US_MARKET_START_HOUR or hour < US_MARKET_END_HOUR
@@ -1679,6 +1868,69 @@ def format_title(title):
 CONTRACT_KEYWORDS = {"공급계약", "수주", "계약체결", "공급 계약", "단일판매"}
 
 
+# ============================================================
+# 📅 제목 안의 일정(날짜/시기) 표현 추출
+# ------------------------------------------------------------
+# 기사 본문 전체를 매번 읽어오진 않으므로(속도/안정성 문제), 제목 자체에
+# 날짜/시기 표현이 있으면 뽑아서 별도 줄로 보여줌. 본문까지 가져와야 하는
+# 완전한 일정 추출은 DART 공시의 format_dart_schedule()이 이미 하고 있음
+# (공시는 원문 전체를 가져오니까) - 이건 그것의 "제목만 있는 일반뉴스" 버전.
+# ============================================================
+_TITLE_SCHEDULE_PATTERN = re.compile(
+    r"\d{4}년\s?\d{1,2}월(?:\s?\d{1,2}일)?"   # 2026년 8월15일
+    r"|\d{1,2}월\s?\d{1,2}일"                  # 8월15일
+    r"|\d{1,2}월\s?(?:말|초|중)"                # 8월말/8월초/8월중
+    r"|내달|이달\s?말|다음\s?달|올해\s?말"
+    r"|[1-4]분기|상반기|하반기"
+    r"|내년|당장|즉시"
+)
+
+
+def _extract_schedule_from_title(title):
+    """제목 안에 일정/날짜 관련 표현이 있으면 중복없이 리스트로 반환. 없으면 빈 리스트."""
+    seen = []
+    for m in _TITLE_SCHEDULE_PATTERN.findall(title):
+        if m not in seen:
+            seen.append(m)
+    return seen
+
+
+def _build_schedule_line(title):
+    """제목에서 일정 표현을 찾아 "⏰ 일정: ..." 한 줄로 만든다. 없으면 None."""
+    found = _extract_schedule_from_title(title)
+    if not found:
+        return None
+    return "⏰ 일정: " + " / ".join(found)
+
+
+# ============================================================
+# 🔎 제목 기반 5W1H(누가/무엇을/언제) 요약
+# ------------------------------------------------------------
+# ⚠️ 기사 "제목"만 가지고 뽑을 수 있는 만큼만 채움. "어디서/왜/어떻게"까지
+# 포함한 완전한 6하원칙은 본문 전체를 읽어야 해서(사이트마다 구조가 달라
+# 실패 위험도 크고 느려짐) 여기선 안 함 - 필요하면 별도로 요청해주세요.
+# ============================================================
+def _build_5w1h_summary(title):
+    """제목에서 뽑을 수 있는 "누가/무엇을/언제"를 한 줄로 정리. 아무것도 못
+    뽑으면 None (억지로 채우지 않음 - 숫자/사실을 지어내지 않는다는 원칙과 동일)."""
+    who = sorted(resolve_companies_in_text(title) | {c for c in UNIQUE_CELEBS if c in title})
+    # 🐛[버그 수정] KEYWORDS_1에는 회사/그룹명(SK, 삼성 등)도 섞여 있어서 그대로
+    # 쓰면 "무엇을" 자리에 회사명이 들어가는 문제가 있었음. UNIQUE_GIANTS/
+    # UNIQUE_CELEBS(=누가에 이미 쓰는 것들)는 빼고 진짜 "행위/사건" 단어만 남김.
+    action_keywords = (UNIQUE_KEYWORDS_1 | UNIQUE_KEYWORDS_2) - UNIQUE_GIANTS - UNIQUE_CELEBS
+    what_hits = sorted({kw for kw in action_keywords if kw in title})
+    when = _extract_schedule_from_title(title)
+
+    if not who and not what_hits and not when:
+        return None
+
+    bits = []
+    bits.append(f"누가: {', '.join(who) if who else '확인필요'}")
+    bits.append(f"무엇을: {', '.join(what_hits[:3]) if what_hits else '확인필요'}")
+    bits.append(f"언제: {' / '.join(when) if when else '확인필요'}")
+    return "🔎[제목요약] " + " · ".join(bits)
+
+
 def _build_key_point_line(title, is_disclosure, highlight_suffix):
     """
     제목 밑에 붙일 "💡[요점]" 한 줄을 만든다. 계약/수주 관련 뉴스면 계약금액이
@@ -1726,11 +1978,121 @@ def _build_key_point_line(title, is_disclosure, highlight_suffix):
     return f"💡[요점] 계약금액 {amount_label} · 비교기준 없음(매출액·시총 모두 미확인)"
 
 
+def _detect_big_issue_bonus(title):
+    """세계최초/상한가/사상최대/대규모 금액(1조원+)/글로벌기업·삼성과의
+    제휴·합병·인수 같은 "시장에 영향을 줄 만한 빅이슈" 신호를 찾아서 추가
+    점수와 설명을 반환. (보너스점수, 설명문자열) 튜플 - 신호가 없으면 (0, None).
+    이런 신호가 있으면 A등급까지 자연스럽게 오를 수 있도록 큰 가산점을 줌."""
+    bonus = 0
+    reasons = []
+
+    if "상한가" in title or "가격제한폭" in title:
+        bonus += 22
+        reasons.append("상한가")
+
+    if any(w in title for w in ("세계 최초", "세계최초", "세계 첫", "글로벌 최초", "국내 최초", "국내최초")):
+        bonus += 22
+        reasons.append("최초 타이틀")
+
+    if any(w in title for w in ("사상 최대", "역대 최대", "역대급")):
+        bonus += 15
+        reasons.append("사상 최대")
+
+    # 🌍 글로벌 대기업(엔비디아/애플 등)이나 삼성과, 제휴/합병/인수 관련
+    # 단어가 같이 나오면 "시장을 흔들 만한 빅이슈"로 판단
+    partnership_words = ("제휴", "파트너십", "협약", "MOU", "합작", "합병", "인수")
+    has_partnership = any(w in title for w in partnership_words)
+    has_global_or_samsung = any(g in title for g in GLOBAL_COMPANY_KEYWORDS) or "삼성" in title
+    if has_partnership and has_global_or_samsung:
+        bonus += 22
+        reasons.append("글로벌기업·삼성 제휴/합병")
+
+    # 💰 대규모 금액 - 제목에 언급된 금액이 1조원(10,000억) 이상이면 확실한 빅이슈,
+    # 3천억 이상이어도 상당히 큰 규모로 봄
+    amounts = _dart_extract_eok_amounts(title)
+    if amounts:
+        max_amt = max(amounts)
+        if max_amt >= 10000:
+            bonus += 22
+            reasons.append(f"대규모금액({_eok_comma_label(max_amt)})")
+        elif max_amt >= 3000:
+            bonus += 10
+            reasons.append(f"대형금액({_eok_comma_label(max_amt)})")
+
+    bonus = min(bonus, 40)  # 여러 신호가 겹쳐도 과도하게 누적되지 않도록 상한
+    return bonus, (", ".join(reasons) if reasons else None)
+
+
+_STRONG_MATERIAL_WORDS = {
+    "급등", "폭등", "상한가", "가격제한폭", "급락", "폭락",
+}
+
+
+def _is_strong_material(title):
+    """"재탕이라도 공부용으로는 보고 싶은" 강한 재료인지 판정.
+    ① 급등/폭등/상한가처럼 이미 실현된 결과를 나타내는 단어가 직접 있거나
+    ② 빅이슈 감지(세계최초/글로벌제휴/대규모금액 등)에 걸리거나
+    ③ 단독/속보/특징주처럼 그 자체로 "급등/상한가로 이어질 만한" 강한
+       재료거나
+    ④ 강한 키워드가 3개 이상 겹쳐서 사실상 확실한 재료로 보이면
+    → 전부 강한 재료로 인정. (급등/상한가 단어가 직접 없어도, 그럴 만한
+    재료면 재탕이어도 발송 대상이 되도록 범위를 넓힘)"""
+    if any(w in title for w in _STRONG_MATERIAL_WORDS):
+        return True
+    bonus, _ = _detect_big_issue_bonus(title)
+    if bonus > 0:
+        return True
+    matched_count, is_exclusive, is_breaking, is_feature, _ = classify_and_score(title)
+    if is_exclusive or is_breaking or is_feature:
+        return True
+    if matched_count >= 3:
+        return True
+    return False
+
+
+def _build_score_reason_line(matched_count, is_exclusive, is_breaking, is_feature,
+                               has_listed_company, ratio_pct=None, novelty="신규",
+                               big_issue_reason=None):
+    """점수/등급이 왜 그렇게 나왔는지, 어떤 요인이 반영됐는지 사람이 바로
+    알 수 있게 한 줄로 요약. "이유가 있으면 반드시 요약해서 보여준다"는
+    원칙 - 근거가 하나도 없으면 None(과장하지 않음)."""
+    bits = []
+    if is_exclusive:
+        bits.append("🔥[단독]")
+    if is_breaking:
+        bits.append("🔥[속보🚀]")
+    if is_feature:
+        bits.append("특징주")
+    if has_listed_company:
+        bits.append("상장기업 언급")
+    if matched_count >= 3:
+        bits.append(f"강한키워드 {matched_count}개")
+    elif matched_count >= 1:
+        bits.append(f"키워드 {matched_count}개")
+    if ratio_pct is not None:
+        bits.append(f"비율/증감 {ratio_pct:g}%")
+    if big_issue_reason:
+        bits.append(f"🔥빅이슈({big_issue_reason})")
+    if novelty == "후속":
+        bits.append("후속(기존 대비 소폭 감점)")
+    if not bits:
+        return None
+    return "📊 판정근거: " + ", ".join(bits)
+
+
 def _calculate_importance_100(matched_count, is_exclusive, is_breaking, is_feature,
-                                has_listed_company, ratio_pct=None, novelty="신규"):
-    """중요도를 100점 만점으로 환산하고, 등급(이모지+글자)을 같이 반환."""
-    score = 10
-    score += min(matched_count, 5) * 4
+                                has_listed_company, ratio_pct=None, novelty="신규",
+                                big_issue_bonus=0):
+    """중요도를 100점 만점으로 환산하고, 등급(이모지+글자)을 같이 반환.
+    🐛[재조정] 예전엔 "가장 흔한 케이스(키워드2개+회사명)"가 33점(D등급)으로
+    나와서, should_send를 이미 통과한(=최소한의 검증은 된) 뉴스 대부분이
+    D등급에 몰려있었음. 기본점수/키워드가중치를 올려서, 실제로 발송되는
+    뉴스가 D~S 등급에 좀 더 고르게 퍼지도록 재조정함.
+    🔥 big_issue_bonus: 세계최초/상한가/대규모금액/글로벌기업 제휴합병 같은
+    "시장을 흔들 빅이슈" 신호가 있으면 추가 가산점(_detect_big_issue_bonus 참고).
+    """
+    score = 18  # 10 → 18 (기본점수 상향)
+    score += min(matched_count, 5) * 5  # 4 → 5 (키워드 1개당 가중치 상향)
     if has_listed_company:
         score += 15
     if is_exclusive:
@@ -1739,12 +2101,23 @@ def _calculate_importance_100(matched_count, is_exclusive, is_breaking, is_featu
         score += 15
     if is_feature:
         score += 15
+    score += big_issue_bonus
     if ratio_pct is not None:
-        if ratio_pct >= 30:
+        # 🐛[버그 수정] 예전엔 30% 이상이면 전부 똑같이 +20이었음 - 그래서
+        # 순이익 50% 증가나 500% 증가나 점수가 똑같았고, DART 공시는 단독/
+        # 속보/특징주 가산점(+15)이 아예 안 붙는 구조라 아무리 극단적인
+        # 실적이어도 C등급(45점)을 절대 못 넘는 문제가 있었음. 구간을
+        # 세분화해서 극단적 변동이 실제로 더 높게 평가되도록 함.
+        p = abs(ratio_pct)
+        if p >= 100:
+            score += 30
+        elif p >= 50:
+            score += 25
+        elif p >= 30:
             score += 20
-        elif ratio_pct >= 15:
+        elif p >= 15:
             score += 15
-        elif ratio_pct >= 5:
+        elif p >= 5:
             score += 10
         else:
             score += 5
@@ -1908,9 +2281,9 @@ def _resolve_tag(title, is_schedule, is_rumor, is_disclosure, is_exclusive, is_b
     if is_disclosure:
         return "✅ 전자공시", "✅", "전자공시"                                       # 3순위: 전자공시
     if is_exclusive:
-        return "🔥 [단독]", "🔥", "단독"                                           # 4순위: 단독
+        return "🔥[단독]", "🔥", "단독"                                            # 4순위: 단독
     if is_breaking:
-        return "🚨[속보]🚀", "🚨", "속보🚀"                                        # 5순위: 속보
+        return "🔥[속보🚀]", "🔥", "속보🚀"                                        # 5순위: 속보
     if is_feature:
         suffix = "특징주_해외" if is_us_market else "특징주"
         return f"🚨[{suffix}]", "🚨", suffix                                      # 6순위: 특징주
@@ -2071,15 +2444,34 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             val = float(m.group(1) or m.group(2))
             ratio_pct_candidates.append(val)
     ratio_pct_for_score = max(ratio_pct_candidates) if ratio_pct_candidates else None
+    big_issue_bonus, big_issue_reason = _detect_big_issue_bonus(title)
     score100, grade100 = _calculate_importance_100(
         matched_count, is_exclusive, is_breaking, is_feature,
         has_listed_company_for_score, ratio_pct_for_score, novelty,
+        big_issue_bonus=big_issue_bonus,
+    )
+    reason_line = _build_score_reason_line(
+        matched_count, is_exclusive, is_breaking, is_feature,
+        has_listed_company_for_score, ratio_pct_for_score, novelty,
+        big_issue_reason=big_issue_reason,
     )
     score_line = f"✔️ 중요도 {score100} / 100\n✔️ 등급 {grade100}"
+    if reason_line:
+        score_line += f"\n{reason_line}"
 
-    # 🆕 신규/후속 표시 줄 (재탕은 애초에 여기까지 안 오고 발송 직전에 걸러짐)
+    # 📅 제목 안에 일정(날짜/시기) 표현이 있으면 별도 줄로 보여줌
+    schedule_line = _build_schedule_line(title)
+
+    # 🔎 제목에서 뽑을 수 있는 만큼의 5W1H(누가/무엇을/언제) 요약
+    summary_5w1h_line = _build_5w1h_summary(title)
+
+    # 🆕 신규/후속/재탕(강한재료) 표시 줄
     if novelty == "후속":
         novelty_line = f"✔️ [후속] {novelty_note}\n" if novelty_note else "✔️ [후속]\n"
+    elif novelty == "재탕(강한재료)":
+        # 🎓[공부용] 재탕이지만 급등/상한가/빅이슈급이라 참고용으로 발송된 경우 -
+        # "신규"라고 오해하지 않도록 명확히 재탕임을 밝히고 이유도 같이 보여줌.
+        novelty_line = f"✔️ {novelty_note}\n" if novelty_note else "✔️ [재탕-강한재료 참고용]\n"
     else:
         novelty_line = "✔️ [신규]\n"
 
@@ -2106,6 +2498,8 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             earnings_line = f"✔️ {' · '.join(parts)}\n"
 
     key_point_html = html.escape(key_point_line) + "\n" if key_point_line else ""
+    schedule_html = html.escape(schedule_line) + "\n" if schedule_line else ""
+    summary_5w1h_html = html.escape(summary_5w1h_line) + "\n" if summary_5w1h_line else ""
 
     if is_disclosure or is_rumor:
         # 📋 DART 공시류 - 구분선 없이 빈 줄로만 섹션을 나눔:
@@ -2190,6 +2584,8 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             f"{related_theme_line}"
             f"{earnings_line}"
             f"{key_point_html}"
+            f"{schedule_html}"
+            f"{summary_5w1h_html}"
             f"{score_line}\n"
             f"{company_snapshot_line}"
         )
@@ -2311,7 +2707,7 @@ def is_recent_article(entry, minutes=60, default_if_unknown=True):
             else:
                 return default_if_unknown
 
-        now = datetime.datetime.now()
+        now = _now_kst()
         diff_minutes = (now - article_time).total_seconds() / 60
         return 0 <= diff_minutes <= minutes
     except Exception:
@@ -2515,9 +2911,15 @@ def check_domestic_news(current_time_str, max_sent_override=None):
             # 걸러내고, 후속(새 숫자/정보 있음)은 표시를 붙여서 그대로 보냄.
             novelty, novelty_emoji, novelty_note = classify_novelty(title)
             if novelty == "재탕":
-                print(f"[재탕 감지] {title[:60]}")
-                mark_as_sent(title)
-                continue
+                # 🎓[공부용 예외] 급등/폭등/상한가/빅이슈급 강한 재료면, 재탕이라도
+                # 억제하지 않고 그대로 보냄(참고용). 이미 본 기사 등록은 그대로 함.
+                if _is_strong_material(title):
+                    novelty_note = "🚨[재탕이지만 강한재료라 참고용 발송]"
+                    novelty = "재탕(강한재료)"
+                else:
+                    print(f"[재탕 감지] {title[:60]}")
+                    mark_as_sent(title)
+                    continue
 
             # 🚫 먼저 "전송 예정"으로 등록해서, 같은 뉴스가 다른 소스(RSS/네이버 등)에서
             # 거의 동시에 잡혀도 절대 두 번 나가지 않게 함.
@@ -2793,7 +3195,7 @@ def _log_briefing_for_backtest(theme_name, already_moved, not_yet_moved):
     """
     if not _firestore_client:
         return
-    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    today_str = _now_kst().strftime("%Y-%m-%d")
     doc = {
         "date": today_str,
         "top_theme": theme_name,
@@ -2918,9 +3320,15 @@ def check_us_news(current_time_str, max_sent_override=None):
             # 걸러내고, 후속(새 숫자/정보 있음)은 표시를 붙여서 그대로 보냄.
             novelty, novelty_emoji, novelty_note = classify_novelty(title)
             if novelty == "재탕":
-                print(f"[재탕 감지] {title[:60]}")
-                mark_as_sent(title)
-                continue
+                # 🎓[공부용 예외] 급등/폭등/상한가/빅이슈급 강한 재료면, 재탕이라도
+                # 억제하지 않고 그대로 보냄(참고용). 이미 본 기사 등록은 그대로 함.
+                if _is_strong_material(title):
+                    novelty_note = "🚨[재탕이지만 강한재료라 참고용 발송]"
+                    novelty = "재탕(강한재료)"
+                else:
+                    print(f"[재탕 감지] {title[:60]}")
+                    mark_as_sent(title)
+                    continue
 
             mark_as_sent(title)  # 🚫 먼저 등록해서 중복 전송 원천 차단
             _remember_for_fuzzy(title)
@@ -2948,7 +3356,7 @@ def is_recent_naver_item(pub_date_str, minutes=60):
         return True
     try:
         article_time = parsedate_to_datetime(pub_date_str).replace(tzinfo=None)
-        diff_minutes = (datetime.datetime.now() - article_time).total_seconds() / 60
+        diff_minutes = (_now_kst() - article_time).total_seconds() / 60
         return 0 <= diff_minutes <= minutes
     except Exception:
         return True
@@ -2962,6 +3370,7 @@ def is_recent_naver_item(pub_date_str, minutes=60):
 # - 실패하면 알려진 도메인 매핑을 사용.
 # ============================================================
 SOURCE_NAME_BY_DOMAIN = {
+    "news.google.com": "Google",  # 🔧 해외RSS/네이버(구글RSS방식)가 이 도메인을 링크로 씀 - "Google News"로 길게 나오던 걸 짧게 통일
     "updownnews.co.kr": "업다운뉴스",
     "yna.co.kr": "연합뉴스",
     "hankyung.com": "한국경제",
@@ -3078,9 +3487,15 @@ def check_naver_news(current_time_str, max_sent_override=None, minutes_override=
 
             novelty, novelty_emoji, novelty_note = classify_novelty(title)
             if novelty == "재탕":
-                print(f"[재탕 감지] {title[:60]}")
-                mark_as_sent(title)
-                continue
+                # 🎓[공부용 예외] 급등/폭등/상한가/빅이슈급 강한 재료면, 재탕이라도
+                # 억제하지 않고 그대로 보냄(참고용). 이미 본 기사 등록은 그대로 함.
+                if _is_strong_material(title):
+                    novelty_note = "🚨[재탕이지만 강한재료라 참고용 발송]"
+                    novelty = "재탕(강한재료)"
+                else:
+                    print(f"[재탕 감지] {title[:60]}")
+                    mark_as_sent(title)
+                    continue
 
             mark_as_sent(title)
             _remember_for_fuzzy(title)
@@ -3247,19 +3662,20 @@ def extract_telegram_headline_and_link(msg, fallback_url):
     return headline, article_link, msg_time
 
 
-def _is_within_last_hour(msg_time):
-    """msg_time(타임존 포함 datetime)이 1시간 이내인지 확인. 시각을 모르면(None) 통과시킴."""
+def _is_within_last_hour(msg_time, minutes=60):
+    """msg_time(타임존 포함 datetime)이 minutes분 이내인지 확인. 시각을 모르면(None) 통과시킴.
+    테스트할 때는 minutes를 크게(예: 1440=24시간) 넘기면 더 넉넉하게 볼 수 있음."""
     if msg_time is None:
         return True
     try:
         now_utc = datetime.datetime.now(datetime.timezone.utc)
         diff_minutes = (now_utc - msg_time).total_seconds() / 60
-        return 0 <= diff_minutes <= 60
+        return 0 <= diff_minutes <= minutes
     except Exception:
         return True
 
 
-def check_telegram_channels(current_time_str, max_sent_override=None):
+def check_telegram_channels(current_time_str, max_sent_override=None, minutes_override=None):
     if "텔레그램1 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
         return
     headers = {"User-Agent": USER_AGENT}
@@ -3291,7 +3707,7 @@ def check_telegram_channels(current_time_str, max_sent_override=None):
                 if is_blocked_title(headline):  # 🧹 삭제어 포함 시 무조건 차단
                     mark_as_sent(headline)
                     continue
-                if not _is_within_last_hour(msg_time):  # 🕒 1시간 지난 메시지는 제외
+                if not _is_within_last_hour(msg_time, minutes=minutes_override or 60):  # 🕒 1시간(또는 테스트시 확장) 지난 메시지는 제외
                     mark_as_sent(headline)
                     continue
 
@@ -3312,9 +3728,13 @@ def check_telegram_channels(current_time_str, max_sent_override=None):
                 # 것과 겹칠 수 있음
                 novelty, novelty_emoji, novelty_note = classify_novelty(headline)
                 if novelty == "재탕":
-                    print(f"[재탕 감지] {headline[:60]}")
-                    mark_as_sent(headline)
-                    continue
+                    if _is_strong_material(headline):
+                        novelty_note = "🚨[재탕이지만 강한재료라 참고용 발송]"
+                        novelty = "재탕(강한재료)"
+                    else:
+                        print(f"[재탕 감지] {headline[:60]}")
+                        mark_as_sent(headline)
+                        continue
 
                 mark_as_sent(headline)  # 🚫 먼저 등록해서 중복 전송 차단
                 _remember_for_fuzzy(headline)
@@ -3332,7 +3752,7 @@ def check_telegram_channels(current_time_str, max_sent_override=None):
     print(f"[{current_time_str}] 텔레그램1(필터적용): 신규 {scanned}건 확인, {sent}건 전송")
 
 
-def check_telegram_channels_unfiltered(current_time_str, max_sent_override=None):
+def check_telegram_channels_unfiltered(current_time_str, max_sent_override=None, minutes_override=None):
     """텔레그램2 - 공부용, 조건 없이 업데이트되면 무조건 전송"""
     if "텔레그램2 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
         return
@@ -3364,7 +3784,7 @@ def check_telegram_channels_unfiltered(current_time_str, max_sent_override=None)
                 if is_blocked_title(headline):  # 🧹 삭제어 포함 시 무조건 차단 (무필터 채널도 예외 없음)
                     mark_as_sent(headline)
                     continue
-                if not _is_within_last_hour(msg_time):  # 🕒 1시간 지난 메시지는 제외
+                if not _is_within_last_hour(msg_time, minutes=minutes_override or 60):  # 🕒 1시간(또는 테스트시 확장) 지난 메시지는 제외
                     mark_as_sent(headline)
                     continue
 
@@ -3393,7 +3813,7 @@ def check_telegram_channels_unfiltered(current_time_str, max_sent_override=None)
 # ============================================================
 # 📝 분석 블로그 (매일 올라오는 게 아니므로 키워드 필터 없이 새 글이면 무조건 전송)
 # ============================================================
-def check_blogs(current_time_str, max_sent_override=None):
+def check_blogs(current_time_str, max_sent_override=None, minutes_override=None):
     if "블로그 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
         return
     feedparser.USER_AGENT = USER_AGENT
@@ -3434,7 +3854,11 @@ def check_blogs(current_time_str, max_sent_override=None):
                 continue
             # 🕒 오래된 글(예: 몇 년 전 글)이 한꺼번에 밀려오는 걸 막기 위해
             # 최근 3일(4320분) 이내 글만 통과. 발행일을 못 읽으면 안전하게 제외.
-            if not is_recent_article(entry, minutes=60, default_if_unknown=False):
+            # 🐛[버그 수정] 주석은 4320분(3일)인데 실제로는 60분만 확인하고
+            # 있었음 - 블로그는 자주 안 올라오는데 60분 창이라 대부분의 새 글을
+            # 놓치고 있었을 가능성이 높음(예: 아침에 올라온 글이 봇 재시작
+            # 몇 시간 뒤엔 이미 "오래됨" 처리됨). 4320분으로 수정.
+            if not is_recent_article(entry, minutes=minutes_override or 4320, default_if_unknown=False):
                 mark_as_sent(title)
                 continue
 
@@ -3544,7 +3968,7 @@ def resolve_all_youtube_channels():
     return ordered
 
 
-def check_youtube(current_time_str, max_sent_override=None):
+def check_youtube(current_time_str, max_sent_override=None, minutes_override=None):
     if "유튜브 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
         return
     feedparser.USER_AGENT = USER_AGENT
@@ -3571,7 +3995,9 @@ def check_youtube(current_time_str, max_sent_override=None):
                 mark_as_sent(title)
                 continue
             # 🕒 오래된 영상이 한꺼번에 밀려오는 걸 막기 위해 최근 3일 이내 영상만 통과.
-            if not is_recent_article(entry, minutes=60, default_if_unknown=False):
+            # 🐛[버그 수정] 블로그와 똑같은 버그 - 주석은 3일인데 실제론 60분만
+            # 확인하고 있었음. 4320분(3일)으로 수정.
+            if not is_recent_article(entry, minutes=minutes_override or 4320, default_if_unknown=False):
                 mark_as_sent(title)
                 continue
 
@@ -3989,7 +4415,7 @@ def check_ipo_listings(current_time_str, bgn_date_override=None, max_sent_overri
     """DART 투자설명서 공시를 훑어서, 내일 상장 예정인 종목이 있으면 알림."""
     if not DART_API_KEY:
         return
-    today_str = bgn_date_override or datetime.datetime.now().strftime("%Y%m%d")
+    today_str = bgn_date_override or _now_kst().strftime("%Y%m%d")
     tomorrow = datetime.date.today() + datetime.timedelta(days=1)
 
     try:
@@ -4165,7 +4591,7 @@ def _dart_has_disclosure_today(stock_code):
     corp_code = _get_dart_corp_code_map().get(stock_code)
     has_disclosure = None
     if corp_code:
-        today_str = datetime.datetime.now().strftime("%Y%m%d")
+        today_str = _now_kst().strftime("%Y%m%d")
         try:
             res = requests.get(
                 "https://opendart.fss.or.kr/api/list.json",
@@ -4347,7 +4773,7 @@ def _dart_fetch_financial_items(stock_code):
     items = []
     corp_code = _get_dart_corp_code_map().get(stock_code)
     if corp_code:
-        this_year = datetime.datetime.now().year
+        this_year = _now_kst().year
         for year in (this_year - 1, this_year - 2, this_year):
             for fs_div in ("CFS", "OFS"):
                 try:
@@ -5114,7 +5540,7 @@ def check_dart_disclosures(current_time_str, bgn_date_override=None, max_sent_ov
     # "YYYYMMDD" 문자열로 넘기면 됨. 평소엔 None이라 오늘 날짜 그대로 씀.
     # 🧪 max_sent_override: 테스트할 때 몇 건 보내면 바로 멈출지(응답이 빨리
     # 오게 하기 위함) - 안 넘기면 원래처럼 끝까지 다 훑음.
-    today_str = bgn_date_override or datetime.datetime.now().strftime("%Y%m%d")
+    today_str = bgn_date_override or _now_kst().strftime("%Y%m%d")
     page_no = 1
     max_pages = 5
     scanned = 0
@@ -5124,15 +5550,14 @@ def check_dart_disclosures(current_time_str, bgn_date_override=None, max_sent_ov
     while page_no <= max_pages:
         if _budget_exceeded or (max_sent_override and sent >= max_sent_override):
             break
-        url = (
-            "https://opendart.fss.or.kr/api/list.json"
-            f"?crtfc_key={DART_API_KEY}&bgn_de={today_str}"
-            f"&page_no={page_no}&page_count=100"
-        )
+        # 🔒[보안 강화] API 키를 URL 문자열에 직접 박지 않고 params로 분리 -
+        # 나중에 실수로 url 변수를 로그에 찍어도 키가 노출 안 되게 함.
+        url = "https://opendart.fss.or.kr/api/list.json"
+        params = {"crtfc_key": DART_API_KEY, "bgn_de": today_str, "page_no": page_no, "page_count": 100}
         data = None
         for attempt in range(2):
             try:
-                res = requests.get(url, timeout=10)
+                res = requests.get(url, params=params, timeout=10)
                 if res.status_code == 200:
                     data = res.json()
                     break
@@ -5272,21 +5697,19 @@ def initialize_existing_dart_disclosures():
     if not DART_API_KEY:
         return
 
-    today_str = datetime.datetime.now().strftime("%Y%m%d")
+    today_str = _now_kst().strftime("%Y%m%d")
     page_no = 1
     max_pages = 5
     registered = 0
 
     while page_no <= max_pages:
-        url = (
-            "https://opendart.fss.or.kr/api/list.json"
-            f"?crtfc_key={DART_API_KEY}&bgn_de={today_str}"
-            f"&page_no={page_no}&page_count=100"
-        )
+        # 🔒[보안 강화] API 키를 URL 문자열이 아닌 params로 분리
+        url = "https://opendart.fss.or.kr/api/list.json"
+        params = {"crtfc_key": DART_API_KEY, "bgn_de": today_str, "page_no": page_no, "page_count": 100}
         data = None
         for attempt in range(2):
             try:
-                res = requests.get(url, timeout=10)
+                res = requests.get(url, params=params, timeout=10)
                 if res.status_code == 200:
                     data = res.json()
                     break
@@ -5322,12 +5745,12 @@ def main():
 
     startup_init()
 
-    now = datetime.datetime.now()
+    now = _now_kst()
     last_rss = last_custom = last_tg_channel = last_tg_unfiltered = last_dart = last_naver = last_blog = last_youtube = now
 
     while True:
         try:
-            now = datetime.datetime.now()
+            now = _now_kst()
             time_str = now.strftime("%H:%M:%S")
 
             if (now - last_rss).total_seconds() >= RSS_CHECK_INTERVAL:
@@ -5460,7 +5883,7 @@ _source_status = {}
 
 def _update_source_status(name, ok, error=None):
     _source_status[name] = {
-        "last_run": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "last_run": _now_kst().strftime("%Y-%m-%d %H:%M:%S"),
         "ok": ok,
         "error": error,
     }
@@ -5489,7 +5912,7 @@ def run_once():
             print(f"[초기화 오류] startup_init() 실패: {e}")
             traceback.print_exc()
 
-        now = datetime.datetime.now()
+        now = _now_kst()
         time_str = now.strftime("%H:%M:%S")
 
         # 🩺 각 소스를 이 표에 등록해두고 한 줄씩 자동 실행 + 상태 기록.
@@ -5567,7 +5990,7 @@ try:
         _recent_titles_for_fuzzy.clear()
 
         try:
-            check_us_news(datetime.datetime.now().strftime("%H:%M:%S"), max_sent_override=3)
+            check_us_news(_now_kst().strftime("%H:%M:%S"), max_sent_override=3)
         finally:
             # 3) 테스트 끝나면 원래대로 복구 (실제 운영 로직에 영향 안 주도록)
             globals()["is_recent_article"] = original_is_recent
@@ -5598,7 +6021,7 @@ try:
         _recent_titles_for_fuzzy.clear()
 
         try:
-            return fn(datetime.datetime.now().strftime("%H:%M:%S"), **fn_kwargs)
+            return fn(_now_kst().strftime("%H:%M:%S"), **fn_kwargs)
         finally:
             if loosen_recency:
                 globals()["is_recent_article"] = original_is_recent
@@ -5627,7 +6050,7 @@ try:
 
         try:
             check_dart_disclosures(
-                datetime.datetime.now().strftime("%H:%M:%S"),
+                _now_kst().strftime("%H:%M:%S"),
                 bgn_date_override=yesterday_str,
                 max_sent_override=3,  # 🧪 응답 빨리 오게 3건만 보내면 멈춤
             )
@@ -5648,8 +6071,8 @@ try:
     def _test_telegram_now_route():
         """🧪 텔레그램1(필터)+2(무조건) 채널 강제 테스트 - 중복무시로 즉시 발송해봄."""
         startup_init()
-        _run_forced_test(check_telegram_channels, max_sent_override=3)
-        _run_forced_test(check_telegram_channels_unfiltered, max_sent_override=3)
+        _run_forced_test(check_telegram_channels, max_sent_override=3, minutes_override=1440)
+        _run_forced_test(check_telegram_channels_unfiltered, max_sent_override=3, minutes_override=1440)
         return "텔레그램 채널 강제 테스트 완료! 텔레그램을 확인하세요.", 200
 
     @app.route("/test_custom_sources_now", methods=["GET"])
@@ -5705,7 +6128,7 @@ try:
         오늘 알림 보낼 게 있는지 즉시 확인해봄 (강제로 새 데이터를 만들진
         않음 - 실제로 저장된 일정이 있어야 뭔가 옵니다)."""
         startup_init()
-        check_upcoming_schedule_reminders(datetime.datetime.now().strftime("%H:%M:%S"))
+        check_upcoming_schedule_reminders(_now_kst().strftime("%H:%M:%S"))
         return "일정 리마인더 체크 완료! (Firestore에 D-7/D-3 해당하는 일정이 있어야 발송됩니다. 없으면 0건이 정상)", 200
 
     @app.route("/test_briefing", methods=["GET"])
@@ -5820,7 +6243,7 @@ try:
         """
         startup_init()  # ALL_LISTED_COMPANIES 등이 비어있으면 요점 계산이 부실해지므로 먼저 초기화
 
-        now = datetime.datetime.now()
+        now = _now_kst()
         time_str = now.strftime("%H:%M:%S")
         results = []
 
