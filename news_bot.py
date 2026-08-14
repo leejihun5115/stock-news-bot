@@ -1,5 +1,35 @@
 # -*- coding: utf-8 -*-
 """
+# 버그수정11 (2026-08-14) — 약한 DART 공시 노출 차단:
+#   D등급이면서 강한 신호(단독/속보/특징주/흑자전환/빅이슈/20%+ 비율변동)가
+#   하나도 없는 공시는 조용히 억제해서 안 보냄 - "금액 적거나 일반적인
+#   내용"이 너무 많이 온다는 요청 반영. 강한 신호가 있으면 D등급이어도
+#   그대로 보냄(과도하게 막지 않기 위함). 일반뉴스는 이 필터 영향 안 받음
+#   (원래 자체 필터가 있어서). 3가지 시나리오(약한공시 차단/흑자전환은
+#   통과/일반뉴스는 무관) 전부 검증 완료.
+#
+# 버그수정10 (2026-08-14) — 이번 요청 중 "지금 가능한" 것들 처리:
+#   1. [Key Point]가 제목을 그대로 반복하던 문제 - 일반뉴스에서는 아예 제거
+#      (본문 전체를 안 읽는 이상 제목과 다른 진짜 요약을 만들 수 없어서,
+#      억지로 만드는 것보다 정직하게 안 보여주는 게 낫다는 판단). DART는
+#      원문 기반 실질정보(거래상대방/배당/지분율)를 계속 보여줌.
+#   2. 등급 표시 형식 변경: "뉴스등급 : D등급 (38/100)", "재무등급 : 관심(흑자전환) (38/100)"
+#   3. 흑자전환인데 다른 데이터(ROE 등) 부족으로 "주의"등급 나오던 문제 -
+#      흑자전환 감지시 최소 "관심(흑자전환)" 등급 보장.
+#   4. 판정근거에서 이유 불명확한 "강한키워드 N개" 제거.
+#   5. 🔥[중대] 한글 회사명 하이라이트가 단어경계 없이 부분일치라서 "테스트"
+#      안에 짧은 회사명이 우연히 들어있으면 오탐하던 버그 - (?<![가-힣])...
+#      (?![가-힣]) 패턴으로 수정 (4곳 전부). 재현+수정 검증 완료.
+#   6. 텔레그램 채널 추가: newszzang, stockdartalert (상장기업 언급시만 노출.
+#      rocket_news1/라르고TV는 이미 있었음 - 라르고TV 미노출은 다른 원인으로 추정).
+#   7. 브리핑 끝에 "— 타이밍 —" 서명 추가.
+#   8. 해외지수에 원/달러 환율, WTI 유가 추가.
+#
+#   ⚠️[중요] 요청하신 것 중 아래는 "새로운 유료 실시간 데이터"가 있어야 가능해서
+#   이번엔 손 못 댔습니다 - 실제 나스닥/코스피200 선물, 채권금리, DXY, 외국인
+#   선물수급, 실시간 대장주 등락률/거래대금 추적, 예측성 시나리오 종목 추천.
+#   지금 쓰는 무료 소스(DART/Yahoo지수/네이버금융)로는 안 됩니다.
+#
 # 버그수정9 (2026-08-14) — 배당결정 공시 + Key Point 문장 개선:
 #   1. 배당결정 공시도 대량보유상황보고서와 같은 원인(짧은 타임아웃 15초→30초)
 #      이었을 가능성이 높아 같이 상향. 배당금액뿐 아니라 배당기준일("언제")도
@@ -366,6 +396,11 @@ UNRESTRICTED_SOURCES = {
 # ============================================================
 TARGET_TELEGRAM_CHANNELS = [
     ("텔레그램", "https://t.me/s/notRealDonaldTrump_kr"),
+    # 🆕 요청하신 채널 추가 - 상장기업 이름이 제목/본문에 있을 때만 노출됨
+    # (이 목록은 "필터 적용"이라 무조건 다 오는 게 아니라, 관련 종목이
+    # 언급된 것만 골라서 옴)
+    ("뉴스짱", "https://t.me/s/newszzang"),
+    ("공시알리미", "https://t.me/s/stockdartalert"),
 ]
 
 # ============================================================
@@ -1063,6 +1098,8 @@ US_MARKET_INDICES = [
     ("러셀2000", "^RUT"),
     ("필라델피아반도체(SOX)", "^SOX"),
     ("VIX(공포지수)", "^VIX"),
+    ("원/달러 환율", "KRW=X"),
+    ("WTI 국제유가", "CL=F"),
 ]
 
 US_KEY_STOCKS = [
@@ -1690,6 +1727,12 @@ def format_title(title):
       - 그 외 상장기업/개별 계열사명(삼성전자 등) -> ⚡️로 양쪽 감싸기
       - FED/POWELL/EARNINGS 같은 금리·실적 매크로 단어 -> 💰 접두사
       - TRUMP(영문 티커)는 회사가 아니라 인물이므로 🕵️로 처리
+
+    🐛[버그 수정] 한글 회사명은 정규식 \\b(단어경계)가 안 먹혀서, 지금까지
+    "테스트"라는 일반 단어 안에 짧은 회사명(예: "테스")이 우연히 들어있으면
+    잘못 하이라이트되는 문제가 있었음. (?<![가-힣])...(?![가-힣]) 패턴으로
+    "앞뒤가 한글 글자로 이어지지 않을 때만" 매치하도록 고쳐서, 더 긴 한글
+    단어 안에 짧은 회사명이 우연히 포함된 경우를 걸러냄.
     """
     formatted = html.escape(title)
 
@@ -1716,7 +1759,7 @@ def format_title(title):
     if KOREAN_GROUP_NAMES:
         sorted_terms = sorted(KOREAN_GROUP_NAMES, key=len, reverse=True)
         pattern_parts = [
-            (r"\b" + re.escape(t) + r"\b") if t.isascii() else re.escape(t)
+            (r"\b" + re.escape(t) + r"\b") if t.isascii() else (r"(?<![가-힣])" + re.escape(t) + r"(?![가-힣])")
             for t in sorted_terms
         ]
         combined_pattern = re.compile("|".join(pattern_parts), re.IGNORECASE)
@@ -1726,7 +1769,7 @@ def format_title(title):
     if GLOBAL_COMPANY_KEYWORDS:
         sorted_terms = sorted(GLOBAL_COMPANY_KEYWORDS, key=len, reverse=True)
         pattern_parts = [
-            (r"\b" + re.escape(t) + r"\b") if t.isascii() else re.escape(t)
+            (r"\b" + re.escape(t) + r"\b") if t.isascii() else (r"(?<![가-힣])" + re.escape(t) + r"(?![가-힣])")
             for t in sorted_terms
         ]
         combined_pattern = re.compile("|".join(pattern_parts), re.IGNORECASE)
@@ -1742,7 +1785,7 @@ def format_title(title):
     if company_terms:
         sorted_terms = sorted(company_terms, key=len, reverse=True)
         pattern_parts = [
-            (r"\b" + re.escape(t) + r"\b") if t.isascii() else re.escape(t)
+            (r"\b" + re.escape(t) + r"\b") if t.isascii() else (r"(?<![가-힣])" + re.escape(t) + r"(?![가-힣])")
             for t in sorted_terms
         ]
         combined_pattern = re.compile("|".join(pattern_parts), re.IGNORECASE)
@@ -1764,7 +1807,7 @@ def format_title(title):
     if theme_only_keywords_1:
         sorted_terms = sorted(theme_only_keywords_1, key=len, reverse=True)
         pattern_parts = [
-            (r"\b" + re.escape(t) + r"\b") if t.isascii() else re.escape(t)
+            (r"\b" + re.escape(t) + r"\b") if t.isascii() else (r"(?<![가-힣])" + re.escape(t) + r"(?![가-힣])")
             for t in sorted_terms
         ]
         combined_pattern = re.compile("|".join(pattern_parts), re.IGNORECASE)
@@ -1970,7 +2013,9 @@ def _build_score_reason_line(matched_count, is_exclusive, is_breaking, is_featur
     """점수/등급이 왜 그렇게 나왔는지 사람이 바로 알 수 있게 한 줄로 요약.
     "상장기업 언급"처럼 거의 항상 참인 무의미한 이유는 넣지 않고, 실제로
     주가에 영향 줄 만한 실질적 근거(단독/속보/특징주/비율변동/빅이슈)만
-    담음 - 근거가 하나도 없으면 None(과장하지 않음)."""
+    담음 - 근거가 하나도 없으면 None(과장하지 않음).
+    🐛[수정] "강한키워드 N개"는 왜 중요한지 이유가 불명확해서 제거함 -
+    단순히 정해둔 단어가 몇 개 겹쳤다는 것만으로는 실질적인 근거가 아님."""
     bits = []
     if is_exclusive:
         bits.append("🔥[단독]")
@@ -1978,8 +2023,6 @@ def _build_score_reason_line(matched_count, is_exclusive, is_breaking, is_featur
         bits.append("🔥[속보🚀]")
     if is_feature:
         bits.append("특징주")
-    if matched_count >= 3:
-        bits.append(f"강한키워드 {matched_count}개")
     if ratio_pct is not None:
         bits.append(f"비율/증감 {ratio_pct:g}%")
     if big_issue_reason:
@@ -2356,15 +2399,33 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         has_listed_company_for_score, ratio_pct_for_score, novelty,
         big_issue_reason=big_issue_reason,
     )
-    score_line = f"✔️ 뉴스등급 {score100} / 100 ({grade100})"
+    score_line = f"✔️ 뉴스등급 : {grade100}등급 ({score100} / 100)"
     if reason_line:
         score_line += f"\n{reason_line}"
+
+    # 🚫 D등급이면서 강한 신호(흑자전환/빅이슈/단독/속보/특징주/큰 비율변동)도
+    # 전혀 없는 공시는 조용히 억제. "금액이 적거나 일반적인 내용"인 공시가
+    # 너무 많이 온다는 요청을 반영 - 진짜 강한 신호가 있으면 D등급이어도
+    # 그대로 보냄(과도하게 막지 않기 위함).
+    if is_disclosure and grade100 == "D":
+        has_strong_signal = (
+            is_exclusive or is_breaking or is_feature or big_issue_bonus > 0
+            or (ratio_pct_for_score is not None and ratio_pct_for_score >= 20)
+            or (highlight_suffix and "흑자전환" in highlight_suffix)
+        )
+        if not has_strong_signal:
+            return False
 
     # 📅 제목 안에 일정(날짜/시기) 표현이 있으면 별도 줄로 보여줌
     schedule_line = _build_schedule_line(title)
 
     # 🔎 제목에서 뽑을 수 있는 만큼의 5W1H(누가/무엇을/언제) 요약
-    summary_5w1h_line = _build_key_point_summary(title)
+    # ⚠️[중요] 제목만 갖고 있어서, 제목과 "다른" 진짜 요약을 만들 수 없음
+    # (본문 전체를 읽어야만 가능한데 그건 별도 큰 작업). 억지로 만들면
+    # 제목을 그대로 반복하거나 지어낸 내용이 되므로, 아예 안 보여줌 -
+    # 정직한 게 낫다는 판단. DART 공시는 원문을 읽어서 실질적 정보
+    # (거래상대방/배당/지분율 등)를 뽑고 있어서 별도로 그대로 유지됨.
+    summary_5w1h_line = None
 
     # 🆕 신규/후속/재탕(강한재료) 표시 줄
     if novelty == "후속":
@@ -2465,7 +2526,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
                 fin_snap = _dart_financial_snapshot(stock_code)
                 fin_score, fin_grade, fin_missing = calculate_financial_score_100(fin_snap)
                 if fin_snap:  # 재무제표 자체를 못 가져온 경우(신규상장 등)는 아예 표시 안 함
-                    fin_line = f"✔️ 재무등급 {fin_score} / 100 ({fin_grade})"
+                    fin_line = f"✔️ 재무등급 : {fin_grade} ({fin_score} / 100)"
                     if fin_missing:
                         fin_line += f" (참고: {'/'.join(fin_missing)} 데이터 없음)"
                     snap_parts.append(fin_line)
@@ -3144,6 +3205,10 @@ def build_morning_briefing_text(header="🇺🇸 해외시장"):
         _log_briefing_for_backtest(top_theme["name"], already_moved, not_yet_moved)
     except Exception as e:
         print(f"[브리핑 기록 오류] {e}")
+
+    # ✍️ 브리핑 끝에 서명을 살짝 붙임
+    lines.append("")
+    lines.append("— 타이밍 —")
 
     return "\n".join(lines)
 
@@ -5137,6 +5202,12 @@ def calculate_financial_score_100(snap):
     else:
         score += 10
 
+    # 🎯 흑자전환은 그 자체로 확실히 긍정적인 신호인데, ROE/부채비율 등
+    # "다른" 데이터가 부족하면(missing) 종합점수가 낮게 나와서 "주의"로
+    # 잘못 표시되는 문제가 있었음. 흑자전환이 감지되면 최소 "관심(흑자전환)"
+    # 등급을 보장함 (다른 데이터 부족으로 억울하게 낮은 등급 안 받게).
+    is_turnaround = op_prev is not None and op_cur is not None and op_prev <= 0 < op_cur
+
     score = max(0, min(score, 100))
 
     if score >= 80:
@@ -5145,6 +5216,8 @@ def calculate_financial_score_100(snap):
         grade = "양호"
     elif score >= 50:
         grade = "보통"
+    elif is_turnaround:
+        grade = "관심(흑자전환)"
     else:
         grade = "주의"
 
