@@ -1,5 +1,54 @@
 # -*- coding: utf-8 -*-
 """
+# 버그수정7 (2026-08-14) — 브리핑 스케줄 확장 + 휴장일 안내 신설:
+#   1. 아침브리핑을 7시/7시30분 2번, 오후브리핑을 15시/15시30분 2번으로 확장
+#      (기존 8시/15시 각 1번 → 각 2번). 시/분 슬롯 리스트 기반으로 재설계.
+#   2. 🔔미국장 개장 브리핑 신설 - 22시30분(서머타임 기준, 겨울엔 23시30분으로
+#      직접 조정 필요)에 개장 직후 지수/주요종목 현황을 정리해서 발송.
+#      기존 아침브리핑 로직을 재사용(header만 다르게).
+#   3. 📅휴장일 안내 신설 - 국경일로 증시가 며칠 쉬면 "언제부터 언제까지
+#      쉬는지" 미리 알려줌. 신정/삼일절/어린이날/현충일/광복절/개천절/한글날/
+#      성탄절처럼 날짜 고정된 공휴일은 미리 채워뒀음. 설날/추석/대체공휴일은
+#      음력 기준이라 정확한 날짜를 지어내는 대신 직접 추가하도록 안내 주석을
+#      남김(KRX_MARKET_HOLIDAYS_2026 참고). 광복절(8/15, 토) 사례로 실제
+#      검증 완료 - "08월 15일(토) ~ 08월 16일(일)" 정확히 감지됨.
+#
+# 버그수정6 (2026-08-14) — 판정근거/DART 요점 개선:
+#   1. 판정근거에서 거의 항상 참인 무의미한 "상장기업 언급" 제거. 실제로
+#      주가에 영향 줄 실질적 이유(단독/속보/특징주/비율변동/빅이슈)만 남김 -
+#      전부 없으면 줄 자체를 안 보여줌(과장 안 함).
+#   2. 🤝거래상대방 라벨 신설 - DART 계약/공급/양수도 공시 원문에 공시
+#      제출기업이 아닌 "다른 상장기업"이 거래상대방으로 언급되면, 그 회사명과
+#      계약금액을 자동으로 뽑아서 "🤝주성엔지니어링 (계약 500억)"처럼 보여줌
+#      (예: 삼성전자 공시에 반도체장비업체 주성엔지니어링이 상대방으로
+#      나오면 자동 추출). 실제 텍스트로 검증 완료.
+#   3. 대량보유상황보고서의 "누가 몇% 보유"는 이미 있던 로직(_dart_shareholding_label)인데,
+#      최근 사례처럼 안 나온 건 DART 원문 조회 자체가 실패했을 가능성이 높음
+#      (별도 이슈로 계속 추적 중).
+#
+# 버그수정5 (2026-08-14) — 줄간격 + 목표가 표시:
+#   1. 메시지 섹션(본문/등급/회사정보) 사이에 여백 한 줄씩 추가해서 덜
+#      답답하게 개선.
+#   2. "🎯목표가" 줄 신설 - 네이버금융에 실제 애널리스트 목표주가가 있으면
+#      "목표가: 🔺85,000원 (+21.4%)" 형태로 표시(🔺=상향/🔻=하향, 텔레그램은
+#      글자색 미지원이라 색깔 대신 이모지로 구분). 실제 목표가가 없고 EPS·PER만
+#      있으면 "(추정)" 표시를 붙여서 진짜 애널리스트 수치와 구분되게 계산해서
+#      보여줌 (숫자를 진짜처럼 지어내지 않기 위함). 기존 "🎯괴리율" 표시를
+#      이걸로 통합(내용이 겹쳐서). 밑줄강조 정규식도 새 이름에 맞게 같이 수정.
+#   4가지 시나리오(상향/하향/추정치/데이터없음) 전부 검증 완료.
+#
+# 버그수정4 (2026-08-14) — 요청하신 6가지 개선사항:
+#   1. "제목요약"(누가:X·무엇을:Y 나열식)을 자연스럽게 연결된 문장으로 변경.
+#      [Key Point] "한화투자증권이 본격화·투자 관련 소식" 형태.
+#   2. 한국 대기업 그룹명 앞 👍 이모지 제거 (굵게만 표시).
+#   3. 유튜브 태그 중복 체크마크(✅[유튜브 _ ✅채널명]) 수정 →
+#      ✅[유튜브 _ 채널명]으로 정리.
+#   4. "중요도"→"뉴스등급", "재무점수"→"재무등급"으로 명칭 통일, 한 줄로 압축.
+#   5. DART 재무카드에 "💡특이사항" 줄 신설 - 매출/영업이익/순이익이 20%
+#      이상 증가하면(시장이 좋게 반응할 만한 수준) 자동으로 강조 표시.
+#   6. Google 출처 표시 통일은 이미 완료(버그수정2) - 재확인만 남음.
+#   전부 실제 메시지 조립까지 통합 테스트로 검증 완료.
+#
 # 버그수정3 (2026-08-14) — 🔥[중대] SOLO_MODE에 잘못된 형식(한글 이름을
 #   슬래시로 나열)을 넣으면, "일단 전부 끄고" 시작했는데 아무것도 못 알아들어서
 #   전체 소스가 다 꺼져버리는 사고가 있었음 (실제로 뉴스가 하나도 안 오던
@@ -1123,8 +1172,8 @@ def _detect_theme_from_text(text):
                 return theme
     return None
 
-MORNING_BRIEFING_HOUR = 8    # 오전 브리핑 (한국장 열리기 전) - KST 기준, 서버 로컬시간=KST 가정
-AFTERNOON_BRIEFING_HOUR = 15  # 오후 브리핑 (한국장 마감 무렵) - 필요하면 이 숫자만 바꾸면 됨
+MORNING_BRIEFING_TIMES = [(7, 0), (7, 30)]      # 오전 브리핑 2번 (7시, 7시30분) - KST 기준
+AFTERNOON_BRIEFING_TIMES = [(15, 0), (15, 30)]  # 오후 브리핑 2번 (15시, 15시30분)
 
 # ============================================================
 # 💾 중복 방지 저장소 (Firestore, 무료)
@@ -1638,7 +1687,7 @@ def format_title(title):
         pattern = re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE)
         formatted = pattern.sub(f"<b>💰{term}</b>", formatted)
 
-    # 4-a) 우리나라 대기업 그룹명 -> 👍 / 해외 글로벌기업명 -> ⭐
+    # 4-a) 우리나라 대기업 그룹명 -> 굵게만 표시 (이모지 없이)
     already_highlighted = set()
     if KOREAN_GROUP_NAMES:
         sorted_terms = sorted(KOREAN_GROUP_NAMES, key=len, reverse=True)
@@ -1647,7 +1696,7 @@ def format_title(title):
             for t in sorted_terms
         ]
         combined_pattern = re.compile("|".join(pattern_parts), re.IGNORECASE)
-        formatted = combined_pattern.sub(lambda m: f"<b>👍{m.group(0)}</b>", formatted)
+        formatted = combined_pattern.sub(lambda m: f"<b>{m.group(0)}</b>", formatted)
         already_highlighted |= KOREAN_GROUP_NAMES
 
     if GLOBAL_COMPANY_KEYWORDS:
@@ -1759,24 +1808,46 @@ def _build_schedule_line(title):
 # 포함한 완전한 6하원칙은 본문 전체를 읽어야 해서(사이트마다 구조가 달라
 # 실패 위험도 크고 느려짐) 여기선 안 함 - 필요하면 별도로 요청해주세요.
 # ============================================================
-def _build_5w1h_summary(title):
-    """제목에서 뽑을 수 있는 "누가/무엇을/언제"를 한 줄로 정리. 아무것도 못
-    뽑으면 None (억지로 채우지 않음 - 숫자/사실을 지어내지 않는다는 원칙과 동일)."""
+def _has_final_consonant(word):
+    """한글 단어의 마지막 글자에 받침이 있는지 확인 (조사 선택용).
+    받침 있으면 "이/을", 없으면 "가/를"을 씀 (예: "한화가" vs "한화투자증권이")."""
+    if not word:
+        return False
+    last_char = word[-1]
+    code = ord(last_char)
+    if 0xAC00 <= code <= 0xD7A3:  # 한글 완성형 글자 범위
+        return (code - 0xAC00) % 28 != 0
+    return False
+
+
+def _build_key_point_summary(title):
+    """제목에서 뽑을 수 있는 누가/무엇을/언제를, 단어 나열이 아니라 조사를
+    붙여서 자연스럽게 읽히는 한 문장으로 요약. 형식: [Key Point] "요약문장"
+    최소한 "누가"나 "무엇을" 하나는 있어야 문장을 만듦 (억지로 지어내지 않음
+    - 숫자/사실을 지어내지 않는다는 원칙과 동일)."""
     who = sorted(resolve_companies_in_text(title) | {c for c in UNIQUE_CELEBS if c in title})
     # KEYWORDS_1엔 회사/그룹명(SK, 삼성 등)도 섞여있어서, "누가"에 이미 쓴
     # UNIQUE_GIANTS/UNIQUE_CELEBS는 빼고 진짜 "행위/사건" 단어만 남김.
     action_keywords = (UNIQUE_KEYWORDS_1 | UNIQUE_KEYWORDS_2) - UNIQUE_GIANTS - UNIQUE_CELEBS
-    what_hits = sorted({kw for kw in action_keywords if kw in title})
+    what_hits = sorted({kw for kw in action_keywords if kw in title}, key=len, reverse=True)
     when = _extract_schedule_from_title(title)
 
-    if not who and not what_hits and not when:
-        return None
+    if not who and not what_hits:
+        return None  # 언제만 있고 누가/무엇을 둘 다 없으면 문장을 못 만듦
 
-    bits = []
-    bits.append(f"누가: {', '.join(who) if who else '확인필요'}")
-    bits.append(f"무엇을: {', '.join(what_hits[:3]) if what_hits else '확인필요'}")
-    bits.append(f"언제: {' / '.join(when) if when else '확인필요'}")
-    return "🔎[제목요약] " + " · ".join(bits)
+    who_str = "·".join(who[:2])
+    what_str = "·".join(what_hits[:2])
+    when_prefix = f"{' / '.join(when)}, " if when else ""
+
+    if who_str and what_str:
+        josa = "이" if _has_final_consonant(who_str) else "가"
+        sentence = f"{when_prefix}{who_str}{josa} {what_str} 관련 소식"
+    elif who_str:
+        sentence = f"{when_prefix}{who_str} 관련 소식"
+    else:
+        sentence = f"{when_prefix}{what_str} 관련 소식"
+
+    return f'[Key Point] "{sentence}"'
 
 
 def _build_key_point_line(title, is_disclosure, highlight_suffix):
@@ -1901,9 +1972,10 @@ def _is_strong_material(title):
 def _build_score_reason_line(matched_count, is_exclusive, is_breaking, is_feature,
                                has_listed_company, ratio_pct=None, novelty="신규",
                                big_issue_reason=None):
-    """점수/등급이 왜 그렇게 나왔는지, 어떤 요인이 반영됐는지 사람이 바로
-    알 수 있게 한 줄로 요약. "이유가 있으면 반드시 요약해서 보여준다"는
-    원칙 - 근거가 하나도 없으면 None(과장하지 않음)."""
+    """점수/등급이 왜 그렇게 나왔는지 사람이 바로 알 수 있게 한 줄로 요약.
+    "상장기업 언급"처럼 거의 항상 참인 무의미한 이유는 넣지 않고, 실제로
+    주가에 영향 줄 만한 실질적 근거(단독/속보/특징주/비율변동/빅이슈)만
+    담음 - 근거가 하나도 없으면 None(과장하지 않음)."""
     bits = []
     if is_exclusive:
         bits.append("🔥[단독]")
@@ -1911,12 +1983,8 @@ def _build_score_reason_line(matched_count, is_exclusive, is_breaking, is_featur
         bits.append("🔥[속보🚀]")
     if is_feature:
         bits.append("특징주")
-    if has_listed_company:
-        bits.append("상장기업 언급")
     if matched_count >= 3:
         bits.append(f"강한키워드 {matched_count}개")
-    elif matched_count >= 1:
-        bits.append(f"키워드 {matched_count}개")
     if ratio_pct is not None:
         bits.append(f"비율/증감 {ratio_pct:g}%")
     if big_issue_reason:
@@ -2293,7 +2361,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         has_listed_company_for_score, ratio_pct_for_score, novelty,
         big_issue_reason=big_issue_reason,
     )
-    score_line = f"✔️ 중요도 {score100} / 100\n✔️ 등급 {grade100}"
+    score_line = f"✔️ 뉴스등급 {score100} / 100 ({grade100})"
     if reason_line:
         score_line += f"\n{reason_line}"
 
@@ -2301,7 +2369,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
     schedule_line = _build_schedule_line(title)
 
     # 🔎 제목에서 뽑을 수 있는 만큼의 5W1H(누가/무엇을/언제) 요약
-    summary_5w1h_line = _build_5w1h_summary(title)
+    summary_5w1h_line = _build_key_point_summary(title)
 
     # 🆕 신규/후속/재탕(강한재료) 표시 줄
     if novelty == "후속":
@@ -2348,7 +2416,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         body_escaped = ""
         if highlight_suffix:
             body_escaped = html.escape(highlight_suffix)
-            body_escaped = re.sub(r"(🎯괴리율[^\n]*)", r"<u>\1</u>", body_escaped)
+            body_escaped = re.sub(r"(🎯목표가[^\n]*)", r"<u>\1</u>", body_escaped)
         body_section = f"{body_escaped}\n\n" if body_escaped else ""
         header_line_prefix = f"{title_prefix} " if title_prefix else ""
         text_content = (
@@ -2356,7 +2424,7 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             f"<b>{report_body}</b>\n\n"
             f"{novelty_line}"
             f"{key_point_html}"
-            f"{score_line}\n\n"
+            f"\n{score_line}\n\n"
             f"{body_section}"
         )
         # 🔘 링크를 텍스트(<a>)가 아니라 버튼(인라인 키보드)으로 바꿈.
@@ -2395,14 +2463,14 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             if stock_code:
                 mcap = _dart_market_cap_eok(stock_code)
                 snap_parts = [x for x in (
-                    _dart_gap_ratio_label(stock_code),
+                    _build_target_price_line(stock_code),
                     _dart_valuation_line(stock_code),
                 ) if x]
                 # 🏦 재무점수 (매출성장/영업이익성장/영업이익률/ROE/부채비율/영업현금흐름 100점)
                 fin_snap = _dart_financial_snapshot(stock_code)
                 fin_score, fin_grade, fin_missing = calculate_financial_score_100(fin_snap)
                 if fin_snap:  # 재무제표 자체를 못 가져온 경우(신규상장 등)는 아예 표시 안 함
-                    fin_line = f"✔️ 재무점수 {fin_score} / 100\n✔️ 등급 {fin_grade}"
+                    fin_line = f"✔️ 재무등급 {fin_score} / 100 ({fin_grade})"
                     if fin_missing:
                         fin_line += f" (참고: {'/'.join(fin_missing)} 데이터 없음)"
                     snap_parts.append(fin_line)
@@ -2424,8 +2492,8 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
             f"{key_point_html}"
             f"{schedule_html}"
             f"{summary_5w1h_html}"
-            f"{score_line}\n"
-            f"{company_snapshot_line}"
+            f"\n{score_line}\n"
+            f"\n{company_snapshot_line}"
         )
         reply_markup = (
             {"inline_keyboard": [[{"text": "🔗 기사보기", "url": news_url}]]} if news_url else None
@@ -2950,8 +3018,9 @@ def _rank_domestic_candidates(kr_stock_names, limit=3):
 #    강했는지 정리해서, 그게 한국 주식 중 어떤 종목과 관련 있는지까지
 #    묶어서 아침에 한 번, 오후에 한 번 보내줍니다.
 # ============================================================
-def build_morning_briefing_text():
-    """아침 브리핑 텍스트를 조립. 지수 시세를 전부 못 가져오면 None(발송 안 함)."""
+def build_morning_briefing_text(header="🇺🇸 해외시장"):
+    """아침 브리핑 텍스트를 조립. 지수 시세를 전부 못 가져오면 None(발송 안 함).
+    header를 다르게 넘기면 같은 내용을 "미국장 개장" 등 다른 제목으로도 재사용 가능."""
     index_lines = []
     any_index_ok = False
     for name, symbol in US_MARKET_INDICES:
@@ -2983,7 +3052,7 @@ def build_morning_briefing_text():
 
     ranked_themes = _classify_us_themes(quote_map)
 
-    lines = ["🇺🇸 해외시장", ""]
+    lines = [header, ""]
     lines.extend(index_lines)
     lines.append("")
     if stock_lines:
@@ -3131,20 +3200,71 @@ def send_morning_briefing():
     return False
 
 
+def send_us_market_open_briefing():
+    """🔔 미국장 개장 시각에, 개장 직후 지수/주요종목 상황을 정리해서 보냄.
+    build_morning_briefing_text()와 같은 데이터를 쓰되, 제목만 "미국장 개장"
+    으로 다르게 붙여서 재사용."""
+    text = build_morning_briefing_text(header="🔔 미국장 개장 특이사항")
+    if not text:
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID_OVERSEAS,
+        "text": text,
+        "link_preview_options": {"is_disabled": True},
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=10)
+        if res.status_code == 200:
+            print("✅ [미국장 개장 브리핑] 발송 완료.")
+            return True
+        print(f"[미국장 개장 브리핑 전송 실패] status={res.status_code} body={res.text[:200]}")
+    except Exception as e:
+        print(f"[미국장 개장 브리핑 전송 오류] {e}")
+    return False
+
+
+def _is_near_scheduled_time(now, target_hour, target_minute, window_minutes=3):
+    """지금 시각(now)이 목표 시:분에서 ±window_minutes 이내인지 확인.
+    체크 주기가 정확히 매분마다 돌지 않을 수도 있어서, 정각을 살짝 지나쳐도
+    놓치지 않게 여유를 둠."""
+    target_total = target_hour * 60 + target_minute
+    now_total = now.hour * 60 + now.minute
+    return abs(now_total - target_total) <= window_minutes
+
+
+# ⚠️ 미국 서머타임(3월~11월경) 기준 9:30 ET 개장 = 22:30 KST.
+# 서머타임이 아닐 때(11월~3월경)는 개장이 23:30 KST로 한 시간 밀림 - 정확한
+# 자동 판별은 별도 라이브러리(pytz 등)가 필요해서, 지금은 서머타임 기준
+# 시각으로 고정해뒀습니다. 겨울철엔 이 숫자를 23, 30으로 바꿔주세요.
+US_MARKET_OPEN_BRIEFING_TIME = (22, 30)
+
+
 def check_morning_briefing(now):
     """
-    ⏰ 오전(8시대)과 오후(15시대) 두 번, 하루에 각각 한 번씩 브리핑을 발송.
-    두 슬롯은 서로 독립적인 쿨다운 키를 써서, 오전 걸 보냈다고 오후 게
-    막히지 않게 함(반대도 마찬가지).
+    ⏰ 오전 2번(7시/7시30분) + 오후 2번(15시/15시30분) + 미국장 개장(22시30분)
+    총 5번, 하루에 각 슬롯당 한 번씩 브리핑을 발송. 슬롯마다 독립적인
+    쿨다운 키를 써서 서로 안 막음.
     """
-    if now.hour == MORNING_BRIEFING_HOUR:
-        today_key = f"morning_briefing_am_{now.strftime('%Y%m%d')}"
-        if should_run_task(today_key, 20 * 3600):
-            send_morning_briefing()
-    elif now.hour == AFTERNOON_BRIEFING_HOUR:
-        today_key = f"morning_briefing_pm_{now.strftime('%Y%m%d')}"
-        if should_run_task(today_key, 20 * 3600):
-            send_morning_briefing()
+    today_str = now.strftime("%Y%m%d")
+    for hour, minute in MORNING_BRIEFING_TIMES:
+        if _is_near_scheduled_time(now, hour, minute):
+            key = f"morning_briefing_am_{hour}{minute:02d}_{today_str}"
+            if should_run_task(key, 20 * 3600):
+                send_morning_briefing()
+            return
+    for hour, minute in AFTERNOON_BRIEFING_TIMES:
+        if _is_near_scheduled_time(now, hour, minute):
+            key = f"morning_briefing_pm_{hour}{minute:02d}_{today_str}"
+            if should_run_task(key, 20 * 3600):
+                send_morning_briefing()
+            return
+    open_hour, open_minute = US_MARKET_OPEN_BRIEFING_TIME
+    if _is_near_scheduled_time(now, open_hour, open_minute):
+        key = f"us_market_open_{today_str}"
+        if should_run_task(key, 20 * 3600):
+            send_us_market_open_briefing()
+        return
 
 
 # ============================================================
@@ -3934,7 +4054,7 @@ def check_youtube(current_time_str, max_sent_override=None, minutes_override=Non
             send_telegram_message(
                 title, link, current_time_str, matched_count=0,
                 is_exclusive=False, is_breaking=False, is_feature=False, is_us_market=False,
-                custom_source=f"🎬유튜브 _ ✅{channel_name}",
+                custom_source=f"유튜브 _ {channel_name}",
             )
             sent += 1
 
@@ -4180,6 +4300,120 @@ def _save_upcoming_schedule_reminders(corp_name, stock_code, report_nm, report_t
             print(f"✅ [일정 리마인더 등록] {corp_name} - {label}: {value}")
         except Exception as e:
             print(f"[일정 리마인더 저장 오류] {corp_name}: {e}")
+
+
+# ============================================================
+# 📅 주식시장 휴장일 안내
+# 👶 쉬운 설명: 국경일 등으로 주식시장이 며칠 안 열리면, 미리 "언제부터
+#    언제까지 쉬는지" 정리해서 알려줍니다.
+# ------------------------------------------------------------
+# ⚠️[중요] 여기 목록은 "날짜가 고정된" 공휴일(신정/삼일절/어린이날/현충일/
+# 광복절/개천절/한글날/성탄절)만 미리 채워뒀습니다. 설날/추석은 음력 기준이라
+# 매년 날짜가 달라지고, 주말과 겹칠 때 생기는 "대체공휴일"까지 정확히
+# 계산하려면 공식 달력을 확인해야 합니다 - 잘못된 날짜를 지어내는 것보다
+# 정확한 값을 직접 넣어주시는 게 안전해서, 아래 목록에 설날/추석/대체공휴일을
+# "YYYYMMDD" 형식으로 직접 추가해주세요 (예: "20260916").
+# ============================================================
+KRX_MARKET_HOLIDAYS_2026 = [
+    ("20260101", "신정"),
+    ("20260301", "삼일절"),
+    ("20260505", "어린이날"),
+    ("20260606", "현충일"),
+    ("20260815", "광복절"),
+    ("20261003", "개천절"),
+    ("20261009", "한글날"),
+    ("20261225", "성탄절"),
+    # 👇 설날/추석/대체공휴일은 정확한 날짜를 확인해서 아래처럼 추가해주세요:
+    # ("20260217", "설날"),
+    # ("20260925", "추석"),
+]
+
+
+def _find_upcoming_holiday_range(today, holidays, days_ahead=7):
+    """오늘(today, date 객체)로부터 days_ahead일 이내에 시작하는 "연속 휴장
+    구간"을 찾아서 (시작일, 종료일, 사유목록) 튜플로 반환. 없으면 None.
+    공휴일이 주말과 붙어있으면 그 주말도 구간에 포함시켜서 "실제로 며칠
+    쉬는지" 정확히 보여줌."""
+    holiday_dates = set()
+    reason_by_date = {}
+    for date_str, name in holidays:
+        try:
+            d = datetime.datetime.strptime(date_str, "%Y%m%d").date()
+            holiday_dates.add(d)
+            reason_by_date[d] = name
+        except ValueError:
+            continue
+
+    # 공휴일 날짜 앞뒤로 붙어있는 주말(토/일)도 "쉬는 날"에 포함
+    all_off_days = set(holiday_dates)
+    for d in list(holiday_dates):
+        cursor = d
+        while True:
+            cursor = cursor - datetime.timedelta(days=1)
+            if cursor.weekday() >= 5:  # 토(5)/일(6)
+                all_off_days.add(cursor)
+            else:
+                break
+        cursor = d
+        while True:
+            cursor = cursor + datetime.timedelta(days=1)
+            if cursor.weekday() >= 5:
+                all_off_days.add(cursor)
+            else:
+                break
+
+    upcoming = sorted(d for d in all_off_days if today <= d <= today + datetime.timedelta(days=days_ahead))
+    if not upcoming:
+        return None
+
+    # 연속된 첫 구간만 찾음 (여러 구간이 있으면 가장 가까운 것부터)
+    start = upcoming[0]
+    end = start
+    for d in upcoming[1:]:
+        if (d - end).days == 1:
+            end = d
+        else:
+            break
+
+    reasons = sorted({reason_by_date[d] for d in holiday_dates if start <= d <= end})
+    return start, end, reasons
+
+
+def check_market_holiday_notice(current_time_str):
+    """휴장 며칠 전에 "언제부터 언제까지 쉬는지" 미리 한 번 알려줌
+    (하루 1회 제한)."""
+    if not should_run_task("market_holiday_notice", 12 * 3600):
+        return
+    today = _now_kst().date()
+    result = _find_upcoming_holiday_range(today, KRX_MARKET_HOLIDAYS_2026, days_ahead=7)
+    if not result:
+        return
+    start, end, reasons = result
+    notice_key = f"market_holiday_notice_sent_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}"
+    if not should_run_task(notice_key, 30 * 24 * 3600):  # 같은 구간은 한 달에 한 번만
+        return
+
+    if start == end:
+        period_str = f"{start.strftime('%m월 %d일')}({['월','화','수','목','금','토','일'][start.weekday()]})"
+    else:
+        period_str = (f"{start.strftime('%m월 %d일')}({['월','화','수','목','금','토','일'][start.weekday()]}) ~ "
+                       f"{end.strftime('%m월 %d일')}({['월','화','수','목','금','토','일'][end.weekday()]})")
+    reason_str = "/".join(reasons) if reasons else "공휴일"
+    text = (
+        f"📅 주식시장 휴장 안내\n\n"
+        f"{period_str} 국내 증시가 휴장합니다.\n"
+        f"사유: {reason_str}\n\n"
+        f"휴장 기간 중에는 국내 관련 알림(DART/국내RSS 등)이 새로 안 올라올 수 있습니다."
+    )
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    try:
+        res = requests.post(url, json={"chat_id": CHAT_ID, "text": text}, timeout=10)
+        if res.status_code == 200:
+            print(f"✅ [휴장 안내] {period_str} 발송 완료.")
+        else:
+            print(f"[휴장 안내 전송 실패] status={res.status_code}")
+    except Exception as e:
+        print(f"[휴장 안내 전송 오류] {e}")
 
 
 # ============================================================
@@ -4590,6 +4824,37 @@ def _dart_stock_snapshot(stock_code):
 
     _dart_snapshot_cache[stock_code] = (result, now)
     return result
+
+
+def _build_target_price_line(stock_code):
+    """
+    "목표가: 🔺39,500원 (+7.0%)" 형태의 줄을 만든다.
+    ① 네이버금융에 실제 애널리스트 목표주가가 있으면 그걸 그대로 씀(가장 정확).
+    ② 없고 EPS·PER·현재가는 있으면, "현재 PER이 유지된다"는 가정으로 EPS
+       기준 추정치를 계산해서 보여줌 - 단, 진짜 애널리스트 목표가와 헷갈리지
+       않도록 반드시 "(추정)"을 붙임 (숫자를 진짜처럼 지어내지 않기 위함).
+    ③ 둘 다 없으면 None.
+    🔺 = 목표가가 현재가보다 높음(상향) / 🔻 = 낮음(하향). 텔레그램은 글자
+    색깔을 직접 지원하지 않아서, 색깔 대신 이 두 이모지로 구분함.
+    """
+    snap = _dart_stock_snapshot(stock_code)
+    cur = snap.get("current_price")
+    target = snap.get("target_price")
+    eps = snap.get("eps")
+    per = snap.get("per")
+
+    if cur and target:
+        arrow = "🔺" if target >= cur else "🔻"
+        gap = (target - cur) / cur * 100
+        return f"🎯목표가: {arrow}{target:,.0f}원 ({gap:+.1f}%)"
+
+    if cur and eps and per:
+        estimated = eps * per
+        arrow = "🔺" if estimated >= cur else "🔻"
+        gap = (estimated - cur) / cur * 100
+        return f"🎯목표가(추정): {arrow}{estimated:,.0f}원 ({gap:+.1f}%)"
+
+    return None
 
 
 def _dart_gap_ratio_label(stock_code):
@@ -5138,6 +5403,35 @@ DART_GENERIC_AMOUNT_RULES = [
 ]
 
 
+def _dart_counterparty_label(report_nm, text, filer_corp_name=""):
+    """
+    계약/공급/양수도 관련 공시 원문에 "자신(공시 제출기업)이 아닌 다른
+    상장기업"이 거래상대방으로 언급되면, 그 회사명과 관련 금액을 뽑아서
+    "🤝주성엔지니어링 (계약 500억)" 형태로 반환. 예: 삼성전자가 반도체장비
+    업체 주성엔지니어링과 계약했다는 공시라면, 그 관련주(주성엔지니어링)를
+    바로 알 수 있게 보여줌 - "누구랑 계약했길래 이게 재료인지"가 핵심이라서.
+    상대방이 상장기업이 아니거나 못 찾으면 None (지어내지 않음).
+    """
+    if not text:
+        return None
+    contract_types = ("계약", "공급", "양수", "양도", "취득", "처분", "투자", "출자")
+    if not any(k in report_nm for k in contract_types):
+        return None
+
+    mentioned = resolve_companies_in_text(text) - NOISY_LISTED_COMPANY_NAMES
+    if filer_corp_name:
+        mentioned = {c for c in mentioned if c != filer_corp_name and filer_corp_name not in c and c not in filer_corp_name}
+    if not mentioned:
+        return None
+
+    # 원문에 가장 많이 등장하는(=핵심 거래상대방일 가능성이 높은) 회사명 하나만 씀
+    counterparty = max(mentioned, key=lambda c: text.count(c))
+    amounts = _dart_extract_eok_amounts(_dart_find_near(text, [counterparty], window=200))
+    if amounts:
+        return f"🤝{counterparty} (계약 {_eok_comma_label(max(amounts))})"
+    return f"🤝{counterparty} (거래상대방)"
+
+
 def _dart_generic_amount_label(report_nm, text):
     """위 DART_GENERIC_AMOUNT_RULES 표를 순서대로 확인해서, 해당하는 유형이면
     근처 금액을 찾아 "📐발행금액 300억원" 형태로 반환. 못 찾으면 None."""
@@ -5246,7 +5540,7 @@ def _dart_financial_strong(text, stock_code=None, report_nm=""):
     # 흑자전환은 부호가 명확한 이벤트라 그대로 우선 노출 (최고 등급 10)
     # (정기보고서라도 흑자전환 자체는 문턱값 없이 통과 - 부호가 명확한 강한 신호라서)
     if "흑자전환" in text and ("영업이익" in text or "당기순이익" in text):
-        info_lines = [x for x in (_dart_gap_ratio_label(stock_code), _dart_valuation_line(stock_code)) if x]
+        info_lines = [x for x in (_build_target_price_line(stock_code), _dart_valuation_line(stock_code)) if x]
         prefix = ("\n".join(info_lines) + "\n") if info_lines else ""
         return True, f"{prefix}📊손익 ⭐🚨흑자전환 중요{_keycap(10)}💯"
 
@@ -5265,14 +5559,13 @@ def _dart_financial_strong(text, stock_code=None, report_nm=""):
         '당기(전기, 증감%(비교기준)) 중요N️⃣' 형태의 한 줄로 만든다. 5등급
         이상이면 🚨를 붙이고, 뒤에 💯를 붙인다. DART 실적 공시 원문은 보통
         '당기금액 → 전기금액(증감율%)' 순서로 나온다.
-        반환값: (당기금액 숫자 또는 None, 조립된 줄 문자열 또는 None) - 숫자는
-        매출/영업이익 크기를 서로 비교해서 "표가 텍스트로 펼쳐지며 엉뚱한 값을
-        잘못 집어온" 경우를 걸러내는 안전장치에 씀."""
+        반환값: (당기금액, 조립된 줄 문자열, 증감률) - 증감률은 나중에
+        "특이사항"(큰 폭 증가 등) 판정에 씀. 못 찾으면 각각 None."""
         chunk = _dart_find_near(text, keywords, window=200)
         amounts = _dart_extract_eok_amounts(chunk)
         pcts = _dart_extract_percentages(chunk)
         if not amounts:
-            return None, None
+            return None, None, None
         cur = amounts[0]
         pct = pcts[0] if pcts else None
         basis = _comparison_basis_label(chunk)
@@ -5283,16 +5576,16 @@ def _dart_financial_strong(text, stock_code=None, report_nm=""):
         if len(amounts) >= 2:
             prior = amounts[1]
             if pct is not None:
-                return cur, f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)}, {arrow}{abs(pct):g}%{basis_tag}) {badge}".rstrip()
-            return cur, f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)})"
+                return cur, f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)}, {arrow}{abs(pct):g}%{basis_tag}) {badge}".rstrip(), pct
+            return cur, f"{label}: {_eok_comma_label(cur)} ({_eok_comma_label(prior)})", pct
         if pct is not None:
-            return cur, f"{label}: {_eok_comma_label(cur)} ({arrow}{abs(pct):g}%{basis_tag}) {badge}".rstrip()
-        return cur, f"{label}: {_eok_comma_label(cur)}"
+            return cur, f"{label}: {_eok_comma_label(cur)} ({arrow}{abs(pct):g}%{basis_tag}) {badge}".rstrip(), pct
+        return cur, f"{label}: {_eok_comma_label(cur)}", pct
 
     lines = []
-    rev_amount, rev_line = _metric_line("매출", ["매출액", "매출"])
-    op_amount, op_line = _metric_line("영업", ["영업이익", "영업이익(손실)"])
-    net_amount, net_line = _metric_line("순이익", ["당기순이익", "순이익"])
+    rev_amount, rev_line, rev_pct = _metric_line("매출", ["매출액", "매출"])
+    op_amount, op_line, op_pct = _metric_line("영업", ["영업이익", "영업이익(손실)"])
+    net_amount, net_line, net_pct = _metric_line("순이익", ["당기순이익", "순이익"])
 
     # 🛡️ 안전장치: 표가 텍스트로 납작하게 펼쳐지면서 "영업이익" 근처에서
     # 엉뚱한(다른 항목의) 숫자를 잘못 집어오는 경우가 있음. 영업이익이나
@@ -5306,6 +5599,19 @@ def _dart_financial_strong(text, stock_code=None, report_nm=""):
     for line in (rev_line, op_line, net_line):
         if line:
             lines.append(line)
+
+    # 💡 특이사항 - 시장 반응이 좋을 만한 수준(20% 이상 증가)이면 한눈에
+    # 보이도록 별도로 요약. 사장님 요청: "매출/영업이익이 어느 기준 이상
+    # 증가했을 때 시장 반응도 괜찮게 나올만한 기준이면 나오게" 반영.
+    _special_notes = []
+    if rev_pct is not None and rev_pct >= 20:
+        _special_notes.append(f"매출 🔺{rev_pct:g}% 큰 폭 증가")
+    if op_pct is not None and op_pct >= 20:
+        _special_notes.append(f"영업이익 🔺{op_pct:g}% 큰 폭 증가")
+    if net_pct is not None and net_pct >= 20:
+        _special_notes.append(f"순이익 🔺{net_pct:g}% 큰 폭 증가")
+    if _special_notes:
+        lines.append("💡특이사항: " + ", ".join(_special_notes))
 
     # 🚀 어닝서프라이즈(컨센서스 상회)/어닝쇼크(컨센서스 하회): 원문에 컨센서스
     # 대비 수치가 직접 적혀 있으면 매출/영업이익 실적 줄과 별개로 한 줄 더 추가
@@ -5335,7 +5641,7 @@ def _dart_financial_strong(text, stock_code=None, report_nm=""):
             if not any(abs(p) >= DART_PERIODIC_REPORT_MIN_YOY for p in yoy_pcts):
                 return False, None
 
-        info_lines = [x for x in (_dart_gap_ratio_label(stock_code), _dart_valuation_line(stock_code)) if x]
+        info_lines = [x for x in (_build_target_price_line(stock_code), _dart_valuation_line(stock_code)) if x]
         prefix = ("\n".join(info_lines) + "\n") if info_lines else ""
         return True, f"{prefix}📊" + "\n".join(lines)
 
@@ -5590,6 +5896,7 @@ def check_dart_disclosures(current_time_str, bgn_date_override=None, max_sent_ov
                     _dart_shareholding_label(report_nm, report_text, filer_name=filer_name),
                     _dart_major_shareholder_change_label(report_nm, report_text),
                     _dart_free_stock_ratio_label(report_nm, report_text),
+                    _dart_counterparty_label(report_nm, report_text, filer_corp_name=corp_name),
                     _dart_generic_amount_label(report_nm, report_text),
                     format_dart_schedule(report_text),  # ⏰ 일정(V2) - 배당/납입/청약/임상 등 20여종 세분화 추출
                 ) if x
@@ -5696,6 +6003,7 @@ def main():
 
             if ENABLE_MORNING_BRIEFING:
                 check_morning_briefing(now)
+                check_market_holiday_notice(time_str)
 
             if ENABLE_SCHEDULE_REMINDERS and should_run_task("schedule_reminders", 3600):
                 check_upcoming_schedule_reminders(time_str)
@@ -5859,6 +6167,7 @@ def run_once():
             ("국내RSS", lambda: check_domestic_news(time_str), None, ENABLE_DOMESTIC_NEWS),
             ("해외RSS", lambda: check_us_news(time_str), None, ENABLE_US_NEWS),
             ("아침브리핑", lambda: check_morning_briefing(now), None, ENABLE_MORNING_BRIEFING),
+            ("휴장일안내", lambda: check_market_holiday_notice(time_str), None, ENABLE_MORNING_BRIEFING),
             ("일정리마인더", lambda: check_upcoming_schedule_reminders(time_str), ("schedule_reminders", 3600), ENABLE_SCHEDULE_REMINDERS),
             ("IPO알림", lambda: check_ipo_listings(time_str), ("ipo_listings", 3600), ENABLE_IPO_ALERTS),
             ("텔레그램1(필터)", lambda: check_telegram_channels(time_str), None, ENABLE_TELEGRAM_CHANNELS),
