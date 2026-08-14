@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-# 수정0 (2026-08-14) — 넘버링 리셋 기준점. 지금까지의 모든 수정사항이 이
-#   완성본에 반영되어 있습니다. 이제부터 버그를 잡을 때마다 이 번호를
-#   올리고, 무엇이 바뀌었는지 한 줄씩 여기 추가해주세요.
+# 수정1 (2026-08-14) — KRX 상장법인 목록 조회 방식을 DART API로 전환.
+#   KRX 사이트가 클라우드 서버 IP를 차단(403)해서 계속 실패하던 문제를,
+#   DART corpCode.xml(항상 정상 작동하던 API)로 대체해서 해결. KRX 직접
+#   조회는 예비 백업으로만 남겨둠. 검증: 가짜 XML로 상장/비상장 구분,
+#   DART 실패시 KRX 백업 전환, 둘 다 실패해도 크래시 없음 - 전부 확인함.
 #
 주식/공시 및 외부 텔레그램 채널 수신/중계 알림 봇 (최종 완성본)
 
@@ -2511,15 +2513,67 @@ def is_recent_article(entry, minutes=60, default_if_unknown=True):
 
 def fetch_krx_company_names():
     """
-    KRX(한국거래소) 정보데이터시스템(KIND)에서 코스피+코스닥 상장법인 전체 명단을 받아와서
-    회사명과 종목코드를 같이 추출. 실패하면 빈 값들을 반환하고 조용히 넘어감
-    (이 기능 없이도 봇은 정상 작동). 종목코드는 COMPANY_NAME_TO_CODE에 채워서,
-    일반 뉴스에서도 회사명만으로 시가총액/PER 등을 조회할 수 있게 함.
+    상장법인(코스피+코스닥) 전체 명단을 회사명+종목코드로 받아온다.
+    🔧[방식 전환] 원래 KRX(한국거래소) 사이트를 직접 긁어왔는데, KRX가
+    Render 같은 클라우드 서버 IP를 아예 차단하고 있어서(403 Access Denied)
+    계속 실패하고 있었음. 대신 DART(전자공시시스템)가 이미 제공하는 전체
+    기업목록 API(corpCode.xml)를 씀 - 상장기업은 전부 DART에도 등록돼있고,
+    이 API는 지금까지 막힌 적이 없어서 훨씬 안정적임.
+    실패하면 빈 값들을 반환하고 조용히 넘어감(이 기능 없이도 봇은 정상 작동).
     """
+    names, name_to_code = _fetch_listed_companies_from_dart()
+    if names:
+        return names, name_to_code
+
+    # 🩺 혹시 DART_API_KEY가 없거나 DART API 자체가 막힌 극단적인 경우를
+    # 대비해서, KRX 직접 긁기도 마지막 예비 수단으로 남겨둠 (평소엔 안 씀).
+    print("⚠️ DART로 상장기업 목록을 못 가져와서, KRX 직접 조회를 예비로 시도합니다...")
+    return _fetch_listed_companies_from_krx_fallback()
+
+
+def _fetch_listed_companies_from_dart():
+    """DART corpCode.xml에서 종목코드가 있는(=실제 상장된) 기업만 골라
+    (회사명 집합, {회사명: 종목코드}) 형태로 반환. _get_dart_corp_code_map()과
+    같은 원본 데이터를 쓰지만, 이쪽은 회사명까지 같이 뽑아서 씀."""
+    import io, zipfile
+    import xml.etree.ElementTree as ET
+
+    if not DART_API_KEY:
+        return set(), {}
+
+    names = set()
+    name_to_code = {}
+    try:
+        res = requests.get(
+            "https://opendart.fss.or.kr/api/corpCode.xml",
+            params={"crtfc_key": DART_API_KEY},
+            timeout=20,
+        )
+        if res.status_code != 200:
+            print(f"⚠️ [DART] 상장기업 목록 요청 실패: status={res.status_code}")
+            return set(), {}
+        with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+            with z.open(z.namelist()[0]) as f:
+                tree = ET.parse(f)
+                for el in tree.getroot().findall("list"):
+                    stock_code = (el.findtext("stock_code") or "").strip()
+                    corp_name = (el.findtext("corp_name") or "").strip()
+                    # 종목코드가 6자리 숫자로 있는 것만 = 실제 상장된 회사
+                    if corp_name and len(corp_name) >= 2 and re.fullmatch(r"\d{6}", stock_code):
+                        names.add(corp_name)
+                        name_to_code[corp_name] = stock_code
+        print(f"✅ [DART] 상장기업 {len(names)}개 명단 로드 완료 (KRX 대신 DART API 사용).")
+    except Exception as e:
+        print(f"⚠️ [DART] 상장기업 목록 로드 실패: {e}")
+        return set(), {}
+    return names, name_to_code
+
+
+def _fetch_listed_companies_from_krx_fallback():
+    """KRX 사이트 직접 조회 (예비 백업용 - 클라우드 IP 차단으로 평소엔
+    실패할 가능성이 높음, 그래도 혹시 몰라 남겨둠)."""
     url = "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13"
     try:
-        # 🩺 일부 사이트는 Referer가 없으면 봇으로 보고 차단/다른 응답을 줌 -
-        # 실제 브라우저처럼 보이도록 Referer도 같이 보냄
         res = requests.get(
             url,
             headers={"User-Agent": USER_AGENT, "Referer": "https://kind.krx.co.kr/corpgeneral/corpList.do"},
@@ -2529,8 +2583,6 @@ def fetch_krx_company_names():
         soup = BeautifulSoup(res.text, "html.parser")
         table = soup.find("table")
         if not table:
-            # 🩺 진단 정보를 최대한 남겨서, 다음 로그에서 "왜 실패했는지"
-            # (차단됐는지/구조가 바뀌었는지/빈 응답인지) 바로 알 수 있게 함
             snippet = res.text[:300].replace("\n", " ").strip()
             print(f"⚠️ KRX 상장법인 목록: 표를 찾지 못했습니다. "
                   f"(status={res.status_code}, 응답길이={len(res.text)}자, 앞부분='{snippet}')")
@@ -2544,7 +2596,6 @@ def fetch_krx_company_names():
             if not cells:
                 continue
             name = cells[0].get_text(strip=True)
-            # 너무 짧은 이름(1글자)은 오매칭 위험이 커서 제외
             if name and len(name) >= 2:
                 names.add(name)
                 if len(cells) >= 2:
