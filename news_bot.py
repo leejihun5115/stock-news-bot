@@ -1,5 +1,29 @@
 # -*- coding: utf-8 -*-
 """
+# 버그수정9 (2026-08-14) — 배당결정 공시 + Key Point 문장 개선:
+#   1. 배당결정 공시도 대량보유상황보고서와 같은 원인(짧은 타임아웃 15초→30초)
+#      이었을 가능성이 높아 같이 상향. 배당금액뿐 아니라 배당기준일("언제")도
+#      같이 추출하도록 확장. 원문 조회/파싱 실패해도 조용히 안 넘어가고
+#      "⚠️ 원문 조회 실패로 배당금액 확인 불가..." 안내 표시.
+#   2. 🔥[중대] [Key Point] 요약 방식 전면 교체 - 예전엔 "누가·무엇을" 키워드만
+#      뽑아 조사만 붙인 밋밋한 문장("SK·SK하이닉스가 생산·AI 관련 소식")을
+#      억지로 만들었는데, 실제 내용이 안 담겨서 계속 지적받음. 제목 자체가
+#      이미 기자가 쓴 완성된 문장(진짜 5W1H 포함)이라는 걸 활용 - 이제 출처
+#      접미사만 떼고 제목 그대로 [Key Point]로 보여줌. 훨씬 정확하고 내용도
+#      풍부해짐(지어낼 위험도 없음). 실제 예시로 검증 완료.
+#
+# 버그수정8 (2026-08-14) — 🔥[중대] 대량보유상황보고서 "누가 몇% 보유" 요약이
+#   실제로 안 나왔던 문제 원인 파악 및 수정:
+#   1. 대량보유상황보고서가 다른 소스보다 짧은 타임아웃(15초)만 받고 있어서
+#      원문 조회가 자주 실패했음 - 반기/사업/분기보고서와 동급(30초)으로 상향.
+#   2. 지분율 검색 키워드 확장 - "보유주식등의비율", "발행주식총수에 대한"
+#      등 실제 DART 문서에서 쓰이는 다른 표기도 잡히게 함 (검증: 새 키워드로
+#      예전엔 놓쳤을 문구도 정상 추출됨 확인).
+#   3. 🩺[핵심] 원문 조회/파싱이 실패해도 조용히 넘어가지 않고, "⚠️ 원문
+#      조회 실패로 지분율 상세 확인 불가 - 아래 링크에서 직접 확인해주세요"
+#      처럼 사용자에게 명확히 상태를 알려주도록 변경. 실제 메시지 조립까지
+#      통합 테스트로 검증 완료.
+#
 # 버그수정7 (2026-08-14) — 브리핑 스케줄 확장 + 휴장일 안내 신설:
 #   1. 아침브리핑을 7시/7시30분 2번, 오후브리핑을 15시/15시30분 2번으로 확장
 #      (기존 8시/15시 각 1번 → 각 2번). 시/분 슬롯 리스트 기반으로 재설계.
@@ -1802,52 +1826,23 @@ def _build_schedule_line(title):
 
 
 # ============================================================
-# 🔎 제목 기반 5W1H(누가/무엇을/언제) 요약
+# 🔎 제목 기반 [Key Point] 요약
 # ------------------------------------------------------------
-# ⚠️ 기사 "제목"만 가지고 뽑을 수 있는 만큼만 채움. "어디서/왜/어떻게"까지
-# 포함한 완전한 6하원칙은 본문 전체를 읽어야 해서(사이트마다 구조가 달라
-# 실패 위험도 크고 느려짐) 여기선 안 함 - 필요하면 별도로 요청해주세요.
+# ⚠️ 예전엔 "누가·무엇을" 키워드만 뽑아서 조사만 붙인 문장을 억지로 만들었는데
+# ("SK·SK하이닉스가 생산·AI 관련 소식"처럼), 실제 내용이 안 들어있고 밋밋해서
+# 사장님이 계속 지적하셨음. 생각해보니 "제목" 자체가 이미 기자가 쓴 완성된
+# 문장이라 실제 누가/언제/무엇을/어떻게가 정확히 담겨있음 - 이걸 억지로
+# 키워드만 뽑아 재조합하는 것보다, 출처 접미사(" - 매체명")만 떼고 그대로
+# 보여주는 게 훨씬 정확하고 내용도 풍부함(지어낼 위험도 없음).
 # ============================================================
-def _has_final_consonant(word):
-    """한글 단어의 마지막 글자에 받침이 있는지 확인 (조사 선택용).
-    받침 있으면 "이/을", 없으면 "가/를"을 씀 (예: "한화가" vs "한화투자증권이")."""
-    if not word:
-        return False
-    last_char = word[-1]
-    code = ord(last_char)
-    if 0xAC00 <= code <= 0xD7A3:  # 한글 완성형 글자 범위
-        return (code - 0xAC00) % 28 != 0
-    return False
-
-
 def _build_key_point_summary(title):
-    """제목에서 뽑을 수 있는 누가/무엇을/언제를, 단어 나열이 아니라 조사를
-    붙여서 자연스럽게 읽히는 한 문장으로 요약. 형식: [Key Point] "요약문장"
-    최소한 "누가"나 "무엇을" 하나는 있어야 문장을 만듦 (억지로 지어내지 않음
-    - 숫자/사실을 지어내지 않는다는 원칙과 동일)."""
-    who = sorted(resolve_companies_in_text(title) | {c for c in UNIQUE_CELEBS if c in title})
-    # KEYWORDS_1엔 회사/그룹명(SK, 삼성 등)도 섞여있어서, "누가"에 이미 쓴
-    # UNIQUE_GIANTS/UNIQUE_CELEBS는 빼고 진짜 "행위/사건" 단어만 남김.
-    action_keywords = (UNIQUE_KEYWORDS_1 | UNIQUE_KEYWORDS_2) - UNIQUE_GIANTS - UNIQUE_CELEBS
-    what_hits = sorted({kw for kw in action_keywords if kw in title}, key=len, reverse=True)
-    when = _extract_schedule_from_title(title)
-
-    if not who and not what_hits:
-        return None  # 언제만 있고 누가/무엇을 둘 다 없으면 문장을 못 만듦
-
-    who_str = "·".join(who[:2])
-    what_str = "·".join(what_hits[:2])
-    when_prefix = f"{' / '.join(when)}, " if when else ""
-
-    if who_str and what_str:
-        josa = "이" if _has_final_consonant(who_str) else "가"
-        sentence = f"{when_prefix}{who_str}{josa} {what_str} 관련 소식"
-    elif who_str:
-        sentence = f"{when_prefix}{who_str} 관련 소식"
-    else:
-        sentence = f"{when_prefix}{what_str} 관련 소식"
-
-    return f'[Key Point] "{sentence}"'
+    """제목에서 출처 접미사만 제거해서 [Key Point] 요약으로 보여줌. 제목
+    자체가 이미 5W1H가 담긴 완성된 문장이라, 억지로 키워드만 이어붙이는
+    것보다 훨씬 정확하고 자연스러움. 너무 짧으면(4자 미만) None."""
+    cleaned = _strip_source_suffix(title).strip()
+    if not cleaned or len(cleaned) < 4:
+        return None
+    return f'[Key Point] "{cleaned}"'
 
 
 def _build_key_point_line(title, is_disclosure, highlight_suffix):
@@ -4125,7 +4120,7 @@ def _dart_extract_percentages(text):
             pass
     return out
 
-_LARGE_REPORT_KEYWORDS = ("반기보고서", "사업보고서", "분기보고서")
+_LARGE_REPORT_KEYWORDS = ("반기보고서", "사업보고서", "분기보고서", "대량보유상황보고서", "배당결정")
 
 
 def _is_large_dart_report(report_nm):
@@ -5256,8 +5251,9 @@ def _dart_shareholding_label(report_nm, text, filer_name=""):
 
     chunk = _dart_find_near(
         text,
-        ["보유비율", "지분율", "보유 비율", "보유주식등의 비율", "보유주식비율"],
-        window=600,
+        ["보유비율", "지분율", "보유 비율", "보유주식등의 비율", "보유주식비율",
+         "보유주식등의비율", "직전보고서", "보유 주식등의 비율", "발행주식총수에 대한"],
+        window=800,
     )
     pcts = _dart_extract_percentages(chunk)
     if not pcts:
@@ -5448,17 +5444,29 @@ def _dart_generic_amount_label(report_nm, text):
 
 def _dart_dividend_amount_label(report_nm, text):
     """
-    배당결정 공시면 원문에서 '주당 배당금'을 찾아서 "💰주당배당금 500원" 형태로
-    반환. 배당 관련 공시가 아니거나 금액을 못 찾으면 None.
+    배당결정 공시면 원문에서 '주당 배당금'과 '배당기준일'을 찾아서
+    "💰주당배당금 500원 · ⏰배당기준일 2026-12-31" 형태로 반환. 배당 관련
+    공시가 아니거나 금액을 못 찾으면 None.
     """
     if "배당" not in report_nm or not text:
         return None
-    chunk = _dart_find_near(text, ["주당 배당금", "1주당 배당금", "주당배당금"], window=100)
+    chunk = _dart_find_near(
+        text,
+        ["주당 배당금", "1주당 배당금", "주당배당금", "1주당 현금배당금",
+         "1주당 현물배당", "보통주식", "우선주식"],
+        window=200,
+    )
     m = re.search(r"([\d,]+)\s*원", chunk)
+    bits = []
     if m:
-        amount = m.group(1)
-        return f"💰주당배당금 {amount}원"
-    return None
+        bits.append(f"💰주당배당금 {m.group(1)}원")
+
+    date_chunk = _dart_find_near(text, ["배당기준일", "지급예정일", "지급일"], window=150)
+    date_m = re.search(r"(\d{4})[-.년]\s*(\d{1,2})[-.월]\s*(\d{1,2})", date_chunk)
+    if date_m:
+        bits.append(f"⏰배당기준일 {date_m.group(1)}-{date_m.group(2).zfill(2)}-{date_m.group(3).zfill(2)}")
+
+    return " · ".join(bits) if bits else None
 
 
 def _dart_extract_quarter_label(text, report_nm):
@@ -5903,11 +5911,27 @@ def check_dart_disclosures(current_time_str, bgn_date_override=None, max_sent_ov
             ]
             if extra_notes:
                 reason = (reason + "\n\n" if reason else "") + "\n\n".join(extra_notes)
-            elif report_text and "대량보유상황보고서" in report_nm:
-                # 원문은 정상적으로 받아왔는데도 지분율을 못 찾은 경우 - 이 공시가
-                # 예상과 다른 문서 포맷(표 구조 등)일 수 있으므로 로그로 남겨서
-                # 다음에 패턴을 더 보강할 수 있게 합니다.
-                print(f"[DART 지분율 파싱 실패] {corp_name} (rcept_no={rcept_no}) - 원문은 받았지만 보유비율 패턴을 못 찾음.")
+            elif "대량보유상황보고서" in report_nm:
+                # 🩺 대량보유상황보고서인데 요약이 하나도 안 나온 경우 - 조용히
+                # 넘어가지 않고, 사용자에게 "왜 요약이 없는지" 명확히 알려줌
+                # (숫자를 지어낼 수는 없지만, 최소한 상태는 정직하게 보여줌).
+                if not report_text:
+                    fallback_note = "⚠️ 원문 조회 실패로 지분율 상세 확인 불가 - 아래 링크에서 직접 확인해주세요."
+                    print(f"[DART 원문 조회 실패-지분율] {corp_name} (rcept_no={rcept_no})")
+                else:
+                    fallback_note = "⚠️ 원문은 받았지만 지분율 패턴을 못 찾음 - 아래 링크에서 직접 확인해주세요."
+                    print(f"[DART 지분율 파싱 실패] {corp_name} (rcept_no={rcept_no}) - 원문은 받았지만 보유비율 패턴을 못 찾음.")
+                reason = (reason + "\n\n" if reason else "") + fallback_note
+            elif "배당" in report_nm:
+                # 🩺 배당결정 공시도 같은 원칙 - 배당금액/기준일을 못 뽑았으면
+                # 조용히 넘어가지 않고 이유를 명확히 알려줌.
+                if not report_text:
+                    fallback_note = "⚠️ 원문 조회 실패로 배당금액 확인 불가 - 아래 링크에서 직접 확인해주세요."
+                    print(f"[DART 원문 조회 실패-배당] {corp_name} (rcept_no={rcept_no})")
+                else:
+                    fallback_note = "⚠️ 원문은 받았지만 배당금액 패턴을 못 찾음 - 아래 링크에서 직접 확인해주세요."
+                    print(f"[DART 배당금액 파싱 실패] {corp_name} (rcept_no={rcept_no})")
+                reason = (reason + "\n\n" if reason else "") + fallback_note
 
             # ⏰ 이 회사가 최근 특징주/급등 워치리스트에 있으면, 이 공시의 미래
             # 일정을 리마인더로 저장 (오늘이 그 날짜가 되면 자동으로 알림 발송)
