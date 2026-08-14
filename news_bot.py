@@ -1,194 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-# 수정43 (2026-08-13) — 이게 가장 최신, 가장 완전한 버전입니다. (메인 봇 - 전체 기능판 + 기능별 스위치)
-#   [수정43] 🔥 [단독]/[속보] 표시를 🔥[단독], 🔥[속보🚀] 형태로 통일 - 태그
-#            줄과 판정근거 줄 둘 다 전체 적용됨 (검증 완료).
-#   [수정42] 🎓 "재탕이어도 발송" 범위 확장 - 예전엔 급등/폭등/상한가 "단어"가
-#            제목에 직접 있어야만 예외였는데, 이제 단독/속보/특징주처럼
-#            "급등·상한가로 이어질 만한" 강한 재료거나 강한 키워드가 3개
-#            이상 겹치면 그 단어가 없어도 재탕 예외로 인정해서 발송함
-#            (검증: 단독/특징주는 True, 무관한 시황은 False로 정확히 구분).
-#            + 상장기업/일정이 있는 뉴스에 일정줄/5W1H요약/판정근거가 빠짐없이
-#            같이 붙는 것도 재검증 완료.
-#   [수정41] 3가지 수정:
-#            (1) 🕐🔥[중대] datetime.datetime.now()가 서버 시스템 시간대를
-#                그대로 썼는데, Render는 보통 UTC로 돌아서 KST 대비 9시간이
-#                밀려 나오는 문제였을 가능성이 높음 - "시간이 전혀 안 맞다"는
-#                증상과 일치. _now_kst() 헬퍼를 만들어 서버 시간대와 무관하게
-#                항상 정확한 KST를 반환하도록 전체 18곳 교체(검증 완료:
-#                UTC 서버 흉내내도 정확히 9시간 보정됨).
-#            (2) "Google News" 출처 표시를 "Google"로 단축 (해외RSS/네이버
-#                둘 다 적용 - 둘 다 구글뉴스RSS를 쓰므로 자동으로 같이 적용됨).
-#            (3) 🎓 급등/폭등/상한가/빅이슈급 강한 재료는 재탕으로 판정돼도
-#                억제하지 않고 "🚨[재탕이지만 강한재료라 참고용 발송]"으로
-#                표시해서 그대로 발송 (공부용으로 다 받아보고 싶다는 요청 반영).
-#   [수정40] 🔥 "빅이슈" 자동 감지 및 가산점 추가 - 상한가/세계최초·국내최초/
-#            사상최대/글로벌기업(엔비디아·애플 등)·삼성과의 제휴·합병·MOU/
-#            1조원 이상 대규모 금액 중 하나라도 해당하면 큰 가산점(+15~22,
-#            중복시 최대 40)을 줘서 A등급까지 자연스럽게 도달하도록 함
-#            (검증: "세계최초 3나노 양산" 사례 70점/A등급 확인).
-#            판정근거 줄에 "🔥빅이슈(사유)"로 항상 표시됨.
-#   [수정39] 🐛🔥 [중대] 점수 재조정 - 가장 흔한 케이스(키워드2개+회사명,
-#            발송조건을 최소한으로 통과한 뉴스)가 33점(D등급)에 몰려있던
-#            문제 수정. 기본점수 10→18, 키워드당 가중치 4→5로 올려서, 이제
-#            같은 케이스가 43점(C등급)으로 상향됨. 특징주/단독 등은 자연스럽게
-#            B등급까지 도달. + 📊 "판정근거" 줄 신설 - 왜 이 점수/등급이
-#            나왔는지(단독/속보/특징주/키워드개수/비율 등) 항상 요약해서
-#            보여줌(전체 뉴스 공통 적용).
-#   [수정38] 🔥 [후속] 표시 문구 개선 - 예전엔 "비율 5.15%"처럼 맨숫자만
-#            보여줘서 뭘 의미하는지 애매했음. 이제 제목 근처 단어(상승/급등/
-#            하락/급락 등)로 맥락을 붙여 "상승률 5.15% 확인됨"처럼 사람이
-#            바로 이해할 수 있게 바꿈 + 이전 보도 제목도 같이 보여줘서 비교
-#            가능하게 함.
-#   [수정37] 📅 일반 뉴스(RSS/네이버/텔레그램)에도 제목 안의 일정(날짜/시기)
-#            표현을 뽑아 "⏰ 일정: ..." 줄로 표시. + 🔎 제목 기반 "누가/무엇을/
-#            언제" 요약 줄 추가 (완전한 6하원칙은 본문 전체를 읽어야 해서
-#            제목만으로 가능한 만큼만 함 - 어디서/왜/어떻게는 제외).
-#            🐛 만드는 중 발견한 버그: KEYWORDS_1에 회사명(SK 등)이 섞여있어서
-#            "무엇을" 자리에 회사명이 잘못 들어가던 것도 같이 수정.
-#   [수정36] 🎯 유사뉴스 중 "강한 내용"(확정적 표현) 우선 발송 - 이전 기사가
-#            "검토/추진/전망" 같은 미확정 표현이었는데, 이번 기사에 "체결/확정/
-#            승인" 같은 확정 단어가 새로 생기면 재료 강도가 완전히 달라진
-#            것으로 보고 후속 발송함(금액/비율/회사명 새로 생긴 것과 동급으로
-#            취급). 이미 확정된 걸 또 확정이라고만 반복하면 여전히 재탕으로
-#            억제됨(검증 완료).
-#   [수정35] 🐛 같은 뉴스가 매체마다 제목만 살짝 바뀌어 도배되던 문제 개선:
-#            (1) 글자순서 기반(SequenceMatcher) 유사도만 쓰던 걸, 단어(토큰)
-#                겹침 비율도 같이 확인하도록 보강 - 기자마다 문장을 재구성해도
-#                (어순만 바뀐 경우) 이제 잡힘.
-#            (2) 제목 끝의 "- 매체명" 접미사를 비교 전에 제거 - 매체마다 다른
-#                접미사 때문에 유사도가 깎이던 문제 해결.
-#            오탐(완전히 다른 삼성전자 뉴스 2건) 검증도 통과함 - 무관한 뉴스를
-#            잘못 걸러내지 않음.
-#   [수정34] 🐛🔥 [중대] 점수/등급 재검증 - DART 공시는 단독/속보/특징주
-#            가산점(+15)이 구조적으로 아예 안 붙어서, 순이익이 50% 늘든
-#            500% 늘든 항상 C등급(45점)에 막혀있던 문제 발견. 비율 보너스
-#            구간을 세분화(30/50/100% 문턱)해서 극단적 실적변동이 최대
-#            B등급까지 오를 수 있게 개선. (뉴스는 여전히 S등급까지 도달 가능,
-#            검증 완료)
-#   [수정33] 🔍 전체 점검 (텔레그램/블로그/유튜브/보안):
-#            - 🐛 텔레그램 시간판정(_is_within_last_hour)도 네이버와 같은
-#              버그 - 별도 하드코딩 함수라 테스트 시 "24시간 넓히기"가 실제로
-#              안 먹히고 있었음. minutes 파라미터 추가해서 수정.
-#            - 🐛🔥 [중대] 블로그/유튜브 - 주석은 "최근 3일(4320분)"인데 실제
-#              코드는 60분만 보고 있던 버그. 블로그/유튜브가 유독 결과가 적었던
-#              진짜 원인으로 보임. 4320분으로 수정.
-#            - 🔒 보안 강화 - DART API 키가 URL 문자열에 직접 박혀있던 걸
-#              params 딕셔너리로 분리 (로그 노출 위험 방지). /status, /panel
-#              화면에 민감정보 노출 없음을 확인.
-#   [수정32] 🔄 네이버뉴스 방식 전환 - 네이버 오픈API "검색" 권한이 신규
-#            계정에는 셀프 등록으로 안 열려서(Scope Status Invalid) 계속
-#            401이 나던 문제를 우회. 구글뉴스 RSS 한국어 검색(51개 검색어
-#            그대로 재사용)으로 바꿔서 API 키 없이 작동. 함수명/환경변수는
-#            그대로라 다른 설정은 안 건드려도 됨. 나중에 네이버 API 제휴신청이
-#            승인되면 이 함수만 다시 API 방식으로 되돌리면 됨.
-#   [수정31] 🩺 네이버 401 진단 강화 - 지금까지는 "401이다"까지만 알 수
-#            있었는데, 이제 네이버가 실제로 보내는 응답 본문(errorCode/
-#            errorMessage)까지 /test_naver_now 화면에 그대로 보여줌. 키가
-#            틀린 건지, IP제한인지, 다른 사유인지 이제 정확히 알 수 있음.
-#   [수정30] 네이버 검색어 34개→51개로 확장. 누락됐던 대기업 그룹명(네이버/
-#            카카오/두산/한화/HD현대/LS) 추가 + 산업 테마 키워드(반도체/HBM/
-#            이차전지/AI반도체/로봇/방산/원전/조선/바이오/양자컴퓨팅/우주항공)
-#            신설. 테마 키워드는 GLOBAL_AND_DOMESTIC_GIANTS(다른 곳의 점수
-#            계산에도 쓰이는 목록)를 오염시키지 않도록 별도 목록으로 분리해서
-#            네이버 검색어에서만 합침.
-#   [수정29] 🐛 /test_naver_now가 실제로 401/429가 나도 화면엔 항상 "완료"
-#            라고만 떠서, 뭐가 문제인지 화면만 보고는 알 수 없던 문제 수정.
-#            이제 check_naver_news가 상태("ok"/"no_key"/"rate_limited"/
-#            "auth_failed")를 반환하고, 화면에 정확한 원인을 보여줌.
-#   [수정28] 🐛 네이버뉴스 전용 버그 수정 - is_recent_naver_item이 다른 소스와
-#            달리 별도 함수라서, /test_naver_now의 "24시간까지 넓히기"가 실제로
-#            안 먹히고 있었음. minutes_override로 진짜 반영되게 고침.
-#            + 테스트 모드일 땐 쿼리 사이 대기시간도 1초→0.2초로 줄여서 응답
-#            속도 개선 (34개 검색어 다 훑어도 약 7초).
-#   [수정27] 🎯 SOLO_MODE에 콤마로 여러 개 나열 가능해짐 - 예:
-#            SOLO_MODE=US_NEWS,DART 로 넣으면 해외RSS+아침브리핑+DART공시가
-#            동시에 켜지고 나머지는 자동으로 꺼짐 (예전엔 딱 하나만 가능했음).
-#   [수정26] 🐛 [전체 점검] DART에서 발견한 "502 타임아웃 위험"이 다른
-#            /test_XXX_now 라우트에도 똑같이 있을 수 있어서 전부 점검함.
-#            10개 소스 함수(국내RSS/해외RSS/네이버/약업전자/텔레그램1/텔레그램2/
-#            블로그/유튜브/IPO/DART) 전부에 max_sent_override 파라미터를
-#            추가하고, 모든 /test_XXX_now 라우트가 3건 제한으로 빠르게
-#            응답하도록 통일. 대량 데이터(800건) 시나리오로 실제 검증 완료.
-#   [수정25] 🐛 /test_dart_now가 "어제부터+중복무시"로 수백 건을 훑으면서
-#            하나하나 원문조회하다가 응답이 너무 오래 걸려 502(타임아웃) 나던
-#            문제 수정. max_sent_override로 소수 건(원문조회 최대 30건, 발송
-#            최대 3건)만 확인하고 빨리 응답하도록 제한.
-#   [수정24] 🐛🔥 [중대] should_run_task()가 Firestore 없으면(지금 상태!)
-#            무조건 True만 반환해서, DART/네이버/블로그/유튜브/일정리마인더/
-#            IPO알림/브리핑 등 "N분/하루 한 번만" 주기 제한이 전부 사실상
-#            작동을 안 하고 있던 버그 수정. 메모리 폴백 추가함.
-#            + 아침브리핑을 오전 8시/오후 15시 하루 두 번으로 분리 발송.
-#   [수정23] 아침브리핑 "8시대에만 발송" 시간 제한 제거 - 이제 언제 체크되든
-#            (하루 한 번만) 발송됨. 아침브리핑 관련 버그 전수 테스트 완료
-#            (KRX목록없음/야후전면실패/부분실패 전부 안전하게 처리 확인).
-#   [수정22] 🎛️ /panel 컨트롤 패널 추가 - 매번 주소 외워서 칠 필요 없이,
-#            이 페이지 하나에서 지금 뭐가 켜져있는지 보고 버튼 클릭으로
-#            바로 테스트 가능. https://<주소>/panel 로 접속.
-#   [수정21] 🧪 모든 소스별 즉시 테스트 라우트 추가 (총 12개):
-#            /test_domestic_news_now, /test_us_news_now, /test_dart_now,
-#            /test_telegram_now, /test_custom_sources_now, /test_naver_now,
-#            /test_blog_now, /test_youtube_now, /test_ipo_now,
-#            /test_schedule_reminders_now, /test_briefing, /test_score
-#            각각 "이미본것 무시 + (해당하면) 최근 24시간까지 허용"으로 즉시
-#            강제 발송해보고, 끝나면 자동으로 원래 상태 복구됨.
-#   [수정20] KRX 상장법인 목록 조회 실패 시 진단 로그 강화 (응답코드/길이/
-#            앞부분 출력) + Referer 헤더 추가. 다음 로그로 정확한 실패 원인
-#            파악 예정 (계속 실패하는 상태 - 대안 필요할 수도 있음).
-#   [수정19] 지분변동 공시에 "몇 주"까지 추가 - 이제 "누가 몇주 몇%" 전부
-#            근거로 표시됨. (공급계약은 이미 [요점]에서 매출액 대비 비율로
-#            근거 제시하고 있음 - 별도 수정 불필요, 기존 기능이 이미 담당)
-#   [수정18] 🐛 대량보유상황보고서에서 "누가"(제출인) 정보가 빠져있던 문제 수정
-#            - DART가 API로 이미 주는 flr_nm(제출인) 필드를 안 쓰고 있었음.
-#            이제 "🙋제출인명 📐지분율 X%" 형태로 누가 몇% 보유하게 됐는지 표시.
-#   [수정17] 🐛 DART 재무실적(매출/영업이익/순이익) 증감률이 지금까지 중요도
-#            100점 점수에 전혀 반영이 안 되던 버그 수정 - 순이익 50% 늘어도
-#            점수가 낮게 나오던 원인. 이제 [요점] 비율과 재무실적 증감률 중
-#            더 강한 신호를 점수에 반영함.
-#   [수정16] 🐛 DART 재무수치 이상치 안전장치 - 영업이익/순이익이 매출보다 크게
-#            잘못 뽑히면(표가 텍스트로 펼쳐지며 엉뚱한 숫자를 집어온 경우)
-#            "확인필요"로 정직하게 표시. 재무수치 카드와 "⏰일정" 섹션 사이
-#            줄간격도 정리(빈 줄 추가).
-#   [수정15] 해외뉴스 라벨 "해외시황/외신"→"해외_외신"으로 변경. 해외뉴스 매칭
-#            조건 다시 1개로 완화(확인용).
-#   [수정14] 🎯 SOLO_MODE 단축 스위치 추가! Render 환경변수에 SOLO_MODE=DART
-#            처럼 딱 하나만 넣으면, 그것만 켜고 나머지 전부 자동으로 꺼짐.
-#            (예전엔 10개 스위치를 하나씩 다 바꿔야 했음). 값: DOMESTIC_NEWS /
-#            US_NEWS / DART / TELEGRAM / CUSTOM_SOURCES / NAVER / BLOG / YOUTUBE.
-#            안 쓰면(빈 값) 기존처럼 ENABLE_XXX 개별 스위치가 각자 적용됨.
-#   [수정13] /test_dart_now 테스트 라우트 추가 - DART 공시도 해외뉴스처럼
-#            "어제부터 + 중복무시"로 즉시 강제 발송 테스트 가능. 테스트 끝나면
-#            자동으로 원래대로("오늘 날짜만") 복구됨.
-#   [수정12] 뉴스 판정 조건을 다시 엄격하게(2개 키워드 필요) 복구 - 수정7의 완화를 되돌림.
-#            /test_us_news_now 테스트용 라우트 추가 (24시간+중복무시로 즉시 발송 테스트)
-#   [수정10] 해외뉴스/아침브리핑을 별도 텔레그램 채팅방(CHAT_ID_OVERSEAS)으로 분리 발송 가능
-#   [수정11] 🎛️ 기능별 ON/OFF 스위치 추가 (ENABLE_DOMESTIC_NEWS, ENABLE_US_NEWS,
-#            ENABLE_DART 등). Render 환경변수로 "이번엔 해외뉴스만 켜서 검증",
-#            "이번엔 DART만 켜서 검증" 식으로 한 파일 안에서 부분별로 테스트
-#            가능. 환경변수 안 건드리면 전부 켜진 기존 상태 그대로 유지됨.
-#   ⚠️ 앞으로 수정할 때마다 이 번호를 올리고, 무엇이 바뀌었는지 여기 한 줄씩
-#      추가해주세요. 다른 AI/도구로 고친 파일을 다시 합칠 때는, 이 번호가
-#      낮으면(예: 수정2, 수정3) "예전 버전"이라는 뜻이니 절대 이걸로 덮어쓰지
-#      말고, 먼저 어느 버전이 최신인지부터 확인하세요.
-#
-#   ⚠️⚠️ 중요: "해외시황 전용 봇"(국내RSS/DART/텔레그램 등 대부분 기능이
-#      꺼진 가벼운 버전)은 이 파일과 절대 같은 저장소에 올리면 안 됩니다!
-#      실수로 한 번 이 파일이 해외전용판으로 덮어써졌다가 복구한 적이
-#      있습니다 - 해외시황 봇은 반드시 "새로운, 별도의" GitHub 저장소를
-#      만들어서 거기에만 올려주세요.
-#
-#   [수정2] 약업/전자신문 중복버그, 해외뉴스 테마연결, 실적발표 구조화,
-#           IPO 알림, 일정 D-7/D-3 리마인더, 아침 브리핑, 진단로그,
-#           ✔️ 아이콘 통일, 100점 점수, 링크 버튼화, 종목 자동인식,
-#           extract_dart_schedule 위치버그 수정
-#   [수정3] /status 소스별 상태 확인 페이지 추가 (run_once를 표 기반으로 재구성)
-#   [수정4] 해외뉴스 RSS 한글 검색어 URL 인코딩 버그 수정 (%26 등 안전하게 처리)
-#   [수정5] 네이버 뉴스 API를 NCP 방식 → developers.naver.com 오픈API 방식으로 수정
-#   [수정6] RSS를 requests로 먼저 가져온 뒤 feedparser에 넘기는 방식으로 통일
-#           (_fetch_rss_feed 공용함수) - 인코딩 선언 불일치로 인한 파싱 실패 감소
-#   [수정7] 국내/해외/텔레그램 뉴스 판정 조건 완화 (AND→OR, matched_count 2→1)
-#   [수정8] 반기/사업/분기보고서 등 대형 DART 문서 타임아웃 15초→30초로 연장
-#   [수정9] 해외시황 전용 파일이 실수로 이 파일을 덮어썼던 사고 이후 복구
+# 수정0 (2026-08-14) — 넘버링 리셋 기준점. 지금까지의 모든 수정사항이 이
+#   완성본에 반영되어 있습니다. 이제부터 버그를 잡을 때마다 이 번호를
+#   올리고, 무엇이 바뀌었는지 한 줄씩 여기 추가해주세요.
 #
 주식/공시 및 외부 텔레그램 채널 수신/중계 알림 봇 (최종 완성본)
 
@@ -1020,11 +834,9 @@ DART_WATCH_COMPANIES = set(GLOBAL_AND_DOMESTIC_GIANTS)
 DART_RUMOR_KEYWORDS = ["조회공시", "풍문", "보도", "해명", "설명요구"]
 
 # ------------------------------------------------------------
-# DART 공시 화이트리스트 - "진짜 돈이 되는" 유형만 엄선.
-# 예전에는 KEYWORDS_1/2 아무 단어나 report_nm에 걸리면 다 통과시켰는데,
-# "타법인주식및출자증권취득결정"의 "취득" 같은 게 아니라 report_nm 안의 흔한 단어
-# ("계약" 등)만으로도 유동화전문회사 같은 비상장 SPC의 사무 서류까지 걸려서
-# 이제는 아래 화이트리스트에 있는 "결정/변경" 류 실제 이벤트 유형만 통과시킴.
+# DART 공시 화이트리스트 - "진짜 돈이 되는" 이벤트 유형(결정/변경 등)만 엄선.
+# 흔한 단어(예: "계약")만으로 걸러내면 무관한 서류까지 다 걸려서, 아래
+# 화이트리스트에 있는 정확한 유형명만 통과시킴.
 # 임원ㆍ주요주주소유상황보고서, 사업보고서, 감사보고서 단순제출, 증권발행실적보고서
 # 같은 정기/행정 서류는 화이트리스트에 없으므로 자동으로 걸러짐.
 # ------------------------------------------------------------
@@ -1398,11 +1210,9 @@ def _find_near_duplicate(title, threshold=None):
     씀 - 회사명이 새로 추가되는 등으로 문장이 꽤 달라져도 "관련 기사"로
     인식되게 하기 위함 (어차피 신규/후속 둘 다 발송은 되니 위험 없음).
 
-    🐛[버그 수정] 글자 순서 기반(SequenceMatcher) 유사도만 쓰면, 기자마다
-    문장을 재구성해서 쓴 "사실상 같은 뉴스"를 놓치는 경우가 많았음(예: 여러
-    매체가 같은 사건을 다른 어순으로 보도 → 유사도가 낮게 나와서 전부 "신규"로
-    통과됨). 단어(토큰) 겹침 비율도 같이 계산해서, 둘 중 하나라도 기준을
-    넘으면 "관련 기사"로 인정하도록 보강함.
+    글자 순서(SequenceMatcher)와 단어 겹침(Jaccard) 둘 다 확인해서, 기자마다
+    문장을 다른 순서로 써도("A가 B를 했다" vs "B는 A로 인해...") 같은 사건이면
+    "관련 기사"로 인식함.
     """
     threshold = FUZZY_DEDUP_THRESHOLD if threshold is None else threshold
     # 단어 기준 임계값은 글자기준보다 자연스럽게 낮게 나오는 경향이 있어서
@@ -1602,13 +1412,9 @@ def should_run_task(task_name, interval_seconds):
     (예: 네이버 5분, DART 1분, 블로그 30분)보다 자주 실행되지 않도록 막아주는 함수.
     Firestore에 "마지막 실행 시각"을 저장해두고, 아직 주기가 안 지났으면 False.
 
-    🐛[버그 수정] 예전엔 Firestore가 없으면(메모리 전용 모드) 무조건 True를
-    반환해서, "하루 한 번만"/"N분에 한 번만" 같은 주기 제한이 사실상 전혀
-    작동을 안 하고 있었습니다(DART/네이버/블로그/유튜브/일정리마인더/IPO알림/
-    아침·오후브리핑 전부 영향받음). 메모리 폴백을 추가해서, Firestore가 없어도
-    최소한 이 컨테이너가 재시작되기 전까지는 주기가 지켜지게 했습니다.
-    (컨테이너 재시작되면 메모리가 날아가서 다시 풀리는 건 어쩔 수 없음 -
-    완전한 해결은 Firestore 연결이 필요함)
+    Firestore가 없어도(메모리 전용 모드) 이 컨테이너가 살아있는 동안은 주기가
+    지켜짐(재시작하면 메모리가 초기화돼서 다시 풀림 - 완전한 해결은 Firestore
+    연결 필요).
     """
     now = datetime.datetime.now(datetime.timezone.utc)
 
@@ -1837,7 +1643,7 @@ def format_title(title):
 
     # 7) KEYWORDS_1(내용 키워드1)의 테마 단어 -> 💡 접두사
     #    (기업/인물 이름은 위에서 이미 👍⚡️🕵️로 처리됐으니, 여기선 신약/임상/반도체 같은 순수 테마 단어만 대상)
-    #    ⚠️ 예전엔 🎯를 썼는데, DART 공시 카드의 "🎯괴리율"이랑 겹쳐서 헷갈려서 💡로 바꿈
+    #    (DART 공시 카드의 "🎯괴리율"과 헷갈리지 않게 💡 아이콘 사용)
     theme_only_keywords_1 = UNIQUE_KEYWORDS_1 - UNIQUE_GIANTS - UNIQUE_CELEBS - money_body_words - {"일정"}
     if theme_only_keywords_1:
         sorted_terms = sorted(theme_only_keywords_1, key=len, reverse=True)
@@ -1914,9 +1720,8 @@ def _build_5w1h_summary(title):
     """제목에서 뽑을 수 있는 "누가/무엇을/언제"를 한 줄로 정리. 아무것도 못
     뽑으면 None (억지로 채우지 않음 - 숫자/사실을 지어내지 않는다는 원칙과 동일)."""
     who = sorted(resolve_companies_in_text(title) | {c for c in UNIQUE_CELEBS if c in title})
-    # 🐛[버그 수정] KEYWORDS_1에는 회사/그룹명(SK, 삼성 등)도 섞여 있어서 그대로
-    # 쓰면 "무엇을" 자리에 회사명이 들어가는 문제가 있었음. UNIQUE_GIANTS/
-    # UNIQUE_CELEBS(=누가에 이미 쓰는 것들)는 빼고 진짜 "행위/사건" 단어만 남김.
+    # KEYWORDS_1엔 회사/그룹명(SK, 삼성 등)도 섞여있어서, "누가"에 이미 쓴
+    # UNIQUE_GIANTS/UNIQUE_CELEBS는 빼고 진짜 "행위/사건" 단어만 남김.
     action_keywords = (UNIQUE_KEYWORDS_1 | UNIQUE_KEYWORDS_2) - UNIQUE_GIANTS - UNIQUE_CELEBS
     what_hits = sorted({kw for kw in action_keywords if kw in title})
     when = _extract_schedule_from_title(title)
@@ -2084,15 +1889,13 @@ def _calculate_importance_100(matched_count, is_exclusive, is_breaking, is_featu
                                 has_listed_company, ratio_pct=None, novelty="신규",
                                 big_issue_bonus=0):
     """중요도를 100점 만점으로 환산하고, 등급(이모지+글자)을 같이 반환.
-    🐛[재조정] 예전엔 "가장 흔한 케이스(키워드2개+회사명)"가 33점(D등급)으로
-    나와서, should_send를 이미 통과한(=최소한의 검증은 된) 뉴스 대부분이
-    D등급에 몰려있었음. 기본점수/키워드가중치를 올려서, 실제로 발송되는
-    뉴스가 D~S 등급에 좀 더 고르게 퍼지도록 재조정함.
-    🔥 big_issue_bonus: 세계최초/상한가/대규모금액/글로벌기업 제휴합병 같은
-    "시장을 흔들 빅이슈" 신호가 있으면 추가 가산점(_detect_big_issue_bonus 참고).
+    기본점수(18) + 키워드/상장기업/단독/속보/특징주 가산점 + 빅이슈 가산점을
+    더해서 계산. big_issue_bonus: 세계최초/상한가/대규모금액/글로벌기업
+    제휴합병 같은 "시장을 흔들 빅이슈" 신호가 있으면 붙는 가산점
+    (_detect_big_issue_bonus 참고).
     """
-    score = 18  # 10 → 18 (기본점수 상향)
-    score += min(matched_count, 5) * 5  # 4 → 5 (키워드 1개당 가중치 상향)
+    score = 18
+    score += min(matched_count, 5) * 5
     if has_listed_company:
         score += 15
     if is_exclusive:
@@ -2103,11 +1906,8 @@ def _calculate_importance_100(matched_count, is_exclusive, is_breaking, is_featu
         score += 15
     score += big_issue_bonus
     if ratio_pct is not None:
-        # 🐛[버그 수정] 예전엔 30% 이상이면 전부 똑같이 +20이었음 - 그래서
-        # 순이익 50% 증가나 500% 증가나 점수가 똑같았고, DART 공시는 단독/
-        # 속보/특징주 가산점(+15)이 아예 안 붙는 구조라 아무리 극단적인
-        # 실적이어도 C등급(45점)을 절대 못 넘는 문제가 있었음. 구간을
-        # 세분화해서 극단적 변동이 실제로 더 높게 평가되도록 함.
+        # 증감률이 클수록 더 높은 가산점을 주도록 구간을 세분화함
+        # (30%/50%/100% 문턱값으로, 극단적인 실적변동일수록 더 후하게 평가).
         p = abs(ratio_pct)
         if p >= 100:
             score += 30
@@ -2160,7 +1960,7 @@ def classify_and_score(title):
 
     is_strong_signal = bool(upper_hits) and bool(lower_hits)  # ✏️[복구] 다시 AND로 (2개 키워드 다 필요)
     # 🎯 상장 종목명이 제목에 있으면, 다른 이벤트 단어(계약/실적 등)가 없어도
-    # 그 자체로 무조건 전송 (예전에는 이벤트 단어가 같이 있어야만 전송됐음)
+    # 그 자체로 무조건 전송
     has_listed_company = bool(listed_company_hits)
     should_send = is_strong_signal or has_listed_company or is_exclusive or is_breaking or is_feature
 
@@ -2261,10 +2061,7 @@ def _resolve_tag(title, is_schedule, is_rumor, is_disclosure, is_exclusive, is_b
     맞는 게 채택됩니다 (일정 > 조회공시 > 전자공시 > 단독 > 속보 > 특징주 >
     해외시황 > 돈관련 > 커스텀소스 > RSS출처 > 기본).
 
-    ⚠️ 예전엔 이 우선순위를 tag_line용 if/elif와 source_bracket용 if/elif,
-    이렇게 완전히 똑같은 순서를 두 벌 따로 타고 있었습니다. 하나 고치면
-    다른 쪽도 손으로 맞춰야 했고, 깜빡하면 둘이 어긋나는 버그가 생기기
-    쉬운 구조였습니다. 이제 한 번의 판단으로 tag_line(공시류 메시지에 씀)과
+    한 번의 판단으로 tag_line(공시류 메시지에 씀)과
     (source_emoji, source_bracket)(일반 뉴스 메시지에 씀)을 동시에 반환해서,
     구조적으로 절대 어긋날 수 없게 만들었습니다.
 
@@ -2435,10 +2232,8 @@ def send_telegram_message(title, news_url, time_str, matched_count, is_exclusive
         pct_match = re.search(r"(\d+(?:\.\d+)?)\s*%", key_point_line)
         if pct_match:
             ratio_pct_candidates.append(float(pct_match.group(1)))
-    # 🐛[버그 수정] 매출/영업이익/순이익 증감률(highlight_suffix 안의 재무실적
-    # 카드)이 지금까지 중요도 점수 계산에 전혀 반영이 안 되고 있었음 - 순이익이
-    # 50% 늘어도 점수가 낮게 나오던 원인. 재무실적 줄에 있는 증감률 중 가장 큰
-    # 걸 [요점] 비율과 같이 후보에 넣어서, 둘 중 더 강한 신호를 점수에 씀.
+    # 매출/영업이익/순이익 증감률(highlight_suffix 안의 재무실적 카드)도
+    # [요점] 비율과 같이 후보에 넣어서, 둘 중 더 강한 신호를 점수에 씀.
     if is_disclosure and highlight_suffix:
         for m in re.finditer(r"🔺(\d+(?:\.\d+)?)%|▼(\d+(?:\.\d+)?)%", highlight_suffix):
             val = float(m.group(1) or m.group(2))
@@ -2856,6 +2651,12 @@ def _fetch_rss_feed(rss_url, timeout=10):
     return feedparser.parse(rss_url)
 
 
+# ============================================================
+# 📰 국내 RSS 뉴스 체크
+# 👶 쉬운 설명: 한국 신문사들(한경/매경/연합뉴스 등)의 실시간 뉴스를 계속
+#    살펴보다가, 주식에 영향을 줄 만한 중요한 소식이 있으면 텔레그램으로
+#    바로 알려줍니다.
+# ============================================================
 def check_domestic_news(current_time_str, max_sent_override=None):
     feedparser.USER_AGENT = USER_AGENT
     scanned = 0
@@ -3051,6 +2852,12 @@ def _rank_domestic_candidates(kr_stock_names, limit=3):
     return scored[:limit]
 
 
+# ============================================================
+# 🌅 아침 브리핑 (오전/오후, 하루 2번)
+# 👶 쉬운 설명: 미국 증시가 밤사이 어땠는지(나스닥/반도체 등), 어떤 테마가
+#    강했는지 정리해서, 그게 한국 주식 중 어떤 종목과 관련 있는지까지
+#    묶어서 아침에 한 번, 오후에 한 번 보내줍니다.
+# ============================================================
 def build_morning_briefing_text():
     """아침 브리핑 텍스트를 조립. 지수 시세를 전부 못 가져오면 None(발송 안 함)."""
     index_lines = []
@@ -3248,6 +3055,11 @@ def check_morning_briefing(now):
             send_morning_briefing()
 
 
+# ============================================================
+# 🇺🇸 해외(미국) 뉴스 체크
+# 👶 쉬운 설명: 미국 증시/빅테크/반도체 관련 뉴스를 구글뉴스에서 찾아보고,
+#    한국 관련주까지 자동으로 연결해서 알려줍니다.
+# ============================================================
 def check_us_news(current_time_str, max_sent_override=None):
     feedparser.USER_AGENT = USER_AGENT
     scanned = 0
@@ -3438,6 +3250,11 @@ _naver_auth_error_reported = False
 _naver_rate_limit_until = 0.0
 _naver_last_error_detail = ""  # 🩺 401/기타 오류 시 네이버가 준 실제 응답 본문을 저장해서, 테스트 화면에도 바로 보여줄 수 있게 함
 
+# ============================================================
+# 🔎 네이버 뉴스 체크 (구글뉴스 검색 방식)
+# 👶 쉬운 설명: 삼성/SK/LG 같은 대기업 이름이나 반도체/AI 같은 산업
+#    테마로 뉴스를 검색해서, 중요해 보이는 것만 골라 보내줍니다.
+# ============================================================
 def check_naver_news(current_time_str, max_sent_override=None, minutes_override=None):
     """
     🔄[방식 전환] 네이버 오픈API 대신 구글뉴스 RSS(한국어)로 검색하는 방식으로
@@ -3538,10 +3355,8 @@ def _extract_custom_source_headline(a_tag):
     """
     커스텀 소스(약업신문/전자신문) <a> 태그에서 실제 제목 줄을 뽑아내는 공용 로직.
     ⚠️ 이 함수를 check_custom_sources()와 initialize_existing_custom_sources()가
-    "반드시 똑같이" 써야 합니다. 예전엔 두 곳이 제목을 서로 다른 방식으로 계산해서
-    ("초기화 때 등록한 제목"과 "실제 체크 때 계산한 제목"이 문자열 자체가 달랐음),
-    초기화가 사실상 무용지물이 되어 봇이 재시작될 때마다 기존 기사들이 전부
-    "새 기사"인 것처럼 한꺼번에 쏟아지는 버그가 있었습니다. 반드시 이 함수
+    "반드시 똑같이" 써야 합니다(제목 계산 방식이 둘 사이에 다르면, 봇이
+    재시작될 때마다 기존 기사가 전부 "새 기사"로 잘못 인식됨). 반드시 이 함수
     하나로 통일해서 재발을 막습니다.
     """
     # 링크 안에 카테고리/제목/요약이 통째로 들어있는 경우가 있어서,
@@ -3558,6 +3373,11 @@ def _extract_custom_source_headline(a_tag):
     return _shorten_headline(headline_line) if headline_line else ""
 
 
+# ============================================================
+# 💊 약업신문 / 전자신문 체크
+# 👶 쉬운 설명: 바이오/제약 전문지(약업신문)와 전자/IT 전문지(전자신문)를
+#    직접 들여다보고, 새 기사가 올라오면 알려줍니다.
+# ============================================================
 def check_custom_sources(current_time_str, max_sent_override=None):
     sources = CUSTOM_SCRAPE_SOURCES
     sent = 0
@@ -3675,6 +3495,11 @@ def _is_within_last_hour(msg_time, minutes=60):
         return True
 
 
+# ============================================================
+# 📡 텔레그램 채널1 (필터 적용)
+# 👶 쉬운 설명: 다른 주식 정보 텔레그램 채널들을 대신 구독해서, 그중
+#    상장기업 이름이 나오는 중요한 것만 골라서 다시 보내줍니다.
+# ============================================================
 def check_telegram_channels(current_time_str, max_sent_override=None, minutes_override=None):
     if "텔레그램1 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
         return
@@ -3813,6 +3638,11 @@ def check_telegram_channels_unfiltered(current_time_str, max_sent_override=None,
 # ============================================================
 # 📝 분석 블로그 (매일 올라오는 게 아니므로 키워드 필터 없이 새 글이면 무조건 전송)
 # ============================================================
+# ============================================================
+# ✍️ 분석 블로그 체크
+# 👶 쉬운 설명: 유명한 주식 분석 블로거들의 새 글이 올라오면 바로
+#    알려줍니다 (키워드 조건 없이, 새 글이면 무조건).
+# ============================================================
 def check_blogs(current_time_str, max_sent_override=None, minutes_override=None):
     if "블로그 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
         return
@@ -3853,11 +3683,8 @@ def check_blogs(current_time_str, max_sent_override=None, minutes_override=None)
                 mark_as_sent(title)
                 continue
             # 🕒 오래된 글(예: 몇 년 전 글)이 한꺼번에 밀려오는 걸 막기 위해
-            # 최근 3일(4320분) 이내 글만 통과. 발행일을 못 읽으면 안전하게 제외.
-            # 🐛[버그 수정] 주석은 4320분(3일)인데 실제로는 60분만 확인하고
-            # 있었음 - 블로그는 자주 안 올라오는데 60분 창이라 대부분의 새 글을
-            # 놓치고 있었을 가능성이 높음(예: 아침에 올라온 글이 봇 재시작
-            # 몇 시간 뒤엔 이미 "오래됨" 처리됨). 4320분으로 수정.
+            # 최근 3일(4320분) 이내 글만 통과. 발행일을 못 읽으면 안전하게 제외
+            # (블로그는 자주 안 올라와서, 60분처럼 좁은 창이면 놓치기 쉬움).
             if not is_recent_article(entry, minutes=minutes_override or 4320, default_if_unknown=False):
                 mark_as_sent(title)
                 continue
@@ -3923,9 +3750,8 @@ def resolve_youtube_channel_id(handle):
 def resolve_all_youtube_channels():
     """YOUTUBE_CHANNELS의 @핸들들을 전부 channel_id로 변환해서 RSS 주소 목록을 만듦.
 
-    ⚠️ 예전엔 12개 채널을 하나씩 순서대로(직렬로) 처리해서, 채널 하나가 느리거나
-    응답이 없으면 최대 15초씩 쌓여서(About 페이지까지 합치면 채널당 최대 30초)
-    전체가 몇 분씩 걸릴 수 있었습니다. Render 같은 호스팅은 그 시간 동안 헬스체크가
+    ⚠️ 여러 채널을 순서대로(직렬로) 처리하면, 채널 하나가 느려도 전체가
+    몇 분씩 걸릴 수 있습니다. Render 같은 호스팅은 그 시간 동안 헬스체크가
     응답을 못 받으면 "죽었다"고 판단해서 컨테이너를 재시작해버리는데, 그러면
     startup_init()이 끝을 못 보고 처음부터 계속 다시 시작하는 크래시 루프에 빠집니다.
     (실제로 로그에서 "KRX 목록 로드"는 매번 성공하는데 "유튜브 채널ID 확인"에서
@@ -3968,6 +3794,11 @@ def resolve_all_youtube_channels():
     return ordered
 
 
+# ============================================================
+# 🎬 유튜브 체크
+# 👶 쉬운 설명: 주식/경제 유튜버들의 새 영상이 올라오면, 제목에 상장기업
+#    이름이 있는지 보고 알려줍니다.
+# ============================================================
 def check_youtube(current_time_str, max_sent_override=None, minutes_override=None):
     if "유튜브 전체" in PAUSED_SOURCES:  # ⏸️ 카테고리 전체 일시정지
         return
@@ -3994,9 +3825,7 @@ def check_youtube(current_time_str, max_sent_override=None, minutes_override=Non
             if is_blocked_title(title):  # 🧹 삭제어 포함 시 무조건 차단
                 mark_as_sent(title)
                 continue
-            # 🕒 오래된 영상이 한꺼번에 밀려오는 걸 막기 위해 최근 3일 이내 영상만 통과.
-            # 🐛[버그 수정] 블로그와 똑같은 버그 - 주석은 3일인데 실제론 60분만
-            # 확인하고 있었음. 4320분(3일)으로 수정.
+            # 🕒 오래된 영상이 한꺼번에 밀려오는 걸 막기 위해 최근 3일(4320분) 이내 영상만 통과.
             if not is_recent_article(entry, minutes=minutes_override or 4320, default_if_unknown=False):
                 mark_as_sent(title)
                 continue
@@ -4027,10 +3856,8 @@ def check_youtube(current_time_str, max_sent_override=None, minutes_override=Non
 # "공시 종류"가 아니라 실제 돈/실적/기업가치와 관련된 수치를 원문에서 찾아
 # 텔레그램 제목에 그대로 보여준다 (예: 💥시가총액대비 32%, 💥영업이익 전년비 +85%).
 #
-# 예전에는 "몇 % 이상이어야만 통과"하는 문턱값(DART_MIN_* 상수들)이 있었는데,
-# 어차피 실제 비율을 제목에 그대로 보여주기 때문에 문턱값으로 미리 거를 필요가
-# 없어졌다 - 크고 작은 건 받아보는 사람이 직접 판단하면 된다. 그래서 문턱값
-# 상수들은 전부 제거했다.
+# 문턱값(몇 % 이상이어야만 통과) 없이, 실제 비율을 그대로 제목에 보여줌 -
+# 크고 작은 건 받아보는 사람이 직접 판단하면 됨.
 #
 # 참고:
 # - 영업이익/매출 YoY, 컨센서스대비 → 실적 공시(_dart_financial_strong)
@@ -4263,6 +4090,12 @@ def _save_upcoming_schedule_reminders(corp_name, stock_code, report_nm, report_t
             print(f"[일정 리마인더 저장 오류] {corp_name}: {e}")
 
 
+# ============================================================
+# ⏰ 일정 리마인더 (D-7 / D-3)
+# 👶 쉬운 설명: 예전에 나온 공시에서 "몇 월 며칠에 이런 일이 있다"고
+#    나왔던 걸 기억해뒀다가, 그 날짜가 7일 전/3일 전으로 다가오면
+#    미리 알려줍니다.
+# ============================================================
 def check_upcoming_schedule_reminders(current_time_str):
     """
     저장해둔 미래 일정들을 훑어서, "오늘부터 며칠 남았는지" 계산 후
@@ -4411,6 +4244,11 @@ def _extract_ipo_info(text):
     return offering_price, market, industry
 
 
+# ============================================================
+# 🆕 신규상장(IPO) 알림
+# 👶 쉬운 설명: 새로 주식시장에 상장하는 회사가 있으면(투자설명서 공시
+#    기준), 상장 하루 전에 미리 알려줍니다.
+# ============================================================
 def check_ipo_listings(current_time_str, bgn_date_override=None, max_sent_override=None):
     """DART 투자설명서 공시를 훑어서, 내일 상장 예정인 종목이 있으면 알림."""
     if not DART_API_KEY:
@@ -5506,9 +5344,7 @@ def dart_should_expose(report_nm, text, stock_code):
         # _dart_financial_strong 안에서 report_nm을 보고 이 기준을 적용함).
         return _dart_financial_strong(text, stock_code, report_nm)
 
-    # 🎯 [연결 완료] "결정 자체가 재료"인 유형은 원문 텍스트 성공/실패와 무관하게
-    # 항상 노출한다. 예전에는 DART_STRONG_REPORT_KEYWORDS를 만들어두고도 실제로는
-    # 아무 데서도 참조하지 않는 죽은 코드였음 - 이번에 실제로 연결함.
+    # 🎯 "결정 자체가 재료"인 유형은 원문 텍스트 성공/실패와 무관하게 항상 노출.
     if any(k in report_nm for k in DART_ALWAYS_EXPOSE_KEYWORDS):
         return True, None
 
@@ -5531,6 +5367,12 @@ def dart_should_expose(report_nm, text, stock_code):
 
 # ============================================================
 # DART 전자공시
+# ============================================================
+# ============================================================
+# 📋 DART 전자공시 체크
+# 👶 쉬운 설명: 상장기업이 나라(금융감독원)에 공식으로 신고하는 문서
+#    (공시)를 계속 살펴보다가, 돈이 되는 진짜 중요한 소식(계약/실적/
+#    지분변동 등)만 골라서 알려줍니다.
 # ============================================================
 def check_dart_disclosures(current_time_str, bgn_date_override=None, max_sent_override=None):
     if not DART_API_KEY:
@@ -5620,7 +5462,7 @@ def check_dart_disclosures(current_time_str, bgn_date_override=None, max_sent_ov
             if not report_text:
                 # ⚠️ 원문 텍스트를 못 가져오면 지분율/배당금/비율 요약(extra_notes)이
                 # 전부 빈 채로 나갈 수밖에 없습니다. 왜 요약이 안 붙었는지 바로
-                # 알 수 있도록 로그를 남깁니다 (예전엔 조용히 넘어가서 원인 파악이 안 됐음).
+                # 알 수 있도록 로그를 남깁니다.
                 print(f"[DART 원문 조회 실패] {corp_name} / {report_nm} (rcept_no={rcept_no}) - 원문을 못 가져와 요약 없이 발송됩니다.")
             should_expose, reason = dart_should_expose(report_nm, report_text, stock_code)
             if not should_expose:
@@ -5969,20 +5811,14 @@ try:
     def _test_us_news_now_route():
         """
         🧪 임시 테스트용 경로 - 진짜 새 기사가 나올 때까지 기다리지 않고,
-        지금 피드에 있는 기사를 "최근 1일 이내"로 넉넉하게 봐서 강제로
-        실제 발송까지 시켜봅니다. 이미 "이미 봤다"고 등록된 기사도 이번
-        테스트에서만 예외적으로 다시 보내봅니다.
+        지금 피드에 있는 기사를 "최근 60분" 기준 그대로 강제로 실제 발송까지
+        시켜봅니다. 이미 "이미 봤다"고 등록된 기사도 이번 테스트에서만
+        예외적으로 다시 보내봅니다.
         ⚠️ 실제로 텔레그램에 메시지가 몇 건 갈 수 있습니다 (진짜 발송임).
         """
         startup_init()
 
-        # 1) "최근 60분" 기준을 "최근 24시간"으로 임시로 늘림
-        original_is_recent = is_recent_article
-        def _loose_is_recent(entry, minutes=60, default_if_unknown=True):
-            return original_is_recent(entry, minutes=1440, default_if_unknown=default_if_unknown)
-        globals()["is_recent_article"] = _loose_is_recent
-
-        # 2) 해외뉴스 관련해서 "이미 봤다"고 등록된 기록을 이번만 비워서,
+        # 해외뉴스 관련해서 "이미 봤다"고 등록된 기록을 이번만 비워서,
         # 지금 피드에 있는 기사가 "새 기사"로 인식되게 함
         backup_sent_titles = set(sent_news_titles)
         backup_fuzzy = list(_recent_titles_for_fuzzy)
@@ -5992,8 +5828,7 @@ try:
         try:
             check_us_news(_now_kst().strftime("%H:%M:%S"), max_sent_override=3)
         finally:
-            # 3) 테스트 끝나면 원래대로 복구 (실제 운영 로직에 영향 안 주도록)
-            globals()["is_recent_article"] = original_is_recent
+            # 테스트 끝나면 원래대로 복구 (실제 운영 로직에 영향 안 주도록)
             sent_news_titles.clear()
             sent_news_titles.update(backup_sent_titles)
             _recent_titles_for_fuzzy.clear()
@@ -6001,20 +5836,12 @@ try:
 
         return "해외뉴스 강제 테스트 완료! 텔레그램을 확인하세요 (0건이었다면 로그의 원본 건수를 확인해주세요).", 200
 
-    def _run_forced_test(fn, loosen_recency=False, **fn_kwargs):
+    def _run_forced_test(fn, **fn_kwargs):
         """
         🧪 공용 강제테스트 실행기 - 모든 /test_XXX_now 라우트가 공통으로 씀.
-        "이미 봤다"고 기록된 걸 이번만 비우고(끝나면 복구), 필요하면 "최근
-        60분" 기준도 "최근 24시간"으로 느슨하게 바꿔서(끝나면 복구) fn을
-        한 번 실행합니다.
+        "이미 봤다"고 기록된 걸 이번만 비우고(끝나면 복구) fn을 한 번
+        실행합니다. 시간창은 항상 정상 운영과 동일한 60분 그대로 씁니다.
         """
-        original_is_recent = None
-        if loosen_recency:
-            original_is_recent = globals()["is_recent_article"]
-            def _loose(entry, minutes=60, default_if_unknown=True):
-                return original_is_recent(entry, minutes=1440, default_if_unknown=default_if_unknown)
-            globals()["is_recent_article"] = _loose
-
         backup_sent = set(sent_news_titles)
         backup_fuzzy = list(_recent_titles_for_fuzzy)
         sent_news_titles.clear()
@@ -6023,8 +5850,6 @@ try:
         try:
             return fn(_now_kst().strftime("%H:%M:%S"), **fn_kwargs)
         finally:
-            if loosen_recency:
-                globals()["is_recent_article"] = original_is_recent
             sent_news_titles.clear()
             sent_news_titles.update(backup_sent)
             _recent_titles_for_fuzzy.clear()
@@ -6037,13 +5862,10 @@ try:
         "어제부터"로 넓히고, "이미 봤다"고 등록된 공시도 이번만 무시하고
         강제로 실제 발송까지 시켜봅니다. 끝나면 자동으로 원래대로 복구됩니다.
         ⚠️ 실제로 텔레그램에 메시지가 몇 건 갈 수 있습니다 (진짜 발송임).
-        🐛[버그 수정] 어제부터+중복무시로 훑으면 대상이 수백 건이 될 수 있어서,
-        하나하나 원문을 조회하다가 응답이 너무 오래 걸려 502(타임아웃)가
-        나던 문제가 있었음. max_sent_override로 소수 건만 빠르게 확인하도록 제한.
+        max_sent_override로 소수 건만 빠르게 확인하도록 제한해서 응답이 오래
+        걸리지 않게 함.
         """
         startup_init()
-
-        yesterday_str = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
 
         backup_sent_titles = set(sent_news_titles)
         sent_news_titles.clear()
@@ -6051,7 +5873,6 @@ try:
         try:
             check_dart_disclosures(
                 _now_kst().strftime("%H:%M:%S"),
-                bgn_date_override=yesterday_str,
                 max_sent_override=3,  # 🧪 응답 빨리 오게 3건만 보내면 멈춤
             )
         finally:
@@ -6062,17 +5883,17 @@ try:
 
     @app.route("/test_domestic_news_now", methods=["GET"])
     def _test_domestic_news_now_route():
-        """🧪 국내 RSS 강제 테스트 - 최근 24시간 + 중복무시로 즉시 발송해봄."""
+        """🧪 국내 RSS 강제 테스트 - 최근 60분 + 중복무시로 즉시 발송해봄."""
         startup_init()
-        _run_forced_test(check_domestic_news, loosen_recency=True, max_sent_override=3)
+        _run_forced_test(check_domestic_news, max_sent_override=3)
         return "국내RSS 강제 테스트 완료! 텔레그램을 확인하세요.", 200
 
     @app.route("/test_telegram_now", methods=["GET"])
     def _test_telegram_now_route():
         """🧪 텔레그램1(필터)+2(무조건) 채널 강제 테스트 - 중복무시로 즉시 발송해봄."""
         startup_init()
-        _run_forced_test(check_telegram_channels, max_sent_override=3, minutes_override=1440)
-        _run_forced_test(check_telegram_channels_unfiltered, max_sent_override=3, minutes_override=1440)
+        _run_forced_test(check_telegram_channels, max_sent_override=3)
+        _run_forced_test(check_telegram_channels_unfiltered, max_sent_override=3)
         return "텔레그램 채널 강제 테스트 완료! 텔레그램을 확인하세요.", 200
 
     @app.route("/test_custom_sources_now", methods=["GET"])
@@ -6084,42 +5905,40 @@ try:
 
     @app.route("/test_naver_now", methods=["GET"])
     def _test_naver_now_route():
-        """🧪 네이버 뉴스(구글RSS 방식) 강제 테스트 - 최근 24시간 + 중복무시로
+        """🧪 네이버 뉴스(구글RSS 방식) 강제 테스트 - 최근 60분 + 중복무시로
         즉시 발송해봄. 네이버 오픈API "검색" 권한이 신규 계정에 안 열려서
         (Scope Status Invalid), 구글뉴스 RSS 한국어 검색으로 우회함. API 키가
         필요 없어서 401/429 걱정이 없음."""
         startup_init()
-        result = _run_forced_test(check_naver_news, max_sent_override=3, minutes_override=1440)
+        result = _run_forced_test(check_naver_news, max_sent_override=3)
 
         messages = {
-            "ok": "✅ 네이버 뉴스(구글RSS 방식) 강제 테스트 완료! 텔레그램을 확인하세요 (0건이면 최근 24시간 안에 매칭되는 기사가 없었던 것).",
+            "ok": "✅ 네이버 뉴스(구글RSS 방식) 강제 테스트 완료! 텔레그램을 확인하세요 (0건이면 최근 60분 안에 매칭되는 기사가 없었던 것).",
         }
         return messages.get(result, f"테스트 완료 (결과: {result})"), 200
 
     @app.route("/test_blog_now", methods=["GET"])
     def _test_blog_now_route():
-        """🧪 분석 블로그 강제 테스트 - 최근 24시간 + 중복무시로 즉시 발송해봄."""
+        """🧪 분석 블로그 강제 테스트 - 최근 60분 + 중복무시로 즉시 발송해봄."""
         startup_init()
-        _run_forced_test(check_blogs, loosen_recency=True, max_sent_override=3)
+        _run_forced_test(check_blogs, max_sent_override=3)
         return "분석 블로그 강제 테스트 완료! 텔레그램을 확인하세요.", 200
 
     @app.route("/test_youtube_now", methods=["GET"])
     def _test_youtube_now_route():
         """🧪 유튜브 강제 테스트 - 채널ID를 아직 못 가져왔으면 먼저 가져오고,
-        최근 24시간 + 중복무시로 즉시 발송해봄."""
+        최근 60분 + 중복무시로 즉시 발송해봄."""
         startup_init()
         if not YOUTUBE_CHANNEL_RSS_URLS:
             resolve_all_youtube_channels()
-        _run_forced_test(check_youtube, loosen_recency=True, max_sent_override=3)
+        _run_forced_test(check_youtube, max_sent_override=3)
         return "유튜브 강제 테스트 완료! 텔레그램을 확인하세요.", 200
 
     @app.route("/test_ipo_now", methods=["GET"])
     def _test_ipo_now_route():
-        """🧪 신규상장(IPO) 알림 강제 테스트 - "오늘 날짜"만 보던 걸 "어제부터"로
-        넓히고, 중복무시로 즉시 발송해봄."""
+        """🧪 신규상장(IPO) 알림 강제 테스트 - 오늘 날짜 기준, 중복무시로 즉시 발송해봄."""
         startup_init()
-        yesterday_str = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
-        _run_forced_test(check_ipo_listings, bgn_date_override=yesterday_str, max_sent_override=3)
+        _run_forced_test(check_ipo_listings, max_sent_override=3)
         return "IPO 알림 강제 테스트 완료! 텔레그램을 확인하세요 (내일 상장 예정 종목이 없으면 0건이 정상).", 200
 
     @app.route("/test_schedule_reminders_now", methods=["GET"])
