@@ -1,6 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-# 수정1 (2026-08-14) — KRX 상장법인 목록 조회 방식을 DART API로 전환.
+# 버그수정3 (2026-08-14) — 🔥[중대] SOLO_MODE에 잘못된 형식(한글 이름을
+#   슬래시로 나열)을 넣으면, "일단 전부 끄고" 시작했는데 아무것도 못 알아들어서
+#   전체 소스가 다 꺼져버리는 사고가 있었음 (실제로 뉴스가 하나도 안 오던
+#   원인). 이제 ①콤마/슬래시 둘 다 구분자로 인식, ②한글 이름도 별칭으로
+#   인식(국내RSS/해외RSS/DART/텔레그램/약업전자/네이버/블로그/유튜브),
+#   ③그래도 하나도 못 알아들으면 안전하게 "전체 켜짐" 기본상태 유지하도록
+#   수정. 실제 문제됐던 값으로 재현 테스트 + 안전장치 + 기존방식 호환성
+#   전부 검증 완료.
+#
+# 버그수정2 (2026-08-14) — 국내RSS의 구글뉴스 검색피드 출처 표시가
+#   "구글뉴스"로 하드코딩되어 있던 걸 "Google"로 통일 (해외RSS/네이버 쪽은
+#   이미 통일돼있었는데 이 한 곳만 놓쳤었음). 자기참조로 잘못 써진 주석
+#   (_now_kst 설명 부분)도 같이 정리.
+#
+# 버그수정1 (2026-08-14) — KRX 상장법인 목록 조회 방식을 DART API로 전환.
 #   KRX 사이트가 클라우드 서버 IP를 차단(403)해서 계속 실패하던 문제를,
 #   DART corpCode.xml(항상 정상 작동하던 API)로 대체해서 해결. KRX 직접
 #   조회는 예비 백업으로만 남겨둠. 검증: 가짜 XML로 상장/비상장 구분,
@@ -148,10 +162,39 @@ ENABLE_IPO_ALERTS = _env_flag("ENABLE_IPO_ALERTS")               # 신규상장(
 #   SOLO_MODE=YOUTUBE         → 유튜브만
 # 🎯 SOLO_MODE=DART 처럼 하나만 넣어도 되고, SOLO_MODE=US_NEWS,DART 처럼
 # 콤마로 여러 개 나열하면 그것들만 동시에 켜집니다 (나머지는 자동으로 꺼짐).
+#
+# 🛡️[안전장치] 예전엔 SOLO_MODE에 잘못된 값(예: 한글 이름을 슬래시로 나열한
+# 것)을 넣으면 "일단 전부 끄고" 시작했는데 아무것도 안 켜져서, 결과적으로
+# 소스가 전부 꺼져버리는 사고가 있었음. 이제는 ①콤마(,)와 슬래시(/) 둘 다
+# 구분자로 인식하고, ②한글 이름("국내RSS" 등)도 별칭으로 인식하고,
+# ③그래도 하나도 못 알아들으면 "전부 끄기"를 하지 않고 안전하게 원래
+# 상태(기본값 = 전체 켜짐)를 그대로 유지하도록 고침.
+_SOLO_MODE_ALIASES = {
+    "국내RSS": "DOMESTIC_NEWS", "국내뉴스": "DOMESTIC_NEWS",
+    "해외RSS": "US_NEWS", "해외뉴스": "US_NEWS", "해외": "US_NEWS",
+    "DART공시": "DART", "공시": "DART",
+    "텔레그램1+2": "TELEGRAM", "텔레그램": "TELEGRAM", "텔레그램1": "TELEGRAM", "텔레그램2": "TELEGRAM",
+    "약업전자": "CUSTOM_SOURCES", "약업/전자신문": "CUSTOM_SOURCES", "약업신문": "CUSTOM_SOURCES", "전자신문": "CUSTOM_SOURCES",
+    "네이버": "NAVER", "네이버뉴스": "NAVER",
+    "블로그": "BLOG", "분석블로그": "BLOG",
+    "유튜브": "YOUTUBE",
+}
 _SOLO_MODE_RAW = os.environ.get("SOLO_MODE", "").strip().upper()
-_SOLO_MODES = {m.strip() for m in _SOLO_MODE_RAW.split(",") if m.strip()}
-if _SOLO_MODES:
-    # 일단 전부 끄고, SOLO_MODE에 해당하는 것만 켬
+_SOLO_MODE_TOKENS = [t.strip() for t in re.split(r"[,/]", _SOLO_MODE_RAW) if t.strip()]
+_SOLO_MODES = set()
+_SOLO_MODE_UNKNOWN = []
+for _tok in _SOLO_MODE_TOKENS:
+    _resolved = _SOLO_MODE_ALIASES.get(_tok, _tok)  # 한글이면 별칭표에서 영문으로 변환, 아니면 그대로
+    _SOLO_MODES.add(_resolved)
+
+_KNOWN_SOLO_MODES = {
+    "DOMESTIC_NEWS", "US_NEWS", "DART", "TELEGRAM", "CUSTOM_SOURCES",
+    "NAVER", "BLOG", "YOUTUBE",
+}
+_SOLO_MODES_VALID = _SOLO_MODES & _KNOWN_SOLO_MODES
+
+if _SOLO_MODES_VALID:
+    # 최소 하나는 알아들었을 때만 "전부 끄고 이것만 켜기"를 실행 (안전함)
     ENABLE_DOMESTIC_NEWS = False
     ENABLE_US_NEWS = False
     ENABLE_MORNING_BRIEFING = False
@@ -164,11 +207,7 @@ if _SOLO_MODES:
     ENABLE_SCHEDULE_REMINDERS = False
     ENABLE_IPO_ALERTS = False
 
-    _KNOWN_SOLO_MODES = {
-        "DOMESTIC_NEWS", "US_NEWS", "DART", "TELEGRAM", "CUSTOM_SOURCES",
-        "NAVER", "BLOG", "YOUTUBE",
-    }
-    for _mode in _SOLO_MODES:
+    for _mode in _SOLO_MODES_VALID:
         if _mode == "DOMESTIC_NEWS":
             ENABLE_DOMESTIC_NEWS = True
         elif _mode == "US_NEWS":
@@ -186,9 +225,13 @@ if _SOLO_MODES:
             ENABLE_BLOG = True
         elif _mode == "YOUTUBE":
             ENABLE_YOUTUBE = True
-        else:
-            print(f"⚠️ SOLO_MODE 항목 '{_mode}'는 알 수 없는 값입니다(무시함). "
-                  f"({'/'.join(sorted(_KNOWN_SOLO_MODES))} 중에서 골라 콤마로 나열해주세요)")
+
+_SOLO_MODES_INVALID = _SOLO_MODES - _KNOWN_SOLO_MODES
+if _SOLO_MODES_INVALID:
+    print(f"⚠️ SOLO_MODE에 못 알아듣는 값이 있습니다(무시함): {', '.join(sorted(_SOLO_MODES_INVALID))} "
+          f"({'/'.join(sorted(_KNOWN_SOLO_MODES))} 중에서 골라 콤마(,)로 나열해주세요)")
+if _SOLO_MODE_TOKENS and not _SOLO_MODES_VALID:
+    print("⚠️ SOLO_MODE 값을 하나도 못 알아들어서, 안전하게 '전체 켜짐' 기본 상태를 유지합니다.")
 
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
 NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
@@ -900,7 +943,7 @@ DOMESTIC_RSS_SOURCE_NAMES = {
     "https://www.yna.co.kr/rss/economy.xml": "연합뉴스",
     "https://rss.hankyung.com/new/hk_news.xml": "한국경제",
     "https://www.mk.co.kr/rss/30000001/les.xml": "매일경제",
-    "https://news.google.com/rss/search?q=주식+증권+상장+에코프로+SK오션플랜트+삼성전자+SK하이닉스&hl=ko&gl=KR&ceid=KR:ko": "구글뉴스",
+    "https://news.google.com/rss/search?q=주식+증권+상장+에코프로+SK오션플랜트+삼성전자+SK하이닉스&hl=ko&gl=KR&ceid=KR:ko": "Google",
     "http://www.cstimes.com/rss/allArticle.xml": "CS타임즈",
     "https://politepol.com/fd/lRjhc60Zukff": "폴리트폴",
     "http://www.theguru.co.kr/data/rss/section_30.xml": "더구루",
