@@ -8,17 +8,27 @@ from flask import Flask
 
 app = Flask(__name__)
 
-# 텔레그램 설정
 TELEGRAM_BOT_TOKEN = "8475724946:AAEkypDs4bHPAnjiInyAsVHDzCfNDS2LXGs"
 TELEGRAM_CHAT_ID = "6754280298"
 
-# 다중 실행 방지용 플래그
+# 다중 실행 방지용 전역 플래그 및 락
 _is_running = False
 _lock = threading.Lock()
 
+# 분석 엔진: 일정 키워드와 분석 근거 매칭
+SCHEDULE_KEYWORDS = {
+    "발표": "기업 실적 또는 중요 경영 사항 공개",
+    "상장": "주식 시장 신규 종목 등록 및 자금 조달",
+    "계약": "신규 수주 및 파트너십 체결",
+    "승인": "정부 규제 통과 및 기술 인증",
+    "개최": "컨퍼런스, 주주총회 등 주요 행사",
+    "예정": "향후 사업 계획 및 마일스톤",
+    "출시": "신제품/서비스 시장 진입"
+}
+
 @app.route('/')
 def home():
-    return "Alpha Elite Intelligence SaaS Bot (Secure Hourly Report) is running!", 200
+    return "Alpha Elite Intelligence Bot is running securely.", 200
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -33,22 +43,26 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"[텔레그램 전송 에러] {e}", flush=True)
 
-def fetch_and_analyze_news():
+def fetch_comprehensive_schedules():
+    """뉴스에서 일정과 그 분석 근거를 추출하는 로직"""
     rss_url = "https://rss.hankyung.com/new/hk_market.xml"
-    report_data = []
+    schedules = []
     try:
-        resp = requests.get(rss_url, timeout=5)
+        resp = requests.get(rss_url, timeout=10)
         if resp.status_code == 200:
             root = ET.fromstring(resp.content)
-            for item in root.findall('.//item')[:10]:
+            for item in root.findall('.//item'):
                 title = item.find('title').text
                 link = item.find('link').text
-                schedule_keywords = ['발표', '개최', '상장', '출시', '계약', '예정', '준비', '완공', '승인', '총회', '실적']
-                is_schedule = any(kw in title for kw in schedule_keywords)
-                report_data.append({"title": title, "link": link, "is_schedule": is_schedule})
-    except Exception:
-        pass
-    return report_data
+                
+                # 키워드 매칭 및 분석 근거 추출
+                found_kw = [kw for kw in SCHEDULE_KEYWORDS if kw in title]
+                if found_kw:
+                    reason = SCHEDULE_KEYWORDS[found_kw[0]]
+                    schedules.append({"title": title, "link": link, "reason": reason})
+    except Exception as e:
+        print(f"Error fetching: {e}", flush=True)
+    return schedules
 
 def run_integrated_report():
     global _is_running
@@ -58,34 +72,31 @@ def run_integrated_report():
         _is_running = True
 
     try:
-        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔄 통합 브리핑 파이프라인 가동...", flush=True)
-        news_items = fetch_and_analyze_news()
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔄 중장기 일정 분석 파이프라인 가동...", flush=True)
+        schedules = fetch_comprehensive_schedules()
         
-        full_msg = "📌 <b>[ALPHA ELITE INTEGRATED REPORT]</b>\n"
-        full_msg += f"⏰ 시간: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n━━━━━━━━━━━━━━━━\n"
+        msg = "📌 <b>[ALPHA ELITE 1-YEAR HORIZON REPORT]</b>\n"
+        msg += f"⏰ 시간: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n━━━━━━━━━━━━━━━━\n\n"
+        msg += "🗓️ <b>분석된 중장기 주요 일정 및 근거</b>\n"
         
-        full_msg += "🔥 <b>최신 시장 뉴스 및 특징주</b>\n"
-        for item in news_items[:3]:
-            full_msg += f"• {item['title']}\n🔗 <a href='{item['link']}'>[상세보기]</a>\n"
-        
-        full_msg += "\n🗓️ <b>다가오는 주요 일정/이벤트 (중장기 점검)</b>\n"
-        schedules = [i for i in news_items if i['is_schedule']]
         if schedules:
-            for s in schedules[:5]:
-                full_msg += f"• {s['title']}\n  🔗 <a href='{s['link']}'>[일정 상세]</a>\n"
+            for s in schedules[:7]: # 상위 주요 일정 7개 선별
+                msg += f"• <b>{s['title']}</b>\n"
+                msg += f"  └ <b>근거:</b> {s['reason']}\n"
+                msg += f"  └ 🔗 <a href='{s['link']}'>[일정 상세 보기]</a>\n\n"
         else:
-            full_msg += "• 현재 등록된 다가오는 핵심 일정 없음\n"
+            msg += "• 현재 확인되는 주요 중장기 일정 없음\n"
             
-        full_msg += "━━━━━━━━━━━━━━━━\n👉 1시간 후 차기 브리핑 예정"
+        msg += "━━━━━━━━━━━━━━━━\n👉 1시간 후 차기 브리핑 예정"
         
-        send_telegram_message(full_msg)
+        send_telegram_message(msg)
     finally:
         with _lock:
             _is_running = False
 
 def background_scheduler():
     time.sleep(3)
-    print("🚀 Secure Hourly Scheduler Started!", flush=True)
+    print("🚀 Secure 1-Hour Scheduler Started!", flush=True)
     while True:
         run_integrated_report()
         # 정확히 1시간(3600초) 대기
@@ -93,8 +104,7 @@ def background_scheduler():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
-    # 플라스크 워커가 중복으로 스레드를 띄우는 것을 방지하기 위해 중복 실행 체크
-    if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or os.environ.get("RENDER") or True:
-        t = threading.Thread(target=background_scheduler, daemon=True)
-        t.start()
+    # 백그라운드 스케줄러 단일 실행 보장
+    t = threading.Thread(target=background_scheduler, daemon=True)
+    t.start()
     app.run(host='0.0.0.0', port=port)
