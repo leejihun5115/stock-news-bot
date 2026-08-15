@@ -12,12 +12,15 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = "8475724946:AAEkypDs4bHPAnjiInyAsVHDzCfNDS2LXGs"
 TELEGRAM_CHAT_ID = "6754280298"
 
+# 다중 실행 방지용 플래그
+_is_running = False
+_lock = threading.Lock()
+
 @app.route('/')
 def home():
-    return "Alpha Elite Intelligence SaaS Bot (Hourly Integrated Report) is running!", 200
+    return "Alpha Elite Intelligence SaaS Bot (Secure Hourly Report) is running!", 200
 
 def send_telegram_message(message):
-    """링크가 포함된 통합 보고서 전송"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -31,54 +34,67 @@ def send_telegram_message(message):
         print(f"[텔레그램 전송 에러] {e}", flush=True)
 
 def fetch_and_analyze_news():
-    """뉴스 및 특징주 RSS 파싱 및 일정 추출 로직"""
     rss_url = "https://rss.hankyung.com/new/hk_market.xml"
     report_data = []
     try:
         resp = requests.get(rss_url, timeout=5)
         if resp.status_code == 200:
             root = ET.fromstring(resp.content)
-            for item in root.findall('.//item')[:5]:
+            for item in root.findall('.//item')[:10]:
                 title = item.find('title').text
                 link = item.find('link').text
-                is_schedule = any(kw in title for kw in ['발표', '개최', '상장', '출시', '계약', '예정'])
+                schedule_keywords = ['발표', '개최', '상장', '출시', '계약', '예정', '준비', '완공', '승인', '총회', '실적']
+                is_schedule = any(kw in title for kw in schedule_keywords)
                 report_data.append({"title": title, "link": link, "is_schedule": is_schedule})
     except Exception:
         pass
     return report_data
 
 def run_integrated_report():
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔄 통합 브리핑 파이프라인 가동...", flush=True)
-    news_items = fetch_and_analyze_news()
-    
-    full_msg = "📌 <b>[ALPHA ELITE INTEGRATED REPORT]</b>\n"
-    full_msg += f"⏰ 시간: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n━━━━━━━━━━━━━━━━\n"
-    
-    full_msg += "🔥 <b>최신 시장 뉴스 및 특징주</b>\n"
-    for item in news_items[:3]:
-        full_msg += f"• {item['title']}\n🔗 <a href='{item['link']}'>[상세보기]</a>\n"
-    
-    full_msg += "\n🗓️ <b>추출된 주요 일정/이벤트</b>\n"
-    schedules = [i for i in news_items if i['is_schedule']]
-    if schedules:
-        for s in schedules:
-            full_msg += f"• {s['title']}\n💡 근거: 관련 일정/이벤트 포함\n"
-    else:
-        full_msg += "• 현재 정규 일정 없음\n"
+    global _is_running
+    with _lock:
+        if _is_running:
+            return
+        _is_running = True
+
+    try:
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔄 통합 브리핑 파이프라인 가동...", flush=True)
+        news_items = fetch_and_analyze_news()
         
-    full_msg += "━━━━━━━━━━━━━━━━\n👉 1시간 후 차기 브리핑 예정"
-    
-    send_telegram_message(full_msg)
+        full_msg = "📌 <b>[ALPHA ELITE INTEGRATED REPORT]</b>\n"
+        full_msg += f"⏰ 시간: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n━━━━━━━━━━━━━━━━\n"
+        
+        full_msg += "🔥 <b>최신 시장 뉴스 및 특징주</b>\n"
+        for item in news_items[:3]:
+            full_msg += f"• {item['title']}\n🔗 <a href='{item['link']}'>[상세보기]</a>\n"
+        
+        full_msg += "\n🗓️ <b>다가오는 주요 일정/이벤트 (중장기 점검)</b>\n"
+        schedules = [i for i in news_items if i['is_schedule']]
+        if schedules:
+            for s in schedules[:5]:
+                full_msg += f"• {s['title']}\n  🔗 <a href='{s['link']}'>[일정 상세]</a>\n"
+        else:
+            full_msg += "• 현재 등록된 다가오는 핵심 일정 없음\n"
+            
+        full_msg += "━━━━━━━━━━━━━━━━\n👉 1시간 후 차기 브리핑 예정"
+        
+        send_telegram_message(full_msg)
+    finally:
+        with _lock:
+            _is_running = False
 
 def background_scheduler():
-    time.sleep(2)
-    print("🚀 Hourly Scheduler Started!", flush=True)
+    time.sleep(3)
+    print("🚀 Secure Hourly Scheduler Started!", flush=True)
     while True:
         run_integrated_report()
+        # 정확히 1시간(3600초) 대기
         time.sleep(3600)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
-    t = threading.Thread(target=background_scheduler, daemon=True)
-    t.start()
+    # 플라스크 워커가 중복으로 스레드를 띄우는 것을 방지하기 위해 중복 실행 체크
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or os.environ.get("RENDER") or True:
+        t = threading.Thread(target=background_scheduler, daemon=True)
+        t.start()
     app.run(host='0.0.0.0', port=port)
