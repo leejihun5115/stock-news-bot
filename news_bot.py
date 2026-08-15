@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import sys
 from datetime import datetime
 from flask import Flask
 
@@ -11,12 +12,12 @@ def home():
     return "Alpha Elite Intelligence SaaS Bot is running!", 200
 
 def send_telegram_test(part_name, message):
-    print(f"\n--- [텔레그램 전송 테스트: {part_name}] ---")
-    print(message)
-    print("------------------------------------------")
+    print(f"\n--- [텔레그램 전송 테스트: {part_name}] ---", flush=True)
+    print(message, flush=True)
+    print("------------------------------------------", flush=True)
 
 def run_pipeline_test():
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔄 파트별 자동 브리핑 송출 시작...")
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔄 파트별 자동 브리핑 송출 시작...", flush=True)
     
     # 1. 국내 뉴스/공시 파트
     news_msg = "🔥 [ALPHA ELITE INTELLIGENCE REPORT]\n🏢 대상 종목: 두산에너빌리티\n🏷️ 상태: [신규]\n📝 제목: 1조원 규모 SMR 주기기 계약 최종 확정\n📊 가치평가: 95점 | Upside +30%"
@@ -35,17 +36,16 @@ def run_pipeline_test():
     send_telegram_test("종합브리핑", daily_msg)
 
 def background_scheduler():
-    time.sleep(1)
-    # 첫 실행 즉시 테스트 출력
+    time.sleep(2)
+    print("🚀 Background scheduler started!", flush=True)
     run_pipeline_test()
     while True:
-        # 30초마다 반복 실행 (원하시면 10초 등으로 더 줄일 수 있습니다)
         time.sleep(30)
         run_pipeline_test()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
-    print(f"🚀 Starting Flask server on port {port} (30s test interval)...")
+    print(f"🚀 Starting Flask server on port {port}...", flush=True)
     
     t = threading.Thread(target=background_scheduler, daemon=True)
     t.start()
