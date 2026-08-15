@@ -32,7 +32,6 @@ def send_telegram_message(message):
 
 def fetch_and_analyze_news():
     """뉴스 및 특징주 RSS 파싱 및 일정 추출 로직"""
-    # 실제 환경에서는 다양한 소스를 합칠 수 있음
     rss_url = "https://rss.hankyung.com/new/hk_market.xml"
     report_data = []
     try:
@@ -42,7 +41,6 @@ def fetch_and_analyze_news():
             for item in root.findall('.//item')[:5]:
                 title = item.find('title').text
                 link = item.find('link').text
-                # 간단한 일정 추출 키워드 매칭 로직 (실제는 더 고도화 가능)
                 is_schedule = any(kw in title for kw in ['발표', '개최', '상장', '출시', '계약', '예정'])
                 report_data.append({"title": title, "link": link, "is_schedule": is_schedule})
     except Exception:
@@ -53,16 +51,13 @@ def run_integrated_report():
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔄 통합 브리핑 파이프라인 가동...", flush=True)
     news_items = fetch_and_analyze_news()
     
-    # 1시간 주기 통합 메시지 작성
     full_msg = "📌 <b>[ALPHA ELITE INTEGRATED REPORT]</b>\n"
     full_msg += f"⏰ 시간: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n━━━━━━━━━━━━━━━━\n"
     
-    # 뉴스 섹션
     full_msg += "🔥 <b>최신 시장 뉴스 및 특징주</b>\n"
     for item in news_items[:3]:
         full_msg += f"• {item['title']}\n🔗 <a href='{item['link']}'>[상세보기]</a>\n"
     
-    # 일정 섹션
     full_msg += "\n🗓️ <b>추출된 주요 일정/이벤트</b>\n"
     schedules = [i for i in news_items if i['is_schedule']]
     if schedules:
@@ -80,7 +75,6 @@ def background_scheduler():
     print("🚀 Hourly Scheduler Started!", flush=True)
     while True:
         run_integrated_report()
-        # 1시간 대기 (3600초)
         time.sleep(3600)
 
 if __name__ == '__main__':
