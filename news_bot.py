@@ -35,14 +35,17 @@ def run_pipeline_test():
     send_telegram_test("종합브리핑", daily_msg)
 
 def background_scheduler():
-    time.sleep(2)
+    time.sleep(1)
+    # 첫 실행 즉시 테스트 출력
+    run_pipeline_test()
     while True:
+        # 30초마다 반복 실행 (원하시면 10초 등으로 더 줄일 수 있습니다)
+        time.sleep(30)
         run_pipeline_test()
-        time.sleep(60)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
-    print(f"🚀 Starting Flask server on port {port}...")
+    print(f"🚀 Starting Flask server on port {port} (30s test interval)...")
     
     t = threading.Thread(target=background_scheduler, daemon=True)
     t.start()
