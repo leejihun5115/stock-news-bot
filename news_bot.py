@@ -35,15 +35,16 @@ def run_pipeline_test():
     send_telegram_test("종합브리핑", daily_msg)
 
 def background_scheduler():
-    time.sleep(3) # 서버 기동 대기
+    time.sleep(2)
     while True:
         run_pipeline_test()
-        time.sleep(60) # 1분마다 테스트 출력
+        time.sleep(60)
 
 if __name__ == '__main__':
-    # 백그라운드에서 스케줄러 실행 (Flask 웹 서버와 동시 구동)
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🚀 Starting Flask server on port {port}...")
+    
     t = threading.Thread(target=background_scheduler, daemon=True)
     t.start()
     
-    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
