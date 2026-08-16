@@ -1,4 +1,13 @@
 # ============================================================
+# 2026-08-16 수정본
+# - 최근 1시간 뉴스 필터
+# - 텔레그램/유튜브 외부 콘텐츠는 상장기업 관련성 있을 때만 뉴스화
+# - 텔레그램 메시지 포맷 개선
+# - _engine_seen UnboundLocalError 수정
+# - 로그를 성공/실패와 핵심 원인 중심으로 간소화
+# ============================================================
+
+# ============================================================
 # AI 주식 브리핑 엔진 - Commercial Edition V1
 # 두 원본(news_bot_버그수정12.py + news_bot_1.py)의 검증된 기능을 보존하고
 # RSS 진단 + 상용화 점수 엔진을 추가한 통합본
@@ -272,7 +281,7 @@ sys.excepthook = _log_uncaught_exception
 
 # 시작 시점에 환경 정보를 남겨 Render 설정 문제도 바로 확인할 수 있게 한다.
 _logger.info("============================================================")
-_logger.info("[NEWS BOT 상세 로그 시작]")
+_logger.info("[NEWS BOT 로그 시작]")
 _logger.info("Python=%s", sys.version.split()[0])
 _logger.info("PID=%s", os.getpid())
 _logger.info("RUN_MODE=%s", os.environ.get("RUN_MODE", "(미설정)"))
@@ -930,6 +939,7 @@ def _engine_load_seen():
 
 
 def _engine_mark_seen(key):
+    global _engine_seen
     if not key:
         return False
     with _engine_lock:
@@ -1012,6 +1022,10 @@ def _engine_recent_enough(source, published):
         return True
     dt = _engine_parse_datetime(published)
     if dt is None:
+        # 최근 1시간 여부를 확인할 수 없는 외부 텔레그램/유튜브 콘텐츠는
+        # 오래된 게시물이 재유입되는 것을 막기 위해 전송하지 않는다.
+        if source.startswith("텔레그램/") or source.startswith("유튜브/") or source == "유튜브":
+            return False
         return True
     age = _now_kst() - dt
     return age.total_seconds() >= -300 and age.total_seconds() <= NEWS_MAX_AGE_HOURS * 3600
@@ -1104,11 +1118,11 @@ def _engine_process_item(source, title, link, published="", extra="", summary=""
 def _engine_fetch_rss(url, source):
     started = time.time()
     try:
-        _engine_log("info", "[RSS 시작] %s | URL=%s", source, url)
+        _engine_log("debug", "[RSS 시작] %s", source)
         r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
-        _engine_log("info", "[RSS 응답] %s | HTTP=%s | 최종URL=%s | bytes=%s | %.2fs", source, r.status_code, r.url, len(r.content), time.time()-started)
+        _engine_log("debug", "[RSS 응답] %s | HTTP=%s", source, r.status_code)
         if not r.ok:
-            _engine_log("error", "[RSS 실패] %s | HTTP=%s | reason=%s | body=%s", source, r.status_code, r.reason, r.text[:1000])
+            _engine_log("error", "[RSS 실패] %s | 원인=%s", source, r.reason)
             return []
         result = feedparser.parse(r.content)
         if getattr(result, "bozo", False):
@@ -1163,7 +1177,7 @@ def _engine_run_naver():
             r = requests.get("https://openapi.naver.com/v1/search/news.json", headers=headers,
                              params={"query": q, "display": 20, "start": 1, "sort": "date"}, timeout=ENGINE_HTTP_TIMEOUT)
             if not r.ok:
-                _engine_log("error", "[네이버 실패] 검색어=%s | HTTP=%s | reason=%s | body=%s", q, r.status_code, r.reason, r.text[:1000])
+                _engine_log("error", "[네이버 실패] 검색어=%s | 원인=%s", q, r.reason)
                 continue
             data = r.json()
             items = data.get("items", []) or []
@@ -1254,7 +1268,7 @@ def _engine_run_telegram_channels():
         try:
             r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT)
             if not r.ok:
-                _engine_log("error", "[텔레그램채널 실패] %s | HTTP=%s | reason=%s", name, r.status_code, r.reason)
+                _engine_log("error", "[텔레그램채널 실패] %s | 원인=%s", name, r.reason)
                 continue
             soup = BeautifulSoup(r.text, "html.parser")
             posts = soup.select("div.tgme_widget_message_wrap")[-10:]
@@ -1322,7 +1336,7 @@ def _start_render_health_server():
                 self.wfile.write(body)
 
             def log_message(self, fmt, *args):
-                _engine_log("debug", "[Render health] " + fmt, *args)
+                pass  # 헬스체크 요청은 로그에 남기지 않음
 
         server = HTTPServer(("0.0.0.0", port), HealthHandler)
         _engine_log("info", "[Render] PORT=%s 헬스서버 시작 완료", port)
@@ -1333,7 +1347,7 @@ def _start_render_health_server():
 
 def _engine_main_loop():
     _engine_load_seen()
-    _engine_log("info", "[실행엔진] 1분 주기 엔진 시작 | RSS=15초 설정과 별개로 이 엔진은 60초마다 전체 상태를 기록합니다.")
+    _engine_log("info", "[실행엔진] 1분 주기 시작")
     while True:
         cycle_start = time.time()
         try:
@@ -1341,7 +1355,7 @@ def _engine_main_loop():
         except Exception as e:
             log_error("메인 사이클 치명적 오류", e)
         wait = max(1, ENGINE_INTERVAL - (time.time() - cycle_start))
-        _engine_log("info", "[대기] 다음 1분 주기까지 %.1f초", wait)
+        _engine_log("debug", "[대기] %.1f초", wait)
         time.sleep(wait)
 
 
