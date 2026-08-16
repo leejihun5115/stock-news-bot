@@ -209,6 +209,21 @@ def print(*args, **kwargs):
 
 
 # ============================================================
+# --- 시작 로그에 필요한 환경변수 선행 초기화 ---
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+CHAT_ID = os.environ.get("CHAT_ID", "")
+CHAT_ID_OVERSEAS = os.environ.get("CHAT_ID_OVERSEAS", "") or CHAT_ID
+DART_API_KEY = os.environ.get("DART_API_KEY", "")
+NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
+NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
+def _startup_env_flag(name, default=True):
+    val = os.environ.get(name)
+    return default if val is None else val.strip().lower() in ("true", "1", "yes", "on")
+ENABLE_DOMESTIC_NEWS = _startup_env_flag("ENABLE_DOMESTIC_NEWS")
+ENABLE_US_NEWS = _startup_env_flag("ENABLE_US_NEWS")
+ENABLE_TELEGRAM_CHANNELS = _startup_env_flag("ENABLE_TELEGRAM_CHANNELS")
+ENABLE_YOUTUBE = _startup_env_flag("ENABLE_YOUTUBE")
+
 # 🔎 상세 로그 기록 강화
 # ------------------------------------------------------------
 # Render 콘솔 + news_bot.log에 동시에 기록
@@ -216,7 +231,7 @@ def print(*args, **kwargs):
 # 처리되지 않은 예외도 마지막 traceback까지 기록
 # ============================================================
 import logging
-from logging.handlers import RotatingFileHandler
+from logging import FileHandler
 
 LOG_FILE = os.environ.get("NEWS_BOT_LOG_FILE", "news_bot.log")
 _logger = logging.getLogger("news_bot")
@@ -233,10 +248,7 @@ if not _logger.handlers:
     _console.setFormatter(_fmt)
     _logger.addHandler(_console)
     try:
-        _file = RotatingFileHandler(
-            LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5,
-            encoding="utf-8"
-        )
+        _file = FileHandler(LOG_FILE, mode="w", encoding="utf-8")
         _file.setLevel(logging.INFO)
         _file.setFormatter(_fmt)
         _logger.addHandler(_file)
@@ -252,7 +264,7 @@ def log_info(message, *args):
 
 
 def log_debug(message, *args):
-    _logger.debug(message, *args)
+    pass  # 상세 성공 로그 숨김
 
 
 def log_error(context, exc=None, **details):
@@ -271,12 +283,7 @@ def _log_uncaught_exception(exc_type, exc_value, exc_tb):
     if exc_type is KeyboardInterrupt:
         sys.__excepthook__(exc_type, exc_value, exc_tb)
         return
-    _logger.critical(
-        "[치명적 예외] %s: %s\n%s",
-        exc_type.__name__, exc_value,
-        "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-    )
-
+    _logger.critical("[치명적 예외] %s: %s", exc_type.__name__, exc_value)
 
 sys.excepthook = _log_uncaught_exception
 
@@ -307,10 +314,7 @@ try:
                     getattr(response, "reason", ""), elapsed, body
                 )
             else:
-                _logger.debug(
-                    "[HTTP 성공] method=%s | url=%s | status=%s | %.2fs",
-                    method, getattr(response, "url", url), response.status_code, elapsed
-                )
+                pass  # 상세 성공 로그 숨김
             return response
         except Exception as _e:
             _logger.error(
@@ -341,10 +345,7 @@ try:
                     len(getattr(result, "entries", []) or [])
                 )
             else:
-                _logger.debug(
-                    "[RSS 파싱 성공] source=%s | entries=%s",
-                    source, len(getattr(result, "entries", []) or [])
-                )
+                pass  # 상세 성공 로그 숨김
             return result
         except Exception as _e:
             log_error("RSS 파싱 실행", _e, source=source)
@@ -970,7 +971,7 @@ def _engine_log(level, message, *args):
         elif level == "warning":
             _logger.warning(message, *args)
         elif level == "debug":
-            _logger.debug(message, *args)
+            pass  # 상세 성공 로그 숨김
         else:
             _logger.info(message, *args)
     except Exception:
