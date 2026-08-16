@@ -233,9 +233,10 @@ if not _logger.handlers:
     _console.setFormatter(_fmt)
     _logger.addHandler(_console)
     try:
+        # 매 실행 시작 시 새 로그로 시작: 이전 실행 로그를 이어붙이지 않는다.
         _file = RotatingFileHandler(
             LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5,
-            encoding="utf-8"
+            encoding="utf-8", mode="w"
         )
         _file.setLevel(logging.DEBUG)
         _file.setFormatter(_fmt)
@@ -245,6 +246,9 @@ if not _logger.handlers:
             f"[로그파일 생성 실패] {type(_e).__name__}: {_e}",
             file=sys.stderr, flush=True
         )
+
+
+_logger.info("[로그 시작] 이 실행 시점부터 새 로그 기록을 시작합니다. log_file=%s", LOG_FILE)
 
 
 def log_info(message, *args):
@@ -1156,20 +1160,33 @@ def _engine_relation_reason(text, companies, market_hits):
     return "국내 관련주와의 연결성이 확인되는 시장 재료"
 
 
+def _engine_impact_label(text):
+    low = _engine_clean(text).lower()
+    # 국내 상장사에 불리한 경쟁/대체 확대
+    harm_words = ["수주 증가", "수주 확대", "점유율 확대", "경쟁 심화", "경쟁", "대체", "중국에 밀려", "중국 수주", "가격 경쟁", "공급 과잉"]
+    benefit_words = ["수주", "공급계약", "계약 체결", "대규모 공급", "증설", "양산", "수혜", "투자 확대"]
+    if any(w in low for w in harm_words) and any(w in low for w in ["중국", "경쟁", "점유율", "대체", "밀려"]):
+        return "🔻 피해주"
+    if any(w in low for w in benefit_words):
+        return "🔺 수혜주"
+    return "관련주"
+
+
 def _engine_summary(title, extra, companies, market_hits):
     text = _engine_clean(f"{title} {extra}")
     links = _engine_stock_links(text, companies)
     reason = _engine_relation_reason(text, companies, market_hits)
     if links:
-        core = f"{reason} → " + "·".join(links) + " 등 관련주"
+        label = _engine_impact_label(text)
+        core = f"{reason} / {label} → " + "·".join(links)
     elif companies:
-        core = f"{reason} → " + "·".join(companies[:4])
+        core = f"{reason} / 관련주 → " + "·".join(companies[:4])
     elif market_hits:
         core = "시장 핵심 재료 → " + "·".join(market_hits[:4])
     else:
         core = text[:180]
     date_match = re.search(r"(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일|\d{1,2}일|\d{1,2}:\d{2})", text)
-    return core, (date_match.group(1) if date_match else "")
+    return core, (date_match.group(1) if date_match else ""), links
 
 
 def _engine_score(item):
@@ -1220,9 +1237,16 @@ def _engine_format_message(item):
     time_text = html.escape(item.get("time_text", ""))
     title_html = html.escape(title)
     lines = [f"<b>✅ [{source}]</b>" + (f"                                      🕐 {time_text}" if time_text else ""), f"{title_prefix} {title_html}"]
-    core, schedule = _engine_summary(item["title"], item["extra"], companies, item["market_hits"])
+    core, schedule, links = _engine_summary(item["title"], item["extra"], companies, item["market_hits"])
     core_html = html.escape(core).replace("⚡️", "⚡️")
-    lines += ["", "<b>🔎 한국과의 관계 / 관련주</b>", core_html]
+    # 제목 바로 아래에 상장사와 뉴스와의 연결 내용을 먼저 표시한다.
+    if links:
+        company_text = "·".join(links)
+        lines += ["", f"<b>{html.escape(company_text)}</b>", html.escape(_engine_relation_reason(_engine_clean(item["title"] + " " + item.get("extra", "")), companies, item["market_hits"]))]
+    elif companies:
+        company_text = "·".join(companies[:4])
+        lines += ["", f"<b>{html.escape(company_text)}</b>", html.escape(_engine_relation_reason(_engine_clean(item["title"] + " " + item.get("extra", "")), companies, item["market_hits"]))]
+    lines += ["", core_html]
     if schedule:
         lines += ["", f"<b>📅 일정</b>", html.escape(schedule)]
     if item.get("link"):
