@@ -1438,7 +1438,7 @@ def _engine_run_naver():
     start = (cycle * batch_size) % max(1, len(queries))
     selected = [queries[(start+i) % len(queries)] for i in range(batch_size)] if queries else []
     _engine_run_naver.cycle = cycle + 1
-    _engine_log("info", "[네이버 시작] 전체검색어=%d | 이번주기=%d | offset=%d", len(queries), len(selected), start)
+    _engine_log("info", "[네이버] 검색 시작 전체검색어=%d | 이번주기=%d | offset=%d", len(queries), len(selected), start)
     headers = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
     total = 0
     api_ok = True
@@ -1536,7 +1536,7 @@ def _engine_run_dart():
 
 def _engine_run_telegram_channels():
     if not ENABLE_TELEGRAM_CHANNELS:
-        _engine_log("warning", "[텔레그램채널] ENABLE_TELEGRAM_CHANNELS=OFF")
+        _engine_log("warning", "[텔레그램] ENABLE_TELEGRAM_CHANNELS=OFF")
         return
     channels = TARGET_TELEGRAM_CHANNELS + TARGET_TELEGRAM_CHANNELS_UNFILTERED
     total = 0
