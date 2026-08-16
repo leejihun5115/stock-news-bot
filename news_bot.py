@@ -1,13 +1,4 @@
 # ============================================================
-# 2026-08-16 수정본
-# - 최근 1시간 뉴스 필터
-# - 텔레그램/유튜브 외부 콘텐츠는 상장기업 관련성 있을 때만 뉴스화
-# - 텔레그램 메시지 포맷 개선
-# - _engine_seen UnboundLocalError 수정
-# - 로그를 성공/실패와 핵심 원인 중심으로 간소화
-# ============================================================
-
-# ============================================================
 # AI 주식 브리핑 엔진 - Commercial Edition V1
 # 두 원본(news_bot_버그수정12.py + news_bot_1.py)의 검증된 기능을 보존하고
 # RSS 진단 + 상용화 점수 엔진을 추가한 통합본
@@ -212,9 +203,11 @@ def print(*args, **kwargs):
 
 
 # ============================================================
-# 🪵 간단 로그
+# 🔎 상세 로그 기록 강화
 # ------------------------------------------------------------
-# 성공/실패와 핵심 원인만 간단히 기록한다.
+# Render 콘솔 + news_bot.log에 동시에 기록
+# HTTP 실패 시 URL / 상태코드 / 응답 내용 / 예외 / traceback 기록
+# 처리되지 않은 예외도 마지막 traceback까지 기록
 # ============================================================
 import logging
 from logging.handlers import RotatingFileHandler
@@ -257,13 +250,15 @@ def log_debug(message, *args):
 
 
 def log_error(context, exc=None, **details):
-    """실패 여부와 핵심 원인만 한 줄로 기록한다."""
-    reason = ""
+    """실패 원인을 최대한 자세히 기록한다."""
+    parts = [f"[실패] {context}"]
+    for k, v in details.items():
+        parts.append(f"{k}={v}")
     if exc is not None:
-        reason = f" | 원인={type(exc).__name__}: {str(exc)[:180]}"
-    elif details:
-        reason = " | " + " | ".join(f"{k}={str(v)[:120]}" for k, v in details.items())
-    _logger.error("[실패] %s%s", context, reason)
+        parts.append(f"예외={type(exc).__name__}: {exc}")
+    _logger.error(" | ".join(parts))
+    if exc is not None:
+        _logger.error("상세 traceback:\n%s", traceback.format_exc())
 
 
 def _log_uncaught_exception(exc_type, exc_value, exc_tb):
@@ -281,7 +276,7 @@ sys.excepthook = _log_uncaught_exception
 
 # 시작 시점에 환경 정보를 남겨 Render 설정 문제도 바로 확인할 수 있게 한다.
 _logger.info("============================================================")
-_logger.info("[NEWS BOT 로그 시작]")
+_logger.info("[NEWS BOT 상세 로그 시작]")
 _logger.info("Python=%s", sys.version.split()[0])
 _logger.info("PID=%s", os.getpid())
 _logger.info("RUN_MODE=%s", os.environ.get("RUN_MODE", "(미설정)"))
@@ -296,37 +291,66 @@ try:
     _original_session_request = requests.sessions.Session.request
 
     def _logged_session_request(self, method, url, **kwargs):
+        started = time.time()
         try:
             response = _original_session_request(self, method, url, **kwargs)
+            elapsed = time.time() - started
             if response.status_code >= 400:
-                _logger.error("[HTTP 실패] %s | 원인=%s", method, getattr(response, "reason", "HTTP 오류"))
+                body = (response.text or "")[:2000].replace("\n", " ")
+                _logger.error(
+                    "[HTTP 실패] method=%s | url=%s | status=%s | reason=%s | %.2fs | 응답=%r",
+                    method, getattr(response, "url", url), response.status_code,
+                    getattr(response, "reason", ""), elapsed, body
+                )
+            else:
+                _logger.debug(
+                    "[HTTP 성공] method=%s | url=%s | status=%s | %.2fs",
+                    method, getattr(response, "url", url), response.status_code, elapsed
+                )
             return response
         except Exception as _e:
-            _logger.error("[HTTP 실패] %s | 원인=%s", method, str(_e)[:180])
+            _logger.error(
+                "[HTTP 예외] method=%s | url=%s | %.2fs | 예외=%s: %s\n%s",
+                method, url, time.time() - started,
+                type(_e).__name__, _e, traceback.format_exc()
+            )
             raise
 
     requests.sessions.Session.request = _logged_session_request
 except Exception as _e:
-    log_error("requests 로깅 초기화", _e)
+    log_error("requests 상세 로깅 초기화", _e)
 
 # feedparser가 파싱 실패/bozo를 반환하는 경우에도 원인을 로그에 남긴다.
 try:
     _original_feedparser_parse = feedparser.parse
 
     def _logged_feedparser_parse(*args, **kwargs):
+        source = args[0] if args else kwargs.get("url", "(없음)")
         try:
             result = _original_feedparser_parse(*args, **kwargs)
             if getattr(result, "bozo", False):
                 exc = getattr(result, "bozo_exception", None)
-                _logger.error("[RSS 실패] 원인=%s", str(exc or "파싱 오류")[:180])
+                _logger.error(
+                    "[RSS 파싱 실패] source=%s | 예외=%s: %s | entries=%s",
+                    source,
+                    type(exc).__name__ if exc else "unknown",
+                    exc if exc else "원인 미상",
+                    len(getattr(result, "entries", []) or [])
+                )
+            else:
+                _logger.debug(
+                    "[RSS 파싱 성공] source=%s | entries=%s",
+                    source, len(getattr(result, "entries", []) or [])
+                )
             return result
         except Exception as _e:
-            log_error("RSS 파싱", _e)
+            log_error("RSS 파싱 실행", _e, source=source)
             raise
 
     feedparser.parse = _logged_feedparser_parse
 except Exception as _e:
-    log_error("feedparser 로깅 초기화", _e)
+    log_error("feedparser 상세 로깅 초기화", _e)
+
 
 # ============================================================
 # 환경설정 - BOT_TOKEN, CHAT_ID, DART_API_KEY 설정
@@ -906,8 +930,6 @@ ENGINE_INTERVAL = 60
 ENGINE_HTTP_TIMEOUT = 20
 ENGINE_MAX_SEND_PER_CYCLE = 20
 ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
-NEWS_MAX_AGE_HOURS = 1
-NEWS_TIME_FILTER_SOURCES = {"Google", "Google-US", "네이버뉴스", "키워드조합", "전자신문", "약업신문"}
 
 _engine_seen = set()
 _engine_lock = threading.Lock()
@@ -939,7 +961,6 @@ def _engine_load_seen():
 
 
 def _engine_mark_seen(key):
-    global _engine_seen
     if not key:
         return False
     with _engine_lock:
@@ -971,109 +992,30 @@ def _engine_send_telegram(text):
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
-        r = requests.post(
-            url,
-            data={
-                "chat_id": CHAT_ID,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False,
-            },
-            timeout=ENGINE_HTTP_TIMEOUT,
-        )
+        r = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "disable_web_page_preview": False}, timeout=ENGINE_HTTP_TIMEOUT)
         try:
             api_result = r.json()
         except Exception:
-            api_result = {}
+            api_result = {"raw": r.text[:1000]}
+
         if r.ok and api_result.get("ok", True):
-            _engine_log("info", "[텔레그램 성공]")
+            _engine_log("info", "[텔레그램 성공] HTTP=%s | chat_id=%s | message_id=%s",
+                        r.status_code, CHAT_ID, (api_result.get("result") or {}).get("message_id"))
             return True
-        reason = api_result.get("description") or r.reason or f"HTTP {r.status_code}"
-        _engine_log("error", "[텔레그램 실패] 원인=%s", str(reason)[:180])
+
+        _engine_log(
+            "error",
+            "[텔레그램 실패] HTTP=%s | reason=%s | ok=%s | error_code=%s | description=%s | body=%s",
+            r.status_code,
+            r.reason,
+            api_result.get("ok"),
+            api_result.get("error_code"),
+            api_result.get("description"),
+            r.text[:1000]
+        )
     except Exception as e:
-        _engine_log("error", "[텔레그램 실패] 원인=%s", str(e)[:180])
+        log_error("텔레그램 전송", e, url=url)
     return False
-
-
-def _engine_parse_datetime(value):
-    if not value:
-        return None
-    text = str(value).strip()
-    try:
-        dt = parsedate_to_datetime(text)
-        if dt.tzinfo:
-            dt = dt.astimezone(_KST).replace(tzinfo=None)
-        return dt
-    except Exception:
-        pass
-    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y%m%d%H%M%S", "%Y%m%d%H%M"):
-        try:
-            dt = datetime.datetime.strptime(text, fmt)
-            if dt.tzinfo:
-                dt = dt.astimezone(_KST).replace(tzinfo=None)
-            return dt
-        except Exception:
-            continue
-    return None
-
-
-def _engine_recent_enough(source, published):
-    if source == "DART":
-        return True
-    dt = _engine_parse_datetime(published)
-    if dt is None:
-        # 최근 1시간 여부를 확인할 수 없는 외부 텔레그램/유튜브 콘텐츠는
-        # 오래된 게시물이 재유입되는 것을 막기 위해 전송하지 않는다.
-        if source.startswith("텔레그램/") or source.startswith("유튜브/") or source == "유튜브":
-            return False
-        return True
-    age = _now_kst() - dt
-    return age.total_seconds() >= -300 and age.total_seconds() <= NEWS_MAX_AGE_HOURS * 3600
-
-
-def _engine_listed_company_matches(text):
-    t = _engine_clean(text).lower()
-    candidates = []
-    for x in sorted(UNIQUE_GIANTS | GLOBAL_COMPANY_KEYWORDS | UNIQUE_TARGET, key=len, reverse=True):
-        if not x or x.lower() in UNIQUE_CELEBS:
-            continue
-        if x.lower() in t:
-            candidates.append(x)
-    return candidates[:6]
-
-
-def _engine_is_external_content_relevant(source, text):
-    """유튜브/외부 텔레그램은 상장기업 관련 내용이 있을 때만 뉴스화한다."""
-    if source.startswith("텔레그램/") or source.startswith("유튜브/") or source == "유튜브":
-        return bool(_engine_listed_company_matches(text))
-    return True
-
-
-def _engine_format_message(source, title, link, published, matched, extra="", summary=""):
-    safe_source = html.escape(source)
-    safe_title = html.escape(title)
-    time_text = ""
-    dt = _engine_parse_datetime(published)
-    if dt:
-        time_text = dt.strftime("%H:%M")
-    elif published:
-        time_text = html.escape(str(published)[:16])
-    source_line = f"✅ [{safe_source}]"
-    if time_text:
-        source_line += " " * max(4, 31 - len(source_line)) + f"🕐 {time_text}"
-    lines = [source_line, "", f"📌 {safe_title}"]
-    if matched:
-        lines += ["", "🔎 핵심"]
-        if summary:
-            lines.append(html.escape(summary))
-        else:
-            lines.append(" / ".join(f"⚡️{html.escape(x)}" for x in matched))
-    if extra and not str(extra).startswith("🔎"):
-        lines += ["", html.escape(str(extra)[:500])]
-    if link:
-        safe_link = html.escape(str(link), quote=True)
-        lines += ["", f'<a href="{safe_link}">🔗 원문 보기</a>']
-    return "\n".join(lines)
 
 
 def _engine_is_relevant(title):
@@ -1088,41 +1030,48 @@ def _engine_is_relevant(title):
     return list(kws)[:8]
 
 
-def _engine_process_item(source, title, link, published="", extra="", summary=""):
+def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title)
     link = str(link or "").strip()
     if not title:
         return False
-    if not _engine_recent_enough(source, published):
-        return False
-    full_text = f"{title} {extra or ''} {summary or ''}"
-    if not _engine_is_external_content_relevant(source, full_text):
-        _engine_log("info", "[%s] 상장기업 관련성 없음 → 미전송", source)
-        return False
     key = link or f"{source}|{title}"
+    # 전송 성공 후에만 seen으로 기록한다.
+    # 기존 방식은 전송 실패/429/네트워크 오류가 나도 이미 본 기사로 기록되어
+    # 다음 주기에 재전송되지 않는 문제가 있었다.
     with _engine_lock:
         if key in _engine_seen:
             return False
 
-    matched = _engine_listed_company_matches(full_text) if (source.startswith("텔레그램/") or source.startswith("유튜브/") or source == "유튜브") else _engine_is_relevant(full_text)
-    msg = _engine_format_message(source, title, link, published, matched, extra=extra, summary=summary)
+    matched = _engine_is_relevant(title)
+    # 키워드 검색 결과는 검색 자체가 관련성을 보장하므로 전송한다.
+    lines = [f"📰 [{source}]", title]
+    if matched:
+        lines.append("🔎 " + ", ".join(matched))
+    if published:
+        lines.append(f"🕐 {published}")
+    if extra:
+        lines.append(extra[:500])
+    if link:
+        lines.append(link)
+    msg = "\n".join(lines)
     ok = _engine_send_telegram(msg)
     if ok:
         _engine_mark_seen(key)
-        _engine_log("info", "[%s] 전송 성공", source)
+        _engine_log("info", "[%s] 신규=1 | 전송=성공 | seen기록=완료 | 제목=%s", source, title[:100])
     else:
-        _engine_log("error", "[%s] 전송 실패 | 다음 주기 재시도", source)
+        _engine_log("error", "[%s] 신규=1 | 전송=실패 | seen기록=안함 | 다음 주기에 재시도 | 제목=%s", source, title[:100])
     return ok
 
 
 def _engine_fetch_rss(url, source):
     started = time.time()
     try:
-        _engine_log("debug", "[RSS 시작] %s", source)
+        _engine_log("info", "[RSS 시작] %s | URL=%s", source, url)
         r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
-        _engine_log("debug", "[RSS 응답] %s | HTTP=%s", source, r.status_code)
+        _engine_log("info", "[RSS 응답] %s | HTTP=%s | 최종URL=%s | bytes=%s | %.2fs", source, r.status_code, r.url, len(r.content), time.time()-started)
         if not r.ok:
-            _engine_log("error", "[RSS 실패] %s | 원인=%s", source, r.reason)
+            _engine_log("error", "[RSS 실패] %s | HTTP=%s | reason=%s | body=%s", source, r.status_code, r.reason, r.text[:1000])
             return []
         result = feedparser.parse(r.content)
         if getattr(result, "bozo", False):
@@ -1177,7 +1126,7 @@ def _engine_run_naver():
             r = requests.get("https://openapi.naver.com/v1/search/news.json", headers=headers,
                              params={"query": q, "display": 20, "start": 1, "sort": "date"}, timeout=ENGINE_HTTP_TIMEOUT)
             if not r.ok:
-                _engine_log("error", "[네이버 실패] 검색어=%s | 원인=%s", q, r.reason)
+                _engine_log("error", "[네이버 실패] 검색어=%s | HTTP=%s | reason=%s | body=%s", q, r.status_code, r.reason, r.text[:1000])
                 continue
             data = r.json()
             items = data.get("items", []) or []
@@ -1268,7 +1217,7 @@ def _engine_run_telegram_channels():
         try:
             r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT)
             if not r.ok:
-                _engine_log("error", "[텔레그램채널 실패] %s | 원인=%s", name, r.reason)
+                _engine_log("error", "[텔레그램채널 실패] %s | HTTP=%s | reason=%s", name, r.status_code, r.reason)
                 continue
             soup = BeautifulSoup(r.text, "html.parser")
             posts = soup.select("div.tgme_widget_message_wrap")[-10:]
@@ -1277,9 +1226,7 @@ def _engine_run_telegram_channels():
                 txt = _engine_clean(post.get_text(" "))
                 a = post.select_one("a.tgme_widget_message_date")
                 link = a.get("href", "") if a else url
-                time_tag = post.select_one("time[datetime]")
-                published = time_tag.get("datetime", "") if time_tag else ""
-                if txt and _engine_process_item(f"텔레그램/{name}", txt[:1000], link, published):
+                if txt and _engine_process_item(f"텔레그램/{name}", txt[:1000], link):
                     total += 1
         except Exception as e:
             log_error("텔레그램 채널 수집", e, channel=name, url=url)
@@ -1289,7 +1236,7 @@ def _engine_run_telegram_channels():
 def _engine_cycle():
     started = time.time()
     _engine_log("info", "============================================================")
-    _engine_log("info", "[1분 주기 시작 | 뉴스 최근 1시간 필터] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
+    _engine_log("info", "[1분 주기 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
     try:
         _engine_run_google_and_domestic()
     except Exception as e:
@@ -1336,7 +1283,7 @@ def _start_render_health_server():
                 self.wfile.write(body)
 
             def log_message(self, fmt, *args):
-                pass  # 헬스체크 요청은 로그에 남기지 않음
+                _engine_log("debug", "[Render health] " + fmt, *args)
 
         server = HTTPServer(("0.0.0.0", port), HealthHandler)
         _engine_log("info", "[Render] PORT=%s 헬스서버 시작 완료", port)
@@ -1347,7 +1294,7 @@ def _start_render_health_server():
 
 def _engine_main_loop():
     _engine_load_seen()
-    _engine_log("info", "[실행엔진] 1분 주기 시작")
+    _engine_log("info", "[실행엔진] 1분 주기 엔진 시작 | RSS=15초 설정과 별개로 이 엔진은 60초마다 전체 상태를 기록합니다.")
     while True:
         cycle_start = time.time()
         try:
@@ -1355,7 +1302,7 @@ def _engine_main_loop():
         except Exception as e:
             log_error("메인 사이클 치명적 오류", e)
         wait = max(1, ENGINE_INTERVAL - (time.time() - cycle_start))
-        _engine_log("debug", "[대기] %.1f초", wait)
+        _engine_log("info", "[대기] 다음 1분 주기까지 %.1f초", wait)
         time.sleep(wait)
 
 
