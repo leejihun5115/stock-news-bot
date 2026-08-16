@@ -986,7 +986,7 @@ ENGINE_HTTP_TIMEOUT = 20
 ENGINE_MAX_SEND_PER_CYCLE = 20
 ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
 
-# 시간제한은 사용하지 않는다. 뉴스 신선도는 시장 반영 가능 여부를 기준으로 판단한다.
+# 외부채널(텔레그램/유튜브)은 60분을 기본으로 하며, 시장 마감 후/휴무의 강한 국내 상장기업 재료만 예외 허용한다.
 NEWS_TEST_FILE = os.environ.get("NEWS_TEST_FILE", "news_test_items.json")
 MARKET_IMPACT_KEYWORDS = {
     "인수", "합병", "M&A", "m&a", "세계최초", "세계 최대", "세계최대", "사상 최대", "사상최대",
@@ -995,7 +995,8 @@ MARKET_IMPACT_KEYWORDS = {
     "신규 수주", "수출", "기술수출", "기술이전", "자사주", "배당", "매각", "공개매수",
     "신약", "임상 3상", "임상3상", "임상 성공", "대형 계약", "초대형 계약", "공급 확대",
     # 정책·규제·테마 중 실제 주가 반응으로 이어질 가능성이 높은 재료
-    "정책", "규제", "관세", "세액공제", "지원", "법안", "정부 대책", "수혜", "수주 경쟁",
+    "정책 확정", "정책 시행", "규제 확정", "관세 부과", "세액공제 확정", "법안 통과", "정부 대책 확정",
+    "대규모 지원", "지원금 확정", "수주 경쟁",
 }
 # 실제 주가 반응 가능성이 높은 강한 재료.
 # 상장기업이 직접 연결되고 아래 재료가 있으면 시간 제한 없이 시장 반영 여부를 기준으로 검토한다.
@@ -1005,7 +1006,8 @@ STRONG_MARKET_HITS = {
     "독점", "FDA", "승인", "허가", "특허", "기술수출", "기술이전",
     "임상 3상", "임상3상", "임상 성공", "대규모 투자", "증설", "양산",
     "상용화", "공급 확대", "매각", "공개매수", "자사주", "배당",
-    "정책", "규제", "관세", "세액공제", "지원", "법안", "정부 대책", "수주 경쟁",
+    "정책 확정", "정책 시행", "규제 확정", "관세 부과", "세액공제 확정", "법안 통과", "정부 대책 확정",
+    "대규모 지원", "지원금 확정", "수주 경쟁",
 }
 BREAKING_WORDS = {"속보"}
 FEATURE_WORDS = {"특징주"}
@@ -1168,10 +1170,30 @@ def _engine_external_time_gate(source, published, title, extra, market_state, ma
     age = (_now_kst() - dt).total_seconds()
     if age <= 3600:
         return True, "최근60분"
-    text = _engine_clean(f"{title} {extra}").lower()
-    strong = any(k.lower() in text for k in STRONG_MARKET_HITS) or len(market_hits) >= 2
-    if market_state in ("시장 마감 후 뉴스", "시장 휴무로 미반영") and strong:
-        return True, market_state
+    text = _engine_clean(f"{title} {extra}")
+    text_l = text.lower()
+
+    # 60분 예외는 절대로 "강한 단어" 하나만으로 열지 않는다.
+    # 시장 마감 후/휴무일에 다음 거래일 주가 반영 가능성이 있는
+    # "국내 상장기업 + 실제 사건 + 강한 재료"가 모두 확인될 때만 허용한다.
+    domestic_companies = {
+        "삼성전자", "SK하이닉스", "SK이노베이션", "LG에너지솔루션", "LG전자", "LG화학",
+        "현대차", "현대자동차", "기아", "HD현대", "HD한국조선해양", "HD현대중공업",
+        "한화오션", "한화에어로스페이스", "삼성중공업", "한미반도체", "에코프로", "에코프로비엠",
+        "셀트리온", "두산에너빌리티", "두산로보틱스", "레인보우로보틱스", "로보티즈",
+        "HD현대일렉트릭", "효성중공업", "LS ELECTRIC", "LIG넥스원", "현대로템", "한전기술",
+        "한전KPS", "LG에너지솔루션", "삼성SDI", "SK스퀘어", "NAVER", "카카오", "KB금융",
+        "하나금융지주", "신한지주", "우리금융지주", "HMM", "S-Oil",
+    }
+    domestic_hit = any(c.lower() in text_l for c in domestic_companies)
+
+    # 실제 사건형 재료만 인정. 전망/분석/관심/지원 등의 약한 표현은 예외를 열지 않는다.
+    strong_hits = [k for k in STRONG_MARKET_HITS if k.lower() in text_l]
+    strong = bool(strong_hits)
+
+    if market_state in ("시장 마감 후 뉴스", "시장 휴무로 미반영") and domestic_hit and strong:
+        return True, f"{market_state} | 국내상장기업+강한재료"
+
     return False, "60분 초과"
 
 
@@ -1213,10 +1235,36 @@ def _engine_market_hit(text):
     return [x for x in MARKET_IMPACT_KEYWORDS if x.lower() in t]
 
 
+def _engine_is_weak_nonstock_news(text):
+    """주가와 직접 연결되지 않는 사회공헌/캠페인/일반 홍보성 뉴스 차단."""
+    low = _engine_clean(text).lower()
+    weak = [
+        "사회공헌", "캠페인", "인신매매 근절", "기부", "후원", "봉사",
+        "공익", "홍보대사", "브랜드 캠페인", "csr", "esg 활동",
+    ]
+    strong_business = [
+        "수주", "계약", "공급", "투자", "증설", "양산", "실적",
+        "기술이전", "기술수출", "인수", "합병", "승인", "허가",
+        "특허", "지분", "배당", "자사주", "정책 확정", "법안 통과",
+        "관세 부과", "세액공제 확정", "상용화", "매출",
+    ]
+    return any(x in low for x in weak) and not any(x in low for x in strong_business)
+
+
+def _engine_domestic_companies(companies):
+    """글로벌 기업을 국내 상장기업으로 오인하지 않도록 국내 종목만 반환."""
+    return [c for c in companies if c in LISTED_COMPANY_ALIASES and c not in GLOBAL_COMPANY_KEYWORDS]
+
+
+def _engine_global_companies(companies):
+    return [c for c in companies if c in GLOBAL_COMPANY_KEYWORDS]
+
+
 def _engine_classify(source, title, extra=""):
     text = _engine_clean(f"{title} {extra}")
     companies = _engine_find_companies(text)
-    company_core = (set(KOREAN_GROUP_NAMES) | set(GLOBAL_COMPANY_KEYWORDS) | set(GLOBAL_AND_DOMESTIC_GIANTS)) - set(UNIQUE_CELEBS)
+    domestic = _engine_domestic_companies(companies)
+    global_companies = _engine_global_companies(companies)
     k1, k2 = _engine_has_keyword_pair(text)
     market_hits = _engine_market_hit(text)
     low = text.lower()
@@ -1224,27 +1272,41 @@ def _engine_classify(source, title, extra=""):
     is_feature = any(x in low for x in FEATURE_WORDS)
     is_exclusive = any(x in low for x in EXCLUSIVE_WORDS)
     is_external = source.startswith("텔레그램/") or source.startswith("유튜브/")
-    # 속보/특징주/단독이라는 단어만으로 우회하지 않는다.
-    # 반드시 상장기업과 주가 영향 재료가 함께 있어야 한다.
-    stock_linked = bool(companies) or bool(_engine_stock_links(text, companies))
+
+    # 사회공헌/캠페인 등 주가와 무관한 뉴스는 기업명이 있어도 원천 차단.
+    if _engine_is_weak_nonstock_news(text):
+        return False, "주가재료 미충족", [], k1, k2, []
+
+    # 관련주 연결은 '국내 상장기업'이 실제로 존재하거나,
+    # 국내 테마 연결을 별도 검증한 경우에만 허용한다.
+    stock_links = _engine_stock_links(text, domestic)
+    stock_linked = bool(domestic) or bool(stock_links)
     market_relevant = bool(market_hits)
-    if is_breaking and stock_linked and market_relevant:
-        return True, "🚀속보", companies, k1, k2, market_hits
-    if is_feature and stock_linked and market_relevant:
-        return True, "🚨특징주", companies, k1, k2, market_hits
-    if is_exclusive and stock_linked and market_relevant:
-        return True, "🚀단독", companies, k1, k2, market_hits
-    # 텔레그램/유튜브는 '제목에 상장기업 + 주가 영향 재료'가 기본 노출 조건.
+
+    # 글로벌 기업 자체 뉴스는 글로벌 뉴스로 노출할 수 있지만
+    # 글로벌 기업명을 국내 상장기업/관련주로 절대 사용하지 않는다.
+    global_relevant = bool(global_companies) and market_relevant
+
+    if is_breaking and (stock_linked or global_relevant) and market_relevant:
+        return True, "🚀속보", domestic or global_companies, k1, k2, market_hits
+    if is_feature and (stock_linked or global_relevant) and market_relevant:
+        return True, "🚨특징주", domestic or global_companies, k1, k2, market_hits
+    if is_exclusive and (stock_linked or global_relevant) and market_relevant:
+        return True, "🚀단독", domestic or global_companies, k1, k2, market_hits
+
     if is_external:
         if stock_linked and market_relevant:
-            top = bool(set(companies) & company_core) and bool(market_hits)
-            return True, "📌🏆" if top else "📌", companies, k1, k2, market_hits
+            return True, "📌", domestic, k1, k2, market_hits
+        # 외부 콘텐츠는 글로벌 기업 단독 뉴스도 주가 영향 재료가 있을 때만 허용.
+        if global_relevant:
+            return True, "🌐", global_companies, k1, k2, market_hits
         return False, "외부콘텐츠", [], k1, k2, market_hits
-    # 일반 뉴스 검색은 기존 키워드 조합을 유지하되, 주가 영향 재료가 없으면 제외한다.
+
     if k1 and k2 and stock_linked and market_relevant:
-        top = bool(set(companies) & company_core) and bool(market_hits)
-        return True, "📌🏆" if top else "📌", companies, k1, k2, market_hits
-    return False, "일반", companies, k1, k2, market_hits
+        return True, "📌", domestic, k1, k2, market_hits
+    if global_relevant:
+        return True, "🌐", global_companies, k1, k2, market_hits
+    return False, "일반", [], k1, k2, market_hits
 
 
 # 국내 상장기업/관련주 연결 문구. 단순 산업 키워드만으로 종목을 억지 연결하지 않는다.
@@ -1265,15 +1327,18 @@ STOCK_LINK_MAP = {
 def _engine_stock_links(text, companies):
     t = _engine_clean(text)
     links = []
+    # 본문에 실제 등장한 국내 상장기업을 최우선.
+    for stock in companies:
+        if stock in LISTED_COMPANY_ALIASES and stock not in GLOBAL_COMPANY_KEYWORDS and stock not in links:
+            links.append(stock)
+
+    # 테마 연결은 국내 사업 연결 키워드가 본문에 실제 존재할 때만 후보를 만든다.
+    # 글로벌 기업 이름만으로 국내 종목을 강제 생성하지 않는다.
     for key, stocks in STOCK_LINK_MAP.items():
         if key.lower() in t.lower():
             for stock in stocks:
                 if stock not in links:
                     links.append(stock)
-    # 뉴스 본문에 직접 언급된 국내 기업은 우선 표시
-    for c in companies:
-        if c in KOREAN_GROUP_NAMES and c not in links:
-            links.insert(0, c)
     return links[:5]
 
 
@@ -1296,21 +1361,22 @@ def _engine_theme(text):
 
 def _engine_relation_reason(text, companies, market_hits):
     low = text.lower()
+    domestic = _engine_domestic_companies(companies)
     if any(x in low for x in ["수주", "공급계약", "계약 체결", "계약", "발주", "공급"]):
         if "LNG" in text or "LNG선" in text or "조선" in text:
-            return "한국 조선사와 직접적인 수주 경쟁"
+            return "조선 수주 확대 → 국내 조선사 수혜 연결"
         if any(x in text for x in ["HBM", "AI 반도체", "반도체"]):
-            return "국내 반도체 업체의 공급·수주 확대와 직접 연결"
-        return "국내 관련 기업의 수주·공급 확대와 직접 연결"
+            return "AI·반도체 수요 확대 → 국내 반도체 공급망 연결"
+        return "계약·수주·공급 확대 → 국내 상장기업 사업과 연결"
     if any(x in low for x in ["인수", "합병", "m&a"]):
-        return "국내 관련 기업의 경쟁구도·사업가치 변화에 직접 영향"
+        return "인수·합병으로 경쟁구도 및 사업가치 변화"
     if any(x in low for x in ["승인", "허가", "fda"]):
-        return "국내 관련 기업의 제품·사업 매출 확대와 직접 연결"
+        return "승인·허가로 제품 상용화 및 매출 확대 가능성"
     if any(x in low for x in ["투자", "증설", "양산"]):
-        return "국내 관련 기업의 생산능력·매출 확대와 직접 연결"
-    if companies:
-        return "국내 상장기업 사업과 직접 연결"
-    return "국내 관련주와의 연결성이 확인되는 시장 재료"
+        return "투자·증설·양산으로 생산능력 확대"
+    if domestic:
+        return "기사에 직접 언급된 국내 상장기업의 사업·실적과 연결"
+    return ""
 
 
 def _engine_schedule(text):
@@ -1333,11 +1399,13 @@ def _engine_schedule(text):
 
 def _engine_summary(title, extra, companies, market_hits):
     text = _engine_clean(f"{title} {extra}")
-    links = _engine_stock_links(text, companies)
+    domestic = _engine_domestic_companies(companies)
+    global_companies = _engine_global_companies(companies)
+    links = _engine_stock_links(text, domestic)
     reason = _engine_relation_reason(text, companies, market_hits)
     theme = _engine_theme(text)
+
     if links:
-        # 수혜/피해 방향을 명확히 표시한다. 단순 '관련주' 표기는 최소화한다.
         low = text.lower()
         if any(x in low for x in ["경쟁", "중국", "수주 감소", "수주량 감소", "점유율 하락", "밀려", "빼앗", "시장 잠식"]):
             direction = "🔻 피해주"
@@ -1347,16 +1415,19 @@ def _engine_summary(title, extra, companies, market_hits):
             direction = "관련주"
         theme_text = f"[{theme} 테마] " if theme else ""
         core = f"🔎 {theme_text}{reason} / {direction} → " + "·".join(links[:3])
-    elif companies:
-        core = f"🔎 {reason} → " + "·".join(companies[:4])
+    elif domestic:
+        core = f"🔎 {reason} → " + "·".join(domestic[:4])
+    elif global_companies:
+        # 글로벌 기업은 국내 상장기업 문구를 절대 만들지 않는다.
+        core = f"🔎 글로벌 기업 → " + "·".join(global_companies[:4])
     elif market_hits:
         core = "🔎 시장 핵심 재료 → " + "·".join(market_hits[:4])
     else:
-        core = f"🔎 {reason}"
+        core = ""
     return core, _engine_schedule(text)
 
 def _engine_score(item):
-    return (4 if item["category"] in ("🚀속보", "🚨특징주") else 0) + (4 if item["category"] == "📌🏆" else 0) + min(3, len(item["companies"])) + min(3, len(item["market_hits"])) + min(2, len(item["extra"]))
+    return (4 if item["category"] in ("🚀속보", "🚨특징주", "🚀단독") else 0) + min(3, len(_engine_domestic_companies(item["companies"]))) + min(3, len(item["market_hits"])) + min(2, len(item["extra"]))
 
 _engine_pending = []
 _engine_sent_fingerprints = []  # {text, source, time_text, published, title}
@@ -1413,8 +1484,8 @@ def _engine_format_message(item):
     title = item["title"]
     companies = item["companies"]
     text_low = _engine_clean(title + " " + item.get("extra", "")).lower()
-    # 상장기업은 제목에서도 눈에 띄게 표시
-    for c in companies:
+    # 국내 상장기업만 ⚡️ 표시. 글로벌 기업에는 ⚡️를 붙이지 않는다.
+    for c in _engine_domestic_companies(companies):
         title = re.sub(rf"(?<!⚡️)({re.escape(c)})", r"⚡️\1", title, count=1)
     # 분류별 시각 표기
     if category in ("🚀속보", "🚨특징주", "🚀단독"):
@@ -1427,7 +1498,7 @@ def _engine_format_message(item):
         global_hit = next((c for c in companies if c in GLOBAL_COMPANY_KEYWORDS), "")
         person_hit = next((c for c in UNIQUE_CELEBS if c.lower() in text_low), "")
         if global_hit:
-            title_prefix = "⭐" + "⚡️" + global_hit
+            title_prefix = "⭐️" + global_hit
         elif person_hit:
             title_prefix = "🕵️" + person_hit
         else:
@@ -1453,7 +1524,8 @@ def _engine_format_message(item):
     core_html = html.escape(core).replace("⚡️", "⚡️")
     # 별도 '한국과의 관계 / 관련주' 소제목은 사용하지 않는다.
     # 한국 기업과의 연결 내용과 수혜/피해 방향을 바로 한 줄로 보여준다.
-    lines += ["", core_html]
+    if core:
+        lines += ["", core_html]
     if market_state in ("시장 마감 후 뉴스", "시장 휴무로 미반영"):
         lines += ["", f"⏸️ {html.escape(market_state)}"]
     if schedule:
