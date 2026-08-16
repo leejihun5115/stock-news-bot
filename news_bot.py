@@ -728,8 +728,8 @@ DOMESTIC_RSS_URLS = [
 
 DOMESTIC_RSS_SOURCE_NAMES = {
     "https://www.yna.co.kr/rss/economy.xml": "연합뉴스",
-    "https://rss.hankyung.com/new/hk_news.xml": "한국경제",
-    "https://www.mk.co.kr/rss/30000001/les.xml": "매일경제",
+    "https://www.hankyung.com/feed/all-news": "한국경제",
+    "https://www.mk.co.kr/rss/30000001": "매일경제",
     "https://news.google.com/rss/search?q=주식+증권+상장+에코프로+SK오션플랜트+삼성전자+SK하이닉스&hl=ko&gl=KR&ceid=KR:ko": "Google",
     "http://www.cstimes.com/rss/allArticle.xml": "CS타임즈",
     "https://politepol.com/fd/lRjhc60Zukff": "폴리트폴",
