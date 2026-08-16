@@ -335,7 +335,7 @@ _logger.info("[환경] Render=%s | NAVER=%s | DART=%s | RSS=%s | 미국뉴스=%s
              bool(os.environ.get("PORT")), bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET),
              bool(DART_API_KEY), ENABLE_DOMESTIC_NEWS, ENABLE_US_NEWS,
              ENABLE_TELEGRAM_CHANNELS, ENABLE_YOUTUBE)
-_logger.info("[정상] 시간제한=OFF | 시장 반영 여부를 기준으로 신선도 판정")
+_logger.info("[정상] 국내뉴스=시장반영형 | 텔레그램/유튜브=최근60분 기본 | 강한 마감후·휴무 재료만 예외")
 _logger.info("============================================================")
 
 # requests를 사용하는 기존 함수는 수정하지 않고, 모든 HTTP 요청을 자동 진단한다.
@@ -1140,9 +1140,39 @@ def _engine_market_state(source, published):
     return "시장 마감 후 뉴스"
 
 
-def _engine_recent_enough(published):
-    # 호환용. 더 이상 뉴스 노출 여부를 시간으로 차단하지 않는다.
-    return _engine_parse_datetime(published) is not None
+def _engine_recent_enough(published, source=""):
+    """외부 콘텐츠(텔레그램/유튜브)는 최근 60분을 기본으로 한다.
+    단, 국내 장 마감 후/휴무에 발생한 강한 주가 재료는 다음 거래일 반영을 위해 예외 허용한다.
+    국내 RSS/NAVER/DART/미국뉴스는 이 함수로 노출을 제한하지 않는다.
+    """
+    dt = _engine_parse_datetime(published)
+    if dt is None:
+        return False
+    if not (str(source).startswith("텔레그램/") or str(source).startswith("유튜브/")):
+        return True
+    age = (_now_kst() - dt).total_seconds()
+    if age <= 3600:
+        return True
+    return False
+
+
+def _engine_external_time_gate(source, published, title, extra, market_state, market_hits):
+    """텔레그램/유튜브 도배 방지용 시간 관문.
+    60분 초과는 원칙적으로 차단하고, 장 마감 후/휴무의 강한 재료만 예외로 통과시킨다.
+    """
+    if not (str(source).startswith("텔레그램/") or str(source).startswith("유튜브/")):
+        return True, ""
+    dt = _engine_parse_datetime(published)
+    if dt is None:
+        return False, "발행시간 확인불가"
+    age = (_now_kst() - dt).total_seconds()
+    if age <= 3600:
+        return True, "최근60분"
+    text = _engine_clean(f"{title} {extra}").lower()
+    strong = any(k.lower() in text for k in STRONG_MATERIAL_WORDS) or len(market_hits) >= 2
+    if market_state in ("시장 마감 후 뉴스", "시장 휴무로 미반영") and strong:
+        return True, market_state
+    return False, "60분 초과"
 
 
 AMBIGUOUS_COMPANY_TERMS = {
@@ -1247,6 +1277,23 @@ def _engine_stock_links(text, companies):
     return links[:5]
 
 
+THEME_MAP = {
+    "HBM": "HBM·AI반도체", "AI 반도체": "HBM·AI반도체", "AI칩": "HBM·AI반도체",
+    "로봇": "휴머노이드·로봇", "휴머노이드": "휴머노이드·로봇",
+    "LNG선": "LNG선·조선", "LNG": "LNG선·조선",
+    "방산": "방산·우주항공", "원전": "원전·SMR", "SMR": "원전·SMR",
+    "2차전지": "2차전지·배터리", "전고체": "전고체배터리",
+    "전력기기": "전력기기·전력망", "변압기": "전력기기·전력망",
+    "바이오": "바이오·헬스케어", "AI": "AI",
+}
+
+def _engine_theme(text):
+    low = text.lower()
+    for key, theme in sorted(THEME_MAP.items(), key=lambda x: len(x[0]), reverse=True):
+        if key.lower() in low:
+            return theme
+    return ""
+
 def _engine_relation_reason(text, companies, market_hits):
     low = text.lower()
     if any(x in low for x in ["수주", "공급계약", "계약 체결", "계약", "발주", "공급"]):
@@ -1288,16 +1335,18 @@ def _engine_summary(title, extra, companies, market_hits):
     text = _engine_clean(f"{title} {extra}")
     links = _engine_stock_links(text, companies)
     reason = _engine_relation_reason(text, companies, market_hits)
+    theme = _engine_theme(text)
     if links:
         # 수혜/피해 방향을 명확히 표시한다. 단순 '관련주' 표기는 최소화한다.
         low = text.lower()
         if any(x in low for x in ["경쟁", "중국", "수주 감소", "수주량 감소", "점유율 하락", "밀려", "빼앗", "시장 잠식"]):
             direction = "🔻 피해주"
-        elif any(x in low for x in ["수주", "공급계약", "계약 체결", "공급 확대", "증설", "양산", "승인", "허가", "기술수출", "대규모 투자", "수혜"]):
+        elif any(x in low for x in ["수주", "공급계약", "계약 체결", "공급 확대", "증설", "양산", "승인", "허가", "기술수출", "대규모 투자", "수혜", "지분 확대"]):
             direction = "🔺 수혜주"
         else:
             direction = "관련주"
-        core = f"🔎 {reason} / {direction} → " + "·".join(links)
+        theme_text = f"[{theme} 테마] " if theme else ""
+        core = f"🔎 {theme_text}{reason} / {direction} → " + "·".join(links[:3])
     elif companies:
         core = f"🔎 {reason} → " + "·".join(companies[:4])
     elif market_hits:
@@ -1406,7 +1455,7 @@ def _engine_format_message(item):
     # 한국 기업과의 연결 내용과 수혜/피해 방향을 바로 한 줄로 보여준다.
     lines += ["", core_html]
     if market_state in ("시장 마감 후 뉴스", "시장 휴무로 미반영"):
-        lines += ["", f"🔎 {html.escape(market_state)}"]
+        lines += ["", f"⏸️ {html.escape(market_state)}"]
     if schedule:
         lines += ["", f"<b>📅 일정</b>", html.escape(schedule)]
     if item.get("link"):
@@ -1474,6 +1523,10 @@ def _engine_process_item(source, title, link, published="", extra=""):
         return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
+    gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
+    if not gate_ok:
+        _engine_log("info", "[제외] ⏱️ %s | %s", gate_reason, title[:80])
+        return False
     if market_state == "시장시간 확인불가":
         _engine_log("warning", "[로직] 시장시간 확인 필요 | source=%s | %s", source, title[:80])
     key = link or f"{source}|{title}"
