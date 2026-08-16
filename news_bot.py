@@ -1,5 +1,6 @@
 # ============================================================
-# 원본 복구 기반 조건 반영 검증본 (2026-08-16)
+# 원본 복구 기반 조건 반영 검증본 (2026-08-17)
+# 핵심원칙 강화: 실제 상장기업 검증 + 실제 사건 확인 + 주가영향 근거 제시
 # 기존 수집 구조 보존 + 1시간 필터 + 소스별 필터 + 분류/재확인/중복통합
 # ============================================================
 
@@ -936,6 +937,8 @@ ENGINE_INTERVAL = 60
 ENGINE_HTTP_TIMEOUT = 20
 ENGINE_MAX_SEND_PER_CYCLE = 20
 ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
+ENGINE_FINGERPRINT_FILE = os.environ.get("NEWS_BOT_FINGERPRINT_FILE", "news_bot_fingerprints.jsonl")
+ENGINE_SESSION_START = _now_kst().strftime("%Y-%m-%d %H:%M:%S")
 
 NEWS_MAX_AGE_HOURS = float(os.environ.get("NEWS_MAX_AGE_HOURS", "1"))
 NEWS_TEST_FILE = os.environ.get("NEWS_TEST_FILE", "news_test_items.json")
@@ -958,9 +961,32 @@ STRONG_MARKET_HITS = {
     "상용화", "공급 확대", "매각", "공개매수", "자사주", "배당",
     "정책", "규제", "관세", "세액공제", "지원", "법안", "정부 대책", "수주 경쟁",
 }
+# 실제 사건 여부를 판단하는 핵심 원칙. 단순 전망/분석/의견/과거 기사/검토 단계는
+# 원칙적으로 낮게 평가하고, 확정·체결·발표·실행된 사건을 우선한다.
+HARD_EVENT_KEYWORDS = {
+    "계약 체결", "공급계약 체결", "수주 확정", "수주", "공급계약", "계약 체결",
+    "발주", "납품", "공급", "독점계약", "독점공급", "투자 확정", "투자 결정",
+    "증설 결정", "공장 신설", "양산 개시", "양산", "출시", "상용화",
+    "인수 확정", "인수 완료", "합병 완료", "공개매수", "지분 취득",
+    "FDA 승인", "품목허가", "허가 승인", "임상 3상 성공", "임상 성공",
+    "기술수출 계약", "기술이전 계약", "특허 등록", "특허 취득",
+    "실적 발표", "영업이익 흑자전환", "흑자전환", "어닝서프라이즈",
+    "법안 통과", "국회 통과", "정부 확정", "정책 확정", "정책 시행",
+    "세액공제 확정", "관세 확정", "지원 확정", "정부 대책 발표",
+}
+WEAK_EVENT_KEYWORDS = {
+    "전망", "예상", "기대", "가능성", "검토", "추진", "논의", "협의", "계획",
+    "주목", "관심", "분석", "평가", "의견", "전망치", "목표가", "추천",
+    "수혜 기대", "수혜 전망", "성장 기대", "상승 전망", "급등할까", "될까",
+}
 BREAKING_WORDS = {"속보"}
 FEATURE_WORDS = {"특징주"}
 EXCLUSIVE_WORDS = {"단독"}
+
+# DART의 corpCode에서 실제 KRX 상장기업을 검증한 결과를 캐시한다.
+_LISTED_COMPANY_CACHE = set()
+_LISTED_COMPANY_CACHE_READY = False
+_LISTED_COMPANY_CACHE_LOCK = threading.Lock()
 
 _engine_seen = set()
 _engine_lock = threading.Lock()
@@ -981,12 +1007,27 @@ def _engine_log(level, message, *args):
 
 
 def _engine_load_seen():
-    global _engine_seen
+    global _engine_seen, _engine_sent_fingerprints
     try:
         if os.path.exists(ENGINE_STATE_FILE):
             with open(ENGINE_STATE_FILE, "r", encoding="utf-8") as f:
                 _engine_seen = {x.strip() for x in f if x.strip()}
         _engine_log("info", "[상태] 이미 처리한 기사=%d건", len(_engine_seen))
+        try:
+            if os.path.exists(ENGINE_FINGERPRINT_FILE):
+                with open(ENGINE_FINGERPRINT_FILE, "r", encoding="utf-8") as fp:
+                    for line in fp:
+                        try:
+                            row = json.loads(line)
+                            if isinstance(row, dict) and row.get("text"):
+                                _engine_sent_fingerprints.append(row)
+                        except Exception:
+                            continue
+                if len(_engine_sent_fingerprints) > 5000:
+                    del _engine_sent_fingerprints[:-5000]
+            _engine_log("info", "[상태] 선행뉴스 비교기록=%d건", len(_engine_sent_fingerprints))
+        except Exception as e:
+            _engine_log("warning", "[상태] 선행뉴스 기록 로드 실패 | %s", str(e)[:120])
     except Exception as e:
         log_error("상태파일 읽기", e, file=ENGINE_STATE_FILE)
 
@@ -1068,6 +1109,119 @@ def _engine_recent_enough(published):
     return -300 <= age <= NEWS_MAX_AGE_HOURS * 3600
 
 
+def _engine_load_listed_companies():
+    """DART corpCode.xml에서 stock_code가 존재하는 국내 상장법인만 캐시한다.
+    API 실패 시 빈 캐시로 두어 기존 이름 사전은 보조적으로만 사용한다.
+    """
+    global _LISTED_COMPANY_CACHE_READY
+    if _LISTED_COMPANY_CACHE_READY:
+        return _LISTED_COMPANY_CACHE
+    with _LISTED_COMPANY_CACHE_LOCK:
+        if _LISTED_COMPANY_CACHE_READY:
+            return _LISTED_COMPANY_CACHE
+        try:
+            if DART_API_KEY:
+                url = "https://opendart.fss.or.kr/api/corpCode.xml"
+                r = requests.get(url, params={"crtfc_key": DART_API_KEY}, timeout=ENGINE_HTTP_TIMEOUT)
+                if r.ok and r.content:
+                    import zipfile, io
+                    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+                        xml_name = next((n for n in zf.namelist() if n.lower().endswith('.xml')), None)
+                        if xml_name:
+                            data = zf.read(xml_name).decode('utf-8', errors='ignore')
+                            for m in re.finditer(r'<list>\s*<corp_code>(.*?)</corp_code>\s*<corp_name>(.*?)</corp_name>\s*<stock_code>(.*?)</stock_code>', data, re.S):
+                                name = BeautifulSoup(m.group(2), 'html.parser').get_text(strip=True)
+                                stock_code = m.group(3).strip()
+                                if stock_code:
+                                    _LISTED_COMPANY_CACHE.add(name)
+            _LISTED_COMPANY_CACHE_READY = True
+            _engine_log("info", "[상장기업 검증] DART 상장법인=%d건", len(_LISTED_COMPANY_CACHE))
+        except Exception as e:
+            _LISTED_COMPANY_CACHE_READY = True
+            _engine_log("warning", "[상장기업 검증] 실패 | 기존 기업사전은 보조판정으로 사용 | %s", str(e)[:120])
+    return _LISTED_COMPANY_CACHE
+
+
+def _engine_is_verified_listed_company(name):
+    # 국내 기업은 DART 상장법인 목록으로 확인. 글로벌 기업은 기존 글로벌 상장기업 사전을 사용한다.
+    listed = _engine_load_listed_companies()
+    if name in listed:
+        return True
+    if name in GLOBAL_COMPANY_KEYWORDS:
+        return True
+    return False
+
+
+def _engine_find_verified_companies(text):
+    t = _engine_clean(text)
+    found = []
+    candidates = _engine_find_companies(t)
+    for x in candidates:
+        if _engine_is_verified_listed_company(x):
+            found.append(x)
+    return found[:8]
+
+
+def _engine_event_evidence(text):
+    """실제 주가재료가 되는 '확정 사건'만 강한 사건으로 인정한다.
+    단순 전망/분석/검토/과거 회고 문맥에서 우연히 '수주·계약·투자'가
+    등장하는 것을 막기 위해 문장 주변의 약한 표현을 함께 검사한다.
+    """
+    t = _engine_clean(text)
+    low = t.lower()
+    hard = []
+    weak = [x for x in WEAK_EVENT_KEYWORDS if x.lower() in low]
+    # 확정형 우선: '수주' 단독은 부족하고 확정/체결/발주/공급 등 사건성이 있어야 한다.
+    strong_patterns = [
+        (r"(?:계약|공급계약)\s*(?:을|를)?\s*(?:체결|수주|확정)", "계약 체결"),
+        (r"(?:수주|발주)\s*(?:를|을)?\s*(?:확정|받|확보)", "수주 확정"),
+        (r"(?:공급|납품)\s*(?:계약|확정|개시|시작)", "공급 확정"),
+        (r"(?:투자|증설|공장 신설)\s*(?:를|을)?\s*(?:확정|결정|승인)", "투자·증설 확정"),
+        (r"(?:양산|상용화|출시)\s*(?:을|를)?\s*(?:개시|시작|확정)", "양산·상용화 개시"),
+        (r"(?:인수|합병)\s*(?:를|을)?\s*(?:확정|완료|성사)", "인수·합병 확정"),
+        (r"(?:FDA|품목)\s*(?:승인|허가)", "승인·허가"),
+        (r"임상\s*3\s*상\s*(?:성공|통과)", "임상 3상 성공"),
+        (r"(?:특허)\s*(?:등록|취득|승인)", "특허 확정"),
+        (r"(?:실적 발표|흑자전환|어닝서프라이즈)", "실적 확정"),
+        (r"(?:법안|국회)\s*(?:통과|가결)", "법안 통과"),
+        (r"(?:정책|정부 대책|세액공제|관세|지원)\s*(?:을|를)?\s*(?:확정|시행|발표|통과)", "정책 확정·시행"),
+        (r"(?:자사주|공개매수|배당)\s*(?:결정|실시|확정)", "주주환원 확정"),
+    ]
+    for pat, label in strong_patterns:
+        if re.search(pat, t, re.I):
+            hard.append(label)
+    # '삼성중공업 5천억원 수주'처럼 명사형 제목으로 확정 사건을 보도하는 경우도 인정.
+    if re.search(r"(?:[가-힣A-Za-z0-9]+\s*)?(?:대규모|신규|초대형|대형)?\s*수주(?:액|를|을|에)?", t, re.I):
+        if not any(w.lower() in low for w in ["수주 전망", "수주 예상", "수주 가능성", "수주 검토", "수주 논의"]):
+            hard.append("수주")
+    if re.search(r"(?:공급|납품)\s*(?:계약|물량|개시|확대)", t, re.I):
+        if not any(w.lower() in low for w in ["공급 전망", "공급 예상", "공급 가능성", "공급 검토"]):
+            hard.append("공급")
+    # 시장 통계/경쟁 변화도 실제 사건으로 인정하되 '전망/가능성'만 있는 경우 제외.
+    if re.search(r"(?:수주|점유율|판매량|출하량|가격|시장규모)\s*(?:증가|감소|확대|축소|상승|하락)", t, re.I):
+        if not any(w.lower() in low for w in ["전망", "예상", "가능성", "검토", "논의", "~할", "될 것"]):
+            hard.append("시장지표 변화")
+    # 강한 사건 키워드의 단순 존재만으로 통과시키지 않는다.
+    return list(dict.fromkeys(hard)), weak
+
+
+def _engine_relation_evidence(text, companies, hard_events):
+    t = _engine_clean(text).lower()
+    if any(x.lower() in t for x in ["계약", "수주", "공급", "발주", "납품"]):
+        return "계약·수주·공급 등 실제 거래 발생"
+    if any(x.lower() in t for x in ["투자", "증설", "공장 신설", "양산"]):
+        return "투자·증설·양산 등 실제 사업 확대"
+    if any(x.lower() in t for x in ["인수", "합병", "공개매수", "지분 취득"]):
+        return "인수·합병·지분 거래 등 기업가치 변동 재료"
+    if any(x.lower() in t for x in ["승인", "허가", "임상 3상 성공", "특허"]):
+        return "승인·허가·임상·특허 등 사업화 단계의 확정 이벤트"
+    if any(x.lower() in t for x in ["실적 발표", "흑자전환", "어닝서프라이즈"]):
+        return "실적 등 기업가치에 직접 영향을 주는 확정 수치"
+    if any(x.lower() in t for x in ["법안 통과", "국회 통과", "정책 확정", "정책 시행", "정부 대책 발표", "세액공제 확정"]):
+        return "정책·법안이 확정 또는 시행되어 관련 업종에 직접 영향"
+    return "상장기업과 실제 사건의 연결성 확인"
+
+
 def _engine_find_companies(text):
     t = _engine_clean(text)
     found = []
@@ -1092,37 +1246,48 @@ def _engine_market_hit(text):
 
 
 def _engine_classify(source, title, extra=""):
-    text = _engine_clean(f"{title} {extra}")
-    companies = _engine_find_companies(text)
-    company_core = (set(KOREAN_GROUP_NAMES) | set(GLOBAL_COMPANY_KEYWORDS) | set(GLOBAL_AND_DOMESTIC_GIANTS)) - set(UNIQUE_CELEBS)
+    # 텔레그램은 '제목에 상장기업이 있어야 노출'이 절대 조건이다.
+    # 채널 본문에만 기업명이 있어도 우회하지 않는다.
+    is_external = source.startswith("텔레그램/") or source.startswith("유튜브/")
+    title_clean = _engine_clean(title)
+    text = _engine_clean(f"{title_clean} {extra}")
+    company_text = title_clean if source.startswith("텔레그램/") else text
+    companies = _engine_find_verified_companies(company_text)
     k1, k2 = _engine_has_keyword_pair(text)
     market_hits = _engine_market_hit(text)
+    hard_events, weak_events = _engine_event_evidence(text)
     low = text.lower()
     is_breaking = any(x in low for x in BREAKING_WORDS)
     is_feature = any(x in low for x in FEATURE_WORDS)
     is_exclusive = any(x in low for x in EXCLUSIVE_WORDS)
-    is_external = source.startswith("텔레그램/") or source.startswith("유튜브/")
-    # 속보/특징주/단독이라는 단어만으로 우회하지 않는다.
-    # 반드시 상장기업과 주가 영향 재료가 함께 있어야 한다.
-    stock_linked = bool(companies) or bool(_engine_stock_links(text, companies))
-    market_relevant = bool(market_hits)
-    if is_breaking and stock_linked and market_relevant:
+    # 핵심 원칙: 상장기업 + 주가 영향 재료가 모두 있어야 한다.
+    # 텔레그램/유튜브는 제목의 상장기업 검증을 먼저 통과해야 한다.
+    # 일반 뉴스는 기존 키워드1+키워드2 AND를 유지하되, 실제 확정 사건은 예외적으로 허용한다.
+    stock_linked = bool(companies)
+    market_relevant = bool(hard_events)
+
+    if is_external and not stock_linked:
+        return False, "제외", companies, k1, k2, market_hits
+    if not stock_linked or not market_relevant:
+        return False, "제외", companies, k1, k2, market_hits
+
+    # 일반 뉴스의 속보/특징주/단독은 우선 노출하되, 주가 영향이 없는 단순 단어 제목은 제외한다.
+    if is_breaking:
         return True, "🚀속보", companies, k1, k2, market_hits
-    if is_feature and stock_linked and market_relevant:
-        return True, "🚨특징주", companies, k1, k2, market_hits
-    if is_exclusive and stock_linked and market_relevant:
+    if is_feature:
+        return True, "🔥특징주", companies, k1, k2, market_hits
+    if is_exclusive:
         return True, "🚀단독", companies, k1, k2, market_hits
-    # 텔레그램/유튜브는 '제목에 상장기업 + 주가 영향 재료'가 기본 노출 조건.
+
     if is_external:
-        if stock_linked and market_relevant:
-            top = bool(set(companies) & company_core) and bool(market_hits)
-            return True, "📌🏆" if top else "📌", companies, k1, k2, market_hits
-        return False, "외부콘텐츠", [], k1, k2, market_hits
-    # 일반 뉴스 검색은 기존 키워드 조합을 유지하되, 주가 영향 재료가 없으면 제외한다.
-    if k1 and k2 and stock_linked and market_relevant:
-        top = bool(set(companies) & company_core) and bool(market_hits)
+        top = bool(set(companies) & set(GLOBAL_AND_DOMESTIC_GIANTS)) and bool(market_hits)
         return True, "📌🏆" if top else "📌", companies, k1, k2, market_hits
-    return False, "일반", companies, k1, k2, market_hits
+
+    # 일반 검색: 키워드1+키워드2 AND 또는 실제 확정 사건.
+    if (k1 and k2) or hard_events:
+        top = bool(hard_events) and bool(market_hits)
+        return True, "📌🏆" if top else "📌", companies, k1, k2, market_hits
+    return False, "제외", companies, k1, k2, market_hits
 
 
 # 국내 상장기업/관련주 연결 문구. 단순 산업 키워드만으로 종목을 억지 연결하지 않는다.
@@ -1156,22 +1321,8 @@ def _engine_stock_links(text, companies):
 
 
 def _engine_relation_reason(text, companies, market_hits):
-    low = text.lower()
-    if any(x in low for x in ["수주", "공급계약", "계약 체결", "계약", "발주", "공급"]):
-        if "LNG" in text or "LNG선" in text or "조선" in text:
-            return "한국 조선사와 직접적인 수주 경쟁"
-        if any(x in text for x in ["HBM", "AI 반도체", "반도체"]):
-            return "국내 반도체 업체의 공급·수주 확대와 직접 연결"
-        return "국내 관련 기업의 수주·공급 확대와 직접 연결"
-    if any(x in low for x in ["인수", "합병", "m&a"]):
-        return "국내 관련 기업의 경쟁구도·사업가치 변화에 직접 영향"
-    if any(x in low for x in ["승인", "허가", "fda"]):
-        return "국내 관련 기업의 제품·사업 매출 확대와 직접 연결"
-    if any(x in low for x in ["투자", "증설", "양산"]):
-        return "국내 관련 기업의 생산능력·매출 확대와 직접 연결"
-    if companies:
-        return "국내 상장기업 사업과 직접 연결"
-    return "국내 관련주와의 연결성이 확인되는 시장 재료"
+    hard_events, _ = _engine_event_evidence(text)
+    return _engine_relation_evidence(text, companies, hard_events)
 
 
 def _engine_schedule(text):
@@ -1195,24 +1346,25 @@ def _engine_schedule(text):
 def _engine_summary(title, extra, companies, market_hits):
     text = _engine_clean(f"{title} {extra}")
     links = _engine_stock_links(text, companies)
+    hard_events, weak_events = _engine_event_evidence(text)
     reason = _engine_relation_reason(text, companies, market_hits)
     if links:
-        # 수혜/피해 방향을 명확히 표시한다. 단순 '관련주' 표기는 최소화한다.
         low = text.lower()
-        if any(x in low for x in ["경쟁", "중국", "수주 감소", "수주량 감소", "점유율 하락", "밀려", "빼앗", "시장 잠식"]):
+        # 경쟁 심화/시장잠식은 국내 종목에 불리한 경우에만 피해주.
+        if any(x in low for x in ["수주 경쟁", "중국", "점유율 하락", "시장 잠식", "수주 감소", "밀려", "빼앗"]):
             direction = "🔻 피해주"
-        elif any(x in low for x in ["수주", "공급계약", "계약 체결", "공급 확대", "증설", "양산", "승인", "허가", "기술수출", "대규모 투자", "수혜"]):
+        elif hard_events:
             direction = "🔺 수혜주"
         else:
             direction = "관련주"
-        core = f"🔎 {reason} / {direction} → " + "·".join(links)
+        event_text = "·".join(hard_events[:3]) if hard_events else "실제 사건"
+        core = f"🔎 {reason} → {event_text} / {direction} → " + "·".join(links)
     elif companies:
         core = f"🔎 {reason} → " + "·".join(companies[:4])
-    elif market_hits:
-        core = "🔎 시장 핵심 재료 → " + "·".join(market_hits[:4])
     else:
         core = f"🔎 {reason}"
     return core, _engine_schedule(text)
+
 
 def _engine_score(item):
     return (4 if item["category"] in ("🚀속보", "🚨특징주") else 0) + (4 if item["category"] == "📌🏆" else 0) + min(3, len(item["companies"])) + min(3, len(item["market_hits"])) + min(2, len(item["extra"]))
@@ -1338,7 +1490,13 @@ def _engine_flush_pending():
             _engine_log("info", "[제외] 중복뉴스 | 유사 기사 이미 전송"); continue
         if _engine_send_telegram(_engine_format_message(item)):
             _engine_mark_seen(key)
-            _engine_sent_fingerprints.append({"text": full_text, "source": item["source"], "time_text": item.get("time_text", ""), "published": item.get("published", ""), "title": item["title"]})
+            fp = {"text": full_text, "source": item["source"], "time_text": item.get("time_text", ""), "published": item.get("published", ""), "title": item["title"]}
+            _engine_sent_fingerprints.append(fp)
+            try:
+                with open(ENGINE_FINGERPRINT_FILE, "a", encoding="utf-8") as fp_file:
+                    fp_file.write(json.dumps(fp, ensure_ascii=False) + "\n")
+            except Exception as e:
+                _engine_log("warning", "[상태] 선행뉴스 기록 저장 실패 | %s", str(e)[:120])
             sent += 1
             _engine_log("info", "[성공] %s | 송출", item["category"])
     _engine_log("info", "[최종검증] 후보=%d | 중복통합=%d | 최종전송=%d", len(_engine_pending), len(groups), sent)
@@ -1362,9 +1520,9 @@ def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
     if not title: return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
-    # 시간보다 '주가를 움직일 새로운 사실'을 우선한다.
-    # 상장기업이 직접 연결되고 강한 시장재료가 있으면 1시간이 지나도 후보로 남긴다.
-    strong_hit = bool(set(market_hits) & STRONG_MARKET_HITS)
+    hard_events, weak_events = _engine_event_evidence(title + " " + extra)
+    # 시간보다 '주가를 움직일 새로운 사실'을 우선한다. 단, 실제 사건이 확인된 경우만 시간제약을 무시한다.
+    strong_hit = bool(hard_events)
     listed_company_material = bool(companies) and strong_hit
     bypass_time = (
         listed_company_material
@@ -1380,13 +1538,18 @@ def _engine_process_item(source, title, link, published="", extra=""):
     with _engine_lock:
         if key in _engine_seen: return False
     if not ok:
-        reason = "상장기업 없음" if source.startswith(("텔레그램/", "유튜브/")) else "키워드1+키워드2 불충족"
+        if not companies:
+            reason = "실제 상장기업 확인 실패"
+        elif not hard_events:
+            reason = "실제 사건 없음 | 전망·분석·검토성 내용"
+        else:
+            reason = "주가영향 요건 미충족"
         _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80]); return False
     time_text = ""
     dt = _engine_parse_datetime(published)
     if dt: time_text = dt.strftime("%H:%M")
     _engine_pending.append({"source":source,"title":title,"link":link,"published":published,"extra":extra,"key":key,"category":category,"companies":companies,"k1":k1,"k2":k2,"market_hits":market_hits,"time_text":time_text})
-    _engine_log("info", "[분류] %s | 송출대기 | 기업=%s | 재료=%s", category, ",".join(companies[:3]) or "없음", ",".join(market_hits[:3]) or "없음")
+    _engine_log("info", "[분류] %s | 송출대기 | 상장기업=%s | 실제사건=%s | 시장재료=%s", category, ",".join(companies[:3]) or "없음", ",".join(hard_events[:3]) or "없음", ",".join(market_hits[:3]) or "없음")
     return True
 
 def _engine_fetch_rss(url, source):
@@ -1548,12 +1711,17 @@ def _engine_run_telegram_channels():
             posts = soup.select("div.tgme_widget_message_wrap")[-10:]
             _engine_log("info", "[텔레그램채널] %s | 읽은게시물=%d", name, len(posts))
             for post in posts:
-                txt = _engine_clean(post.get_text(" "))
+                # 텔레그램은 첫 문장을 제목으로 간주하고, 제목에 실제 상장기업명이 있어야 한다.
+                # 본문에만 기업명이 있는 경우는 절대 우회하지 않는다.
+                raw_lines = [x.strip() for x in post.get_text("\n").splitlines() if x.strip()]
+                txt = _engine_clean(" ".join(raw_lines))
+                tg_title = _engine_clean(raw_lines[0] if raw_lines else "")
+                tg_extra = _engine_clean(" ".join(raw_lines[1:]))
                 a = post.select_one("a.tgme_widget_message_date")
                 link = a.get("href", "") if a else url
                 time_node = post.select_one("time")
                 published = time_node.get("datetime", "") if time_node else ""
-                if txt and _engine_process_item(f"텔레그램/{name}", txt[:1000], link, published, txt[:1200]):
+                if tg_title and _engine_process_item(f"텔레그램/{name}", tg_title, link, published, tg_extra[:1600]):
                     total += 1
         except Exception as e:
             log_error("텔레그램 채널 수집", e, channel=name, url=url)
@@ -1609,6 +1777,7 @@ def _engine_run_test_fixture():
 def _engine_cycle():
     started = time.time()
     _engine_log("info", "============================================================")
+    _engine_log("info", "[세션 시작] %s | 로그는 이번 실행 세션부터 기록", ENGINE_SESSION_START)
     _engine_log("info", "[1분 주기 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
     try:
         _engine_run_google_and_domestic()
