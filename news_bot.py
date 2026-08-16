@@ -1,7 +1,7 @@
 # ============================================================
-# AI 주식 브리핑 엔진 - Commercial Edition V1
+# AI 주식 브리핑 엔진 - Commercial Edition V1 (수정 통합본)
 # 두 원본(news_bot_버그수정12.py + news_bot_1.py)의 검증된 기능을 보존하고
-# RSS 진단 + 상용화 점수 엔진을 추가한 통합본
+# RSS 진단 + 상용화 점수 엔진을 추가한 통합본 (RSS 차단 우회 패치 적용)
 # ============================================================
 
 # -*- coding: utf-8 -*-
@@ -306,6 +306,22 @@ US_MARKET_START_HOUR = 22
 US_MARKET_END_HOUR = 6
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# ============================================================
+# 🛡️ 언론사 301/404 차단 우회를 위한 안전 RSS 파서 함수 추가
+# ============================================================
+def parse_rss_safely(name, url):
+    try:
+        headers = {"User-Agent": USER_AGENT}
+        res = requests.get(url, headers=headers, timeout=15)
+        if res.status_code != 200:
+            print(f"[🇰🇷 RSS경고] {name} | HTTP={res.status_code}")
+            return None
+        feed = feedparser.parse(res.content)
+        return feed
+    except Exception as e:
+        print(f"[🇰🇷 RSS에러] {name} | 예외 발생: {e}")
+        return None
 
 PAUSED_SOURCES = {}
 
