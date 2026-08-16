@@ -239,7 +239,10 @@ _logger.setLevel(logging.INFO)
 _logger.propagate = False
 
 if not _logger.handlers:
-    _fmt = logging.Formatter(
+    class _KSTFormatter(logging.Formatter):
+        converter = staticmethod(lambda *args: __import__("time").gmtime(__import__("time").time() + 9 * 3600))
+
+    _fmt = _KSTFormatter(
         "%(asctime)s | %(levelname)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
@@ -264,7 +267,7 @@ def log_info(message, *args):
 
 
 def log_debug(message, *args):
-    pass  # 상세 성공 로그 숨김
+    return
 
 
 def log_error(context, exc=None, **details):
@@ -297,7 +300,7 @@ _logger.info("[환경] Render=%s | NAVER=%s | DART=%s | RSS=%s | 미국뉴스=%s
 _logger.info("============================================================")
 
 # requests를 사용하는 기존 함수는 수정하지 않고, 모든 HTTP 요청을 자동 진단한다.
-# 성공 요청은 DEBUG, 실패(4xx/5xx)는 ERROR로 기록한다.
+# 정상 요청은 기록하지 않고 실패만 간략하게 기록한다.
 try:
     _original_session_request = requests.sessions.Session.request
 
@@ -307,14 +310,19 @@ try:
             response = _original_session_request(self, method, url, **kwargs)
             elapsed = time.time() - started
             if response.status_code >= 400:
-                body = (response.text or "")[:500].replace("\n", " ")
-                _logger.error(
-                    "[HTTP 실패] method=%s | url=%s | status=%s | reason=%s | %.2fs | 응답=%r",
-                    method, getattr(response, "url", url), response.status_code,
-                    getattr(response, "reason", ""), elapsed, body
-                )
+                # HTML/XML 응답 원문은 운영 로그에 기록하지 않는다.
+                target = getattr(response, "url", url)
+                # 유튜브 404는 호출부의 채널ID 실패 로그와 중복되므로 생략한다.
+                if not ("youtube.com" in str(target).lower() and response.status_code == 404):
+                    _logger.error(
+                        "[HTTP 실패] %s %s | %s %s | %.2fs",
+                        str(method).upper(), target,
+                        response.status_code,
+                        getattr(response, "reason", "") or "HTTP 오류",
+                        elapsed
+                    )
             else:
-                pass  # 상세 성공 로그 숨김
+                pass  # 정상 요청은 로그에 남기지 않음
             return response
         except Exception as _e:
             _logger.error(
@@ -333,6 +341,10 @@ try:
 
     def _logged_feedparser_parse(*args, **kwargs):
         source = args[0] if args else kwargs.get("url", "(없음)")
+        if isinstance(source, (bytes, bytearray)):
+            source = "<RSS 원문 생략>"
+        elif len(str(source)) > 180:
+            source = str(source)[:180] + "..."
         try:
             result = _original_feedparser_parse(*args, **kwargs)
             if getattr(result, "bozo", False):
