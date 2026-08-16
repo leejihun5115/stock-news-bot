@@ -233,10 +233,9 @@ if not _logger.handlers:
     _console.setFormatter(_fmt)
     _logger.addHandler(_console)
     try:
-        # 매 실행 시작 시 새 로그로 시작: 이전 실행 로그를 이어붙이지 않는다.
         _file = RotatingFileHandler(
             LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5,
-            encoding="utf-8", mode="w"
+            encoding="utf-8"
         )
         _file.setLevel(logging.DEBUG)
         _file.setFormatter(_fmt)
@@ -246,9 +245,6 @@ if not _logger.handlers:
             f"[로그파일 생성 실패] {type(_e).__name__}: {_e}",
             file=sys.stderr, flush=True
         )
-
-
-_logger.info("[로그 시작] 이 실행 시점부터 새 로그 기록을 시작합니다. log_file=%s", LOG_FILE)
 
 
 def log_info(message, *args):
@@ -949,6 +945,18 @@ MARKET_IMPACT_KEYWORDS = {
     "흑자전환", "어닝서프라이즈", "실적 급증", "대규모 투자", "증설", "양산", "상용화",
     "신규 수주", "수출", "기술수출", "기술이전", "자사주", "배당", "매각", "공개매수",
     "신약", "임상 3상", "임상3상", "임상 성공", "대형 계약", "초대형 계약", "공급 확대",
+    # 정책·규제·테마 중 실제 주가 반응으로 이어질 가능성이 높은 재료
+    "정책", "규제", "관세", "세액공제", "지원", "법안", "정부 대책", "수혜", "수주 경쟁",
+}
+# 실제 주가 반응 가능성이 높은 강한 재료.
+# 상장기업이 직접 연결되고 아래 재료가 있으면 1시간 필터보다 우선하여 검토한다.
+STRONG_MARKET_HITS = {
+    "인수", "합병", "M&A", "m&a", "공급계약", "계약 체결", "계약",
+    "대규모 수주", "수주", "신규 수주", "대형 계약", "초대형 계약",
+    "독점", "FDA", "승인", "허가", "특허", "기술수출", "기술이전",
+    "임상 3상", "임상3상", "임상 성공", "대규모 투자", "증설", "양산",
+    "상용화", "공급 확대", "매각", "공개매수", "자사주", "배당",
+    "정책", "규제", "관세", "세액공제", "지원", "법안", "정부 대책", "수주 경쟁",
 }
 BREAKING_WORDS = {"속보"}
 FEATURE_WORDS = {"특징주"}
@@ -1094,18 +1102,24 @@ def _engine_classify(source, title, extra=""):
     is_feature = any(x in low for x in FEATURE_WORDS)
     is_exclusive = any(x in low for x in EXCLUSIVE_WORDS)
     is_external = source.startswith("텔레그램/") or source.startswith("유튜브/")
-    if is_breaking:
+    # 속보/특징주/단독이라는 단어만으로 우회하지 않는다.
+    # 반드시 상장기업과 주가 영향 재료가 함께 있어야 한다.
+    stock_linked = bool(companies) or bool(_engine_stock_links(text, companies))
+    market_relevant = bool(market_hits)
+    if is_breaking and stock_linked and market_relevant:
         return True, "🚀속보", companies, k1, k2, market_hits
-    if is_feature:
+    if is_feature and stock_linked and market_relevant:
         return True, "🚨특징주", companies, k1, k2, market_hits
-    if is_exclusive and companies:
+    if is_exclusive and stock_linked and market_relevant:
         return True, "🚀단독", companies, k1, k2, market_hits
+    # 텔레그램/유튜브는 '제목에 상장기업 + 주가 영향 재료'가 기본 노출 조건.
     if is_external:
-        if companies:
+        if stock_linked and market_relevant:
             top = bool(set(companies) & company_core) and bool(market_hits)
             return True, "📌🏆" if top else "📌", companies, k1, k2, market_hits
         return False, "외부콘텐츠", [], k1, k2, market_hits
-    if k1 and k2:
+    # 일반 뉴스 검색은 기존 키워드 조합을 유지하되, 주가 영향 재료가 없으면 제외한다.
+    if k1 and k2 and stock_linked and market_relevant:
         top = bool(set(companies) & company_core) and bool(market_hits)
         return True, "📌🏆" if top else "📌", companies, k1, k2, market_hits
     return False, "일반", companies, k1, k2, market_hits
@@ -1160,16 +1174,22 @@ def _engine_relation_reason(text, companies, market_hits):
     return "국내 관련주와의 연결성이 확인되는 시장 재료"
 
 
-def _engine_impact_label(text):
-    low = _engine_clean(text).lower()
-    # 국내 상장사에 불리한 경쟁/대체 확대
-    harm_words = ["수주 증가", "수주 확대", "점유율 확대", "경쟁 심화", "경쟁", "대체", "중국에 밀려", "중국 수주", "가격 경쟁", "공급 과잉"]
-    benefit_words = ["수주", "공급계약", "계약 체결", "대규모 공급", "증설", "양산", "수혜", "투자 확대"]
-    if any(w in low for w in harm_words) and any(w in low for w in ["중국", "경쟁", "점유율", "대체", "밀려"]):
-        return "🔻 피해주"
-    if any(w in low for w in benefit_words):
-        return "🔺 수혜주"
-    return "관련주"
+def _engine_schedule(text):
+    """실제 투자 일정만 추출한다.
+    텔레그램 게시 시각(예: 14:25)은 일정으로 취급하지 않는다.
+    날짜/예정/발표/실적/출시/공급개시 등 미래 이벤트가 명시된 경우만 반환한다.
+    """
+    t = _engine_clean(text)
+    patterns = [
+        r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2})[^.\n]{0,80}(?:예정|발표|공급|출시|실적|승인|시행)',
+        r'(\d{1,2}월\s*\d{1,2}일)[^.\n]{0,80}(?:예정|발표|공급|출시|실적|승인|시행)',
+        r'(?:올해|올해\s*하반기|하반기|상반기|다음달|내달|이번달|다음주|이번주)[^.\n]{0,100}(?:공급|출시|발표|실적|승인|시행|양산|상용화|수주)',
+    ]
+    for pat in patterns:
+        m = re.search(pat, t, re.I)
+        if m:
+            return m.group(0).strip()[:160]
+    return ""
 
 
 def _engine_summary(title, extra, companies, market_hits):
@@ -1177,23 +1197,54 @@ def _engine_summary(title, extra, companies, market_hits):
     links = _engine_stock_links(text, companies)
     reason = _engine_relation_reason(text, companies, market_hits)
     if links:
-        label = _engine_impact_label(text)
-        core = f"{reason} / {label} → " + "·".join(links)
+        # 수혜/피해 방향을 명확히 표시한다. 단순 '관련주' 표기는 최소화한다.
+        low = text.lower()
+        if any(x in low for x in ["경쟁", "중국", "수주 감소", "수주량 감소", "점유율 하락", "밀려", "빼앗", "시장 잠식"]):
+            direction = "🔻 피해주"
+        elif any(x in low for x in ["수주", "공급계약", "계약 체결", "공급 확대", "증설", "양산", "승인", "허가", "기술수출", "대규모 투자", "수혜"]):
+            direction = "🔺 수혜주"
+        else:
+            direction = "관련주"
+        core = f"🔎 {reason} / {direction} → " + "·".join(links)
     elif companies:
-        core = f"{reason} / 관련주 → " + "·".join(companies[:4])
+        core = f"🔎 {reason} → " + "·".join(companies[:4])
     elif market_hits:
-        core = "시장 핵심 재료 → " + "·".join(market_hits[:4])
+        core = "🔎 시장 핵심 재료 → " + "·".join(market_hits[:4])
     else:
-        core = text[:180]
-    date_match = re.search(r"(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일|\d{1,2}일|\d{1,2}:\d{2})", text)
-    return core, (date_match.group(1) if date_match else ""), links
-
+        core = f"🔎 {reason}"
+    return core, _engine_schedule(text)
 
 def _engine_score(item):
     return (4 if item["category"] in ("🚀속보", "🚨특징주") else 0) + (4 if item["category"] == "📌🏆" else 0) + min(3, len(item["companies"])) + min(3, len(item["market_hits"])) + min(2, len(item["extra"]))
 
 _engine_pending = []
-_engine_sent_fingerprints = []
+_engine_sent_fingerprints = []  # {text, source, time_text, published, title}
+
+
+def _engine_freshness(item):
+    """신규/업그레이드/재탕 판정.
+    - 신규: 동일 사건의 선행 송출 기록이 없음
+    - 업그레이드: 선행 뉴스가 있으나 금액/확정/계약/수주 등 강한 새 정보가 제목·본문에 추가됨
+    - 재탕: 실질 내용이 같은 후속 반복 기사
+    """
+    full = item["title"] + " " + item.get("extra", "")
+    for prev in reversed(_engine_sent_fingerprints):
+        prev_text = prev.get("text", "") if isinstance(prev, dict) else str(prev)
+        if _engine_similar(full, prev_text):
+            current_hits = set(_engine_market_hit(full))
+            prev_hits = set(_engine_market_hit(prev_text))
+            strong_new_words = [
+                "계약 체결", "공급계약", "대규모 수주", "신규 수주", "대형 계약", "초대형 계약",
+                "확정", "확정 계약", "수주 확정", "공급 확정", "인수 확정", "승인", "허가",
+                "독점", "사상 최대", "세계최대", "세계 최대", "대규모 투자"
+            ]
+            has_amount = bool(re.search(r"(?:[0-9][0-9,]*\s*(?:억|조|만|달러|원|USD|억원|조원|백만|million|billion))", full, re.I))
+            new_strong = any(w.lower() in full.lower() and w.lower() not in prev_text.lower() for w in strong_new_words)
+            new_hit = bool(current_hits - prev_hits)
+            if new_strong or new_hit or has_amount and not re.search(r"(?:[0-9][0-9,]*\s*(?:억|조|만|달러|원|USD|억원|조원|백만|million|billion))", prev_text, re.I):
+                return "업그레이드", prev
+            return "재탕", prev
+    return "신규", None
 
 
 def _engine_similar(a, b):
@@ -1236,16 +1287,23 @@ def _engine_format_message(item):
     source = html.escape(item["source"])
     time_text = html.escape(item.get("time_text", ""))
     title_html = html.escape(title)
-    lines = [f"<b>✅ [{source}]</b>" + (f"                                      🕐 {time_text}" if time_text else ""), f"{title_prefix} {title_html}"]
-    core, schedule, links = _engine_summary(item["title"], item["extra"], companies, item["market_hits"])
+    freshness, prev = _engine_freshness(item)
+    freshness_html = f"<b>[{freshness}]</b>"
+    lines = [f"<b>✅ [{source}]</b>" + (f"                                      🕐 {time_text}" if time_text else ""), f"{title_prefix} {title_html}", freshness_html]
+    if freshness == "재탕" and prev:
+        prev_source = html.escape(str(prev.get("source", "")))
+        prev_time = html.escape(str(prev.get("time_text", "")))
+        if prev_source or prev_time:
+            lines += [f"↳ 최초 보도: <b>{prev_time} / {prev_source}</b>"]
+    elif freshness == "업그레이드" and prev:
+        prev_source = html.escape(str(prev.get("source", "")))
+        prev_time = html.escape(str(prev.get("time_text", "")))
+        if prev_source or prev_time:
+            lines += [f"↳ 선행 보도: <b>{prev_time} / {prev_source}</b>"]
+    core, schedule = _engine_summary(item["title"], item["extra"], companies, item["market_hits"])
     core_html = html.escape(core).replace("⚡️", "⚡️")
-    # 제목 바로 아래에 상장사와 뉴스와의 연결 내용을 먼저 표시한다.
-    if links:
-        company_text = "·".join(links)
-        lines += ["", f"<b>{html.escape(company_text)}</b>", html.escape(_engine_relation_reason(_engine_clean(item["title"] + " " + item.get("extra", "")), companies, item["market_hits"]))]
-    elif companies:
-        company_text = "·".join(companies[:4])
-        lines += ["", f"<b>{html.escape(company_text)}</b>", html.escape(_engine_relation_reason(_engine_clean(item["title"] + " " + item.get("extra", "")), companies, item["market_hits"]))]
+    # 별도 '한국과의 관계 / 관련주' 소제목은 사용하지 않는다.
+    # 한국 기업과의 연결 내용과 수혜/피해 방향을 바로 한 줄로 보여준다.
     lines += ["", core_html]
     if schedule:
         lines += ["", f"<b>📅 일정</b>", html.escape(schedule)]
@@ -1280,7 +1338,7 @@ def _engine_flush_pending():
             _engine_log("info", "[제외] 중복뉴스 | 유사 기사 이미 전송"); continue
         if _engine_send_telegram(_engine_format_message(item)):
             _engine_mark_seen(key)
-            _engine_sent_fingerprints.append(full_text)
+            _engine_sent_fingerprints.append({"text": full_text, "source": item["source"], "time_text": item.get("time_text", ""), "published": item.get("published", ""), "title": item["title"]})
             sent += 1
             _engine_log("info", "[성공] %s | 송출", item["category"])
     _engine_log("info", "[최종검증] 후보=%d | 중복통합=%d | 최종전송=%d", len(_engine_pending), len(groups), sent)
@@ -1304,11 +1362,18 @@ def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
     if not title: return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
-    # 속보/특징주는 시장 흐름 파악을 위해 시간 필터보다 우선한다.
-    bypass_time = category in ("🚀속보", "🚨특징주") or source.startswith("TEST")
+    # 시간보다 '주가를 움직일 새로운 사실'을 우선한다.
+    # 상장기업이 직접 연결되고 강한 시장재료가 있으면 1시간이 지나도 후보로 남긴다.
+    strong_hit = bool(set(market_hits) & STRONG_MARKET_HITS)
+    listed_company_material = bool(companies) and strong_hit
+    bypass_time = (
+        listed_company_material
+        or (category in ("🚀속보", "🚨특징주", "🚀단독") and bool(companies) and strong_hit)
+        or source.startswith("TEST")
+    )
     if not bypass_time:
         if published and not _engine_recent_enough(published):
-            _engine_log("info", "[제외] 최근시간 | 1시간 초과 | %s", title[:80]); return False
+            _engine_log("info", "[제외] 최근시간 | 1시간 초과 | 주가재료 미충족 | %s", title[:80]); return False
         if not published and (source.startswith("텔레그램/") or source.startswith("유튜브/")):
             _engine_log("info", "[제외] 시간확인불가 | %s", title[:80]); return False
     key = link or f"{source}|{title}"
