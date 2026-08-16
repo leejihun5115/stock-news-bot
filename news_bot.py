@@ -1699,7 +1699,7 @@ if __name__ == "__main__":
         health_thread.start()
         time.sleep(0.3)
 
-        _engine_log("info", "[BOOT] 뉴스 수집/분석 엔진 시작")
+        _engine_log("info", "[시작] 뉴스 수집·분석")
         _engine_log("info", "[BOOT] NAVER=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
                     bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET),
                     bool(DART_API_KEY),
