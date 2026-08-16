@@ -200,6 +200,158 @@ def print(*args, **kwargs):
     kwargs.setdefault("flush", True)
     _original_print(*args, **kwargs)
 
+
+
+# ============================================================
+# 🔎 상세 로그 기록 강화
+# ------------------------------------------------------------
+# Render 콘솔 + news_bot.log에 동시에 기록
+# HTTP 실패 시 URL / 상태코드 / 응답 내용 / 예외 / traceback 기록
+# 처리되지 않은 예외도 마지막 traceback까지 기록
+# ============================================================
+import logging
+from logging.handlers import RotatingFileHandler
+
+LOG_FILE = os.environ.get("NEWS_BOT_LOG_FILE", "news_bot.log")
+_logger = logging.getLogger("news_bot")
+_logger.setLevel(logging.DEBUG)
+_logger.propagate = False
+
+if not _logger.handlers:
+    _fmt = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    _console = logging.StreamHandler(sys.stderr)
+    _console.setLevel(logging.DEBUG)
+    _console.setFormatter(_fmt)
+    _logger.addHandler(_console)
+    try:
+        _file = RotatingFileHandler(
+            LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5,
+            encoding="utf-8"
+        )
+        _file.setLevel(logging.DEBUG)
+        _file.setFormatter(_fmt)
+        _logger.addHandler(_file)
+    except Exception as _e:
+        _original_print(
+            f"[로그파일 생성 실패] {type(_e).__name__}: {_e}",
+            file=sys.stderr, flush=True
+        )
+
+
+def log_info(message, *args):
+    _logger.info(message, *args)
+
+
+def log_debug(message, *args):
+    _logger.debug(message, *args)
+
+
+def log_error(context, exc=None, **details):
+    """실패 원인을 최대한 자세히 기록한다."""
+    parts = [f"[실패] {context}"]
+    for k, v in details.items():
+        parts.append(f"{k}={v}")
+    if exc is not None:
+        parts.append(f"예외={type(exc).__name__}: {exc}")
+    _logger.error(" | ".join(parts))
+    if exc is not None:
+        _logger.error("상세 traceback:\n%s", traceback.format_exc())
+
+
+def _log_uncaught_exception(exc_type, exc_value, exc_tb):
+    if exc_type is KeyboardInterrupt:
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+    _logger.critical(
+        "[치명적 예외] %s: %s\n%s",
+        exc_type.__name__, exc_value,
+        "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    )
+
+
+sys.excepthook = _log_uncaught_exception
+
+# 시작 시점에 환경 정보를 남겨 Render 설정 문제도 바로 확인할 수 있게 한다.
+_logger.info("============================================================")
+_logger.info("[NEWS BOT 상세 로그 시작]")
+_logger.info("Python=%s", sys.version.split()[0])
+_logger.info("PID=%s", os.getpid())
+_logger.info("RUN_MODE=%s", os.environ.get("RUN_MODE", "(미설정)"))
+_logger.info("PORT=%s", os.environ.get("PORT", "(미설정)"))
+_logger.info("작업디렉터리=%s", os.getcwd())
+_logger.info("로그파일=%s", LOG_FILE)
+_logger.info("============================================================")
+
+# requests를 사용하는 기존 함수는 수정하지 않고, 모든 HTTP 요청을 자동 진단한다.
+# 성공 요청은 DEBUG, 실패(4xx/5xx)는 ERROR로 기록한다.
+try:
+    _original_session_request = requests.sessions.Session.request
+
+    def _logged_session_request(self, method, url, **kwargs):
+        started = time.time()
+        try:
+            response = _original_session_request(self, method, url, **kwargs)
+            elapsed = time.time() - started
+            if response.status_code >= 400:
+                body = (response.text or "")[:2000].replace("\n", " ")
+                _logger.error(
+                    "[HTTP 실패] method=%s | url=%s | status=%s | reason=%s | %.2fs | 응답=%r",
+                    method, getattr(response, "url", url), response.status_code,
+                    getattr(response, "reason", ""), elapsed, body
+                )
+            else:
+                _logger.debug(
+                    "[HTTP 성공] method=%s | url=%s | status=%s | %.2fs",
+                    method, getattr(response, "url", url), response.status_code, elapsed
+                )
+            return response
+        except Exception as _e:
+            _logger.error(
+                "[HTTP 예외] method=%s | url=%s | %.2fs | 예외=%s: %s\n%s",
+                method, url, time.time() - started,
+                type(_e).__name__, _e, traceback.format_exc()
+            )
+            raise
+
+    requests.sessions.Session.request = _logged_session_request
+except Exception as _e:
+    log_error("requests 상세 로깅 초기화", _e)
+
+# feedparser가 파싱 실패/bozo를 반환하는 경우에도 원인을 로그에 남긴다.
+try:
+    _original_feedparser_parse = feedparser.parse
+
+    def _logged_feedparser_parse(*args, **kwargs):
+        source = args[0] if args else kwargs.get("url", "(없음)")
+        try:
+            result = _original_feedparser_parse(*args, **kwargs)
+            if getattr(result, "bozo", False):
+                exc = getattr(result, "bozo_exception", None)
+                _logger.error(
+                    "[RSS 파싱 실패] source=%s | 예외=%s: %s | entries=%s",
+                    source,
+                    type(exc).__name__ if exc else "unknown",
+                    exc if exc else "원인 미상",
+                    len(getattr(result, "entries", []) or [])
+                )
+            else:
+                _logger.debug(
+                    "[RSS 파싱 성공] source=%s | entries=%s",
+                    source, len(getattr(result, "entries", []) or [])
+                )
+            return result
+        except Exception as _e:
+            log_error("RSS 파싱 실행", _e, source=source)
+            raise
+
+    feedparser.parse = _logged_feedparser_parse
+except Exception as _e:
+    log_error("feedparser 상세 로깅 초기화", _e)
+
+
 # ============================================================
 # 환경설정 - BOT_TOKEN, CHAT_ID, DART_API_KEY 설정
 # ============================================================
