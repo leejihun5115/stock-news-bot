@@ -1107,20 +1107,69 @@ def _engine_classify(source, title, extra=""):
     return False, "일반", companies, k1, k2, market_hits
 
 
+# 국내 상장기업/관련주 연결 문구. 단순 산업 키워드만으로 종목을 억지 연결하지 않는다.
+STOCK_LINK_MAP = {
+    "LNG선": ["HD한국조선해양", "한화오션", "삼성중공업"],
+    "LNG": ["HD한국조선해양", "한화오션", "삼성중공업"],
+    "조선": ["HD한국조선해양", "한화오션", "삼성중공업", "HD현대중공업"],
+    "HBM": ["SK하이닉스", "삼성전자", "한미반도체"],
+    "AI 반도체": ["SK하이닉스", "삼성전자", "한미반도체"],
+    "전력기기": ["HD현대일렉트릭", "효성중공업", "LS ELECTRIC"],
+    "변압기": ["HD현대일렉트릭", "효성중공업", "LS ELECTRIC"],
+    "방산": ["한화에어로스페이스", "LIG넥스원", "현대로템"],
+    "원전": ["두산에너빌리티", "한전기술", "한전KPS"],
+    "로봇": ["두산로보틱스", "레인보우로보틱스", "로보티즈"],
+    "2차전지": ["LG에너지솔루션", "삼성SDI", "SK이노베이션"],
+}
+
+def _engine_stock_links(text, companies):
+    t = _engine_clean(text)
+    links = []
+    for key, stocks in STOCK_LINK_MAP.items():
+        if key.lower() in t.lower():
+            for stock in stocks:
+                if stock not in links:
+                    links.append(stock)
+    # 뉴스 본문에 직접 언급된 국내 기업은 우선 표시
+    for c in companies:
+        if c in KOREAN_GROUP_NAMES and c not in links:
+            links.insert(0, c)
+    return links[:5]
+
+
+def _engine_relation_reason(text, companies, market_hits):
+    low = text.lower()
+    if any(x in low for x in ["수주", "공급계약", "계약 체결", "계약", "발주", "공급"]):
+        if "LNG" in text or "LNG선" in text or "조선" in text:
+            return "한국 조선사와 직접적인 수주 경쟁"
+        if any(x in text for x in ["HBM", "AI 반도체", "반도체"]):
+            return "국내 반도체 업체의 공급·수주 확대와 직접 연결"
+        return "국내 관련 기업의 수주·공급 확대와 직접 연결"
+    if any(x in low for x in ["인수", "합병", "m&a"]):
+        return "국내 관련 기업의 경쟁구도·사업가치 변화에 직접 영향"
+    if any(x in low for x in ["승인", "허가", "fda"]):
+        return "국내 관련 기업의 제품·사업 매출 확대와 직접 연결"
+    if any(x in low for x in ["투자", "증설", "양산"]):
+        return "국내 관련 기업의 생산능력·매출 확대와 직접 연결"
+    if companies:
+        return "국내 상장기업 사업과 직접 연결"
+    return "국내 관련주와의 연결성이 확인되는 시장 재료"
+
+
 def _engine_summary(title, extra, companies, market_hits):
     text = _engine_clean(f"{title} {extra}")
-    parts = []
-    if companies:
-        reason = "·".join(market_hits[:3]) if market_hits else "관련 내용"
-        parts.append(" / ".join(f"⚡️{c}" for c in companies[:4]) + f" — {reason}")
+    links = _engine_stock_links(text, companies)
+    reason = _engine_relation_reason(text, companies, market_hits)
+    if links:
+        core = f"{reason} → " + "·".join(links) + " 등 관련주"
+    elif companies:
+        core = f"{reason} → " + "·".join(companies[:4])
     elif market_hits:
-        parts.append("핵심 — " + ", ".join(market_hits[:4]))
-    if not parts:
-        # 제목 자체를 과장 없이 짧게 사용
-        parts.append(text[:180])
-    # 일정은 명시적으로 날짜/시간이 들어간 경우에만 별도 표시
+        core = "시장 핵심 재료 → " + "·".join(market_hits[:4])
+    else:
+        core = text[:180]
     date_match = re.search(r"(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일|\d{1,2}일|\d{1,2}:\d{2})", text)
-    return parts[0], (date_match.group(1) if date_match else "")
+    return core, (date_match.group(1) if date_match else "")
 
 
 def _engine_score(item):
@@ -1173,7 +1222,7 @@ def _engine_format_message(item):
     lines = [f"<b>✅ [{source}]</b>" + (f"                                      🕐 {time_text}" if time_text else ""), f"{title_prefix} {title_html}"]
     core, schedule = _engine_summary(item["title"], item["extra"], companies, item["market_hits"])
     core_html = html.escape(core).replace("⚡️", "⚡️")
-    lines += ["", "<b>🔎 핵심</b>", core_html]
+    lines += ["", "<b>🔎 한국과의 관계 / 관련주</b>", core_html]
     if schedule:
         lines += ["", f"<b>📅 일정</b>", html.escape(schedule)]
     if item.get("link"):
