@@ -153,6 +153,9 @@ import sys
 import time
 import datetime
 import threading
+from collections import deque
+import html
+from zoneinfo import ZoneInfo
 import traceback
 import feedparser
 import requests
@@ -933,6 +936,7 @@ ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
 
 _engine_seen = set()
 _engine_lock = threading.Lock()
+_engine_recent_titles = deque(maxlen=500)
 
 
 def _engine_log(level, message, *args):
@@ -961,6 +965,7 @@ def _engine_load_seen():
 
 
 def _engine_mark_seen(key):
+    global _engine_seen
     if not key:
         return False
     with _engine_lock:
@@ -986,92 +991,186 @@ def _engine_item_key(title, link):
     return difflib.SequenceMatcher(None, title[:200].lower(), link[:200].lower()).ratio() and (link or title[:200])
 
 
-def _engine_send_telegram(text):
+def _engine_recent_enough(published):
+    if not published:
+        return True
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(str(published))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        age = (now - dt.astimezone(datetime.timezone.utc)).total_seconds()
+        return -300 <= age <= 3600
+    except Exception:
+        # 날짜를 해석할 수 없는 일반 RSS는 기존 수집을 유지한다.
+        return True
+
+
+def _engine_title_has_listed_company(title):
+    """텔레그램/유튜브는 제목에 상장기업명이 실제로 있는 경우만 통과."""
+    t = _engine_clean(title).lower()
+    if not t:
+        return False
+    # 기존 관심 기업 목록 + 국내 주요 그룹/회사명. 사람/거시 키워드는 제외한다.
+    listed = set(GLOBAL_AND_DOMESTIC_GIANTS) | {
+        "삼성전자", "삼성SDI", "삼성전기", "SK하이닉스", "SK이노베이션", "SK텔레콤",
+        "LG전자", "LG에너지솔루션", "LG화학", "현대차", "현대모비스", "기아",
+        "포스코홀딩스", "포스코퓨처엠", "에코프로비엠", "셀트리온", "한미반도체",
+        "네이버", "카카오", "두산에너빌리티", "한화에어로스페이스", "HD현대중공업",
+        "LS ELECTRIC", "HMM", "대한항공", "한국전력", "삼성바이오로직스",
+        "엔비디아", "테슬라", "애플", "마이크로소프트", "구글", "알파벳", "아마존",
+        "메타", "AMD", "ASML", "TSMC", "인텔", "마이크론", "넷플릭스",
+        "팔란티어", "브로드컴", "퀄컴", "ARM", "버크셔해서웨이", "코카콜라",
+        "월마트", "비자", "마스터카드", "JP모건", "골드만삭스",
+    }
+    # 너무 짧은 그룹명은 오탐을 줄이기 위해 별도 경계 처리
+    for name in sorted(listed, key=len, reverse=True):
+        n = str(name).lower().strip()
+        if len(n) <= 2:
+            if re.search(rf"(?<![a-z가-힣]){re.escape(n)}(?![a-z가-힣])", t):
+                return True
+        elif n in t:
+            return True
+    return False
+
+
+def _engine_keyword_pair_match(title):
+    """일반 키워드 뉴스는 키워드1 AND 키워드2를 모두 만족해야 한다."""
+    t = _engine_clean(title).lower()
+    k1 = [x for x in UNIQUE_KEYWORDS_1 if x and x.lower() in t]
+    k2 = [x for x in UNIQUE_KEYWORDS_2 if x and x.lower() in t]
+    return k1, k2
+
+
+def _engine_similarity(a, b):
+    a = re.sub(r"[^0-9a-z가-힣]+", "", a.lower())
+    b = re.sub(r"[^0-9a-z가-힣]+", "", b.lower())
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _engine_is_duplicate_title(title):
+    # 같은 사건의 제목을 언론사별로 반복 전송하지 않도록 최근 전송 제목과 비교한다.
+    for old in list(_engine_recent_titles)[-300:]:
+        if _engine_similarity(title, old) >= 0.78:
+            return True
+    return False
+
+
+def _engine_send_telegram(text, link=""):
     if not BOT_TOKEN or not CHAT_ID:
         _engine_log("error", "[텔레그램 실패] BOT_TOKEN 또는 CHAT_ID가 없습니다.")
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
-        r = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "disable_web_page_preview": False}, timeout=ENGINE_HTTP_TIMEOUT)
-        try:
-            api_result = r.json()
-        except Exception:
-            api_result = {"raw": r.text[:1000]}
-
+        payload = {
+            "chat_id": CHAT_ID,
+            "text": text,
+            "disable_web_page_preview": False,
+            "parse_mode": "HTML",
+        }
+        r = requests.post(url, data=payload, timeout=ENGINE_HTTP_TIMEOUT)
+        api_result = r.json() if r.headers.get("content-type", "").lower().startswith("application/json") else {}
         if r.ok and api_result.get("ok", True):
-            _engine_log("info", "[텔레그램 성공] HTTP=%s | chat_id=%s | message_id=%s",
-                        r.status_code, CHAT_ID, (api_result.get("result") or {}).get("message_id"))
+            _engine_log("info", "[텔레그램 성공]")
             return True
-
-        _engine_log(
-            "error",
-            "[텔레그램 실패] HTTP=%s | reason=%s | ok=%s | error_code=%s | description=%s | body=%s",
-            r.status_code,
-            r.reason,
-            api_result.get("ok"),
-            api_result.get("error_code"),
-            api_result.get("description"),
-            r.text[:1000]
-        )
+        reason = api_result.get("description") or getattr(r, "reason", "HTTP 오류")
+        _engine_log("error", "[텔레그램 실패] 원인=%s", reason)
     except Exception as e:
-        log_error("텔레그램 전송", e, url=url)
+        _engine_log("error", "[텔레그램 실패] 원인=%s", str(e)[:180])
     return False
 
 
-def _engine_is_relevant(title):
-    t = title.lower()
-    kws = set()
-    for x in UNIQUE_TARGET | UNIQUE_GIANTS | UNIQUE_CELEBS:
-        if x and x.lower() in t:
-            kws.add(x)
-    for x in MONEY_STRONG_WORDS:
-        if x.lower() in t:
-            kws.add(x)
-    return list(kws)[:8]
+def _engine_format_message(source, title, link, published="", extra=""):
+    source_label = f"[${source}]".replace("$", "")
+    time_text = ""
+    if published:
+        try:
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(str(published))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            dt = dt.astimezone(ZoneInfo("Asia/Seoul"))
+            time_text = dt.strftime("%H:%M")
+        except Exception:
+            time_text = str(published)[:16]
+    title_prefix = "📌"
+    low = title.lower()
+    if any(x in low for x in ["속보", "breaking", "긴급"]):
+        title_prefix = "🚀속보"
+    elif "단독" in title:
+        title_prefix = "🚀단독"
+    elif any(x in title for x in PHARMA_KEYWORDS):
+        title_prefix = "💊"
+    elif any(x in title for x in ["일정", "발표일", "회의", "개최", "시행일", "시간"]):
+        title_prefix = "⏰"
+
+    # 시장 관심도가 높은 제목에만 🏆
+    high = any(x.lower() in low for x in [
+        "수주", "계약", "공급계약", "흑자전환", "어닝서프라이즈", "최대매출", "최대주주",
+        "대규모 투자", "대형 수주", "FDA 승인", "임상 3상", "상한가", "급등", "신고가",
+        "대규모", "세계최초", "국내최초"
+    ])
+    if high and title_prefix == "📌":
+        title_prefix = "📌🏆"
+
+    header = f"✅ {source_label}"
+    if time_text:
+        header += f"   🕐 {time_text}"
+    lines = [header, "", f"{title_prefix} {title}"]
+    if extra:
+        lines += ["", "🔎 핵심", extra[:500]]
+    if link:
+        safe_link = html.escape(str(link), quote=True)
+        lines += ["", f'🔗 <a href="{safe_link}">원문 보기</a>']
+    return "\n".join(lines)
 
 
-def _engine_process_item(source, title, link, published="", extra=""):
+def _engine_process_item(source, title, link, published="", extra="", require_keyword_pair=False, require_stock_title=False):
     title = _engine_clean(title)
     link = str(link or "").strip()
     if not title:
         return False
+    if not _engine_recent_enough(published):
+        return False
+    if require_stock_title and not _engine_title_has_listed_company(title):
+        return False
+    if require_keyword_pair:
+        k1, k2 = _engine_keyword_pair_match(title)
+        if not k1 or not k2:
+            return False
+        extra = f"키워드: {k1[0]} + {k2[0]}" if not extra else extra
+
     key = link or f"{source}|{title}"
-    # 전송 성공 후에만 seen으로 기록한다.
-    # 기존 방식은 전송 실패/429/네트워크 오류가 나도 이미 본 기사로 기록되어
-    # 다음 주기에 재전송되지 않는 문제가 있었다.
     with _engine_lock:
         if key in _engine_seen:
             return False
+    if _engine_is_duplicate_title(title):
+        return False
 
     matched = _engine_is_relevant(title)
-    # 키워드 검색 결과는 검색 자체가 관련성을 보장하므로 전송한다.
-    lines = [f"📰 [{source}]", title]
-    if matched:
-        lines.append("🔎 " + ", ".join(matched))
-    if published:
-        lines.append(f"🕐 {published}")
-    if extra:
-        lines.append(extra[:500])
-    if link:
-        lines.append(link)
-    msg = "\n".join(lines)
-    ok = _engine_send_telegram(msg)
+    if matched and not extra:
+        extra = " · ".join(matched[:5])
+    msg = _engine_format_message(source, title, link, published, extra)
+    ok = _engine_send_telegram(msg, link)
     if ok:
         _engine_mark_seen(key)
-        _engine_log("info", "[%s] 신규=1 | 전송=성공 | seen기록=완료 | 제목=%s", source, title[:100])
+        _engine_recent_titles.append(title)
+        _engine_log("info", "[%s] 전송 성공", source)
     else:
-        _engine_log("error", "[%s] 신규=1 | 전송=실패 | seen기록=안함 | 다음 주기에 재시도 | 제목=%s", source, title[:100])
+        _engine_log("error", "[%s] 전송 실패", source)
     return ok
-
 
 def _engine_fetch_rss(url, source):
     started = time.time()
     try:
-        _engine_log("info", "[RSS 시작] %s | URL=%s", source, url)
+        _engine_log("debug", "[RSS 시작] %s", source)
         r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
-        _engine_log("info", "[RSS 응답] %s | HTTP=%s | 최종URL=%s | bytes=%s | %.2fs", source, r.status_code, r.url, len(r.content), time.time()-started)
+        _engine_log("debug", "[RSS 응답] %s | HTTP=%s", source, r.status_code)
         if not r.ok:
-            _engine_log("error", "[RSS 실패] %s | HTTP=%s | reason=%s | body=%s", source, r.status_code, r.reason, r.text[:1000])
+            _engine_log("error", "[RSS 실패] %s | 원인=%s", source, r.reason)
             return []
         result = feedparser.parse(r.content)
         if getattr(result, "bozo", False):
@@ -1093,13 +1192,13 @@ def _engine_run_google_and_domestic():
         source = DOMESTIC_RSS_SOURCE_NAMES.get(url, "국내RSS")
         entries = _engine_fetch_rss(url, source)
         for e in entries[:50]:
-            if _engine_process_item(source, e.get("title", ""), e.get("link", ""), e.get("published", "")):
+            if _engine_process_item(source, e.get("title", ""), e.get("link", ""), e.get("published", ""), require_keyword_pair=True):
                 total += 1
     if ENABLE_US_NEWS:
         for url in US_RSS_URLS:
             entries = _engine_fetch_rss(url, "Google-US")
             for e in entries[:50]:
-                if _engine_process_item("Google-US", e.get("title", ""), e.get("link", ""), e.get("published", "")):
+                if _engine_process_item("Google-US", e.get("title", ""), e.get("link", ""), e.get("published", ""), require_keyword_pair=True):
                     total += 1
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
 
@@ -1126,13 +1225,13 @@ def _engine_run_naver():
             r = requests.get("https://openapi.naver.com/v1/search/news.json", headers=headers,
                              params={"query": q, "display": 20, "start": 1, "sort": "date"}, timeout=ENGINE_HTTP_TIMEOUT)
             if not r.ok:
-                _engine_log("error", "[네이버 실패] 검색어=%s | HTTP=%s | reason=%s | body=%s", q, r.status_code, r.reason, r.text[:1000])
+                _engine_log("error", "[네이버 실패] 검색어=%s | 원인=%s", q, r.reason)
                 continue
             data = r.json()
             items = data.get("items", []) or []
             new_count = 0
             for item in items:
-                if _engine_process_item("네이버뉴스", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), f"🔎 검색어: {q}"):
+                if _engine_process_item("네이버뉴스", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), f"키워드: {q}", require_keyword_pair=True):
                     new_count += 1
                     total += 1
             _engine_log("info", "[네이버] 검색어=%s | 결과=%d | 신규=%d", q, len(items), new_count)
@@ -1160,7 +1259,7 @@ def _engine_run_keyword_combinations():
             r = requests.get("https://openapi.naver.com/v1/search/news.json", headers=headers,
                              params={"query": q, "display": 10, "start": 1, "sort": "date"}, timeout=ENGINE_HTTP_TIMEOUT)
             if not r.ok:
-                _engine_log("error", "[키워드 조합 실패] %s | HTTP=%s | body=%s", q, r.status_code, r.text[:500])
+                _engine_log("error", "[키워드 조합 실패] %s | 원인=%s", q, r.reason)
                 continue
             items = r.json().get("items", []) or []
             new_count = 0
@@ -1184,7 +1283,7 @@ def _engine_run_dart():
         url = "https://opendart.fss.or.kr/api/list.json"
         r = requests.get(url, params={"crtfc_key": DART_API_KEY, "bgn_de": today, "end_de": today, "page_no": 1, "page_count": 100}, timeout=ENGINE_HTTP_TIMEOUT)
         if not r.ok:
-            _engine_log("error", "[DART 실패] HTTP=%s | reason=%s | body=%s", r.status_code, r.reason, r.text[:1000])
+            _engine_log("error", "[DART 실패] 원인=%s", r.reason)
             return
         data = r.json()
         if data.get("status") not in ("000", None):
@@ -1226,12 +1325,50 @@ def _engine_run_telegram_channels():
                 txt = _engine_clean(post.get_text(" "))
                 a = post.select_one("a.tgme_widget_message_date")
                 link = a.get("href", "") if a else url
-                if txt and _engine_process_item(f"텔레그램/{name}", txt[:1000], link):
+                time_node = post.select_one("time")
+                published = time_node.get("datetime", "") if time_node else ""
+                title_node = post.select_one("div.tgme_widget_message_text") or post
+                title_text = _engine_clean(title_node.get_text(" "))
+                if txt and _engine_process_item(f"텔레그램/{name}", title_text[:500], link, published, require_stock_title=True):
                     total += 1
         except Exception as e:
             log_error("텔레그램 채널 수집", e, channel=name, url=url)
     _engine_log("info", "[텔레그램채널 완료] 신규전송=%d", total)
 
+
+
+def _youtube_channel_id(identifier):
+    if str(identifier).startswith("UC"):
+        return str(identifier)
+    try:
+        url = f"https://www.youtube.com/@{identifier}"
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT)
+        m = re.search(r'"channelId":"(UC[^"]+)"', r.text)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
+def _engine_run_youtube():
+    if not ENABLE_YOUTUBE:
+        return
+    total = 0
+    for name, identifier in YOUTUBE_CHANNELS:
+        try:
+            cid = _youtube_channel_id(identifier)
+            if not cid:
+                _engine_log("error", "[유튜브 실패] %s | 원인=채널ID 확인 실패", name)
+                continue
+            feed = _engine_fetch_rss(f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}", f"유튜브/{name}")
+            for e in feed[:10]:
+                title = e.get("title", "")
+                link = e.get("link", "")
+                published = e.get("published", "")
+                if _engine_process_item(f"유튜브/{name}", title, link, published, require_stock_title=True):
+                    total += 1
+        except Exception as e:
+            _engine_log("error", "[유튜브 실패] %s | 원인=%s", name, str(e)[:160])
+    _engine_log("info", "[유튜브] 신규전송=%d", total)
 
 def _engine_cycle():
     started = time.time()
@@ -1257,6 +1394,10 @@ def _engine_cycle():
         _engine_run_telegram_channels()
     except Exception as e:
         log_error("텔레그램 채널 전체", e)
+    try:
+        _engine_run_youtube()
+    except Exception as e:
+        log_error("유튜브 전체", e)
     _engine_log("info", "[1분 주기 완료] 총 소요=%.2f초", time.time()-started)
     _engine_log("info", "============================================================")
 
