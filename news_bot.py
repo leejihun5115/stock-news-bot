@@ -919,3 +919,415 @@ US_MARKET_INDICES = [
     ("원/달러 환율", "USDKRW=X"),
     ("WTI 유가", "CL=F"),
 ]
+# ============================================================
+# [실행 엔진 복구] 1분 주기 실시간 수집/분석/텔레그램 전송
+# ============================================================
+# 이 파일에는 설정/키워드만 남고 실제 반복 실행부가 빠진 경우에도
+# 뉴스 수집이 멈추지 않도록 독립 실행 엔진을 붙인다.
+# 기존 설정값/키워드/환경변수는 그대로 사용한다.
+
+ENGINE_INTERVAL = 60
+ENGINE_HTTP_TIMEOUT = 20
+ENGINE_MAX_SEND_PER_CYCLE = 20
+ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
+
+_engine_seen = set()
+_engine_lock = threading.Lock()
+
+
+def _engine_log(level, message, *args):
+    try:
+        if level == "error":
+            _logger.error(message, *args)
+        elif level == "warning":
+            _logger.warning(message, *args)
+        elif level == "debug":
+            _logger.debug(message, *args)
+        else:
+            _logger.info(message, *args)
+    except Exception:
+        print(message % args if args else message, flush=True)
+
+
+def _engine_load_seen():
+    global _engine_seen
+    try:
+        if os.path.exists(ENGINE_STATE_FILE):
+            with open(ENGINE_STATE_FILE, "r", encoding="utf-8") as f:
+                _engine_seen = {x.strip() for x in f if x.strip()}
+        _engine_log("info", "[상태] 이미 처리한 기사=%d건", len(_engine_seen))
+    except Exception as e:
+        log_error("상태파일 읽기", e, file=ENGINE_STATE_FILE)
+
+
+def _engine_mark_seen(key):
+    if not key:
+        return False
+    with _engine_lock:
+        if key in _engine_seen:
+            return False
+        _engine_seen.add(key)
+        # 메모리 폭주 방지
+        if len(_engine_seen) > 20000:
+            _engine_seen = set(list(_engine_seen)[-15000:])
+        try:
+            with open(ENGINE_STATE_FILE, "a", encoding="utf-8") as f:
+                f.write(key + "\n")
+        except Exception as e:
+            log_error("상태파일 저장", e, file=ENGINE_STATE_FILE)
+        return True
+
+
+def _engine_clean(text):
+    return re.sub(r"\s+", " ", BeautifulSoup(str(text or ""), "html.parser").get_text(" ")).strip()
+
+
+def _engine_item_key(title, link):
+    return difflib.SequenceMatcher(None, title[:200].lower(), link[:200].lower()).ratio() and (link or title[:200])
+
+
+def _engine_send_telegram(text):
+    if not BOT_TOKEN or not CHAT_ID:
+        _engine_log("error", "[텔레그램 실패] BOT_TOKEN 또는 CHAT_ID가 없습니다.")
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    try:
+        r = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "disable_web_page_preview": False}, timeout=ENGINE_HTTP_TIMEOUT)
+        try:
+            api_result = r.json()
+        except Exception:
+            api_result = {"raw": r.text[:1000]}
+
+        if r.ok and api_result.get("ok", True):
+            _engine_log("info", "[텔레그램 성공] HTTP=%s | chat_id=%s | message_id=%s",
+                        r.status_code, CHAT_ID, (api_result.get("result") or {}).get("message_id"))
+            return True
+
+        _engine_log(
+            "error",
+            "[텔레그램 실패] HTTP=%s | reason=%s | ok=%s | error_code=%s | description=%s | body=%s",
+            r.status_code,
+            r.reason,
+            api_result.get("ok"),
+            api_result.get("error_code"),
+            api_result.get("description"),
+            r.text[:1000]
+        )
+    except Exception as e:
+        log_error("텔레그램 전송", e, url=url)
+    return False
+
+
+def _engine_is_relevant(title):
+    t = title.lower()
+    kws = set()
+    for x in UNIQUE_TARGET | UNIQUE_GIANTS | UNIQUE_CELEBS:
+        if x and x.lower() in t:
+            kws.add(x)
+    for x in MONEY_STRONG_WORDS:
+        if x.lower() in t:
+            kws.add(x)
+    return list(kws)[:8]
+
+
+def _engine_process_item(source, title, link, published="", extra=""):
+    title = _engine_clean(title)
+    link = str(link or "").strip()
+    if not title:
+        return False
+    key = link or f"{source}|{title}"
+    # 전송 성공 후에만 seen으로 기록한다.
+    # 기존 방식은 전송 실패/429/네트워크 오류가 나도 이미 본 기사로 기록되어
+    # 다음 주기에 재전송되지 않는 문제가 있었다.
+    with _engine_lock:
+        if key in _engine_seen:
+            return False
+
+    matched = _engine_is_relevant(title)
+    # 키워드 검색 결과는 검색 자체가 관련성을 보장하므로 전송한다.
+    lines = [f"📰 [{source}]", title]
+    if matched:
+        lines.append("🔎 " + ", ".join(matched))
+    if published:
+        lines.append(f"🕐 {published}")
+    if extra:
+        lines.append(extra[:500])
+    if link:
+        lines.append(link)
+    msg = "\n".join(lines)
+    ok = _engine_send_telegram(msg)
+    if ok:
+        _engine_mark_seen(key)
+        _engine_log("info", "[%s] 신규=1 | 전송=성공 | seen기록=완료 | 제목=%s", source, title[:100])
+    else:
+        _engine_log("error", "[%s] 신규=1 | 전송=실패 | seen기록=안함 | 다음 주기에 재시도 | 제목=%s", source, title[:100])
+    return ok
+
+
+def _engine_fetch_rss(url, source):
+    started = time.time()
+    try:
+        _engine_log("info", "[RSS 시작] %s | URL=%s", source, url)
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
+        _engine_log("info", "[RSS 응답] %s | HTTP=%s | 최종URL=%s | bytes=%s | %.2fs", source, r.status_code, r.url, len(r.content), time.time()-started)
+        if not r.ok:
+            _engine_log("error", "[RSS 실패] %s | HTTP=%s | reason=%s | body=%s", source, r.status_code, r.reason, r.text[:1000])
+            return []
+        result = feedparser.parse(r.content)
+        if getattr(result, "bozo", False):
+            _engine_log("error", "[RSS 파싱경고] %s | bozo=1 | exception=%s", source, getattr(result, "bozo_exception", ""))
+        entries = getattr(result, "entries", []) or []
+        _engine_log("info", "[RSS 완료] %s | 원본=%d", source, len(entries))
+        return entries
+    except Exception as e:
+        log_error("RSS 수집", e, source=source, url=url)
+        return []
+
+
+def _engine_run_google_and_domestic():
+    if not ENABLE_DOMESTIC_NEWS:
+        _engine_log("warning", "[국내뉴스] ENABLE_DOMESTIC_NEWS=OFF")
+        return
+    total = 0
+    for url in DOMESTIC_RSS_URLS:
+        source = DOMESTIC_RSS_SOURCE_NAMES.get(url, "국내RSS")
+        entries = _engine_fetch_rss(url, source)
+        for e in entries[:50]:
+            if _engine_process_item(source, e.get("title", ""), e.get("link", ""), e.get("published", "")):
+                total += 1
+    if ENABLE_US_NEWS:
+        for url in US_RSS_URLS:
+            entries = _engine_fetch_rss(url, "Google-US")
+            for e in entries[:50]:
+                if _engine_process_item("Google-US", e.get("title", ""), e.get("link", ""), e.get("published", "")):
+                    total += 1
+    _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
+
+
+def _engine_run_naver():
+    if not ENABLE_NAVER_NEWS:
+        _engine_log("warning", "[네이버] ENABLE_NAVER_NEWS=OFF")
+        return
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        _engine_log("error", "[네이버 실패] NAVER_CLIENT_ID / NAVER_CLIENT_SECRET가 없습니다.")
+        return
+    # 모든 검색어를 한 번에 호출하면 API 제한에 걸릴 수 있으므로 1분마다 순환한다.
+    queries = list(dict.fromkeys(NAVER_SEARCH_QUERIES))
+    batch_size = min(12, len(queries))
+    cycle = getattr(_engine_run_naver, "cycle", 0)
+    start = (cycle * batch_size) % max(1, len(queries))
+    selected = [queries[(start+i) % len(queries)] for i in range(batch_size)] if queries else []
+    _engine_run_naver.cycle = cycle + 1
+    _engine_log("info", "[네이버 시작] 전체검색어=%d | 이번주기=%d | offset=%d", len(queries), len(selected), start)
+    headers = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
+    total = 0
+    for q in selected:
+        try:
+            r = requests.get("https://openapi.naver.com/v1/search/news.json", headers=headers,
+                             params={"query": q, "display": 20, "start": 1, "sort": "date"}, timeout=ENGINE_HTTP_TIMEOUT)
+            if not r.ok:
+                _engine_log("error", "[네이버 실패] 검색어=%s | HTTP=%s | reason=%s | body=%s", q, r.status_code, r.reason, r.text[:1000])
+                continue
+            data = r.json()
+            items = data.get("items", []) or []
+            new_count = 0
+            for item in items:
+                if _engine_process_item("네이버뉴스", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), f"🔎 검색어: {q}"):
+                    new_count += 1
+                    total += 1
+            _engine_log("info", "[네이버] 검색어=%s | 결과=%d | 신규=%d", q, len(items), new_count)
+        except Exception as e:
+            log_error("네이버 뉴스 검색", e, query=q)
+    _engine_log("info", "[네이버 완료] 이번주기 검색어=%d | 신규 전송=%d | API정상=%s", len(selected), total, bool(selected))
+
+
+def _engine_run_keyword_combinations():
+    # 기업명 + 핵심 테마 조합을 실제 네이버 API 검색으로 확인한다.
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        _engine_log("warning", "[키워드 조합] 네이버 API 키가 없어 조합검색을 건너뜁니다.")
+        return
+    companies = list(dict.fromkeys(GLOBAL_AND_DOMESTIC_GIANTS))
+    themes = ["HBM", "반도체", "AI", "로봇", "방산", "원전", "조선", "바이오", "이차전지", "ESS"]
+    # 매 분기마다 10개 조합. 1분 주기 전체 호출량을 제한한다.
+    cycle = getattr(_engine_run_keyword_combinations, "cycle", 0)
+    combos = [(c, themes[(cycle+i) % len(themes)]) for i, c in enumerate(companies[:10])]
+    _engine_run_keyword_combinations.cycle = cycle + 1
+    headers = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
+    _engine_log("info", "[키워드 조합 시작] 이번주기=%d건", len(combos))
+    for company, theme in combos:
+        q = f'"{company}" {theme}'
+        try:
+            r = requests.get("https://openapi.naver.com/v1/search/news.json", headers=headers,
+                             params={"query": q, "display": 10, "start": 1, "sort": "date"}, timeout=ENGINE_HTTP_TIMEOUT)
+            if not r.ok:
+                _engine_log("error", "[키워드 조합 실패] %s | HTTP=%s | body=%s", q, r.status_code, r.text[:500])
+                continue
+            items = r.json().get("items", []) or []
+            new_count = 0
+            for item in items:
+                if _engine_process_item("키워드조합", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), f"🔎 {q}"):
+                    new_count += 1
+            _engine_log("info", "[키워드 조합] %s | 결과=%d | 신규=%d", q, len(items), new_count)
+        except Exception as e:
+            log_error("키워드 조합 검색", e, query=q)
+
+
+def _engine_run_dart():
+    if not ENABLE_DART:
+        _engine_log("warning", "[DART] ENABLE_DART=OFF")
+        return
+    if not DART_API_KEY:
+        _engine_log("error", "[DART 실패] DART_API_KEY가 없습니다.")
+        return
+    try:
+        today = _now_kst().strftime("%Y%m%d")
+        url = "https://opendart.fss.or.kr/api/list.json"
+        r = requests.get(url, params={"crtfc_key": DART_API_KEY, "bgn_de": today, "end_de": today, "page_no": 1, "page_count": 100}, timeout=ENGINE_HTTP_TIMEOUT)
+        if not r.ok:
+            _engine_log("error", "[DART 실패] HTTP=%s | reason=%s | body=%s", r.status_code, r.reason, r.text[:1000])
+            return
+        data = r.json()
+        if data.get("status") not in ("000", None):
+            _engine_log("error", "[DART API 오류] status=%s | message=%s", data.get("status"), data.get("message"))
+            return
+        rows = data.get("list", []) or []
+        _engine_log("info", "[DART 완료] 오늘 공시=%d건", len(rows))
+        sent = 0
+        for row in rows:
+            report = row.get("report_nm", "")
+            if not any(k in report for k in DART_STRONG_REPORT_KEYWORDS):
+                continue
+            corp = row.get("corp_name", "")
+            title = f"{corp} | {report}"
+            link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
+            if _engine_process_item("DART", title, link, row.get("rcept_dt", "")):
+                sent += 1
+        _engine_log("info", "[DART] 전체공시=%d | 강한공시 신규전송=%d", len(rows), sent)
+    except Exception as e:
+        log_error("DART 검사", e)
+
+
+def _engine_run_telegram_channels():
+    if not ENABLE_TELEGRAM_CHANNELS:
+        _engine_log("warning", "[텔레그램채널] ENABLE_TELEGRAM_CHANNELS=OFF")
+        return
+    channels = TARGET_TELEGRAM_CHANNELS + TARGET_TELEGRAM_CHANNELS_UNFILTERED
+    total = 0
+    for name, url in channels:
+        try:
+            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT)
+            if not r.ok:
+                _engine_log("error", "[텔레그램채널 실패] %s | HTTP=%s | reason=%s", name, r.status_code, r.reason)
+                continue
+            soup = BeautifulSoup(r.text, "html.parser")
+            posts = soup.select("div.tgme_widget_message_wrap")[-10:]
+            _engine_log("info", "[텔레그램채널] %s | 읽은게시물=%d", name, len(posts))
+            for post in posts:
+                txt = _engine_clean(post.get_text(" "))
+                a = post.select_one("a.tgme_widget_message_date")
+                link = a.get("href", "") if a else url
+                if txt and _engine_process_item(f"텔레그램/{name}", txt[:1000], link):
+                    total += 1
+        except Exception as e:
+            log_error("텔레그램 채널 수집", e, channel=name, url=url)
+    _engine_log("info", "[텔레그램채널 완료] 신규전송=%d", total)
+
+
+def _engine_cycle():
+    started = time.time()
+    _engine_log("info", "============================================================")
+    _engine_log("info", "[1분 주기 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
+    try:
+        _engine_run_google_and_domestic()
+    except Exception as e:
+        log_error("국내/Google RSS 전체", e)
+    try:
+        _engine_run_naver()
+    except Exception as e:
+        log_error("네이버 전체", e)
+    try:
+        _engine_run_keyword_combinations()
+    except Exception as e:
+        log_error("키워드 조합 전체", e)
+    try:
+        _engine_run_dart()
+    except Exception as e:
+        log_error("DART 전체", e)
+    try:
+        _engine_run_telegram_channels()
+    except Exception as e:
+        log_error("텔레그램 채널 전체", e)
+    _engine_log("info", "[1분 주기 완료] 총 소요=%.2f초", time.time()-started)
+    _engine_log("info", "============================================================")
+
+
+
+# ============================================================
+# Render Web Service 헬스체크
+# 메인 뉴스 엔진은 계속 1분 주기로 돌고,
+# 별도 스레드에서 PORT를 열어 Render의 포트 감지를 만족시킨다.
+# ============================================================
+def _start_render_health_server():
+    try:
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        port = int(os.environ.get("PORT", "10000"))
+
+        class HealthHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b"news_bot is running\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, fmt, *args):
+                _engine_log("debug", "[Render health] " + fmt, *args)
+
+        server = HTTPServer(("0.0.0.0", port), HealthHandler)
+        _engine_log("info", "[Render] PORT=%s 헬스서버 시작 완료", port)
+        server.serve_forever()
+
+    except Exception as e:
+        log_error("Render 헬스서버 시작", e, port=os.environ.get("PORT", "10000"))
+
+def _engine_main_loop():
+    _engine_load_seen()
+    _engine_log("info", "[실행엔진] 1분 주기 엔진 시작 | RSS=15초 설정과 별개로 이 엔진은 60초마다 전체 상태를 기록합니다.")
+    while True:
+        cycle_start = time.time()
+        try:
+            _engine_cycle()
+        except Exception as e:
+            log_error("메인 사이클 치명적 오류", e)
+        wait = max(1, ENGINE_INTERVAL - (time.time() - cycle_start))
+        _engine_log("info", "[대기] 다음 1분 주기까지 %.1f초", wait)
+        time.sleep(wait)
+
+
+if __name__ == "__main__":
+    try:
+        # Render가 Web Service의 포트를 즉시 감지할 수 있도록 먼저 서버를 띄운다.
+        health_thread = threading.Thread(
+            target=_start_render_health_server,
+            name="render-health",
+            daemon=True
+        )
+        health_thread.start()
+        time.sleep(0.3)
+
+        _engine_log("info", "[BOOT] 뉴스 수집/분석 엔진 시작")
+        _engine_log("info", "[BOOT] NAVER=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
+                    bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET),
+                    bool(DART_API_KEY),
+                    ENABLE_DOMESTIC_NEWS,
+                    ENABLE_US_NEWS,
+                    ENABLE_TELEGRAM_CHANNELS)
+
+        _engine_main_loop()
+    except KeyboardInterrupt:
+        _engine_log("warning", "[종료] KeyboardInterrupt")
+    except Exception as e:
+        log_error("프로그램 최상위 오류", e)
+        raise
