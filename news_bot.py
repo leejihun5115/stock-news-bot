@@ -1711,105 +1711,187 @@ def _engine_similar(a, b):
 
 
 def _engine_format_message(item):
-    """최종 뉴스 카드 출력.
-    기존 수집/필터/DB/관심종목/시장상태 로직은 건드리지 않고
-    화면 출력 형식만 관리한다.
+    """뉴스 카드 최종 출력.
+    원문 수집/필터/DB/시장상태/스케줄 로직은 변경하지 않고,
+    제목·핵심요약·국내 관련성 출력만 담당한다.
     """
     category = item["category"]
-    title = item["title"]
-    companies = item["companies"]
-    text_low = _engine_clean(title + " " + item.get("extra", "")).lower()
+    title = str(item["title"]).strip()
+    companies = item.get("companies", [])
+    extra = _engine_clean(str(item.get("extra", "")).strip())
+    market_hits = item.get("market_hits", [])
 
-    # 국내 상장기업만 제목 안에서 ⚡️ 표시.
-    for c in _engine_domestic_companies(companies):
+    # 국내 상장기업이 실제로 제목/본문에서 확인되는 경우에만 표시.
+    domestic = _engine_domestic_companies(companies)
+    for c in domestic:
         title = re.sub(rf"(?<!⚡️)({re.escape(c)})", r"⚡️\1", title, count=1)
 
     source_raw = str(item.get("source", ""))
     source_display = "🇺🇸" if source_raw == "Google-US" else source_raw
-    source = html.escape(source_display)
-    time_text = html.escape(item.get("time_text", ""))
+    time_text = str(item.get("time_text", "")).strip()
 
-    # 신규/업그레이드/재탕은 모든 뉴스의 헤더에 표시.
     freshness, prev = _engine_freshness(item)
-    freshness_html = f"<b>[{html.escape(freshness)}]</b>"
 
-    # 제목은 항상 헤더 다음 줄, 📌 + 굵게. 원문 제목 자체는 변경하지 않는다.
-    title_html = html.escape(title.strip())
-
-    header = f"<b>✅ [{source}] {freshness_html}</b>"
+    header = f"<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>"
     if time_text:
-        header += f"                                      🕐 {time_text}"
+        header += f"                                      🕐 {html.escape(time_text)}"
 
+    # 제목은 절대 요약문보다 아래/위로 이동시키지 않는다.
     lines = [
         header,
-        f"<b>📌 {title_html}</b>",
+        f"<b>📌 {html.escape(title)}</b>",
     ]
 
-    # 재탕/업그레이드의 선행 보도 정보는 유지한다.
-    if freshness == "재탕" and prev:
+    if freshness in ("재탕", "업그레이드") and prev:
         prev_source = html.escape(str(prev.get("source", "")))
         prev_time = html.escape(str(prev.get("time_text", "")))
-        if prev_source or prev_time:
-            lines.append(f"↳ 최초 보도: <b>{prev_time} / {prev_source}</b>")
-    elif freshness == "업그레이드" and prev:
-        prev_source = html.escape(str(prev.get("source", "")))
-        prev_time = html.escape(str(prev.get("time_text", "")))
-        if prev_source or prev_time:
-            lines.append(f"↳ 선행 보도: <b>{prev_time} / {prev_source}</b>")
+        lines.append(f"↳ 선행 보도: <b>{prev_time} / {prev_source}</b>")
 
-    strong, strong_hits = _engine_strong_material(item)
-    historical = _engine_historical_match(item)
-
-    # 뉴스 본문에서 확보된 핵심 내용을 우선 사용한다.
-    # 금액/수치/계약/확정 여부 등이 extra에 있으면 그대로 보존한다.
-    extra = _engine_clean(str(item.get("extra", "")).strip())
+    # ------------------------------------------------------------
+    # 1) 원문 기반 한 줄 핵심요약
+    # ------------------------------------------------------------
+    # 제목 반복을 피하고 extra/본문 요약 결과에서 핵심정보만 사용한다.
     core, schedule = _engine_summary(
-        item["title"], item["extra"], companies, item["market_hits"]
+        title, extra, companies, market_hits
     )
-    core_clean = re.sub(r"^🔎\s*", "", core.strip()) if core else ""
 
-    keypoint = extra[:420] if extra else core_clean[:420]
+    # 기존 summary가 제목을 그대로 반복하는 경우 제거.
+    def _compact_keypoint(text):
+        text = _engine_clean(str(text or ""))
+        text = re.sub(r"^🔎\s*", "", text).strip()
+        if not text:
+            return ""
 
-    if strong:
-        # 💯는 강한 재료일 때만. '급등/급락'을 강한 재료명으로 반복하지 않는다.
-        reason = keypoint or "시장에 영향을 줄 수 있는 강한 핵심 재료"
-        lines.append(f"💯 🔎 {html.escape(reason)}")
+        # 제목과 동일/거의 동일한 문장을 핵심요약으로 사용하지 않는다.
+        title_norm = re.sub(r"[^가-힣A-Za-z0-9]+", "", title.lower())
+        text_norm = re.sub(r"[^가-힣A-Za-z0-9]+", "", text.lower())
+        if title_norm and (
+            text_norm == title_norm
+            or (len(title_norm) >= 25 and title_norm in text_norm)
+        ):
+            return ""
 
-    # 모든 뉴스의 🔎에는 제목을 반복하지 않고 핵심 내용/이유/수치/확정 여부를 넣는다.
-    if keypoint:
+        # 원문이 긴 경우 첫 문장 전체가 아니라 핵심 1문장만.
+        parts = re.split(r"(?<=[.!?。])\s+|\n+", text)
+        parts = [p.strip(" -•") for p in parts if p.strip()]
+        if len(parts) > 1:
+            # 수치/원인/변화가 포함된 문장을 우선
+            ranked = sorted(
+                parts,
+                key=lambda p: (
+                    bool(re.search(r"\d|%|억|조|만|배|계약|수주|증설|투자|생산|판매|출시|승인|인수|합병|정책|금리|유가", p)),
+                    -abs(len(p) - 80)
+                ),
+                reverse=True
+            )
+            text = ranked[0]
+        else:
+            text = parts[0] if parts else text
+
+        return text[:260]
+
+    keypoint = _compact_keypoint(core)
+
+    # extra에 실제 수치/금액/확정·예정 정보가 있고 summary에 없으면 보강.
+    if extra:
+        extra_key = _compact_keypoint(extra)
+        if extra_key and extra_key != keypoint:
+            important = re.search(
+                r"(\d[\d,.]*\s*(?:억|조|만원|억원|조원|%|달러|USD|만대|대|개|명|배))"
+                r"|(\b(?:확정|체결|계약|수주|승인|출시|착공|가동|예정)\b)",
+                extra_key
+            )
+            if important and not re.search(r"\d|확정|체결|계약|수주|승인|출시|예정", keypoint):
+                keypoint = extra_key
+
+    # ------------------------------------------------------------
+    # 2) 강한 재료
+    # ------------------------------------------------------------
+    strong, strong_hits = _engine_strong_material(item)
+    if strong and keypoint:
+        lines.append(f"💯 🔎 {html.escape(keypoint)}")
+    elif keypoint:
         lines.append(f"🔎 {html.escape(keypoint)}")
 
-    # 국내 관련성/테마/관심종목 연결 이유.
-    if core_clean:
-        # 글로벌 기업만 있는 경우에도 국내 상장기업으로 오인시키지 않는다.
-        lines.append(f"🔎 {html.escape(core_clean)}")
+    # ------------------------------------------------------------
+    # 3) 국내 관련 테마/관심종목
+    # ------------------------------------------------------------
+    # 단순 글로벌 기업명 → 국내 종목 연결 금지.
+    # 실제 국내 기업/테마 연관성이 있을 때만 이유를 함께 출력한다.
+    domestic_rows = []
+    try:
+        domestic_rows = _engine_domestic_watchlist(item)
+    except (NameError, AttributeError):
+        domestic_rows = []
 
+    if domestic_rows:
+        for row in domestic_rows[:3]:
+            if isinstance(row, dict):
+                name = str(row.get("name") or row.get("company") or "").strip()
+                reason = str(
+                    row.get("reason")
+                    or row.get("why")
+                    or row.get("relation")
+                    or row.get("theme")
+                    or ""
+                ).strip()
+                theme = str(row.get("theme") or "").strip()
+                if name:
+                    detail = " | ".join(x for x in (theme, reason) if x)
+                    lines.append(
+                        f"🔎 국내 관심종목: <b>{html.escape(name)}</b>"
+                        + (f" → {html.escape(detail[:240])}" if detail else "")
+                    )
+            elif row:
+                lines.append(f"🔎 국내 관심종목: {html.escape(str(row)[:240])}")
+
+    # 기존 로직이 companies를 통해 국내 기업을 명시적으로 확인한 경우에도
+    # 이유 없는 단순 "글로벌 기업 → 종목" 문구는 출력하지 않는다.
+    if domestic and not domestic_rows:
+        lines.append(
+            "🔎 국내 직접 관련: "
+            + html.escape(" · ".join(domestic[:3]))
+            + " — 기사 본문에서 직접 확인된 관련 기업"
+        )
+
+    # ------------------------------------------------------------
+    # 4) 과거 유사 급등/상한가 사례
+    # ------------------------------------------------------------
+    historical = _engine_historical_match(item)
     if historical:
         ratio, hrow = historical
         htitle = html.escape(str(hrow.get("title", "과거 유사 사례"))[:180])
         hlink = html.escape(str(hrow.get("link", "")), quote=True)
+        lines.append(f"📚 과거 유사 급등 사례 ({ratio:.0%})")
         if hlink:
-            lines.extend([
-                f"📚 과거 유사 급등 사례 ({ratio:.0%})",
-                f'<a href="{hlink}">🔗 {htitle}</a>'
-            ])
+            lines.append(f'<a href="{hlink}">🔗 {htitle}</a>')
         else:
-            lines.extend([
-                f"📚 과거 유사 급등 사례 ({ratio:.0%})",
-                htitle
-            ])
+            lines.append(htitle)
 
-    # 과거 합의사항: 개별 뉴스 카드에는 '시장 마감 후 뉴스' 문구를 출력하지 않는다.
-    # market_state 판정 자체는 필터/처리를 위해 그대로 유지한다.
-
+    # ------------------------------------------------------------
+    # 5) 일정: 미래 주가에 영향을 줄 일정만 허용
+    # ------------------------------------------------------------
+    # 과거 실적/기록/수출량 등은 일정으로 출력하지 않는다.
     if schedule:
-        lines.extend(["📅 일정", html.escape(schedule)])
+        schedule_text = str(schedule).strip()
+        future_words = (
+            "예정", "계획", "발표", "출시", "가동", "착공", "완료 예정",
+            "시행", "회의", "실적 발표", "계약 예정", "수주 예정"
+        )
+        date_like = re.search(
+            r"(202[6-9][./-]\d{1,2}[./-]\d{1,2}"
+            r"|\d{1,2}월\s*\d{1,2}일"
+            r"|\d{1,2}일\s*(?:예정|발표|출시|가동))",
+            schedule_text
+        )
+        if any(w in schedule_text for w in future_words) or date_like:
+            lines.extend(["📅 일정", html.escape(schedule_text[:260])])
 
     if item.get("link"):
-        link = html.escape(item["link"], quote=True)
+        link = html.escape(str(item["link"]), quote=True)
         lines.append(f'<a href="{link}">🔗 원문 보기</a>')
 
-    # 모든 뉴스 카드의 줄간격을 동일하게 한다.
+    # 화면 줄간격은 카드 전체에서 동일하게 유지.
     return "\n\n".join(x for x in lines if str(x).strip())
 
 
