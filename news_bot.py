@@ -2615,9 +2615,33 @@ def _engine_is_relevant(title):
     return list(kws)[:8]
 
 
+def _engine_is_within_recent_window(published, window_minutes=60):
+    """현재 KST 기준 최근 window_minutes분 이내 뉴스만 실시간 송출 대상으로 허용한다.
+    과거 뉴스는 분석/비교 DB에서 활용할 수 있지만 현재 뉴스 송출에서는 제외한다.
+    """
+    if not published:
+        return False
+    dt = _engine_parse_datetime(published)
+    if not dt:
+        return False
+    now = _now_kst()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=now.tzinfo)
+    else:
+        dt = dt.astimezone(now.tzinfo)
+    age_seconds = (now - dt).total_seconds()
+    return 0 <= age_seconds <= window_minutes * 60
+
+
 def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
     if not title:
+        return False
+
+    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
+    # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
+    if not _engine_is_within_recent_window(published, 60):
+        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
         return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
