@@ -217,13 +217,11 @@ from bs4 import BeautifulSoup
 # ============================================================
 _KST = datetime.timezone(datetime.timedelta(hours=9))
 
-
 def _now_kst():
     """서버 시스템 시간대와 무관하게 항상 정확한 한국시간(KST)을 naive
     datetime으로 반환. UTC 기준으로 정확히 계산한 뒤 tzinfo만 떼어내므로,
     기존 코드에서 datetime.datetime.now()를 쓰던 자리에 그대로 대체 가능."""
     return datetime.datetime.now(datetime.timezone.utc).astimezone(_KST).replace(tzinfo=None)
-
 
 # ============================================================
 # 🪵 로그 버퍼링 문제 해결 (실시간 로그 출력 강화)
@@ -237,13 +235,10 @@ except Exception:
 import builtins as _builtins
 _original_print = _builtins.print
 
-
 def print(*args, **kwargs):
     kwargs.setdefault("file", sys.stderr)
     kwargs.setdefault("flush", True)
     _original_print(*args, **kwargs)
-
-
 
 # ============================================================
 # --- 시작 로그에 필요한 환경변수 선행 초기화 ---
@@ -275,7 +270,6 @@ try:
 except Exception:
     ZoneInfo = None
 
-
 def _redact_url(url):
     """로그에 남기는 URL에서 API 키/토큰/시크릿 계열 query parameter를 제거한다."""
     try:
@@ -290,7 +284,6 @@ def _redact_url(url):
         return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(pairs), parts.fragment))
     except Exception:
         return "<URL_REDACTED>"
-
 
 LOG_FILE = os.environ.get("NEWS_BOT_LOG_FILE", "news_bot.log")
 _logger = logging.getLogger("news_bot")
@@ -334,14 +327,11 @@ if not _logger.handlers:
             file=sys.stderr, flush=True
         )
 
-
 def log_info(message, *args):
     _logger.info(message, *args)
 
-
 def log_debug(message, *args):
     return
-
 
 def log_error(context, exc=None, **details):
     """실패 원인을 최대한 자세히 기록한다."""
@@ -355,7 +345,6 @@ def log_error(context, exc=None, **details):
     _logger.error(" | ".join(parts))
     # 일반 운영 로그에는 traceback을 남기지 않아 로그 폭주를 방지한다.
     # 치명적 예외는 sys.excepthook에서 별도로 기록한다.
-
 
 def _log_uncaught_exception(exc_type, exc_value, exc_tb):
     if exc_type is KeyboardInterrupt:
@@ -443,7 +432,6 @@ try:
 except Exception as _e:
     log_error("feedparser 상세 로깅 초기화", _e)
 
-
 # ============================================================
 # 환경설정 - BOT_TOKEN, CHAT_ID, DART_API_KEY 설정
 # ============================================================
@@ -451,13 +439,11 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 CHAT_ID_OVERSEAS = os.environ.get("CHAT_ID_OVERSEAS", "") or CHAT_ID
 
-
 def _env_flag(name, default=True):
     val = os.environ.get(name)
     if val is None:
         return default
     return val.strip().lower() in ("true", "1", "yes", "on")
-
 
 ENABLE_DOMESTIC_NEWS = _env_flag("ENABLE_DOMESTIC_NEWS")         # 국내 RSS
 ENABLE_US_NEWS = _env_flag("ENABLE_US_NEWS")                     # 해외 RSS
@@ -814,12 +800,10 @@ BLOCKED_KEYWORDS = set()
 for _category, _words in BLOCKED_KEYWORDS_BY_CATEGORY.items():
     BLOCKED_KEYWORDS |= set(_words)
 
-
 def is_blocked_title(title):
     if not title:
         return False
     return any(word in title for word in BLOCKED_KEYWORDS)
-
 
 GLOBAL_AND_DOMESTIC_GIANTS = [
     "삼성", "SK", "LG", "현대", "기아", "포스코", "에코프로", "셀트리온", "한미반도체",
@@ -886,7 +870,6 @@ US_EARNINGS_WORDS = {
 }
 US_EARNINGS_BEAT_WORDS = {"beats", "beat", "tops", "exceeds", "surpasses"}
 US_EARNINGS_MISS_WORDS = {"misses", "miss", "falls short", "below estimates"}
-
 
 def _extract_earnings_info(title):
     title_lower = title.lower()
@@ -990,7 +973,6 @@ def _google_news_rss_url(query, korean=False):
         return f"https://news.google.com/rss/search?q={encoded}&hl=ko&gl=KR&ceid=KR:ko"
     return f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
 
-
 US_RSS_URLS = [
     _google_news_rss_url("US Stock Market Trump Earnings SKHY Nvidia Semiconductor Oil Gold Copper"),
     _google_news_rss_url("(Nvidia OR AMD OR Micron OR Broadcom OR TSMC) AND (surge OR earnings OR guidance OR chip)"),
@@ -1078,7 +1060,6 @@ EXCLUSIVE_WORDS = {"단독"}
 _engine_seen = set()
 _engine_lock = threading.Lock()
 
-
 def _engine_log(level, message, *args):
     try:
         if level == "error":
@@ -1091,7 +1072,6 @@ def _engine_log(level, message, *args):
             _logger.info(message, *args)
     except Exception:
         print(message % args if args else message, flush=True)
-
 
 def _engine_atomic_append_jsonl(path, obj):
     """상태/브리핑 DB를 한 줄 JSON으로 안전하게 추가한다. 민감정보는 기록하지 않는다."""
@@ -1111,7 +1091,6 @@ def _engine_atomic_append_jsonl(path, obj):
         log_error("JSONL 상태 저장", e, file=path)
         return False
 
-
 def _engine_is_global_market_news(text):
     """국내 관련주가 없어도 보존해야 하는 글로벌 시황 핵심 재료."""
     low = _engine_clean(text).lower()
@@ -1130,7 +1109,6 @@ def _engine_is_global_market_news(text):
         "급등", "급락", "폭등", "폭락", "신고가", "신저가", "사상 최대",
     ]
     return any(k in low for k in macro) and any(k in low for k in events)
-
 
 # Google-US는 국내 종목 연결 여부와 별개로 '시장에 꼭 필요한 뉴스'만 통과시킨다.
 # 단순 종목 등락, 일반 전망, 반복 기사, 가벼운 기업 뉴스는 제외한다.
@@ -1207,6 +1185,48 @@ def _engine_is_us_priority_news(title, extra=""):
         return True
     return False
 
+def _engine_market_move_reason(title, extra=""):
+    """상승/하락 뉴스에서 제목·본문에 드러난 원인과 핵심 키포인트를 기록한다."""
+    text = _engine_clean((title or "") + " " + (extra or ""))
+    low = text.lower()
+    reason_map = [
+        (["유가", "원유", "wti", "brent"], "국제유가 변동"),
+        (["금리", "연준", "fomc", "fed", "금리인하", "금리인상"], "금리·연준 정책"),
+        (["cpi", "pce", "물가"], "물가 지표"),
+        (["고용", "비농업", "실업률", "payroll", "jobs"], "고용 지표"),
+        (["관세", "tariff"], "관세 정책"),
+        (["이란", "이스라엘", "전쟁", "공격", "휴전", "중동", "iran", "war", "ceasefire"], "지정학적 리스크"),
+        (["중국", "미국·중국", "미중", "china"], "미중 정책·중국 변수"),
+        (["실적", "earnings", "매출", "revenue", "영업이익", "profit"], "실적"),
+        (["가이던스", "guidance", "전망", "outlook"], "실적 전망·가이던스"),
+        (["수주", "계약", "contract", "deal", "order"], "대형 계약·수주"),
+        (["투자", "증설", "capex", "investment", "생산", "production"], "투자·증설·생산 확대"),
+        (["승인", "fda", "approval"], "규제·제품 승인"),
+        (["공급망", "supply chain", "반도체 공급"], "공급망 변화"),
+        (["신제품", "제품 출시", "product launch"], "신제품·출시"),
+        (["인수", "합병", "m&a", "acquisition", "merger"], "인수·합병"),
+    ]
+    reasons = []
+    for keys, label in reason_map:
+        if any(k in low for k in keys) and label not in reasons:
+            reasons.append(label)
+
+    # Prefer explicit causal wording from the article.
+    causal = re.findall(
+        r'([^.!?]{0,70}(?:때문|여파|영향|따라|배경|원인|소식|발표|결정|우려|기대)[^.!?]{0,90})',
+        text
+    )
+    if causal:
+        candidate = re.sub(r'\s+', ' ', causal[0]).strip()
+        if len(candidate) >= 12:
+            return candidate[:180]
+
+    if reasons:
+        return "핵심 원인: " + "·".join(reasons[:3])
+
+    # If the source does not provide a cause, explicitly record that fact
+    # rather than inventing a reason.
+    return "핵심 원인: 원문에서 상승·하락의 구체적 원인 확인 필요"
 
 def _engine_us_feature_or_breaking(item):
     """미국 특징주/속보/단독 여부. 단순 등락 기사는 False."""
@@ -1219,6 +1239,14 @@ def _engine_us_feature_or_breaking(item):
     move = ["급등","급락","폭등","폭락","surge","soar","plunge","crash"]
     return any(k in text for k in breaking) and (any(k in text for k in event) or any(k in text for k in move))
 
+def _engine_market_briefing_label(kind, dt_text=""):
+    """미국장 개장/마감 30분 브리핑의 화면 표시 라벨."""
+    if kind == "open":
+        return f"⏱️ {dt_text} 장시작 30분 브리핑" if dt_text else "⏱️ 장시작 30분 브리핑"
+    if kind == "close":
+        return f"⏱️ {dt_text} 시장 마감 30분후 브리핑" if dt_text else "⏱️ 시장 마감 30분후 브리핑"
+    return ""
+
 def _engine_confidence_state(item):
     """미확인/확인/업그레이드 구분. 소문·전망은 확인 전 상태로 표시한다."""
     text = _engine_clean(item.get("title", "") + " " + item.get("extra", "")).lower()
@@ -1228,7 +1256,6 @@ def _engine_confidence_state(item):
     if rumor_hit and not any(k in text for k in confirmed):
         return "미확인"
     return "확인"
-
 
 def _engine_strong_material(item):
     text = _engine_clean(item.get("title", "") + " " + item.get("extra", "")).lower()
@@ -1249,7 +1276,6 @@ def _engine_strong_material(item):
     amount_strong = amount and any(k in text for k in ("계약", "수주", "투자", "증설", "공급")) and any(k in text for k in ("대규모", "초대형", "사상 최대", "사상최대", "역대 최대"))
     return bool(hits or amount_strong), hits[:5]
 
-
 def _engine_historical_match(item):
     if not ENABLE_HISTORICAL_SURGE_DB or not _engine_historical_cache:
         return None
@@ -1265,7 +1291,6 @@ def _engine_historical_match(item):
         if ratio >= HISTORICAL_MATCH_THRESHOLD and (best is None or ratio > best[0]):
             best = (ratio, row)
     return best
-
 
 def _engine_load_extended_state():
     global _engine_historical_cache, _engine_global_briefing_cache, _engine_telegram_counts
@@ -1288,7 +1313,6 @@ def _engine_load_extended_state():
         except Exception:
             _engine_telegram_counts = {}
 
-
 def _engine_record_global_briefing(item):
     if not ENABLE_GLOBAL_BRIEFING_DB:
         return
@@ -1304,7 +1328,6 @@ def _engine_record_global_briefing(item):
         "market_hits": item.get("market_hits", [])[:8],
     }
     _engine_atomic_append_jsonl(GLOBAL_BRIEFING_DB, row)
-
 
 def _engine_record_historical_case(item):
     if not ENABLE_HISTORICAL_SURGE_DB:
@@ -1323,7 +1346,6 @@ def _engine_record_historical_case(item):
         if len(_engine_historical_cache) > 5000:
             del _engine_historical_cache[:-5000]
 
-
 def _engine_telegram_spam_allowed(item):
     source = str(item.get("source", ""))
     if not source.startswith("텔레그램/"):
@@ -1336,7 +1358,6 @@ def _engine_telegram_spam_allowed(item):
         return False
     return True
 
-
 def _engine_telegram_mark_sent(item):
     source = str(item.get("source", ""))
     if source.startswith("텔레그램/"):
@@ -1347,7 +1368,6 @@ def _engine_telegram_mark_sent(item):
             os.replace(TELEGRAM_SPAM_STATE + ".tmp", TELEGRAM_SPAM_STATE)
         except Exception as e:
             log_error("Telegram 도배상태 저장", e, file=TELEGRAM_SPAM_STATE)
-
 
 def _engine_watchdog_alert(force=False):
     global _engine_last_watchdog_alert
@@ -1366,7 +1386,6 @@ def _engine_watchdog_alert(force=False):
     except Exception as e:
         log_error("WATCHDOG Telegram 알림", e)
 
-
 def _engine_load_seen():
     global _engine_seen
     try:
@@ -1376,7 +1395,6 @@ def _engine_load_seen():
         _engine_log("info", "[상태] 이미 처리한 기사=%d건", len(_engine_seen))
     except Exception as e:
         log_error("상태파일 읽기", e, file=ENGINE_STATE_FILE)
-
 
 def _engine_mark_seen(key):
     global _engine_seen
@@ -1396,14 +1414,11 @@ def _engine_mark_seen(key):
             log_error("상태파일 저장", e, file=ENGINE_STATE_FILE)
         return True
 
-
 def _engine_clean(text):
     return re.sub(r"\s+", " ", BeautifulSoup(str(text or ""), "html.parser").get_text(" ")).strip()
 
-
 def _engine_item_key(title, link):
     return difflib.SequenceMatcher(None, title[:200].lower(), link[:200].lower()).ratio() and (link or title[:200])
-
 
 def _engine_send_telegram(text):
     if not BOT_TOKEN or not CHAT_ID:
@@ -1420,7 +1435,6 @@ def _engine_send_telegram(text):
     except Exception as e:
         _engine_log("error", "[실패] Telegram 전송 | 원인=%s", str(e)[:160])
     return False
-
 
 def _engine_parse_datetime(value):
     if not value:
@@ -1445,7 +1459,6 @@ def _engine_parse_datetime(value):
     if dt.tzinfo is not None:
         dt = dt.astimezone(_KST).replace(tzinfo=None)
     return dt
-
 
 KRX_WEEKDAY_OPEN = datetime.time(9, 0)
 KRX_WEEKDAY_CLOSE = datetime.time(15, 30)
@@ -1477,7 +1490,6 @@ def _engine_market_state(source, published):
         return "장중"
     return "시장 마감 후 뉴스"
 
-
 def _engine_recent_enough(published, source=""):
     """외부 콘텐츠(텔레그램/유튜브)는 최근 60분을 기본으로 한다.
     단, 국내 장 마감 후/휴무에 발생한 강한 주가 재료는 다음 거래일 반영을 위해 예외 허용한다.
@@ -1492,7 +1504,6 @@ def _engine_recent_enough(published, source=""):
     if age <= 3600:
         return True
     return False
-
 
 def _engine_external_time_gate(source, published, title, extra, market_state, market_hits):
     """텔레그램/유튜브 도배 방지용 시간 관문.
@@ -1532,7 +1543,6 @@ def _engine_external_time_gate(source, published, title, extra, market_state, ma
 
     return False, "60분 초과"
 
-
 AMBIGUOUS_COMPANY_TERMS = {
     "삼성", "SK", "LG", "현대", "한화", "포스코", "두산", "LS", "우리", "하나", "KB",
     "신한", "KT", "CJ", "GS", "DL", "DB", "농협", "롯데", "신세계", "네이버", "카카오",
@@ -1558,18 +1568,15 @@ def _engine_find_companies(text):
             found.append(x)
     return found[:8]
 
-
 def _engine_has_keyword_pair(text):
     t = _engine_clean(text).lower()
     k1 = [x for x in UNIQUE_KEYWORDS_1 if x and x.lower() in t]
     k2 = [x for x in UNIQUE_KEYWORDS_2 if x and x.lower() in t]
     return k1, k2
 
-
 def _engine_market_hit(text):
     t = _engine_clean(text).lower()
     return [x for x in MARKET_IMPACT_KEYWORDS if x.lower() in t]
-
 
 def _engine_is_weak_nonstock_news(text):
     """주가와 직접 연결되지 않는 사회공헌/캠페인/일반 홍보성 뉴스 차단."""
@@ -1586,15 +1593,12 @@ def _engine_is_weak_nonstock_news(text):
     ]
     return any(x in low for x in weak) and not any(x in low for x in strong_business)
 
-
 def _engine_domestic_companies(companies):
     """글로벌 기업을 국내 상장기업으로 오인하지 않도록 국내 종목만 반환."""
     return [c for c in companies if c in LISTED_COMPANY_ALIASES and c not in GLOBAL_COMPANY_KEYWORDS]
 
-
 def _engine_global_companies(companies):
     return [c for c in companies if c in GLOBAL_COMPANY_KEYWORDS]
-
 
 def _engine_classify(source, title, extra=""):
     text = _engine_clean(f"{title} {extra}")
@@ -1646,7 +1650,6 @@ def _engine_classify(source, title, extra=""):
     if _engine_is_global_market_news(text):
         return True, "🌐", [], k1, k2, market_hits
     return False, "일반", [], k1, k2, market_hits
-
 
 # 국내 상장기업/관련주 연결 문구. 단순 산업 키워드만으로 종목을 억지 연결하지 않는다.
 STOCK_LINK_MAP = {
@@ -1725,7 +1728,6 @@ def _engine_stock_links(text, companies):
                     links.append(stock)
     return links[:5]
 
-
 THEME_MAP = {
     "HBM": "HBM·AI반도체", "AI 반도체": "HBM·AI반도체", "AI칩": "HBM·AI반도체",
     "로봇": "휴머노이드·로봇", "휴머노이드": "휴머노이드·로봇",
@@ -1762,7 +1764,6 @@ def _engine_relation_reason(text, companies, market_hits):
         return "기사에 직접 언급된 국내 상장기업의 사업·실적과 연결"
     return ""
 
-
 def _engine_schedule(text):
     """실제 투자 일정만 추출한다.
     텔레그램 게시 시각(예: 14:25)은 일정으로 취급하지 않는다.
@@ -1779,7 +1780,6 @@ def _engine_schedule(text):
         if m:
             return m.group(0).strip()[:160]
     return ""
-
 
 def _engine_summary(title, extra, companies, market_hits):
     text = _engine_clean(f"{title} {extra}")
@@ -1831,7 +1831,6 @@ def _engine_score(item):
 _engine_pending = []
 _engine_sent_fingerprints = []  # {text, source, time_text, published, title}
 
-
 def _engine_freshness(item):
     """시장 반영 가능 여부를 고려한 신규/업그레이드/재탕 판정."""
     full = item["title"] + " " + item.get("extra", "")
@@ -1864,7 +1863,6 @@ def _engine_freshness(item):
         return "재탕", prev
     return "신규", None
 
-
 def _engine_similar(a, b):
     ta = re.sub(r"[^0-9a-zA-Z가-힣]", "", a.lower())
     tb = re.sub(r"[^0-9a-zA-Z가-힣]", "", b.lower())
@@ -1876,7 +1874,6 @@ def _engine_similar(a, b):
     ma = set(_engine_market_hit(a))
     mb = set(_engine_market_hit(b))
     return bool(ca & cb) and bool(ma & mb) and difflib.SequenceMatcher(None, ta[:180], tb[:180]).ratio() >= 0.52
-
 
 def _engine_market_reason(text):
     """글로벌/미국장 뉴스의 급등·급락 원인을 뉴스 내용에서 추출한다.
@@ -1908,7 +1905,6 @@ def _engine_market_reason(text):
     if hits:
         return "시장 핵심 재료: " + " · ".join(hits[:4])
     return "기사에 명시된 시장 변동 원인 확인 필요"
-
 
 def _engine_format_message(item):
     category = item["category"]
@@ -1968,14 +1964,7 @@ def _engine_format_message(item):
         reason_text = _engine_market_reason(item.get("title", "") + " " + item.get("extra", ""))
         if category in ("🌐", "🌐시황") or str(item.get("source", "")) == "Google-US":
             raw = _engine_clean(item.get("title", "") + " " + item.get("extra", ""))
-            candidate = raw.split(" - ", 1)[0].strip()
-            low_raw = raw.lower()
-            for marker in ("때문", "여파", "영향", "따라", "소식", "발표", "결정", "with ", "after ", "amid ", "on "):
-                idx = low_raw.find(marker.lower())
-                if idx >= 0:
-                    candidate = raw[max(0, idx-35):idx+90].strip()
-                    break
-            strong_reason = candidate[:150] if candidate else reason_text[:150]
+            strong_reason = _engine_market_move_reason(item.get("title", ""), item.get("extra", ""))
         elif strong_hits:
             # 국내/산업 뉴스도 핵심 키워드만 나열하지 않고 문맥을 살려 설명한다.
             strong_reason = ", ".join(strong_hits[:3])
@@ -2006,7 +1995,6 @@ def _engine_format_message(item):
         link = html.escape(item["link"], quote=True)
         lines += ["", f'<a href="{link}">🔗 원문 보기</a>']
     return "\n".join(lines)
-
 
 def _engine_flush_pending():
     global _engine_pending
@@ -2082,7 +2070,6 @@ def _engine_flush_pending():
     _engine_pending = []
     return sent
 
-
 def _engine_is_relevant(title):
     t = title.lower()
     kws = set()
@@ -2093,7 +2080,6 @@ def _engine_is_relevant(title):
         if x.lower() in t:
             kws.add(x)
     return list(kws)[:8]
-
 
 def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
@@ -2136,7 +2122,6 @@ def _engine_process_item(source, title, link, published="", extra=""):
     _engine_log("info", "[후보] %s | 기업=%s | 재료=%s | %s", category, ",".join(companies[:3]) or "없음", ",".join(market_hits[:3]) or "없음", market_state)
     return True
 
-
 def _engine_fetch_rss(url, source):
     started = time.time()
     try:
@@ -2153,7 +2138,6 @@ def _engine_fetch_rss(url, source):
     except Exception as e:
         log_error("RSS 수집", e, source=source, url=url)
         return []
-
 
 def _engine_run_google_and_domestic():
     if not ENABLE_DOMESTIC_NEWS:
@@ -2173,7 +2157,6 @@ def _engine_run_google_and_domestic():
                 if _engine_process_item("Google-US", e.get("title", ""), e.get("link", ""), e.get("published", "") or e.get("updated", ""), e.get("summary", "")):
                     total += 1
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
-
 
 def _engine_run_naver():
     if not ENABLE_NAVER_NEWS:
@@ -2215,7 +2198,6 @@ def _engine_run_naver():
             log_error("네이버 뉴스 검색", e, query=q)
     _engine_log("info", "[네이버] 이번주기=%d개 검색 | 후보=%d | API=%s", len(selected), total, "정상" if api_ok else "오류")
 
-
 def _engine_run_keyword_combinations():
     # 기업명 + 핵심 테마 조합을 실제 네이버 API 검색으로 확인한다.
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
@@ -2245,7 +2227,6 @@ def _engine_run_keyword_combinations():
             _engine_log("info", "[키워드 조합] %s | 결과=%d | 신규=%d", q, len(items), new_count)
         except Exception as e:
             log_error("키워드 조합 검색", e, query=q)
-
 
 def _engine_run_dart():
     if not ENABLE_DART:
@@ -2284,7 +2265,6 @@ def _engine_run_dart():
     except Exception as e:
         log_error("DART 검사", e)
 
-
 def _engine_run_telegram_channels():
     if not ENABLE_TELEGRAM_CHANNELS:
         _engine_log("warning", "[텔레그램] ENABLE_TELEGRAM_CHANNELS=OFF")
@@ -2312,7 +2292,6 @@ def _engine_run_telegram_channels():
             log_error("텔레그램 채널 수집", e, channel=name, url=url)
     _engine_log("info", "[텔레그램] 확인 완료 | 후보=%d건", total)
 
-
 def _engine_youtube_channel_id(handle):
     h = str(handle or "").strip().lstrip("@").strip()
     if not h: return ""
@@ -2325,7 +2304,6 @@ def _engine_youtube_channel_id(handle):
         except Exception:
             continue
     return ""
-
 
 def _engine_run_youtube():
     if not ENABLE_YOUTUBE:
@@ -2348,7 +2326,6 @@ def _engine_run_youtube():
             if _engine_process_item(f"유튜브/{name}", title, e.get("link", ""), published, desc): total += 1
     _engine_log("info", "[유튜브 완료] 채널=%d/%d 성공 | 실패=%d | 신규후보=%d", ok_channels, len(YOUTUBE_CHANNELS), fail_channels, total)
 
-
 def _engine_run_test_fixture():
     path = NEWS_TEST_FILE
     if not path or not os.path.exists(path): return 0
@@ -2362,9 +2339,6 @@ def _engine_run_test_fixture():
         return total
     except Exception as e:
         _engine_log("error", "[실패] 테스트 파일 | 원인=%s", str(e)[:160]); return 0
-
-
-
 
 # ============================================================
 # 🇺🇸 미국장 30분 브리핑 + 장중 변동 감시
@@ -2433,12 +2407,10 @@ _US_BRIEFING_LAST_POLL = None
 _US_BRIEFING_NEWS_MEMORY = []
 _US_BRIEFING_LOCK = threading.Lock()
 
-
 def _us_market_now_et():
     if ZoneInfo is None:
         return None
     return _now_kst().replace(tzinfo=_KST).astimezone(ZoneInfo("America/New_York"))
-
 
 def _us_market_is_holiday(d):
     # 2026 Nasdaq/NYSE 휴장일. 정규장 09:30 ET 기준으로만 사용한다.
@@ -2448,7 +2420,6 @@ def _us_market_is_holiday(d):
     }
     return d.strftime("%Y-%m-%d") in holidays
 
-
 def _us_market_session_open(et=None):
     et = et or _us_market_now_et()
     if et is None:
@@ -2456,7 +2427,6 @@ def _us_market_session_open(et=None):
     if et.weekday() >= 5 or _us_market_is_holiday(et.date()):
         return False
     return datetime.time(9, 30) <= et.time() < datetime.time(16, 0)
-
 
 def _yahoo_chart_quote(symbol, interval="5m", range_="1d"):
     """Yahoo chart endpoint에서 현재가/전일종가/장중 데이터를 안전하게 읽는다."""
@@ -2507,7 +2477,6 @@ def _yahoo_chart_quote(symbol, interval="5m", range_="1d"):
         _engine_log("warning", "[미장시세] %s | 확인 실패=%s", symbol, str(e)[:100])
         return None
 
-
 def _us_briefing_reason(name, theme):
     """최근 수집 뉴스에서 실제 언급된 원인을 찾는다. 없으면 추정하지 않는다."""
     now = _now_kst()
@@ -2537,7 +2506,6 @@ def _us_briefing_reason(name, theme):
         return ""
     return candidates[0].get("title", "")[:180]
 
-
 def _us_briefing_fetch_all():
     data = {}
     for symbol, meta in US_BRIEFING_WATCHLIST.items():
@@ -2547,18 +2515,15 @@ def _us_briefing_fetch_all():
             data[symbol] = q
     return data
 
-
 def _us_direction(pct):
     if pct is None:
         return ""
     return "📈 급등" if pct >= 0 else "📉 급락"
 
-
 def _us_format_pct(pct):
     if pct is None:
         return "시세 확인불가"
     return f"{pct:+.2f}%"
-
 
 def _us_open_briefing(snapshot, et):
     """미국장 개장 30분 브리핑: 시장 전체 → 상승/하락 → 특이사항/테마 → 국내 연결."""
@@ -2692,7 +2657,6 @@ def _us_intraday_events(snapshot):
     events.sort(reverse=True, key=lambda x: x[0])
     return events
 
-
 def _us_intraday_briefing(snapshot, events, et):
     lines = [
         "<b>🌐 [미장 장중 브리핑]</b>",
@@ -2738,7 +2702,6 @@ def _us_intraday_briefing(snapshot, events, et):
     lines.append("※ 방향(급등/급락)과 재료 강도는 별도로 표기하며, 시세만으로 국내 관련주를 강제 연결하지 않습니다.")
     return "\n".join(lines)
 
-
 def _engine_us_market_monitor():
     global _US_BRIEFING_LAST_RUN_DATE, _US_BRIEFING_LAST_OPEN_SENT
     global _US_BRIEFING_LAST_INTRADAY_SENT, _US_BRIEFING_LAST_SNAPSHOT, _US_BRIEFING_LAST_POLL
@@ -2776,7 +2739,6 @@ def _engine_us_market_monitor():
                 _US_BRIEFING_LAST_INTRADAY_SENT = now
                 _engine_log("info", "[미장브리핑] 장중 변동 브리핑 송출 | 이벤트=%d", len(events))
     _US_BRIEFING_LAST_SNAPSHOT = snapshot
-
 
 # ============================================================
 # 🇺🇸 미국장 마감 브리핑
@@ -2994,7 +2956,6 @@ def _engine_us_market_close_monitor():
         _US_CLOSE_BRIEF_LAST_SENT = et.date()
         _engine_log("info", "[미장마감] 장마감 브리핑 송출 완료")
 
-
 def _engine_cycle():
     global _engine_last_cycle_started, _engine_last_cycle_finished
     started = time.time()
@@ -3039,8 +3000,6 @@ def _engine_cycle():
     _engine_flush_pending()
     _engine_last_cycle_finished = time.time()
     _engine_log("info", "[주기 완료] %.2f초", time.time()-started)
-
-
 
 # ============================================================
 # Render Web Service 헬스체크
@@ -3091,7 +3050,6 @@ def _engine_main_loop():
         _engine_log("debug", "[대기] %.1f초", wait)
         time.sleep(min(wait, 5))
         _engine_watchdog_alert()
-
 
 if __name__ == "__main__":
     try:
