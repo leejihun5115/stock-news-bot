@@ -163,6 +163,8 @@ import feedparser
 import requests
 import html
 import json
+import hashlib
+import tempfile
 import re
 import os
 import difflib
@@ -988,6 +990,24 @@ ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
 
 # 외부채널(텔레그램/유튜브)은 60분을 기본으로 하며, 시장 마감 후/휴무의 강한 국내 상장기업 재료만 예외 허용한다.
 NEWS_TEST_FILE = os.environ.get("NEWS_TEST_FILE", "news_test_items.json")
+
+# --- 통합 확장 상태/보안 설정 ---
+HISTORICAL_SURGE_DB = os.environ.get("NEWS_BOT_HISTORICAL_DB", "news_bot_historical_surge.jsonl")
+GLOBAL_BRIEFING_DB = os.environ.get("NEWS_BOT_GLOBAL_BRIEFING_DB", "news_bot_global_briefing.jsonl")
+TELEGRAM_SPAM_STATE = os.environ.get("NEWS_BOT_TELEGRAM_SPAM_STATE", "news_bot_telegram_spam.json")
+WATCHDOG_TIMEOUT = max(120, int(os.environ.get("NEWS_BOT_WATCHDOG_TIMEOUT", "300")))
+WATCHDOG_ALERT_INTERVAL = max(300, int(os.environ.get("NEWS_BOT_WATCHDOG_ALERT_INTERVAL", "900")))
+TELEGRAM_MAX_PER_SOURCE_HOUR = max(1, int(os.environ.get("NEWS_BOT_TELEGRAM_MAX_PER_SOURCE_HOUR", "6")))
+HISTORICAL_MATCH_THRESHOLD = float(os.environ.get("NEWS_BOT_HISTORICAL_MATCH_THRESHOLD", "0.72"))
+ENABLE_GLOBAL_BRIEFING_DB = _env_flag("ENABLE_GLOBAL_BRIEFING_DB")
+ENABLE_HISTORICAL_SURGE_DB = _env_flag("ENABLE_HISTORICAL_SURGE_DB")
+
+_engine_last_cycle_started = 0.0
+_engine_last_cycle_finished = 0.0
+_engine_last_watchdog_alert = 0.0
+_engine_telegram_counts = {}
+_engine_historical_cache = []
+_engine_global_briefing_cache = []
 MARKET_IMPACT_KEYWORDS = {
     "인수", "합병", "M&A", "m&a", "세계최초", "세계 최대", "세계최대", "사상 최대", "사상최대",
     "대규모 수주", "수주", "공급계약", "계약", "독점", "FDA", "승인", "허가", "특허",
@@ -1029,6 +1049,176 @@ def _engine_log(level, message, *args):
             _logger.info(message, *args)
     except Exception:
         print(message % args if args else message, flush=True)
+
+
+def _engine_atomic_append_jsonl(path, obj):
+    """상태/브리핑 DB를 한 줄 JSON으로 안전하게 추가한다. 민감정보는 기록하지 않는다."""
+    try:
+        directory = os.path.dirname(os.path.abspath(path)) or "."
+        os.makedirs(directory, exist_ok=True)
+        line = json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        return True
+    except Exception as e:
+        log_error("JSONL 상태 저장", e, file=path)
+        return False
+
+
+def _engine_is_global_market_news(text):
+    """국내 관련주가 없어도 보존해야 하는 글로벌 시황 재료."""
+    low = _engine_clean(text).lower()
+    macro = [
+        "fomc", "fed", "powell", "cpi", "pce", "nonfarm", "payroll", "unemployment",
+        "treasury", "yield", "bond yield", "tariff", "sanction", "ceasefire", "war",
+        "oil", "wti", "brent", "gold", "copper", "dollar", "usd", "nasdaq", "s&p 500",
+        "dow", "semiconductor index", "phlx", "호르무즈", "전쟁", "휴전", "관세", "제재",
+        "연준", "금리", "국채", "환율", "유가", "뉴욕증시", "필라델피아반도체지수",
+    ]
+    movement = list(US_FEATURE_STOCK_WORDS) + ["급등", "급락", "폭등", "폭락", "신고가", "신저가"]
+    return any(k in low for k in macro) and any(k in low for k in movement + ["발표", "결정", "회의", "인상", "인하", "확산", "충돌", "협상"])
+
+
+def _engine_confidence_state(item):
+    """미확인/확인/업그레이드 구분. 소문·전망은 확인 전 상태로 표시한다."""
+    text = _engine_clean(item.get("title", "") + " " + item.get("extra", "")).lower()
+    rumor = ["가능성", "전망", "관측", "추정", "검토", "추진설", "인수설", "협상중", "논의중", "rumor", "reportedly", "could", "may"]
+    confirmed = ["확정", "공식", "체결", "발표", "승인", "허가", "수주", "공급계약", "실적", "공시", "confirmed", "official", "approved"]
+    rumor_hit = any(k in text for k in rumor) or bool(re.search(r"(?:^|\s)(?:설|루머)(?:$|\s)", text))
+    if rumor_hit and not any(k in text for k in confirmed):
+        return "미확인"
+    return "확인"
+
+
+def _engine_strong_material(item):
+    text = _engine_clean(item.get("title", "") + " " + item.get("extra", "")).lower()
+    strong = set(str(x).lower() for x in STRONG_MARKET_HITS | MONEY_STRONG_WORDS)
+    strong |= {"계약 체결", "공급계약", "대규모 수주", "수주 확정", "사상 최대", "세계 최대", "독점", "승인", "허가", "인수 확정", "대규모 투자"}
+    amount = bool(re.search(r"(?:[0-9][0-9,]*\s*(?:억|조|억원|조원|달러|usd|million|billion))", text, re.I))
+    hits = [x for x in strong if x in text]
+    return bool(hits or amount or len(item.get("market_hits", [])) >= 2), hits[:5]
+
+
+def _engine_historical_match(item):
+    if not ENABLE_HISTORICAL_SURGE_DB or not _engine_historical_cache:
+        return None
+    current = item.get("title", "") + " " + item.get("extra", "")
+    best = None
+    for row in _engine_historical_cache[-3000:]:
+        old = str(row.get("text", ""))
+        if not old:
+            continue
+        ratio = difflib.SequenceMatcher(None,
+            re.sub(r"[^0-9a-zA-Z가-힣]", "", current.lower())[:260],
+            re.sub(r"[^0-9a-zA-Z가-힣]", "", old.lower())[:260]).ratio()
+        if ratio >= HISTORICAL_MATCH_THRESHOLD and (best is None or ratio > best[0]):
+            best = (ratio, row)
+    return best
+
+
+def _engine_load_extended_state():
+    global _engine_historical_cache, _engine_global_briefing_cache, _engine_telegram_counts
+    if ENABLE_HISTORICAL_SURGE_DB and os.path.exists(HISTORICAL_SURGE_DB):
+        try:
+            with open(HISTORICAL_SURGE_DB, "r", encoding="utf-8") as f:
+                _engine_historical_cache = [json.loads(x) for x in f if x.strip()][-5000:]
+        except Exception as e:
+            log_error("과거 급등 DB 읽기", e, file=HISTORICAL_SURGE_DB)
+    if ENABLE_GLOBAL_BRIEFING_DB and os.path.exists(GLOBAL_BRIEFING_DB):
+        try:
+            with open(GLOBAL_BRIEFING_DB, "r", encoding="utf-8") as f:
+                _engine_global_briefing_cache = [json.loads(x) for x in f if x.strip()][-5000:]
+        except Exception as e:
+            log_error("글로벌 브리핑 DB 읽기", e, file=GLOBAL_BRIEFING_DB)
+    if os.path.exists(TELEGRAM_SPAM_STATE):
+        try:
+            with open(TELEGRAM_SPAM_STATE, "r", encoding="utf-8") as f:
+                _engine_telegram_counts = json.load(f) or {}
+        except Exception:
+            _engine_telegram_counts = {}
+
+
+def _engine_record_global_briefing(item):
+    if not ENABLE_GLOBAL_BRIEFING_DB:
+        return
+    if not (item.get("market_hits") or _engine_is_global_market_news(item.get("title", "") + " " + item.get("extra", ""))):
+        return
+    row = {
+        "ts": _now_kst().isoformat(),
+        "source": str(item.get("source", ""))[:80],
+        "published": str(item.get("published", ""))[:80],
+        "title": str(item.get("title", ""))[:500],
+        "link": str(item.get("link", ""))[:1000],
+        "companies": _engine_global_companies(item.get("companies", []))[:6],
+        "market_hits": item.get("market_hits", [])[:8],
+    }
+    _engine_atomic_append_jsonl(GLOBAL_BRIEFING_DB, row)
+
+
+def _engine_record_historical_case(item):
+    if not ENABLE_HISTORICAL_SURGE_DB:
+        return
+    strong, hits = _engine_strong_material(item)
+    title = item.get("title", "")
+    if not strong or not any(x in _engine_clean(title + " " + item.get("extra", "")).lower() for x in ["급등", "폭등", "상한가", "신고가", "surge", "soar", "rally"]):
+        return
+    row = {
+        "ts": _now_kst().isoformat(), "text": (title + " " + item.get("extra", ""))[:800],
+        "title": title[:500], "link": str(item.get("link", ""))[:1000],
+        "companies": item.get("companies", [])[:6], "hits": hits,
+    }
+    if _engine_atomic_append_jsonl(HISTORICAL_SURGE_DB, row):
+        _engine_historical_cache.append(row)
+        if len(_engine_historical_cache) > 5000:
+            del _engine_historical_cache[:-5000]
+
+
+def _engine_telegram_spam_allowed(item):
+    source = str(item.get("source", ""))
+    if not source.startswith("텔레그램/"):
+        return True
+    now = time.time()
+    bucket = _engine_telegram_counts.setdefault(source, [])
+    bucket[:] = [x for x in bucket if now - float(x) < 3600]
+    if len(bucket) >= TELEGRAM_MAX_PER_SOURCE_HOUR:
+        _engine_log("info", "[제외] Telegram 도배방지 | source=%s | 1시간=%d", source, len(bucket))
+        return False
+    return True
+
+
+def _engine_telegram_mark_sent(item):
+    source = str(item.get("source", ""))
+    if source.startswith("텔레그램/"):
+        _engine_telegram_counts.setdefault(source, []).append(time.time())
+        try:
+            with open(TELEGRAM_SPAM_STATE + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(_engine_telegram_counts, f, ensure_ascii=False, separators=(",", ":"))
+            os.replace(TELEGRAM_SPAM_STATE + ".tmp", TELEGRAM_SPAM_STATE)
+        except Exception as e:
+            log_error("Telegram 도배상태 저장", e, file=TELEGRAM_SPAM_STATE)
+
+
+def _engine_watchdog_alert(force=False):
+    global _engine_last_watchdog_alert
+    if not _engine_last_cycle_started:
+        return
+    stale = time.time() - max(_engine_last_cycle_started, _engine_last_cycle_finished)
+    if stale < WATCHDOG_TIMEOUT:
+        return
+    if not force and time.time() - _engine_last_watchdog_alert < WATCHDOG_ALERT_INTERVAL:
+        return
+    _engine_last_watchdog_alert = time.time()
+    msg = f"🚨 뉴스봇 WATCHDOG\n마지막 주기 응답 지연: {int(stale)}초\nKST: {_now_kst().strftime('%Y-%m-%d %H:%M:%S')}"
+    _engine_log("error", "[WATCHDOG] %s", msg.replace("\n", " | "))
+    try:
+        _engine_send_telegram(msg)
+    except Exception as e:
+        log_error("WATCHDOG Telegram 알림", e)
 
 
 def _engine_load_seen():
@@ -1306,6 +1496,9 @@ def _engine_classify(source, title, extra=""):
         return True, "📌", domestic, k1, k2, market_hits
     if global_relevant:
         return True, "🌐", global_companies, k1, k2, market_hits
+    # 국내 관련주가 없어도 의미 있는 글로벌 시황은 보존한다.
+    if _engine_is_global_market_news(text):
+        return True, "🌐시황", [], k1, k2, market_hits
     return False, "일반", [], k1, k2, market_hits
 
 
@@ -1414,14 +1607,15 @@ def _engine_summary(title, extra, companies, market_hits):
         else:
             direction = "관련주"
         theme_text = f"[{theme} 테마] " if theme else ""
-        core = f"🔎 {theme_text}{reason} / {direction} → " + "·".join(links[:3])
+        relation_type = "직접 관련" if domestic else "테마·간접 수혜"
+        core = f"🔎 [{relation_type}] {theme_text}{reason} / {direction} → " + "·".join(links[:3])
     elif domestic:
-        core = f"🔎 {reason} → " + "·".join(domestic[:4])
+        core = f"🔎 [직접 관련] {reason} → " + "·".join(domestic[:4])
     elif global_companies:
         # 글로벌 기업은 국내 상장기업 문구를 절대 만들지 않는다.
         core = f"🔎 글로벌 기업 → " + "·".join(global_companies[:4])
     elif market_hits:
-        core = "🔎 시장 핵심 재료 → " + "·".join(market_hits[:4])
+        core = "🔎 [글로벌 시황] 시장 핵심 재료 → " + "·".join(market_hits[:4])
     else:
         core = ""
     return core, _engine_schedule(text)
@@ -1520,6 +1714,24 @@ def _engine_format_message(item):
         prev_time = html.escape(str(prev.get("time_text", "")))
         if prev_source or prev_time:
             lines += [f"↳ 선행 보도: <b>{prev_time} / {prev_source}</b>"]
+    confidence = _engine_confidence_state(item)
+    strong, strong_hits = _engine_strong_material(item)
+    historical = _engine_historical_match(item)
+    global_companies = _engine_global_companies(companies)
+    if strong:
+        lines.insert(2, "💯 강한 재료" + (f" · {html.escape(', '.join(strong_hits[:3]))}" if strong_hits else ""))
+    if confidence == "미확인":
+        lines.insert(3, "⚠️ [미확인] 공식 확인 전 소문·전망성 재료")
+    if global_companies:
+        lines.insert(3, "🌐 해외 수혜기업: " + html.escape(" · ".join(global_companies[:5])))
+    if historical:
+        ratio, hrow = historical
+        htitle = html.escape(str(hrow.get("title", "과거 유사 사례"))[:180])
+        hlink = html.escape(str(hrow.get("link", "")), quote=True)
+        if hlink:
+            lines += ["", f"📚 과거 유사 급등 사례 ({ratio:.0%})", f'<a href="{hlink}">🔗 {htitle}</a>']
+        else:
+            lines += ["", f"📚 과거 유사 급등 사례 ({ratio:.0%})", htitle]
     core, schedule = _engine_summary(item["title"], item["extra"], companies, item["market_hits"])
     core_html = html.escape(core).replace("⚡️", "⚡️")
     # 별도 '한국과의 관계 / 관련주' 소제목은 사용하지 않는다.
@@ -1554,6 +1766,8 @@ def _engine_flush_pending():
     sent = 0
     for item in candidates[:ENGINE_MAX_SEND_PER_CYCLE]:
         key = item["key"]
+        if not _engine_telegram_spam_allowed(item):
+            continue
         if key in _engine_seen:
             continue
         full_text = item["title"] + " " + item["extra"]
@@ -1562,14 +1776,19 @@ def _engine_flush_pending():
             if _engine_similar(full_text, prev.get("text", "")):
                 similar_prev = prev
                 break
-        # 시장 마감/휴무 중에는 강한 동일 재료를 중복으로 버리지 않는다.
-        # 시장이 반영할 기회가 없었기 때문에 다음 거래일 수급 재료가 될 수 있다.
+        # 동일 사건이라도 확정/금액/추가 계약 등 새로운 정보가 붙으면 '업그레이드'로 살린다.
+        # 단순 재탕만 차단한다.
         if similar_prev and item.get("market_state") not in ("시장 마감 후 뉴스", "시장 휴무로 미반영"):
-            _engine_log("info", "[제외] 중복뉴스 | 시장 반영 기회 있음")
-            continue
+            freshness, _prev = _engine_freshness(item)
+            if freshness == "재탕":
+                _engine_log("info", "[제외] 중복뉴스 | 시장 반영 기회 있음")
+                continue
         if _engine_send_telegram(_engine_format_message(item)):
             _engine_mark_seen(key)
             _engine_sent_fingerprints.append({"text": full_text, "source": item["source"], "time_text": item.get("time_text", ""), "published": item.get("published", ""), "title": item["title"], "market_state": item.get("market_state", "")})
+            _engine_telegram_mark_sent(item)
+            _engine_record_global_briefing(item)
+            _engine_record_historical_case(item)
             sent += 1
             _engine_log("info", "[성공] %s | 송출", item["category"])
     _engine_log("info", "[송출결과] 후보=%d | 중복제거=%d | 전송=%d", len(_engine_pending), len(groups), sent)
@@ -1846,7 +2065,9 @@ def _engine_run_test_fixture():
 
 
 def _engine_cycle():
+    global _engine_last_cycle_started, _engine_last_cycle_finished
     started = time.time()
+    _engine_last_cycle_started = started
     _engine_log("info", "[주기 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
     try:
         _engine_run_google_and_domestic()
@@ -1877,6 +2098,7 @@ def _engine_cycle():
     except Exception as e:
         log_error("테스트 파일 전체", e)
     _engine_flush_pending()
+    _engine_last_cycle_finished = time.time()
     _engine_log("info", "[주기 완료] %.2f초", time.time()-started)
 
 
@@ -1894,6 +2116,10 @@ def _start_render_health_server():
 
         class HealthHandler(BaseHTTPRequestHandler):
             def do_GET(self):
+                if self.path not in ("/", "/health"):
+                    self.send_response(404)
+                    self.end_headers()
+                    return
                 body = b"news_bot is running\n"
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -1913,6 +2139,7 @@ def _start_render_health_server():
 
 def _engine_main_loop():
     _engine_load_seen()
+    _engine_load_extended_state()
     _engine_log("info", "[엔진] 60초 주기 시작")
     while True:
         cycle_start = time.time()
@@ -1921,8 +2148,10 @@ def _engine_main_loop():
         except Exception as e:
             log_error("메인 사이클 치명적 오류", e)
         wait = max(1, ENGINE_INTERVAL - (time.time() - cycle_start))
+        _engine_watchdog_alert()
         _engine_log("debug", "[대기] %.1f초", wait)
-        time.sleep(wait)
+        time.sleep(min(wait, 5))
+        _engine_watchdog_alert()
 
 
 if __name__ == "__main__":
@@ -1936,7 +2165,7 @@ if __name__ == "__main__":
         health_thread.start()
         time.sleep(0.3)
 
-        _engine_log("info", "[시작] 뉴스 수집·분석")
+        _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례 기능 활성화")
         _engine_log("info", "[BOOT] NAVER=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
                     bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET),
                     bool(DART_API_KEY),
