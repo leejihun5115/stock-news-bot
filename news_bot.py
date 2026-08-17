@@ -3110,7 +3110,7 @@ def _us_open_briefing(snapshot, et):
     indices = ["^IXIC", "^GSPC", "^DJI", "^SOX", "^VIX"]
     macro = ["USDKRW=X", "CL=F", "GC=F"]
     lines = [
-        "<b>🌐 [미장 브리핑]</b>",
+        "<b>🇺🇸 [미장 브리핑]</b>",
         f"🕐 개장 30분 · {et.strftime('%H:%M ET')}",
         "",
         "<b>📊 주요 지수</b>",
