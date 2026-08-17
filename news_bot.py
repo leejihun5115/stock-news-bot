@@ -1627,6 +1627,26 @@ def _engine_schedule(text):
     return ""
 
 
+def _engine_stock_relation_reason(text, stock, theme_key=""):
+    """뉴스 본문을 기준으로 왜 해당 종목을 연결했는지 설명한다.
+    단순 종목명/키워드 반복이 아니라 사업·테마 관계를 설명하는 것을 우선한다.
+    """
+    low = text.lower()
+    if stock in _engine_domestic_companies(_engine_find_companies(text)):
+        if any(x in low for x in ["수주", "공급계약", "계약 체결", "발주", "공급"]):
+            if theme_key:
+                return f"기사에 직접 언급된 {stock}의 {theme_key} 관련 수주·공급 재료"
+            return f"기사에 직접 언급된 {stock}의 사업·계약 재료"
+        if any(x in low for x in ["승인", "허가", "fda"]):
+            return f"기사에 직접 언급된 {stock}의 승인·허가 관련 사업 재료"
+        if any(x in low for x in ["투자", "증설", "양산"]):
+            return f"기사에 직접 언급된 {stock}의 투자·증설·양산 재료"
+        return f"기사 본문에 직접 언급된 {stock}의 사업·실적 관련 재료"
+    if theme_key:
+        return f"뉴스의 {theme_key} 재료와 {stock}의 관련 사업이 연결되고 과거 동일 테마에서 시장 반응을 확인할 수 있어 관찰"
+    return f"뉴스 재료와 {stock}의 국내 사업 연관성을 기준으로 관찰"
+
+
 def _engine_summary(title, extra, companies, market_hits):
     text = _engine_clean(f"{title} {extra}")
     domestic = _engine_domestic_companies(companies)
@@ -1645,17 +1665,26 @@ def _engine_summary(title, extra, companies, market_hits):
             direction = "관련주"
         theme_text = f"[{theme} 테마] " if theme else ""
         relation_type = "직접 관련" if domestic else "테마·간접 수혜"
-        core = f"🔎 [{relation_type}] {theme_text}{reason} / {direction} → " + "·".join(links[:3])
+        lines = [f"🔎 [{relation_type}] {theme_text}{reason} / {direction}"]
+        # 관심종목은 최대 3개. 각 종목마다 왜 연결되는지 별도로 설명한다.
+        for n, stock in enumerate(links[:3], 1):
+            badge = "🥇 대장주" if n == 1 else ("🥈 관찰" if n == 2 else "🥉 관찰")
+            stock_reason = _engine_stock_relation_reason(text, stock, theme)
+            lines.append(f"{badge} {stock}")
+            lines.append(f"  🔎 {stock_reason}")
+        return "\n".join(lines), _engine_schedule(text)
     elif domestic:
-        core = f"🔎 [직접 관련] {reason} → " + "·".join(domestic[:4])
+        lines = [f"🔎 [직접 관련] {reason}"]
+        for stock in domestic[:3]:
+            lines.append(f"🥇 대장주 {stock}")
+            lines.append(f"  🔎 {_engine_stock_relation_reason(text, stock, theme)}")
+        return "\n".join(lines), _engine_schedule(text)
     elif global_companies:
-        # 글로벌 기업은 국내 상장기업 문구를 절대 만들지 않는다.
-        core = f"🔎 글로벌 기업 → " + "·".join(global_companies[:4])
+        return f"🔎 글로벌 기업 → " + "·".join(global_companies[:4]), _engine_schedule(text)
     elif market_hits:
-        core = "🔎 [글로벌 시황] 시장 핵심 재료 → " + "·".join(market_hits[:4])
+        return "🔎 [글로벌 시황] 시장 핵심 재료 → " + "·".join(market_hits[:4]), _engine_schedule(text)
     else:
-        core = ""
-    return core, _engine_schedule(text)
+        return "", _engine_schedule(text)
 
 def _engine_score(item):
     return (4 if item["category"] in ("🚀속보", "🚨특징주", "🚀단독") else 0) + min(3, len(_engine_domestic_companies(item["companies"]))) + min(3, len(item["market_hits"])) + min(2, len(item["extra"]))
@@ -1710,6 +1739,19 @@ def _engine_similar(a, b):
     return bool(ca & cb) and bool(ma & mb) and difflib.SequenceMatcher(None, ta[:180], tb[:180]).ratio() >= 0.52
 
 
+def _engine_market_state_label(item):
+    """시장 미반영 문구에 실제 뉴스 판정 시각을 붙인다.
+    예: 2026년 8월 17일 16시 00분 시장 마감후 뉴스
+    """
+    state = str(item.get("market_state", ""))
+    if state not in ("시장 마감 후 뉴스", "시장 휴무로 미반영"):
+        return state
+    dt = _engine_parse_datetime(item.get("published", ""))
+    if dt is None:
+        return state
+    return f"{dt.year}년 {dt.month}월 {dt.day}일 {dt.hour:02d}시 {dt.minute:02d}분 {state.replace('시장 마감 후 뉴스', '시장 마감후 뉴스')}"
+
+
 def _engine_format_message(item):
     category = item["category"]
     title = item["title"]
@@ -1731,7 +1773,7 @@ def _engine_format_message(item):
         if global_hit:
             title_prefix = "⭐️" + global_hit
         elif person_hit:
-            title_prefix = "🕵️" + person_hit
+            title_prefix = "📌"
         else:
             title_prefix = category
     source = html.escape(item["source"])
@@ -1782,7 +1824,7 @@ def _engine_format_message(item):
     if core:
         lines += ["", core_html]
     if market_state in ("시장 마감 후 뉴스", "시장 휴무로 미반영"):
-        lines += ["", f"⏸️ {html.escape(market_state)}"]
+        lines += ["", f"⏸️ {html.escape(_engine_market_state_label(item))}"]
     if schedule:
         lines += ["", f"<b>📅 일정</b>", html.escape(schedule)]
     if item.get("link"):
