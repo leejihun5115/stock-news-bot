@@ -1535,7 +1535,7 @@ def _engine_classify(source, title, extra=""):
         return True, "🌐", global_companies, k1, k2, market_hits
     # 국내 관련주가 없어도 의미 있는 글로벌 시황은 보존한다.
     if _engine_is_global_market_news(text):
-        return True, "🌐시황", [], k1, k2, market_hits
+        return True, "🌐", [], k1, k2, market_hits
     return False, "일반", [], k1, k2, market_hits
 
 
@@ -1627,26 +1627,6 @@ def _engine_schedule(text):
     return ""
 
 
-def _engine_stock_relation_reason(text, stock, theme_key=""):
-    """뉴스 본문을 기준으로 왜 해당 종목을 연결했는지 설명한다.
-    단순 종목명/키워드 반복이 아니라 사업·테마 관계를 설명하는 것을 우선한다.
-    """
-    low = text.lower()
-    if stock in _engine_domestic_companies(_engine_find_companies(text)):
-        if any(x in low for x in ["수주", "공급계약", "계약 체결", "발주", "공급"]):
-            if theme_key:
-                return f"기사에 직접 언급된 {stock}의 {theme_key} 관련 수주·공급 재료"
-            return f"기사에 직접 언급된 {stock}의 사업·계약 재료"
-        if any(x in low for x in ["승인", "허가", "fda"]):
-            return f"기사에 직접 언급된 {stock}의 승인·허가 관련 사업 재료"
-        if any(x in low for x in ["투자", "증설", "양산"]):
-            return f"기사에 직접 언급된 {stock}의 투자·증설·양산 재료"
-        return f"기사 본문에 직접 언급된 {stock}의 사업·실적 관련 재료"
-    if theme_key:
-        return f"뉴스의 {theme_key} 재료와 {stock}의 관련 사업이 연결되고 과거 동일 테마에서 시장 반응을 확인할 수 있어 관찰"
-    return f"뉴스 재료와 {stock}의 국내 사업 연관성을 기준으로 관찰"
-
-
 def _engine_summary(title, extra, companies, market_hits):
     text = _engine_clean(f"{title} {extra}")
     domestic = _engine_domestic_companies(companies)
@@ -1665,26 +1645,17 @@ def _engine_summary(title, extra, companies, market_hits):
             direction = "관련주"
         theme_text = f"[{theme} 테마] " if theme else ""
         relation_type = "직접 관련" if domestic else "테마·간접 수혜"
-        lines = [f"🔎 [{relation_type}] {theme_text}{reason} / {direction}"]
-        # 관심종목은 최대 3개. 각 종목마다 왜 연결되는지 별도로 설명한다.
-        for n, stock in enumerate(links[:3], 1):
-            badge = "🥇 대장주" if n == 1 else ("🥈 관찰" if n == 2 else "🥉 관찰")
-            stock_reason = _engine_stock_relation_reason(text, stock, theme)
-            lines.append(f"{badge} {stock}")
-            lines.append(f"  🔎 {stock_reason}")
-        return "\n".join(lines), _engine_schedule(text)
+        core = f"🔎 [{relation_type}] {theme_text}{reason} / {direction} → " + "·".join(links[:3])
     elif domestic:
-        lines = [f"🔎 [직접 관련] {reason}"]
-        for stock in domestic[:3]:
-            lines.append(f"🥇 대장주 {stock}")
-            lines.append(f"  🔎 {_engine_stock_relation_reason(text, stock, theme)}")
-        return "\n".join(lines), _engine_schedule(text)
+        core = f"🔎 [직접 관련] {reason} → " + "·".join(domestic[:4])
     elif global_companies:
-        return f"🔎 글로벌 기업 → " + "·".join(global_companies[:4]), _engine_schedule(text)
+        # 글로벌 기업은 국내 상장기업 문구를 절대 만들지 않는다.
+        core = f"🔎 글로벌 기업 → " + "·".join(global_companies[:4])
     elif market_hits:
-        return "🔎 [글로벌 시황] 시장 핵심 재료 → " + "·".join(market_hits[:4]), _engine_schedule(text)
+        core = "🔎 [글로벌 시황] 시장 핵심 재료 → " + "·".join(market_hits[:4])
     else:
-        return "", _engine_schedule(text)
+        core = ""
+    return core, _engine_schedule(text)
 
 def _engine_score(item):
     return (4 if item["category"] in ("🚀속보", "🚨특징주", "🚀단독") else 0) + min(3, len(_engine_domestic_companies(item["companies"]))) + min(3, len(item["market_hits"])) + min(2, len(item["extra"]))
@@ -1739,17 +1710,36 @@ def _engine_similar(a, b):
     return bool(ca & cb) and bool(ma & mb) and difflib.SequenceMatcher(None, ta[:180], tb[:180]).ratio() >= 0.52
 
 
-def _engine_market_state_label(item):
-    """시장 미반영 문구에 실제 뉴스 판정 시각을 붙인다.
-    예: 2026년 8월 17일 16시 00분 시장 마감후 뉴스
+def _engine_market_reason(text):
+    """글로벌/미국장 뉴스의 급등·급락 원인을 뉴스 내용에서 추출한다.
+    단순히 '미국장'을 반복하지 않고, 제목/본문에 실제로 명시된 원인을 우선한다.
     """
-    state = str(item.get("market_state", ""))
-    if state not in ("시장 마감 후 뉴스", "시장 휴무로 미반영"):
-        return state
-    dt = _engine_parse_datetime(item.get("published", ""))
-    if dt is None:
-        return state
-    return f"{dt.year}년 {dt.month}월 {dt.day}일 {dt.hour:02d}시 {dt.minute:02d}분 {state.replace('시장 마감 후 뉴스', '시장 마감후 뉴스')}"
+    t = _engine_clean(text)
+    low = t.lower()
+    # 기사에서 원인으로 자주 쓰이는 연결 표현을 우선 추출
+    patterns = [
+        r'(.{0,80}(?:유가|국제유가|원유|천연가스).{0,100}(?:급등|폭등|급락|폭락|하락|상승).{0,100})',
+        r'(.{0,80}(?:금리|금리인하|금리 인하|금리인상|금리 인상|연준|FOMC|파월).{0,100}(?:기대|우려|발언|결정|동결|인하|인상).{0,100})',
+        r'(.{0,80}(?:이란|이스라엘|중동|전쟁|휴전|지정학|관세|중국|미국 정책).{0,120}(?:발언|충돌|긴장|우려|변화|발표|종료|확대).{0,100})',
+        r'(.{0,80}(?:CPI|PCE|고용|실업률|물가|인플레이션|소비자물가).{0,120}(?:발표|상승|하락|둔화|호조|부진).{0,100})',
+        r'(.{0,80}(?:실적|매출|영업이익|가이던스|전망).{0,120}(?:호조|부진|상향|하향|악화|개선|발표).{0,100})',
+        r'(.{0,80}(?:수요|공급|공급망|생산|출하|재고).{0,120}(?:증가|감소|차질|개선|악화|우려).{0,100})',
+    ]
+    for pat in patterns:
+        m = re.search(pat, t, re.I)
+        if m:
+            reason = re.sub(r'\s+', ' ', m.group(1)).strip(" .,-")
+            if len(reason) >= 12:
+                return reason[:180]
+    # 제목에 '...에/때문에/여파로/영향에' 형태가 있으면 원인절을 보존
+    m = re.search(r'([^.\n]{5,120}(?:에|때문에|여파로|영향에|우려에|기대에)\s*(?:[^\n]{5,100}))', t)
+    if m:
+        return re.sub(r'\s+', ' ', m.group(1)).strip()[:180]
+    # 원인이 제목에 명시되지 않은 경우 시장 핵심 키워드를 설명
+    hits = _engine_market_hit(t)
+    if hits:
+        return "시장 핵심 재료: " + " · ".join(hits[:4])
+    return "기사에 명시된 시장 변동 원인 확인 필요"
 
 
 def _engine_format_message(item):
@@ -1771,12 +1761,15 @@ def _engine_format_message(item):
         global_hit = next((c for c in companies if c in GLOBAL_COMPANY_KEYWORDS), "")
         person_hit = next((c for c in UNIQUE_CELEBS if c.lower() in text_low), "")
         if global_hit:
-            title_prefix = "⭐️" + global_hit
+            # 제목에 이미 글로벌 기업명이 있으면 기업명을 prefix에 중복하지 않는다.
+            title_prefix = "⭐️"
         elif person_hit:
-            title_prefix = "📌"
+            title_prefix = "🕵️" + person_hit
         else:
             title_prefix = category
-    source = html.escape(item["source"])
+    source_raw = str(item["source"])
+    source_display = "🇺🇸" if source_raw == "Google-US" else source_raw
+    source = html.escape(source_display)
     time_text = html.escape(item.get("time_text", ""))
     title_html = html.escape(title)
     freshness, prev = _engine_freshness(item)
@@ -1798,17 +1791,19 @@ def _engine_format_message(item):
     historical = _engine_historical_match(item)
     global_companies = _engine_global_companies(companies)
     if strong:
-        # 💯는 재료 강도만 표시한다. 급등/급락 방향을 강한 재료 문구에 섞지 않는다.
-        strong_label = ", ".join(strong_hits[:3]) if strong_hits else "시장 영향 가능성이 큰 재료"
-        amount_m = re.search(r"(?:[0-9][0-9,]*(?:\.\d+)?)\s*(?:억|조|억원|조원|달러|USD|million|billion)", item.get("title","") + " " + item.get("extra",""), re.I)
-        detail = f" · {strong_label}"
-        if amount_m:
-            detail += f" · 규모 {amount_m.group(0)}"
-        lines.insert(2, "💯 강한 재료" + html.escape(detail))
+        # 💯 뒤에는 '급등/급락/강한 재료' 같은 결과 표현이 아니라
+        # 뉴스에서 확인되는 실제 원인·핵심 재료를 넣는다.
+        reason_text = _engine_market_reason(item.get("title", "") + " " + item.get("extra", ""))
+        if category in ("🌐", "🌐시황") or str(item.get("source", "")) == "Google-US":
+            strong_reason = reason_text
+        elif strong_hits:
+            # 국내/산업 뉴스도 핵심 키워드만 나열하지 않고 문맥을 살려 설명한다.
+            strong_reason = ", ".join(strong_hits[:3])
+        else:
+            strong_reason = reason_text
+        lines.insert(2, "💯 🔎 " + html.escape(strong_reason))
     if confidence == "미확인":
         lines.insert(3, "⚠️ [미확인] 공식 확인 전 소문·전망성 재료")
-    if global_companies:
-        lines.insert(3, "🌐 해외 수혜기업: " + html.escape(" · ".join(global_companies[:5])))
     if historical:
         ratio, hrow = historical
         htitle = html.escape(str(hrow.get("title", "과거 유사 사례"))[:180])
@@ -1824,7 +1819,7 @@ def _engine_format_message(item):
     if core:
         lines += ["", core_html]
     if market_state in ("시장 마감 후 뉴스", "시장 휴무로 미반영"):
-        lines += ["", f"⏸️ {html.escape(_engine_market_state_label(item))}"]
+        lines += ["", f"⏸️ {html.escape(market_state)}"]
     if schedule:
         lines += ["", f"<b>📅 일정</b>", html.escape(schedule)]
     if item.get("link"):
