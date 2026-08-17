@@ -2632,8 +2632,12 @@ def _engine_format_message(item):
                     badge = str(row.get("badge") or "🔎 관심종목")
                     # 국내 관심종목으로 최종 선정된 종목명 앞에는 항상 💯를 붙인다.
                     # 대장주/관찰 순위 표시는 종목 선정 이유를 명확히 하기 위한 용도다.
+                    # 미국 뉴스에서 국내 상장기업으로 연결된 최종 관심종목은
+                    # 국내 종목임을 한눈에 구분할 수 있도록 🇰🇷를 종목 바로 앞에 표시한다.
+                    # 국내 뉴스의 기존 출력 형식은 변경하지 않는다.
+                    stock_prefix = "🇰🇷 " if source_raw == "Google-US" else ""
                     lines.append(
-                        f"{html.escape(badge)} — 💯 <b>{html.escape(name)}</b>"
+                        f"{html.escape(badge)} — {stock_prefix}💯 <b>{html.escape(name)}</b>"
                         + (f" /// {html.escape(detail[:360])}" if detail else "")
                     )
             elif row:
