@@ -1487,90 +1487,152 @@ def _engine_global_companies(companies):
     return [c for c in companies if c in GLOBAL_COMPANY_KEYWORDS]
 
 
+
 # ============================================================
-# 엄격 관련성 게이트: 기업명 단순 등장/인용/광고를 관심종목 근거로 사용하지 않는다.
+# 국내 관심종목 엄격 연결 로직
+# 원칙: 모든 뉴스의 최종 목적은 국내 시장 대응용 관심종목 선별이다.
+# 단순 기업명 등장/인용/광고/비교/출처만으로 종목을 선정하지 않는다.
+# 해외기업의 주가 등락 자체도 국내 종목 선정 근거로 사용하지 않는다.
 # ============================================================
-_RELATION_BUSINESS_WORDS = [
-    "수주","공급계약","계약 체결","계약","발주","공급","납품","투자","증설","양산",
-    "생산","출시","상용화","승인","허가","특허","기술수출","기술이전","인수","합병",
-    "지분","실적","매출","영업이익","배당","자사주","공장","착공","가동","수혜","피해",
-    "관세","세액공제","정책 확정","법안 통과"
-]
-_RELATION_NOISE_WORDS = [
-    "에 따르면","따르면","관계자는","관계자에 따르면","광고","협찬","캠페인","사회공헌",
-    "기부","후원","브랜드","예시","비교","참고","인용","출처","관련주로 거론","관련주로 꼽",
-    "소개했다","소개되","언급됐다","언급되","리스트에 포함"
-]
+_DIRECT_BUSINESS_WORDS = (
+    "수주", "수주액", "계약", "공급계약", "공급", "납품", "발주", "투자", "증설", "양산",
+    "출시", "상용화", "승인", "허가", "특허", "실적", "매출", "영업이익", "가동", "착공",
+    "수출", "기술이전", "기술수출", "인수", "합병", "지분", "배당", "자사주", "공급망",
+    "생산", "판매", "수요", "가격", "점유율", "수주잔고", "공급 확대", "생산능력"
+)
+_MENTION_ONLY_PATTERNS = (
+    "에 따르면", "관계자는", "업계에 따르면", "시장에서는", "전문가들은", "전문가들은",
+    "언급했다", "언급되며", "예를 들어", "대표적인 사례", "비교하면", "비교해", "출처:",
+    "자료:", "광고", "협찬", "캠페인", "사회공헌", "브랜드", "홍보", "이벤트", "프로모션"
+)
+_US_THEME_TO_DOMESTIC = {
+    "hbm": ["SK하이닉스", "한미반도체", "삼성전자", "테크윙", "디아이"],
+    "hbm4": ["SK하이닉스", "한미반도체", "테크윙", "피에스케이홀딩스", "디아이"],
+    "ai chip": ["SK하이닉스", "삼성전자", "한미반도체", "테크윙"],
+    "ai칩": ["SK하이닉스", "삼성전자", "한미반도체", "테크윙"],
+    "반도체": ["SK하이닉스", "삼성전자", "한미반도체", "테크윙", "이오테크닉스"],
+    "semiconductor": ["SK하이닉스", "삼성전자", "한미반도체", "테크윙", "이오테크닉스"],
+    "데이터센터": ["SK하이닉스", "삼성전자", "HD현대일렉트릭", "효성중공업", "LS ELECTRIC"],
+    "ai 데이터센터": ["SK하이닉스", "HD현대일렉트릭", "효성중공업", "LS ELECTRIC"],
+    "전력망": ["HD현대일렉트릭", "효성중공업", "LS ELECTRIC"],
+    "변압기": ["HD현대일렉트릭", "효성중공업", "LS ELECTRIC"],
+    "전력기기": ["HD현대일렉트릭", "효성중공업", "LS ELECTRIC"],
+    "lng": ["HD한국조선해양", "한화오션", "삼성중공업"],
+    "lng선": ["HD한국조선해양", "한화오션", "삼성중공업"],
+    "조선": ["HD한국조선해양", "한화오션", "삼성중공업", "HD현대중공업"],
+    "방산": ["한화에어로스페이스", "LIG넥스원", "현대로템"],
+    "defense": ["한화에어로스페이스", "LIG넥스원", "현대로템"],
+    "원전": ["두산에너빌리티", "한전기술", "한전KPS"],
+    "smr": ["두산에너빌리티", "한전기술", "한전KPS"],
+    "로봇": ["두산로보틱스", "레인보우로보틱스", "로보티즈"],
+    "휴머노이드": ["레인보우로보틱스", "두산로보틱스", "로보티즈"],
+    "2차전지": ["LG에너지솔루션", "삼성SDI", "SK이노베이션", "에코프로비엠"],
+    "battery": ["LG에너지솔루션", "삼성SDI", "SK이노베이션", "에코프로비엠"],
+}
 
-def _engine_company_direct_relation(text, company):
-    t=_engine_clean(text); low=t.lower(); name=str(company or "").strip().lower()
-    if not name: return False, ""
-    for m in re.finditer(re.escape(name), low):
-        ctx=low[max(0,m.start()-180):min(len(low),m.end()+240)]
-        biz=[w for w in _RELATION_BUSINESS_WORDS if w.lower() in ctx]
-        if not biz: continue
-        if any(w in ctx for w in ["에 따르면","따르면"]):
-            pats=[rf"{re.escape(name)}.{{0,90}}(?:수주|계약|투자|증설|양산|출시|승인|실적|매출|인수|합병|공급)",
-                  rf"(?:수주|계약|투자|증설|양산|출시|승인|실적|매출|인수|합병|공급).{{0,90}}{re.escape(name)}"]
-            if not any(re.search(p,ctx,re.I) for p in pats): continue
-        noise=[w for w in _RELATION_NOISE_WORDS if w.lower() in ctx]
-        if noise and not any(w.lower() in ctx for w in ["수주","계약","투자","증설","양산","출시","승인","실적","매출"]): continue
-        return True,biz[0]
-    return False,""
-
-def _engine_theme_causal_relation(text, theme_key):
-    t=_engine_clean(text); low=t.lower(); key=str(theme_key or "").lower()
-    if not key or key not in low: return False
-    causal=["수요","공급","증가","확대","급증","투자","증설","양산","생산","수주","계약","발주","납품","출시","상용화","승인","허가","규제","정책","관세","가격","단가","시장","점유율","수혜","실적","매출","공급망","생산능력","데이터센터","전력망","금리","유가","환율","선물","급등","급락","강세","약세"]
-    for m in re.finditer(re.escape(key),low):
-        ctx=low[max(0,m.start()-180):min(len(low),m.end()+260)]
-        if any(x in ctx for x in causal): return True
-    return False
-
-def _engine_strict_domestic_links(text, companies):
-    links=[]
+def _engine_strict_direct_domestic(text, companies):
+    """본문에 기업명이 있다는 이유만으로 관심종목으로 뽑지 않는다.
+    실제 사업·실적 사건과 기업명이 가까이 연결될 때만 직접 관련으로 인정한다.
+    """
+    t = _engine_clean(text)
+    low = t.lower()
+    out = []
     for c in _engine_domestic_companies(companies):
-        ok,_=_engine_company_direct_relation(text,c)
-        if ok and c not in links: links.append(c)
-    for key,stocks in STOCK_LINK_MAP.items():
-        if _engine_theme_causal_relation(text,key):
-            for stock in stocks:
-                if stock not in links: links.append(stock)
-    return links[:8]
+        pos = low.find(c.lower())
+        if pos < 0:
+            continue
+        window = low[max(0, pos-140):pos+180]
+        if any(x in window for x in _MENTION_ONLY_PATTERNS) and not any(x in window for x in _DIRECT_BUSINESS_WORDS):
+            continue
+        if any(x in window for x in _DIRECT_BUSINESS_WORDS):
+            out.append(c)
+    return out
 
-def _engine_domestic_watchlist(item):
-    text=_engine_clean(str(item.get("title", ""))+" "+str(item.get("extra", "")))
-    companies=item.get("companies",[]) or []
-    rows=[]
-    for c in _engine_domestic_companies(companies):
-        ok,word=_engine_company_direct_relation(text,c)
-        if ok: rows.append((100,c,1,1,f"직접 사업연관: {word}"))
-    candidates={}
-    for stock in _engine_strict_domestic_links(text,companies):
-        if any(r[1]==stock for r in rows): continue
-        hist=lead=surge=0
-        for h in _engine_historical_cache[-5000:]:
-            tx=_engine_clean(str(h.get("text",""))+" "+str(h.get("title","")))
-            if stock not in tx: continue
-            hist+=1
-            low=tx.lower()
-            if any(k in low for k in ["상한가","대장주","대장","주도","주도주"]): lead+=1
-            if any(k in low for k in ["급등","폭등","신고가"]): surge+=1
-        if hist<=0: continue
-        score=min(hist,10)*2+min(lead,8)*5+min(surge,8)*2
-        reason=[]
-        for key in STOCK_LINK_MAP:
-            if stock in STOCK_LINK_MAP[key] and _engine_theme_causal_relation(text,key): reason.append(f"{key} 테마 사업연관"); break
-        reason.append(f"과거 상한가·급등 이력 {hist}건")
-        if lead: reason.append(f"과거 테마 주도 이력 {lead}건")
-        if surge>=2: reason.append("과거 탄력·끼 확인")
-        candidates[stock]=(score,stock,hist,lead," + ".join(reason))
-    rows.extend(candidates.values()); rows.sort(key=lambda x:(x[0],x[3],x[2]),reverse=True)
-    result=[]
-    for i,(_,stock,_,_,reason) in enumerate(rows[:3],1):
-        badge="🥇 대장주" if i==1 else ("🥈 관찰" if i==2 else "🥉 관찰")
-        if i==1: reason="대장주 선정 이유: "+reason
-        result.append({"name":stock,"theme":_engine_theme(text),"reason":f"{badge} | {reason}"})
+def _engine_theme_domestic_candidates(text):
+    """해외 뉴스도 '해외 종목명'이 아니라 재료/산업을 기준으로 국내 상장기업을 찾는다."""
+    low = _engine_clean(text).lower()
+    found = []
+    for key, stocks in sorted(_US_THEME_TO_DOMESTIC.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if key in low:
+            for s in stocks:
+                if s in LISTED_COMPANY_ALIASES and s not in GLOBAL_COMPANY_KEYWORDS and s not in found:
+                    found.append(s)
+    return found
+
+def _engine_historical_company_score(stock, text):
+    """과거 급등/상한가 DB에서 해당 종목의 테마 주도 이력을 가점한다."""
+    score = 0
+    low = _engine_clean(text).lower()
+    for row in _engine_historical_cache[-5000:]:
+        companies = row.get("companies", []) if isinstance(row, dict) else []
+        if stock not in companies:
+            continue
+        old = str(row.get("text", "")).lower()
+        # 현재 재료와 유사한 사례면 추가 가점
+        ratio = difflib.SequenceMatcher(None,
+            re.sub(r"[^0-9a-zA-Z가-힣]", "", low)[:220],
+            re.sub(r"[^0-9a-zA-Z가-힣]", "", old)[:220]).ratio()
+        score += 4
+        if any(x in old for x in ("상한가", "폭등", "급등", "신고가")):
+            score += 4
+        if ratio >= 0.45:
+            score += 3
+    return min(score, 20)
+
+def _engine_domestic_watchlist_strict(item):
+    """모든 뉴스에서 국내 관심종목을 선별한다.
+    1) 국내 기업 직접 사건 우선
+    2) 국내 테마가 명확하면 과거 주도/급등 이력이 있는 종목 우선
+    3) 해외 주가 움직임 자체는 근거로 쓰지 않음
+    4) 근거가 약하면 억지로 3종목을 채우지 않음
+    """
+    title = str(item.get("title", ""))
+    extra = str(item.get("extra", ""))
+    text = _engine_clean(title + " " + extra)
+    companies = item.get("companies", []) or []
+    direct = _engine_strict_direct_domestic(text, companies)
+    theme_candidates = _engine_theme_domestic_candidates(text)
+
+    # 제목에 해외기업만 있고 국내 사업 사건이 없는 경우에도 '원인/산업'으로만 연결.
+    # 해외기업명 자체는 후보에서 제거한다.
+    candidates = []
+    for s in direct + theme_candidates:
+        if s in GLOBAL_COMPANY_KEYWORDS or s not in LISTED_COMPANY_ALIASES:
+            continue
+        if s not in candidates:
+            candidates.append(s)
+
+    # 사업연관성 + 과거 급등/주도 이력을 점수화한다.
+    rows = []
+    low = text.lower()
+    for rank, stock in enumerate(candidates):
+        score = 0
+        relation = "직접 사업연관"
+        if stock in direct:
+            score += 30
+        else:
+            relation = "테마·밸류체인 연관"
+            score += 15
+        score += _engine_historical_company_score(stock, text)
+        # 실제 사업 키워드가 많을수록 가점
+        score += min(8, sum(1 for x in _DIRECT_BUSINESS_WORDS if x in low))
+        rows.append((score, stock, relation))
+    rows.sort(key=lambda x: (-x[0], candidates.index(x[1])))
+
+    # 근거가 약한 테마는 종목을 만들지 않는다. 최소한 산업 키워드가 있어야 한다.
+    if not rows:
+        return []
+    theme = _engine_theme(text)
+    result = []
+    for idx, (score, stock, relation) in enumerate(rows[:3], 1):
+        hist = _engine_historical_company_score(stock, text)
+        if idx == 1:
+            why = f"{relation} + 과거 급등·테마 주도 이력{(' 확인' if hist else '')}"
+            label = "🥇 대장주"
+        else:
+            why = f"{relation} + 과거 테마 탄력·급등 이력{(' 확인' if hist else '')}"
+            label = f"{['🥈','🥉'][idx-2]} 관찰종목"
+        result.append({"name": stock, "label": label, "theme": theme, "reason": why, "score": score})
     return result
 
 def _engine_classify(source, title, extra=""):
@@ -1590,11 +1652,12 @@ def _engine_classify(source, title, extra=""):
     if _engine_is_weak_nonstock_news(text):
         return False, "주가재료 미충족", [], k1, k2, []
 
-    # 관련주 연결은 '국내 상장기업'이 실제로 존재하거나,
-    # 국내 테마 연결을 별도 검증한 경우에만 허용한다.
-    stock_links = _engine_strict_domestic_links(text, companies)
+    # 국내 관심종목은 단순 기업명 등장으로 인정하지 않는다.
+    strict_direct = _engine_strict_direct_domestic(text, domestic)
+    strict_theme = _engine_theme_domestic_candidates(text)
+    stock_links = strict_direct + [x for x in strict_theme if x not in strict_direct]
     stock_linked = bool(stock_links)
-    market_relevant = bool(market_hits)
+    market_relevant = bool(market_hits) or bool(strict_theme)
 
     # 글로벌 기업 자체 뉴스는 글로벌 뉴스로 노출할 수 있지만
     # 글로벌 기업명을 국내 상장기업/관련주로 절대 사용하지 않는다.
@@ -1641,8 +1704,21 @@ STOCK_LINK_MAP = {
 }
 
 def _engine_stock_links(text, companies):
-    """호환용 래퍼: 엄격한 사업연관/테마 인과 게이트를 통과한 종목만 반환."""
-    return _engine_strict_domestic_links(text, companies)[:5]
+    t = _engine_clean(text)
+    links = []
+    # 본문에 실제 등장한 국내 상장기업을 최우선.
+    for stock in companies:
+        if stock in LISTED_COMPANY_ALIASES and stock not in GLOBAL_COMPANY_KEYWORDS and stock not in links:
+            links.append(stock)
+
+    # 테마 연결은 국내 사업 연결 키워드가 본문에 실제 존재할 때만 후보를 만든다.
+    # 글로벌 기업 이름만으로 국내 종목을 강제 생성하지 않는다.
+    for key, stocks in STOCK_LINK_MAP.items():
+        if key.lower() in t.lower():
+            for stock in stocks:
+                if stock not in links:
+                    links.append(stock)
+    return links[:5]
 
 
 THEME_MAP = {
@@ -1722,7 +1798,9 @@ def _engine_summary(title, extra, companies, market_hits):
     elif domestic:
         core = f"🔎 [직접 관련] {reason} → " + "·".join(domestic[:4])
     elif global_companies:
-        core = f"🌐 해외 수혜기업 요약: " + "·".join(global_companies[:4]) + " — 해외 주가 움직임 자체는 국내 관심종목 선정 근거로 사용하지 않음"
+        # 해외기업 자체는 국내 관심종목으로 출력하지 않는다.
+        # 국내 종목 연결은 _engine_domestic_watchlist_strict()에서 별도로 수행한다.
+        core = f"🔎 해외시장 핵심 원인 → " + "·".join(market_hits[:4]) if market_hits else ""
     elif market_hits:
         core = "🔎 [글로벌 시황] 시장 핵심 재료 → " + "·".join(market_hits[:4])
     else:
@@ -1730,7 +1808,11 @@ def _engine_summary(title, extra, companies, market_hits):
     return core, _engine_schedule(text)
 
 def _engine_score(item):
-    return (4 if item["category"] in ("🚀속보", "🚨특징주", "🚀단독") else 0) + min(3, len(_engine_domestic_companies(item["companies"]))) + min(3, len(item["market_hits"])) + min(2, len(item["extra"]))
+    try:
+        watch_n = len(_engine_domestic_watchlist_strict(item))
+    except Exception:
+        watch_n = 0
+    return (4 if item["category"] in ("🚀속보", "🚨특징주", "🚀단독") else 0) + min(5, watch_n) + min(3, len(item["market_hits"])) + min(2, len(item["extra"]))
 
 _engine_pending = []
 _engine_sent_fingerprints = []  # {text, source, time_text, published, title}
@@ -1877,7 +1959,7 @@ def _engine_format_message(item):
                 keypoint = extra_key
 
     # ------------------------------------------------------------
-    # 2) 강한 재료
+    # 2) 중요 재료 시각표시
     # ------------------------------------------------------------
     strong, strong_hits = _engine_strong_material(item)
     if strong and keypoint:
@@ -1892,7 +1974,7 @@ def _engine_format_message(item):
     # 실제 국내 기업/테마 연관성이 있을 때만 이유를 함께 출력한다.
     domestic_rows = []
     try:
-        domestic_rows = _engine_domestic_watchlist(item)
+        domestic_rows = _engine_domestic_watchlist_strict(item)
     except (NameError, AttributeError):
         domestic_rows = []
 
@@ -1909,18 +1991,17 @@ def _engine_format_message(item):
                 ).strip()
                 theme = str(row.get("theme") or "").strip()
                 if name:
+                    label = str(row.get("label") or "🔎 국내 관심종목")
                     detail = " | ".join(x for x in (theme, reason) if x)
                     lines.append(
-                        f"🔎 국내 관심종목: <b>{html.escape(name)}</b>"
+                        f"{html.escape(label)} — <b>{html.escape(name)}</b>"
                         + (f" → {html.escape(detail[:240])}" if detail else "")
                     )
             elif row:
                 lines.append(f"🔎 국내 관심종목: {html.escape(str(row)[:240])}")
 
-    # 기존 로직이 companies를 통해 국내 기업을 명시적으로 확인한 경우에도
-    # 이유 없는 단순 "글로벌 기업 → 종목" 문구는 출력하지 않는다.
-    # 국내 기업명이 단순 언급된 경우에는 아무 문구도 출력하지 않는다.
-    # 엄격한 사업연관성 검증을 통과한 watchlist만 출력한다.
+    # 국내 기업명이 단순 언급된 경우에는 관심종목으로 출력하지 않는다.
+    # strict watchlist에서 실제 사업연관성이 확인된 경우에만 종목을 출력한다.
 
     # ------------------------------------------------------------
     # 4) 과거 유사 급등/상한가 사례
