@@ -2471,7 +2471,7 @@ def _engine_format_message(item):
     # ------------------------------------------------------------
     strong, strong_hits = _engine_strong_material(item)
     if strong and keypoint:
-        lines.append(f"💯 🔎 {html.escape(keypoint)}")
+        lines.append(f"🔎 {html.escape(keypoint)}")
     elif keypoint:
         lines.append(f"🔎 {html.escape(keypoint)}")
 
