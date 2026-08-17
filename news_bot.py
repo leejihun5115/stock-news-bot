@@ -3097,7 +3097,7 @@ def _us_briefing_fetch_all():
 def _us_direction(pct):
     if pct is None:
         return ""
-    return "📈 급등" if pct >= 0 else "📉 급락"
+    return "🔺상승" if pct >= 0 else "▼하락"
 
 
 def _us_format_pct(pct):
@@ -3140,8 +3140,40 @@ def _us_open_briefing(snapshot, et):
     for s in macro:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {q['name']} {_us_format_pct(q['change_pct'])}")
-    lines += ["", "※ 글로벌 기업/해외 종목은 국내 관련주로 자동 연결하지 않습니다."]
+            pct = q.get("change_pct")
+            lines.append(f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)}")
+
+    # 미국장 개장 30분 브리핑에도 국내 시장 대응용 ADR을 반드시 포함한다.
+    lines += ["", "<b>🇰🇷 ADR</b>"]
+    adr_symbols = ["PKX", "LPL", "KEP", "KB", "SHG", "SKM"]
+    found_adr = False
+    for s in adr_symbols:
+        q = snapshot.get(s)
+        if q:
+            found_adr = True
+            pct = q.get("change_pct")
+            lines.append(f"• {html.escape(q.get('name', s))} {_us_direction(pct)} {_us_format_pct(pct)}")
+    if not found_adr:
+        lines.append("• ADR 시세 확인불가")
+
+    # 신규 MSCI 재료가 있으면 원문 링크까지, 없으면 확인 결과를 명시한다.
+    msci = {}
+    with _US_BRIEFING_LOCK:
+        rows = list(_US_BRIEFING_NEWS_MEMORY)
+    for row in reversed(rows):
+        tx = str(row.get("text", ""))
+        if any(k.lower() in tx.lower() for k in ["MSCI", "리밸런싱", "지수 편입", "지수 편출"]):
+            msci = row
+            break
+    lines += ["", "<b>📌 MSCI</b>"]
+    if msci:
+        lines.append(f"• {html.escape(str(msci.get('title', ''))[:220])}")
+        if msci.get("link"):
+            link = html.escape(str(msci["link"]), quote=True)
+            lines.append(f'<a href="{link}">🔗 MSCI 관련 원문</a>')
+    else:
+        lines.append("• 확인된 신규 MSCI 재료 없음")
+
     return "\n".join(lines)
 
 
