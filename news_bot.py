@@ -1,3 +1,4 @@
+# 이지훈 | 2026-08-18 | Google/한국경제 원천문제 수정 최종본
 # 이지훈 | 2026-08-18
 # ============================================================
 
@@ -1210,42 +1211,118 @@ def _schedule_add_news_item(source, title, extra, link, published='', companies=
     return False
 
 def _schedule_bootstrap_one_year():
-    state=_schedule_load_json(SCHEDULE_BOOTSTRAP_STATE,{})
+    """
+    최초 1년 일정 DB 구축.
+    [원천 문제 수정]
+    - 시작 시 수백 개 Google RSS를 동시에 폭주시키지 않는다.
+    - cursor/query_index를 JSON으로 저장하고 한 호출 단위만 처리한다.
+    - 메인 실시간 수집과 경쟁하지 않도록 별도 daemon thread가 한 번만
+      실행되는 기존 구조를 유지하되, 각 호출 사이 충분한 간격을 둔다.
+    - 중간 종료/재시작해도 마지막 cursor부터 이어간다.
+    """
+    state = _schedule_load_json(SCHEDULE_BOOTSTRAP_STATE, {})
     if state.get('done'):
         return
-    # 최초 1회는 최근 1년을 월/주 단위로 잘게 나눠 최대한 빠짐없이 훑는다.
-    # 특히 상한가·특징주·급등 재료를 별도 검색어로 넓게 수집한다.
+
     from urllib.parse import quote_plus
-    today=_now_kst().date()
-    start=today-datetime.timedelta(days=SCHEDULE_LOOKBACK_DAYS)
-    added=0; checked=0; requests_count=0
-    cursor=start
-    while cursor < today and checked < SCHEDULE_BOOTSTRAP_MAX_CHECKED:
-        end=min(today,cursor+datetime.timedelta(days=14))
-        for q in SCHEDULE_BOOTSTRAP_QUERIES:
-            if checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED: break
-            url=f'https://news.google.com/rss/search?q={quote_plus(q)}%20after%3A{cursor.isoformat()}%20before%3A{end.isoformat()}&hl=ko&gl=KR&ceid=KR:ko'
-            entries=_engine_fetch_rss(url,'일정DB/1년초기검색')
-            requests_count += 1
-            for e in entries:
-                if checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED: break
-                checked += 1
-                title=e.get('title',''); extra=e.get('summary','') or e.get('description','')
-                low=_engine_clean(f'{title} {extra}').lower()
-                if not any(x in low for x in ('특징주','급등','상한가','수주','공급계약','임상','승인','허가','실적','양산','상용화','기술이전','마일스톤','fomc','cpi','pce','고용','gdp')):
-                    continue
-                row=_schedule_extract_from_text(title, extra, '일정DB/1년초기검색', e.get('published',''), limitup=('상한가' in low))
-                if row:
-                    row['link']=e.get('link','') or ''
-                    if _schedule_append(row): added+=1
-        cursor=end+datetime.timedelta(days=1)
-    _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE,{
-        'done':True,'completed_at':_now_kst().isoformat(),
-        'checked':checked,'added':added,'requests':requests_count,
-        'lookback_days':SCHEDULE_LOOKBACK_DAYS,
-        'note':'최초 1년 전수형 일정 후보 검색 완료. 이후 매일 뉴스/DART에서 지속 누적.'
-    })
-    _engine_log('info','[일정DB] 최초 1년 전수형 초기화 완료 | 확인=%d | 신규=%d | RSS요청=%d',checked,added,requests_count)
+    today = _now_kst().date()
+    start_date = today - datetime.timedelta(days=SCHEDULE_LOOKBACK_DAYS)
+
+    cursor_text = state.get("cursor") or start_date.isoformat()
+    query_index = int(state.get("query_index") or 0)
+
+    try:
+        cursor = datetime.date.fromisoformat(cursor_text)
+    except Exception:
+        cursor = start_date
+        query_index = 0
+
+    added = int(state.get("added") or 0)
+    checked = int(state.get("checked") or 0)
+    requests_count = int(state.get("requests") or 0)
+
+    # 1회 실행에서는 Google 검색 1건만 처리한다.
+    # 1년치 전체를 한 번에 긁는 것이 현재 503의 가장 큰 원인이다.
+    if cursor >= today or checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED:
+        _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE, {
+            **state,
+            'done': True,
+            'completed_at': _now_kst().isoformat(),
+            'checked': checked,
+            'added': added,
+            'requests': requests_count,
+            'cursor': today.isoformat(),
+            'query_index': query_index,
+            'lookback_days': SCHEDULE_LOOKBACK_DAYS,
+            'note': '최초 1년 전수형 일정 후보 검색 완료. 이후 매일 뉴스/DART에서 지속 누적.'
+        })
+        _engine_log('info', '[일정DB] 최초 1년 초기화 완료 | 확인=%d | 신규=%d | RSS요청=%d',
+                    checked, added, requests_count)
+        return
+
+    end_date = min(today, cursor + datetime.timedelta(days=14))
+    q = SCHEDULE_BOOTSTRAP_QUERIES[query_index % len(SCHEDULE_BOOTSTRAP_QUERIES)]
+    url = (
+        f'https://news.google.com/rss/search?q={quote_plus(q)}'
+        f'%20after%3A{cursor.isoformat()}%20before%3A{end_date.isoformat()}'
+        f'&hl=ko&gl=KR&ceid=KR:ko'
+    )
+
+    entries = _engine_fetch_rss(url, '일정DB/1년초기검색')
+    requests_count += 1
+
+    for e in entries[:200]:
+        if checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED:
+            break
+        checked += 1
+        title = e.get('title', '')
+        extra = e.get('summary', '') or e.get('description', '')
+        low = _engine_clean(f'{title} {extra}').lower()
+        if not any(x in low for x in (
+            '특징주','급등','상한가','수주','공급계약','임상','승인','허가',
+            '실적','양산','상용화','기술이전','마일스톤','fomc','cpi','pce',
+            '고용','gdp'
+        )):
+            continue
+        row = _schedule_extract_from_text(
+            title, extra, '일정DB/1년초기검색',
+            e.get('published', ''),
+            limitup=('상한가' in low)
+        )
+        if row:
+            row['link'] = e.get('link', '') or ''
+            if _schedule_append(row):
+                added += 1
+
+    # 다음 호출은 같은 기간의 다음 검색어, 마지막 검색어 후 다음 14일.
+    next_query = query_index + 1
+    if next_query >= len(SCHEDULE_BOOTSTRAP_QUERIES):
+        next_query = 0
+        cursor = end_date + datetime.timedelta(days=1)
+
+    new_state = {
+        'done': False,
+        'cursor': cursor.isoformat(),
+        'query_index': next_query,
+        'checked': checked,
+        'added': added,
+        'requests': requests_count,
+        'lookback_days': SCHEDULE_LOOKBACK_DAYS,
+        'last_run_at': _now_kst().isoformat(),
+    }
+
+    if cursor >= today or checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED:
+        new_state['done'] = True
+        new_state['completed_at'] = _now_kst().isoformat()
+
+    _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE, new_state)
+    _engine_log(
+        'info',
+        '[일정DB] 초기검색 진행 | 기간=%s~%s | 검색=%s | 확인=%d | 신규=%d | RSS요청=%d | 완료=%s',
+        cursor.isoformat(), end_date.isoformat(), q[:50], checked, added,
+        requests_count, new_state['done']
+    )
+
 
 def _schedule_add_dart_row(report, corp, link, rcept_dt):
     # 접수일 자체는 과거일이므로 일정으로 넣지 않는다. 다만 보고서명에 미래 이벤트 날짜가 포함된 경우에만 추출한다.
@@ -2691,9 +2768,9 @@ RSS_RETRY_BACKOFF = float(os.environ.get("RSS_RETRY_BACKOFF", "1.5"))
 RSS_CACHE_TTL = int(os.environ.get("RSS_CACHE_TTL", "900"))
 # 상용 운영 안정화: Google RSS 연속 장애 시 일정 시간 직접 요청을 차단하고
 # Bing/캐시로 우회하여 5~10초짜리 실패 요청이 한 사이클을 잠식하지 않도록 한다.
-RSS_GOOGLE_CIRCUIT_SECONDS = int(os.environ.get("RSS_GOOGLE_CIRCUIT_SECONDS", "120"))
-RSS_GOOGLE_FAILURE_THRESHOLD = int(os.environ.get("RSS_GOOGLE_FAILURE_THRESHOLD", "2"))
-RSS_GOOGLE_REQUEST_TIMEOUT = int(os.environ.get("RSS_GOOGLE_REQUEST_TIMEOUT", str(min(ENGINE_HTTP_TIMEOUT, 8))))
+RSS_GOOGLE_CIRCUIT_SECONDS = int(os.environ.get("RSS_GOOGLE_CIRCUIT_SECONDS", "300"))
+RSS_GOOGLE_FAILURE_THRESHOLD = int(os.environ.get("RSS_GOOGLE_FAILURE_THRESHOLD", "3"))
+RSS_GOOGLE_REQUEST_TIMEOUT = int(os.environ.get("RSS_GOOGLE_REQUEST_TIMEOUT", str(min(ENGINE_HTTP_TIMEOUT, 10))))
 _RSS_SUCCESS_CACHE = {}
 _RSS_FAILURE_STATE = {}
 _RSS_GOOGLE_FAILURES = 0
@@ -2766,6 +2843,119 @@ def _rss_cache_put(url, entries):
         _RSS_SUCCESS_CACHE[_rss_cache_key(url)] = (time.time(), list(entries[:100]))
 
 
+
+# ─────────────────────────────────────────────────────────────
+# [ROOT FIX] Google News / 한국경제 RSS 연결 계층
+# ─────────────────────────────────────────────────────────────
+# Google:
+# - 기존 코드의 가장 큰 문제는 1년 일정 bootstrap thread가 시작과 동시에
+#   수백 개의 Google RSS를 연속 호출하면서 실시간 수집과 경쟁한 것.
+# - 이제 Google은 단일 Session + 연결 재사용 + 최소 요청 간격을 사용한다.
+# - 1년 bootstrap은 별도 스레드에서 폭주하지 않고, 아래 persistent cursor를
+#   통해 한 번에 소량씩 처리한다(아래 bootstrap 함수 패치 참조).
+#
+# 한국경제:
+# - 공식 RSS 주소 자체는 유효한 공식 피드임.
+# - 단발성 requests.get 대신 홈페이지 세션을 먼저 만들고 RSS를 같은
+#   Session/cookie/header 맥락에서 읽는다.
+# - XML RSS에 맞는 Accept/Referer/Language/Encoding을 명시한다.
+# - 403을 반복 호출로 덮지 않고, 정상 세션을 먼저 확립한 뒤 한 번만 재요청한다.
+# ─────────────────────────────────────────────────────────────
+
+_RSS_SESSION_LOCK = threading.Lock()
+_GOOGLE_SESSION = requests.Session()
+_HANKYUNG_SESSION = requests.Session()
+_GOOGLE_LAST_REQUEST_AT = 0.0
+_HANKYUNG_SESSION_READY = False
+
+_GOOGLE_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, text/html;q=0.7, */*;q=0.5",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Connection": "keep-alive",
+}
+
+_HANKYUNG_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": "https://www.hankyung.com/",
+    "Connection": "keep-alive",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+}
+
+_GOOGLE_MIN_REQUEST_INTERVAL = float(os.environ.get("GOOGLE_MIN_REQUEST_INTERVAL", "2.0"))
+_HANKYUNG_WARMUP_TIMEOUT = int(os.environ.get("HANKYUNG_WARMUP_TIMEOUT", "10"))
+
+
+def _google_session_warmup():
+    """Google News 웹 세션을 한 번 만들어 RSS 요청에 재사용."""
+    try:
+        r = _GOOGLE_SESSION.get(
+            "https://news.google.com/",
+            headers=_GOOGLE_HEADERS,
+            timeout=(5, 10),
+            allow_redirects=True,
+        )
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
+def _google_session_get(url, timeout):
+    """Google RSS 요청 간격을 강제하여 burst 요청을 방지한다."""
+    global _GOOGLE_LAST_REQUEST_AT
+    with _RSS_SESSION_LOCK:
+        now = time.time()
+        wait = _GOOGLE_MIN_REQUEST_INTERVAL - (now - _GOOGLE_LAST_REQUEST_AT)
+        if wait > 0:
+            time.sleep(wait)
+        _GOOGLE_LAST_REQUEST_AT = time.time()
+        return _GOOGLE_SESSION.get(
+            url,
+            headers=_GOOGLE_HEADERS,
+            timeout=(5, timeout),
+            allow_redirects=True,
+        )
+
+
+def _hankyung_session_warmup():
+    """공식 RSS 요청 전에 한국경제 메인 세션/쿠키를 먼저 확립한다."""
+    global _HANKYUNG_SESSION_READY
+    if _HANKYUNG_SESSION_READY:
+        return True
+    try:
+        r = _HANKYUNG_SESSION.get(
+            "https://www.hankyung.com/",
+            headers=_HANKYUNG_HEADERS,
+            timeout=(5, _HANKYUNG_WARMUP_TIMEOUT),
+            allow_redirects=True,
+        )
+        # 메인 페이지가 정상 응답하면 쿠키/세션을 유지한다.
+        if 200 <= r.status_code < 400:
+            _HANKYUNG_SESSION_READY = True
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _hankyung_session_get(url, timeout):
+    """공식 RSS 피드: 세션 warm-up → 같은 세션으로 XML 요청."""
+    _hankyung_session_warmup()
+    return _HANKYUNG_SESSION.get(
+        url,
+        headers=_HANKYUNG_HEADERS,
+        timeout=(5, timeout),
+        allow_redirects=True,
+    )
+
+
 def _engine_fetch_rss(url, source):
     """RSS 안정 수집: Google 연속장애 circuit breaker + 재시도 + Bing/캐시 fallback."""
     global _RSS_GOOGLE_FAILURES, _RSS_GOOGLE_CIRCUIT_UNTIL
@@ -2778,12 +2968,17 @@ def _engine_fetch_rss(url, source):
 
     for attempt in range(1, attempts + 1):
         try:
-            r = requests.get(
-                url,
-                headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml, */*"},
-                timeout=(RSS_GOOGLE_REQUEST_TIMEOUT if is_google else ENGINE_HTTP_TIMEOUT),
-                allow_redirects=True,
-            )
+            if is_google:
+                r = _google_session_get(url, RSS_GOOGLE_REQUEST_TIMEOUT)
+            elif source == "한국경제" or "hankyung.com/feed/" in str(url).lower():
+                r = _hankyung_session_get(url, ENGINE_HTTP_TIMEOUT)
+            else:
+                r = requests.get(
+                    url,
+                    headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml, */*"},
+                    timeout=ENGINE_HTTP_TIMEOUT,
+                    allow_redirects=True,
+                )
             status = getattr(r, "status_code", 0)
             if 200 <= status < 300:
                 result = feedparser.parse(r.content)
@@ -2802,6 +2997,28 @@ def _engine_fetch_rss(url, source):
             # 429/5xx는 일시 장애일 가능성이 높으므로 재시도한다.
             retryable = status == 429 or status >= 500
             if not retryable:
+                # 한국경제 403은 세션/쿠키가 오래됐을 수 있으므로,
+                # 동일 세션을 계속 두드리지 않고 세션을 1회 재생성해 재확인한다.
+                if (source == "한국경제" or "hankyung.com/feed/" in str(url).lower()) and status in (401, 403):
+                    global _HANKYUNG_SESSION_READY
+                    try:
+                        _HANKYUNG_SESSION.close()
+                    except Exception:
+                        pass
+                    _HANKYUNG_SESSION_READY = False
+                    _engine_log("warning", "[한국경제 세션 재설정] HTTP=%s | 공식 RSS 재확인", status)
+                    try:
+                        r2 = _hankyung_session_get(url, ENGINE_HTTP_TIMEOUT)
+                        if 200 <= r2.status_code < 300:
+                            result2 = feedparser.parse(r2.content)
+                            entries2 = getattr(result2, "entries", []) or []
+                            if entries2:
+                                _rss_cache_put(url, entries2)
+                                _engine_log("info", "[RSS] %s | 세션 재설정 후 정상 | 수집=%d건", source, len(entries2))
+                                return entries2
+                        last_error = f"HTTP {getattr(r2, 'status_code', status)} {getattr(r2, 'reason', '') or ''}".strip()
+                    except Exception as e2:
+                        last_error = f"{type(e2).__name__}: {e2}"
                 _engine_log("error", "[실패] RSS | %s | 원인=%s", source, last_error)
                 break
             if attempt < RSS_RETRY_COUNT:
@@ -3748,6 +3965,12 @@ def _engine_cycle():
     _engine_last_cycle_started = started
     _engine_log("info", "[주기 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
     try:
+        # 실시간 뉴스 수집 전에 일정 bootstrap은 Google 1회 요청만 수행.
+        # 이후 메인 RSS 수집은 세션/요청간격으로 안정화한다.
+        try:
+            _schedule_bootstrap_one_year()
+        except Exception as _e:
+            _engine_log("warning", "[일정DB] 초기검색 진행 실패 | %s", str(_e)[:160])
         _engine_run_google_and_domestic()
     except Exception as e:
         log_error("국내/Google RSS 전체", e)
@@ -3855,11 +4078,12 @@ if __name__ == "__main__":
         health_thread.start()
         time.sleep(0.3)
 
-        # 1년치 특징주/급등 뉴스에서 미래 일정 DB를 최초 1회 구축한다.
-        schedule_bootstrap_thread = threading.Thread(
-            target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True
-        )
-        schedule_bootstrap_thread.start()
+        # 1년 일정 DB는 Google RSS를 폭주시키지 않도록 1회 작업만 수행하고,
+        # 진행상태를 저장한 뒤 다음 주기/재시작에서 이어간다.
+        try:
+            _schedule_bootstrap_one_year()
+        except Exception as _e:
+            _engine_log("warning", "[일정DB] 초기검색 1회 작업 실패 | %s", str(_e)[:160])
 
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
         _engine_log("info", "[BOOT] NAVER=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
