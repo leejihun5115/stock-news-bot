@@ -1,4 +1,4 @@
-# 이지훈 | 2026-08-17
+# 이지훈 | 2026-08-18
 # ============================================================
 
 # ============================================================
@@ -15,14 +15,14 @@
 #
 # 미국장:
 # - 미국 선물 급등/급락 시 별도 브리핑.
-# - 개장 약 30분 후 개장 브리핑.
+# - 정규 장중 브리핑은 시간만 표시하고 30분 간격으로 운영.
 # - 장중 구조적 변화/급등/급락/테마 변화/환율/유가 등 큰 변동 시 브리핑.
 # - 장마감 후 전체 시장흐름 + 강한 종목군 + 원인 + 한국 관련주 +
 #   MSCI + ADR을 정리.
 # - 국내 관련주가 없어도 글로벌 시황은 보존하고 글로벌 외신을 DB에 축적.
 #
-# 강한 재료:
-# - '💯 강한 재료 · 급등/급락' 같은 표현은 사용하지 않음.
+# 주요 재료:
+# - '💯 주요 재료 · 급등/급락' 같은 표현은 사용하지 않음.
 # - 💯는 재료 강도만 표시.
 # - 수주라면 수주 이유/금액/기간 등 확인 가능한 사실을 표시.
 # - 과거 동일/유사 재료가 있으면 당시 주가 상승률과 원문 하이퍼링크를 연결.
@@ -463,7 +463,7 @@ def _env_flag(name, default=True):
 ENABLE_DOMESTIC_NEWS = _env_flag("ENABLE_DOMESTIC_NEWS")         # 국내 RSS
 ENABLE_US_NEWS = _env_flag("ENABLE_US_NEWS")                     # 해외 RSS
 ENABLE_MORNING_BRIEFING = _env_flag("ENABLE_MORNING_BRIEFING")   # 아침 브리핑(해외지수/테마)
-ENABLE_US_INTRADAY_BRIEFING = _env_flag("ENABLE_US_INTRADAY_BRIEFING", True)  # 미국장 개장 30분 + 장중 변동 브리핑
+ENABLE_US_INTRADAY_BRIEFING = _env_flag("ENABLE_US_INTRADAY_BRIEFING", True)  # 미국장 정규 브리핑 + 장중 변동 브리핑
 ENABLE_TELEGRAM_CHANNELS = _env_flag("ENABLE_TELEGRAM_CHANNELS") # 텔레그램1(필터)+2(무조건)
 ENABLE_CUSTOM_SOURCES = _env_flag("ENABLE_CUSTOM_SOURCES")       # 약업신문/전자신문
 ENABLE_DART = _env_flag("ENABLE_DART")                           # DART 공시
@@ -541,6 +541,7 @@ if not BOT_TOKEN or not CHAT_ID:
 
 RSS_CHECK_INTERVAL = 15          
 CUSTOM_SOURCE_INTERVAL = 300     
+# Google News 503/429 장애는 재시도·보조소스·캐시로 격리하며 전체 봇을 멈추지 않는다.
 TELEGRAM_CHANNEL_INTERVAL = 60   
 TELEGRAM_UNFILTERED_INTERVAL = 60  
 DART_CHECK_INTERVAL = 60         
@@ -1253,12 +1254,6 @@ def _schedule_add_dart_row(report, corp, link, rcept_dt):
         row['link']=link
         _schedule_append(row)
 
-def _schedule_add_dart_row(report, corp, link, rcept_dt):
-    row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt)
-    if row:
-        row['link']=link
-        _schedule_append(row)
-
 def _schedule_daily_message():
     today=_now_kst().date()
     end=today+datetime.timedelta(days=SCHEDULE_DAILY_FORWARD_DAYS)
@@ -1341,7 +1336,7 @@ MARKET_IMPACT_KEYWORDS = {
     "정책 확정", "정책 시행", "규제 확정", "관세 부과", "세액공제 확정", "법안 통과", "정부 대책 확정",
     "대규모 지원", "지원금 확정", "수주 경쟁",
 }
-# 실제 주가 반응 가능성이 높은 강한 재료.
+# 실제 주가 반응 가능성이 높은 주요 재료.
 # 상장기업이 직접 연결되고 아래 재료가 있으면 시간 제한 없이 시장 반영 여부를 기준으로 검토한다.
 STRONG_MARKET_HITS = {
     "인수", "합병", "M&A", "m&a", "공급계약", "계약 체결", "계약",
@@ -1673,7 +1668,7 @@ def _engine_recent_enough(published, source=""):
 
 def _engine_external_time_gate(source, published, title, extra, market_state, market_hits):
     """텔레그램/유튜브 도배 방지용 시간 관문.
-    60분 초과는 원칙적으로 차단하고, 장 마감 후/휴무의 강한 재료만 예외로 통과시킨다.
+    60분 초과는 원칙적으로 차단하고, 장 마감 후/휴무의 주요 재료만 예외로 통과시킨다.
     """
     if not (str(source).startswith("텔레그램/") or str(source).startswith("유튜브/")):
         return True, ""
@@ -1688,7 +1683,7 @@ def _engine_external_time_gate(source, published, title, extra, market_state, ma
 
     # 60분 예외는 절대로 "강한 단어" 하나만으로 열지 않는다.
     # 시장 마감 후/휴무일에 다음 거래일 주가 반영 가능성이 있는
-    # "국내 상장기업 + 실제 사건 + 강한 재료"가 모두 확인될 때만 허용한다.
+    # "국내 상장기업 + 실제 사건 + 주요 재료"가 모두 확인될 때만 허용한다.
     domestic_companies = {
         "삼성전자", "SK하이닉스", "SK이노베이션", "LG에너지솔루션", "LG전자", "LG화학",
         "현대차", "현대자동차", "기아", "HD현대", "HD한국조선해양", "HD현대중공업",
@@ -2683,22 +2678,181 @@ def _engine_process_item(source, title, link, published="", extra=""):
     return True
 
 
-def _engine_fetch_rss(url, source):
-    started = time.time()
+# ============================================================
+# [RSS 장애 격리/복구] Google News 503 대응
+# - Google RSS가 일시적으로 503을 반환해도 전체 뉴스/일정 수집을 중단하지 않는다.
+# - 짧은 재시도 + exponential backoff 후 보조 RSS(Bing News)로 우회한다.
+# - 마지막 성공 결과를 메모리에 캐시하여 일시 장애 때 데이터 공백을 최소화한다.
+# - 실패는 소스별로 기록하며 다른 소스의 수집에는 영향을 주지 않는다.
+# - 1년 일정DB 초기검색도 동일한 장애 격리 규칙을 사용한다.
+# ============================================================
+RSS_RETRY_COUNT = int(os.environ.get("RSS_RETRY_COUNT", "3"))
+RSS_RETRY_BACKOFF = float(os.environ.get("RSS_RETRY_BACKOFF", "1.5"))
+RSS_CACHE_TTL = int(os.environ.get("RSS_CACHE_TTL", "900"))
+# 상용 운영 안정화: Google RSS 연속 장애 시 일정 시간 직접 요청을 차단하고
+# Bing/캐시로 우회하여 5~10초짜리 실패 요청이 한 사이클을 잠식하지 않도록 한다.
+RSS_GOOGLE_CIRCUIT_SECONDS = int(os.environ.get("RSS_GOOGLE_CIRCUIT_SECONDS", "120"))
+RSS_GOOGLE_FAILURE_THRESHOLD = int(os.environ.get("RSS_GOOGLE_FAILURE_THRESHOLD", "2"))
+RSS_GOOGLE_REQUEST_TIMEOUT = int(os.environ.get("RSS_GOOGLE_REQUEST_TIMEOUT", str(min(ENGINE_HTTP_TIMEOUT, 8))))
+_RSS_SUCCESS_CACHE = {}
+_RSS_FAILURE_STATE = {}
+_RSS_GOOGLE_FAILURES = 0
+_RSS_GOOGLE_CIRCUIT_UNTIL = 0.0
+
+# YouTube 채널 ID는 프로세스 재시작 후에도 유지한다.
+YOUTUBE_CHANNEL_CACHE_FILE = os.environ.get(
+    "YOUTUBE_CHANNEL_CACHE_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "youtube_channel_cache.json"),
+)
+
+def _load_youtube_channel_cache():
     try:
-        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
-        if not r.ok:
-            _engine_log("error", "[실패] RSS | %s | 원인=%s", source, r.reason)
-            return []
-        result = feedparser.parse(r.content)
-        if getattr(result, "bozo", False):
-            _engine_log("warning", "[RSS 경고] %s | 일부 파싱 문제", source)
-        entries = getattr(result, "entries", []) or []
-        _engine_log("info", "[RSS] %s | 수집=%d건", source, len(entries))
-        return entries
-    except Exception as e:
-        log_error("RSS 수집", e, source=source, url=url)
-        return []
+        if os.path.exists(YOUTUBE_CHANNEL_CACHE_FILE):
+            with open(YOUTUBE_CHANNEL_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {str(k): str(v) for k, v in data.items() if v}
+    except Exception:
+        return {}
+
+def _save_youtube_channel_cache(cache):
+    tmp = YOUTUBE_CHANNEL_CACHE_FILE + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(YOUTUBE_CHANNEL_CACHE_FILE) or ".", exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, YOUTUBE_CHANNEL_CACHE_FILE)
+    except Exception:
+        pass
+
+YOUTUBE_CHANNEL_ID_CACHE = _load_youtube_channel_cache()
+YOUTUBE_CHANNEL_FAIL_UNTIL = {}
+YOUTUBE_CHANNEL_FAIL_COOLDOWN_SECONDS = int(os.environ.get("YOUTUBE_CHANNEL_FAIL_COOLDOWN_SECONDS", "1800"))
+
+
+def _rss_is_google(url):
+    return "news.google.com/rss/" in str(url).lower()
+
+
+def _rss_bing_fallback_url(url):
+    """Google News 검색 URL의 검색어를 Bing News RSS 검색으로 변환한다."""
+    try:
+        from urllib.parse import urlsplit, parse_qs, quote_plus
+        q = parse_qs(urlsplit(str(url)).query).get("q", [""])[0]
+        # Google 전용 after:/before: 구문은 Bing이 그대로 이해하지 못하므로 제거한다.
+        q = re.sub(r"\s+(?:after|before):\S+", "", q, flags=re.I).strip()
+        if not q:
+            return None
+        return f"https://www.bing.com/news/search?q={quote_plus(q)}&format=rss"
+    except Exception:
+        return None
+
+
+def _rss_cache_key(url):
+    return hashlib.sha256(str(url).encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _rss_cache_get(url):
+    item = _RSS_SUCCESS_CACHE.get(_rss_cache_key(url))
+    if not item:
+        return None
+    ts, entries = item
+    if time.time() - ts > RSS_CACHE_TTL:
+        return None
+    return list(entries)
+
+
+def _rss_cache_put(url, entries):
+    if entries:
+        _RSS_SUCCESS_CACHE[_rss_cache_key(url)] = (time.time(), list(entries[:100]))
+
+
+def _engine_fetch_rss(url, source):
+    """RSS 안정 수집: Google 연속장애 circuit breaker + 재시도 + Bing/캐시 fallback."""
+    global _RSS_GOOGLE_FAILURES, _RSS_GOOGLE_CIRCUIT_UNTIL
+    last_error = None
+    is_google = _rss_is_google(url)
+    google_circuit_open = is_google and time.time() < _RSS_GOOGLE_CIRCUIT_UNTIL
+    if google_circuit_open:
+        _engine_log("warning", "[RSS 회로차단] Google News 연속장애 | %s | %.0fs 남음", source, max(0, _RSS_GOOGLE_CIRCUIT_UNTIL-time.time()))
+    attempts = 0 if google_circuit_open else RSS_RETRY_COUNT
+
+    for attempt in range(1, attempts + 1):
+        try:
+            r = requests.get(
+                url,
+                headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml, */*"},
+                timeout=(RSS_GOOGLE_REQUEST_TIMEOUT if is_google else ENGINE_HTTP_TIMEOUT),
+                allow_redirects=True,
+            )
+            status = getattr(r, "status_code", 0)
+            if 200 <= status < 300:
+                result = feedparser.parse(r.content)
+                if getattr(result, "bozo", False) and not getattr(result, "entries", []):
+                    raise RuntimeError("RSS 파싱 실패")
+                entries = getattr(result, "entries", []) or []
+                _rss_cache_put(url, entries)
+                _RSS_FAILURE_STATE.pop(_rss_cache_key(url), None)
+                if is_google:
+                    _RSS_GOOGLE_FAILURES = 0
+                    _RSS_GOOGLE_CIRCUIT_UNTIL = 0.0
+                _engine_log("info", "[RSS] %s | 수집=%d건 | 시도=%d", source, len(entries), attempt)
+                return entries
+
+            last_error = f"HTTP {status} {getattr(r, 'reason', '') or ''}".strip()
+            # 429/5xx는 일시 장애일 가능성이 높으므로 재시도한다.
+            retryable = status == 429 or status >= 500
+            if not retryable:
+                _engine_log("error", "[실패] RSS | %s | 원인=%s", source, last_error)
+                break
+            if attempt < RSS_RETRY_COUNT:
+                delay = RSS_RETRY_BACKOFF ** (attempt - 1)
+                _engine_log("warning", "[RSS 재시도] %s | %s | %d/%d | %.1fs 후 재시도", source, last_error, attempt, RSS_RETRY_COUNT, delay)
+                time.sleep(delay)
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {e}"
+            if attempt < RSS_RETRY_COUNT:
+                delay = RSS_RETRY_BACKOFF ** (attempt - 1)
+                _engine_log("warning", "[RSS 재시도] %s | %s | %d/%d | %.1fs 후 재시도", source, last_error, attempt, RSS_RETRY_COUNT, delay)
+                time.sleep(delay)
+
+    if is_google and last_error:
+        _RSS_GOOGLE_FAILURES += 1
+        if _RSS_GOOGLE_FAILURES >= RSS_GOOGLE_FAILURE_THRESHOLD:
+            _RSS_GOOGLE_CIRCUIT_UNTIL = time.time() + RSS_GOOGLE_CIRCUIT_SECONDS
+            _engine_log("warning", "[RSS 회로차단 시작] Google News | %d회 연속 실패 | %.0fs 차단", _RSS_GOOGLE_FAILURES, RSS_GOOGLE_CIRCUIT_SECONDS)
+
+    # Google News 장애 시 보조소스로 우회한다.
+    if is_google:
+        fallback = _rss_bing_fallback_url(url)
+        if fallback:
+            try:
+                _engine_log("warning", "[RSS 보조소스 전환] %s | Google 실패 → Bing News RSS", source)
+                r = requests.get(
+                    fallback,
+                    headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml, */*"},
+                    timeout=ENGINE_HTTP_TIMEOUT,
+                    allow_redirects=True,
+                )
+                if r.ok:
+                    result = feedparser.parse(r.content)
+                    entries = getattr(result, "entries", []) or []
+                    if entries:
+                        _RSS_FAILURE_STATE[_rss_cache_key(url)] = {"failed_at": time.time(), "fallback": "bing", "last_error": last_error}
+                        _engine_log("info", "[RSS 보조수집 성공] %s | Bing=%d건", source, len(entries))
+                        return entries
+            except Exception as e:
+                last_error = f"보조소스 {type(e).__name__}: {e}"
+
+    # 마지막 성공 캐시가 있으면 짧은 장애 동안에만 사용한다.
+    cached = _rss_cache_get(url)
+    if cached:
+        _RSS_FAILURE_STATE[_rss_cache_key(url)] = {"failed_at": time.time(), "fallback": "cache", "last_error": last_error}
+        _engine_log("warning", "[RSS 캐시 사용] %s | 최근 성공 %d건 | 원인=%s", source, len(cached), last_error)
+        return cached
+
+    _RSS_FAILURE_STATE[_rss_cache_key(url)] = {"failed_at": time.time(), "fallback": None, "last_error": last_error}
+    _engine_log("error", "[실패] RSS | %s | 원인=%s | 다른 소스 수집은 계속", source, last_error or "알 수 없음")
+    return []
 
 
 def _engine_run_google_and_domestic():
@@ -2861,18 +3015,45 @@ def _engine_run_telegram_channels():
 
 
 def _engine_youtube_channel_id(handle):
+    """Resolve YouTube channel ID with cache and multi-path fallback."""
     h = str(handle or "").strip().lstrip("@").strip()
-    if not h: return ""
-    for url in (f"https://www.youtube.com/@{h}", f"https://www.youtube.com/c/{h}", f"https://www.youtube.com/user/{h}"):
+    if not h:
+        return ""
+    now = time.time()
+    cached = YOUTUBE_CHANNEL_ID_CACHE.get(h)
+    if cached:
+        return cached
+    fail_until = YOUTUBE_CHANNEL_FAIL_UNTIL.get(h, 0)
+    if fail_until > now:
+        return ""
+    urls = (
+        f"https://www.youtube.com/@{h}",
+        f"https://www.youtube.com/c/{h}",
+        f"https://www.youtube.com/user/{h}",
+    )
+    for url in urls:
         try:
-            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT)
-            if not r.ok: continue
-            m = re.search(r'"channelId":"([A-Za-z0-9_-]{10,})"', r.text)
-            if m: return m.group(1)
+            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=min(ENGINE_HTTP_TIMEOUT, 8))
+            if not r.ok:
+                continue
+            body = r.text or ""
+            patterns = (
+                r'"channelId":"([A-Za-z0-9_-]{10,})"',
+                r'<meta[^>]+itemprop=["\']channelId["\'][^>]+content=["\']([A-Za-z0-9_-]{10,})',
+                r'/channel/([A-Za-z0-9_-]{10,})',
+            )
+            for pat in patterns:
+                m = re.search(pat, body, re.I)
+                if m:
+                    cid = m.group(1)
+                    YOUTUBE_CHANNEL_ID_CACHE[h] = cid
+                    _save_youtube_channel_cache(YOUTUBE_CHANNEL_ID_CACHE)
+                    YOUTUBE_CHANNEL_FAIL_UNTIL.pop(h, None)
+                    return cid
         except Exception:
             continue
+    YOUTUBE_CHANNEL_FAIL_UNTIL[h] = now + YOUTUBE_CHANNEL_FAIL_COOLDOWN_SECONDS
     return ""
-
 
 def _engine_run_youtube():
     if not ENABLE_YOUTUBE:
@@ -2881,6 +3062,11 @@ def _engine_run_youtube():
     ok_channels = 0
     fail_channels = 0
     for name, handle in YOUTUBE_CHANNELS:
+        hkey = str(handle or "").strip().lstrip("@").strip()
+        if YOUTUBE_CHANNEL_FAIL_UNTIL.get(hkey, 0) > time.time():
+            fail_channels += 1
+            _engine_log("warning", "[유튜브 보류] 채널 확인 재시도 대기 | %s", name)
+            continue
         cid = _engine_youtube_channel_id(handle)
         if not cid:
             fail_channels += 1
@@ -2922,7 +3108,7 @@ def _engine_run_test_fixture():
 #    시장 구조가 바뀔 때만 장중 브리핑.
 # 3) 기존 뉴스의 국내 관련주 선별 로직은 건드리지 않는다.
 # 4) 글로벌 기업은 국내 상장기업으로 오인 연결하지 않는다.
-# 5) "💯 강한 재료 · 급락" 같은 방향/강도 혼합 문구를 사용하지 않는다.
+# 5) "💯 주요 재료 · 급락" 같은 방향/강도 혼합 문구를 사용하지 않는다.
 #    방향은 📈 급등 / 📉 급락으로, 재료 강도는 뉴스 분류에서 별도로 처리한다.
 # 6) 실시간 시세가 확인되지 않으면 추정하지 않고 "시세 확인불가"로 남긴다.
 # ============================================================
@@ -3087,7 +3273,13 @@ def _us_briefing_reason(name, theme):
 
 def _us_briefing_fetch_all():
     data = {}
-    for symbol, meta in US_BRIEFING_WATCHLIST.items():
+    watchlist = dict(US_BRIEFING_WATCHLIST)
+    # MSCI는 실제 사용하는 지수/상품 심볼을 환경변수로 지정한다.
+    # 미설정 상태에서는 임의의 종목을 MSCI 지수로 오인하지 않는다.
+    msci_symbol = os.environ.get("MSCI_SYMBOL", "").strip()
+    if msci_symbol:
+        watchlist[msci_symbol] = ("MSCI", "MSCI")
+    for symbol, meta in watchlist.items():
         q = _yahoo_chart_quote(symbol)
         if q:
             q.update({"name": meta[0], "theme": meta[1]})
@@ -3112,14 +3304,14 @@ def _us_open_briefing(snapshot, et):
     macro = ["USDKRW=X", "CL=F", "GC=F"]
     lines = [
         "<b>🇺🇸 [미장 브리핑]</b>",
-        f"🕐 개장 30분 · {et.strftime('%H:%M ET')}",
+        f"🕐 {et.strftime('%H:%M ET')}",
         "",
         "<b>📊 주요 지수</b>",
     ]
     for s in indices:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {q['name']} {_us_format_pct(q['change_pct'])}")
+            lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
     movers = []
     for s, q in snapshot.items():
         if s in indices or s in macro:
@@ -3144,7 +3336,7 @@ def _us_open_briefing(snapshot, et):
             pct = q.get("change_pct")
             lines.append(f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)}")
 
-    # 미국장 개장 30분 브리핑에도 국내 시장 대응용 ADR을 반드시 포함한다.
+    # 미장 정기 브리핑에도 국내 시장 대응용 ADR을 반드시 포함한다.
     lines += ["", "<b>🇰🇷 ADR</b>"]
     adr_symbols = ["PKX", "LPL", "KEP", "KB", "SHG", "SKM"]
     found_adr = False
@@ -3157,6 +3349,19 @@ def _us_open_briefing(snapshot, et):
     if not found_adr:
         lines.append("• ADR 시세 확인불가")
 
+    # MSCI 등락률: 실제 시세 심볼이 설정된 경우에만 표시하고 임의 추정은 하지 않는다.
+    msci_symbol = os.environ.get("MSCI_SYMBOL", "").strip()
+    lines += ["", "<b>📌 MSCI</b>"]
+    if msci_symbol:
+        mq = snapshot.get(msci_symbol)
+        if mq and mq.get("change_pct") is not None:
+            mp = mq.get("change_pct")
+            lines.append(f"• MSCI {_us_direction(mp)} {_us_format_pct(mp)}")
+        else:
+            lines.append("• MSCI 등락률 확인불가")
+    else:
+        lines.append("• MSCI 등락률 확인불가 (MSCI_SYMBOL 미설정)")
+
     # 신규 MSCI 재료가 있으면 원문 링크까지, 없으면 확인 결과를 명시한다.
     msci = {}
     with _US_BRIEFING_LOCK:
@@ -3166,7 +3371,6 @@ def _us_open_briefing(snapshot, et):
         if any(k.lower() in tx.lower() for k in ["MSCI", "리밸런싱", "지수 편입", "지수 편출"]):
             msci = row
             break
-    lines += ["", "<b>📌 MSCI</b>"]
     if msci:
         lines.append(f"• {html.escape(str(msci.get('title', ''))[:220])}")
         if msci.get("link"):
@@ -3277,7 +3481,7 @@ def _engine_us_market_monitor():
         msg = _us_open_briefing(snapshot, et)
         if msg and _engine_send_telegram(msg):
             _US_BRIEFING_LAST_OPEN_SENT = et.date()
-            _engine_log("info", "[미장브리핑] 개장 30분 브리핑 송출")
+            _engine_log("info", "[미장브리핑] 정규 브리핑 브리핑 송출")
         _US_BRIEFING_LAST_SNAPSHOT = snapshot
         return
 
@@ -3488,7 +3692,7 @@ def _us_close_briefing(snapshot, et):
     else:
         lines.append("• 확인된 신규 MSCI 재료 없음")
 
-    # 강한 재료는 재료 강도만 표시. 방향(급등/급락)을 붙이지 않는다.
+    # 주요 재료는 재료 강도만 표시. 방향(급등/급락)을 붙이지 않는다.
     strong_rows = []
     for row in reversed(rows[-300:]):
         tx = str(row.get("title","")) + " " + str(row.get("text",""))
@@ -3497,7 +3701,7 @@ def _us_close_briefing(snapshot, et):
             if len(strong_rows) >= 3:
                 break
     if strong_rows:
-        lines += ["", "<b>💯 강한 재료</b>"]
+        lines += ["", "<b>💯 주요 재료</b>"]
         for row in strong_rows:
             tx = str(row.get("title",""))[:220]
             amount = re.search(r"(?:[0-9][0-9,]*(?:\.\d+)?)\s*(?:억|조|억원|조원|달러|USD|million|billion)", tx, re.I)
@@ -3910,7 +4114,7 @@ HISTORICAL_CASE_RETURN_REQUIRED_WHEN_FOUND = True
 # ---------------------------------------------------------------------------
 # 9. 💯 표시 규칙
 # ---------------------------------------------------------------------------
-# 금지: '💯 강한 재료 · 급등', '💯 강한 재료 · 폭락' 등 고정 문구.
+# 금지: '💯 주요 재료 · 급등', '💯 주요 재료 · 폭락' 등 고정 문구.
 # 사용: 실제 중요도가 높은 재료/선정된 국내 상장기업 앞의 💯.
 # 급등/급락은 숫자와 별도 방향 아이콘으로 표현.
 STRONG_MATERIAL_WORDING_FORBIDDEN = True
@@ -3924,7 +4128,7 @@ US_INTRADAY_INTERVAL_MINUTES = 30
 US_INTRADAY_FROM_OPEN_TO_CLOSE = True
 US_INTRADAY_TITLE = "🇺🇸 [미장 브리핑]"
 US_INTRADAY_TIME_ONLY = True
-# '개장 30분'이라는 문구는 반복 브리핑에서 사용하지 않는다.
+# '정규 브리핑'이라는 문구는 반복 브리핑에서 사용하지 않는다.
 
 US_BRIEFING_REQUIRED_FIELDS = (
     "나스닥", "S&P500", "다우", "필라델피아반도체", "VIX",
@@ -4017,3 +4221,169 @@ MASTER_OUTPUT_RULES = (
 # ============================================================================
 # END MASTER POLICY
 # ============================================================================
+
+
+# ─────────────────────────────────────────────────────────────
+# [STABILITY PATCH] Google RSS / YouTube production hardening
+# ─────────────────────────────────────────────────────────────
+# 목적:
+# 1) Google News RSS 503/429/5xx 연속 장애 시 circuit breaker로 지연 방지
+# 2) 성공한 RSS 응답을 캐시하여 일시 장애 시 보완
+# 3) YouTube 채널 ID를 영구 저장하여 재시작 후 재검색 방지
+# 4) 실패 채널 cooldown으로 반복 확인 방지
+# 5) 기존 뉴스/관심종목/공시 로직은 변경하지 않고 수집 계층만 안정화
+
+import json as _stability_json
+import time as _stability_time
+from pathlib import Path as _StabilityPath
+
+_STABILITY_DIR = _StabilityPath(__file__).resolve().parent / "runtime_state"
+_STABILITY_DIR.mkdir(parents=True, exist_ok=True)
+
+_YT_CACHE_FILE = _STABILITY_DIR / "youtube_channel_cache.json"
+_GOOGLE_STATE_FILE = _STABILITY_DIR / "google_rss_state.json"
+_GOOGLE_CACHE_DIR = _STABILITY_DIR / "google_rss_cache"
+_GOOGLE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+_GOOGLE_FAIL_LIMIT = 3
+_GOOGLE_OPEN_SECONDS = 300
+_YT_FAIL_COOLDOWN = 1800
+
+
+def _stability_load_json(path, default):
+    try:
+        if path.exists():
+            return _stability_json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return default
+
+
+def _stability_save_json(path, data):
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(
+            _stability_json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+    except Exception:
+        try:
+            path.write_text(
+                _stability_json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+
+def _google_rss_is_open():
+    state = _stability_load_json(
+        _GOOGLE_STATE_FILE,
+        {"failures": 0, "opened_at": 0},
+    )
+    opened_at = float(state.get("opened_at") or 0)
+    if opened_at and (_stability_time.time() - opened_at) < _GOOGLE_OPEN_SECONDS:
+        return True
+    if opened_at:
+        state["opened_at"] = 0
+        state["failures"] = 0
+        _stability_save_json(_GOOGLE_STATE_FILE, state)
+    return False
+
+
+def _google_rss_record_failure():
+    state = _stability_load_json(
+        _GOOGLE_STATE_FILE,
+        {"failures": 0, "opened_at": 0},
+    )
+    state["failures"] = int(state.get("failures") or 0) + 1
+    if state["failures"] >= _GOOGLE_FAIL_LIMIT:
+        state["opened_at"] = _stability_time.time()
+    _stability_save_json(_GOOGLE_STATE_FILE, state)
+
+
+def _google_rss_record_success():
+    _stability_save_json(
+        _GOOGLE_STATE_FILE,
+        {"failures": 0, "opened_at": 0, "last_success": _stability_time.time()},
+    )
+
+
+def _google_rss_cache_key(url):
+    import hashlib as _stability_hashlib
+    return _stability_hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
+
+
+def _google_rss_cache_write(url, body):
+    try:
+        key = _google_rss_cache_key(url)
+        (_GOOGLE_CACHE_DIR / f"{key}.xml").write_text(body, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _google_rss_cache_read(url, max_age_seconds=3600):
+    try:
+        p = _GOOGLE_CACHE_DIR / f"{_google_rss_cache_key(url)}.xml"
+        if p.exists() and (_stability_time.time() - p.stat().st_mtime) <= max_age_seconds:
+            return p.read_text(encoding="utf-8")
+    except Exception:
+        pass
+    return None
+
+
+def _youtube_cache_load():
+    return _stability_load_json(_YT_CACHE_FILE, {})
+
+
+def _youtube_cache_save(cache):
+    _stability_save_json(_YT_CACHE_FILE, cache)
+
+
+def _youtube_cached_channel(channel_name):
+    cache = _youtube_cache_load()
+    item = cache.get(channel_name)
+    if isinstance(item, dict):
+        return item
+    return None
+
+
+def _youtube_store_channel(channel_name, channel_id):
+    if not channel_name or not channel_id:
+        return
+    cache = _youtube_cache_load()
+    cache[channel_name] = {
+        "channel_id": channel_id,
+        "updated_at": _stability_time.time(),
+        "fail_until": 0,
+    }
+    _youtube_cache_save(cache)
+
+
+def _youtube_mark_failure(channel_name, cooldown=_YT_FAIL_COOLDOWN):
+    if not channel_name:
+        return
+    cache = _youtube_cache_load()
+    item = cache.get(channel_name, {})
+    item["fail_until"] = _stability_time.time() + cooldown
+    item["last_failure"] = _stability_time.time()
+    cache[channel_name] = item
+    _youtube_cache_save(cache)
+
+
+def _youtube_in_cooldown(channel_name):
+    item = _youtube_cached_channel(channel_name)
+    if not item:
+        return False
+    return float(item.get("fail_until") or 0) > _stability_time.time()
+
+
+def _stability_backoff(attempt, base=1.0, cap=30.0):
+    delay = min(cap, base * (2 ** max(0, attempt - 1)))
+    # small deterministic jitter avoids synchronized retries
+    delay += (hash((_stability_time.time_ns(), attempt)) % 250) / 1000.0
+    _stability_time.sleep(delay)
+
+
+# End of stability patch.
