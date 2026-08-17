@@ -1108,17 +1108,69 @@ def _engine_atomic_append_jsonl(path, obj):
 
 
 def _engine_is_global_market_news(text):
-    """국내 관련주가 없어도 보존해야 하는 글로벌 시황 재료."""
+    """국내 관련주가 없어도 보존해야 하는 글로벌 시황 핵심 재료."""
     low = _engine_clean(text).lower()
     macro = [
         "fomc", "fed", "powell", "cpi", "pce", "nonfarm", "payroll", "unemployment",
         "treasury", "yield", "bond yield", "tariff", "sanction", "ceasefire", "war",
-        "oil", "wti", "brent", "gold", "copper", "dollar", "usd", "nasdaq", "s&p 500",
-        "dow", "semiconductor index", "phlx", "호르무즈", "전쟁", "휴전", "관세", "제재",
-        "연준", "금리", "국채", "환율", "유가", "뉴욕증시", "필라델피아반도체지수",
+        "oil", "wti", "brent", "natural gas", "gold", "copper", "dollar", "usd",
+        "nasdaq", "s&p 500", "dow", "semiconductor index", "phlx", "호르무즈", "전쟁",
+        "휴전", "관세", "제재", "연준", "금리", "국채", "환율", "유가", "원유",
+        "천연가스", "뉴욕증시", "필라델피아반도체지수", "반도체 공급망", "공급망",
+        "미중", "중국 정책", "미국 정책",
     ]
-    movement = list(US_FEATURE_STOCK_WORDS) + ["급등", "급락", "폭등", "폭락", "신고가", "신저가"]
-    return any(k in low for k in macro) and any(k in low for k in movement + ["발표", "결정", "회의", "인상", "인하", "확산", "충돌", "협상"])
+    events = [
+        "발표", "결정", "회의", "인상", "인하", "동결", "확정", "발표했다",
+        "충돌", "공격", "침공", "제재", "협상", "휴전", "종료", "돌파",
+        "급등", "급락", "폭등", "폭락", "신고가", "신저가", "사상 최대",
+    ]
+    return any(k in low for k in macro) and any(k in low for k in events)
+
+
+# Google-US는 국내 종목 연결 여부와 별개로 '시장에 꼭 필요한 뉴스'만 통과시킨다.
+# 단순 종목 등락, 일반 전망, 반복 기사, 가벼운 기업 뉴스는 제외한다.
+def _engine_is_us_priority_news(title, extra=""):
+    text = _engine_clean(f"{title} {extra}")
+    low = text.lower()
+    if _engine_is_global_market_news(text):
+        return True
+
+    high_impact = [
+        "fomc", "fed", "powell", "cpi", "pce", "nonfarm", "payroll", "unemployment",
+        "금리 결정", "기준금리", "금리인하", "금리 인하", "금리인상", "금리 인상",
+        "미국 고용", "소비자물가", "인플레이션", "연준", "관세", "제재", "휴전",
+        "전쟁", "공격", "침공", "지정학", "호르무즈", "미중 무역", "중국 정책",
+        "미국 정책", "반도체 공급망", "공급망 차질", "공급망 재편",
+        "유가 급등", "유가 급락", "원유 급등", "원유 급락", "천연가스 급등", "천연가스 급락",
+        "대규모 투자", "대규모 증설", "세계 최대", "사상 최대", "세계 최초",
+        "인수", "합병", "m&a", "독점", "fda 승인", "임상 3상", "어닝서프라이즈",
+        "어닝쇼크", "가이던스 상향", "가이던스 하향", "전망 상향", "전망 하향",
+        "실적 급증", "실적 급감", "공급계약", "대규모 수주", "초대형 계약",
+    ]
+    if any(k in low for k in high_impact):
+        return True
+
+    # 글로벌 핵심 기업의 판도를 바꾸는 발표만 보존한다. 단순 주가 등락은 제외.
+    global_core = [
+        "nvidia", "엔비디아", "micron", "마이크론", "tsmc", "테슬라", "tesla",
+        "apple", "애플", "microsoft", "마이크로소프트", "amazon", "아마존",
+        "google", "alphabet", "메타", "meta", "broadcom", "브로드컴", "intel", "인텔",
+    ]
+    transformative = [
+        "실적", "가이던스", "전망", "신제품", "신규칩", "양산", "생산 확대", "공급 확대",
+        "공급 중단", "생산 중단", "대규모 투자", "인수", "합병", "m&a", "공급망",
+        "수주", "계약", "승인", "규제", "출시", "새로운 ai", "ai 칩", "반도체",
+    ]
+    if any(k in low for k in global_core) and any(k in low for k in transformative):
+        return True
+
+    # 시장 전체 움직임이면서 특별한 원인이 명시된 기사만 통과.
+    market_terms = ["뉴욕증시", "미국증시", "나스닥", "s&p 500", "다우", "반도체주", "m7"]
+    reason_terms = ["왜", "때문", "여파", "영향", "우려", "기대", "발표", "결정", "변화", "충격"]
+    movement = ["상승", "하락", "급등", "급락", "폭등", "폭락"]
+    if any(k in low for k in market_terms) and any(k in low for k in movement) and any(k in low for k in reason_terms):
+        return True
+    return False
 
 
 def _engine_confidence_state(item):
@@ -1134,11 +1186,22 @@ def _engine_confidence_state(item):
 
 def _engine_strong_material(item):
     text = _engine_clean(item.get("title", "") + " " + item.get("extra", "")).lower()
-    strong = set(str(x).lower() for x in STRONG_MARKET_HITS | MONEY_STRONG_WORDS)
-    strong |= {"계약 체결", "공급계약", "대규모 수주", "수주 확정", "사상 최대", "세계 최대", "독점", "승인", "허가", "인수 확정", "대규모 투자"}
-    amount = bool(re.search(r"(?:[0-9][0-9,]*\s*(?:억|조|억원|조원|달러|usd|million|billion))", text, re.I))
+    # 💯는 단순 '급등/급락/계약' 같은 결과·일반 단어가 아니라 실제로 시장에 의미가 큰 재료일 때만 붙인다.
+    strong = {
+        "대규모 수주", "초대형 계약", "대형 계약", "계약 체결", "수주 확정", "공급계약 체결",
+        "세계 최대", "세계최대", "사상 최대", "사상최대", "세계 최초", "세계최초",
+        "독점", "fda 승인", "fda", "허가", "임상 3상", "임상3상", "임상 성공",
+        "인수 확정", "합병 확정", "m&a", "대규모 투자", "대규모 증설", "양산 개시",
+        "상용화 확정", "기술수출", "기술이전", "어닝서프라이즈", "어닝쇼크",
+        "사상 최대 실적", "실적 급증", "실적 급감", "가이던스 상향", "가이던스 하향",
+        "정책 확정", "정책 시행", "규제 확정", "관세 부과", "법안 통과", "정부 대책 확정",
+        "대규모 지원", "지원금 확정", "공급망 재편", "공급망 차질",
+    }
     hits = [x for x in strong if x in text]
-    return bool(hits or amount or len(item.get("market_hits", [])) >= 2), hits[:5]
+    amount = bool(re.search(r"(?:[0-9][0-9,]*\s*(?:억|조|억원|조원|달러|usd|million|billion))", text, re.I))
+    # 금액만 있는 일반 계약은 💯로 만들지 않는다. '대규모/초대형/사상 최대' 등의 맥락이 필요하다.
+    amount_strong = amount and any(k in text for k in ("계약", "수주", "투자", "증설", "공급")) and any(k in text for k in ("대규모", "초대형", "사상 최대", "사상최대", "역대 최대"))
+    return bool(hits or amount_strong), hits[:5]
 
 
 def _engine_historical_match(item):
@@ -1554,6 +1617,51 @@ STOCK_LINK_MAP = {
     "2차전지": ["LG에너지솔루션", "삼성SDI", "SK이노베이션"],
 }
 
+GLOBAL_US_THEME_MAP = {
+    "nvidia": "AI 반도체", "엔비디아": "AI 반도체",
+    "micron": "HBM", "마이크론": "HBM",
+    "tsmc": "HBM", "테슬라": "2차전지", "tesla": "2차전지",
+    "broadcom": "AI 반도체", "브로드컴": "AI 반도체",
+    "intel": "AI 반도체", "인텔": "AI 반도체",
+    "apple": "AI", "애플": "AI", "microsoft": "AI", "마이크로소프트": "AI",
+    "amazon": "AI", "아마존": "AI", "google": "AI", "alphabet": "AI",
+    "meta": "AI", "메타": "AI",
+}
+
+def _engine_us_theme_links(text, global_companies):
+    low = _engine_clean(text).lower()
+    keys = []
+    for c in global_companies:
+        k = GLOBAL_US_THEME_MAP.get(str(c).lower())
+        if k and k not in keys:
+            keys.append(k)
+    for k in STOCK_LINK_MAP:
+        if k.lower() in low and k not in keys:
+            keys.append(k)
+    links=[]
+    for key in keys:
+        for stock in STOCK_LINK_MAP.get(key, []):
+            if stock not in links:
+                links.append(stock)
+    return keys, links[:5]
+
+def _engine_rank_domestic_theme_stocks(theme_keys, max_items=3):
+    candidates=[]
+    for key in theme_keys:
+        for stock in STOCK_LINK_MAP.get(key, []):
+            hist=0; lead_hist=0
+            for h in _engine_historical_cache[-3000:]:
+                tx=str(h.get("text",""))
+                if stock in tx:
+                    hist += 1
+                    if any(x in tx.lower() for x in ["상한가","대장","주도","급등","폭등","신고가"]):
+                        lead_hist += 1
+            score=min(hist,8)*2 + min(lead_hist,8)*3
+            candidates=[x for x in candidates if x[1]!=stock]
+            candidates.append((score,stock,hist,lead_hist,key))
+    candidates.sort(reverse=True, key=lambda x:(x[0],x[3],x[2]))
+    return candidates[:max_items]
+
 def _engine_stock_links(text, companies):
     t = _engine_clean(text)
     links = []
@@ -1649,8 +1757,22 @@ def _engine_summary(title, extra, companies, market_hits):
     elif domestic:
         core = f"🔎 [직접 관련] {reason} → " + "·".join(domestic[:4])
     elif global_companies:
-        # 글로벌 기업은 국내 상장기업 문구를 절대 만들지 않는다.
-        core = f"🔎 글로벌 기업 → " + "·".join(global_companies[:4])
+        theme_keys, us_links = _engine_us_theme_links(text, global_companies)
+        ranked = _engine_rank_domestic_theme_stocks(theme_keys, 3) if us_links else []
+        if ranked:
+            theme_label = "·".join(_engine_theme(k) or k for k in theme_keys[:2])
+            reason2 = reason or _engine_market_reason(text)
+            names=[]
+            for n, (_, stock, hist, lead_hist, key) in enumerate(ranked, 1):
+                badge = "🥇 대장급" if n == 1 else ("🥈 관찰" if n == 2 else "🥉 관찰")
+                why=[]
+                if hist: why.append(f"과거 급등/상한가 {hist}건")
+                if lead_hist: why.append("테마 주도 이력")
+                if hist >= 2 or lead_hist >= 2: why.append("끼·탄력 확인")
+                names.append(f"{badge} {stock}({', '.join(why) if why else '관련 테마'})")
+            core = f"🔎 미국장 {global_companies[0]} → {theme_label} 테마 | {reason2} | 국내 관찰: " + " / ".join(names)
+        else:
+            core = f"🔎 글로벌 핵심기업: {', '.join(global_companies[:4])} | {reason or _engine_market_reason(text)}"
     elif market_hits:
         core = "🔎 [글로벌 시황] 시장 핵심 재료 → " + "·".join(market_hits[:4])
     else:
@@ -1764,7 +1886,7 @@ def _engine_format_message(item):
             # 제목에 이미 글로벌 기업명이 있으면 기업명을 prefix에 중복하지 않는다.
             title_prefix = "⭐️"
         elif person_hit:
-            title_prefix = "🕵️" + person_hit
+            title_prefix = "📌"
         else:
             title_prefix = category
     source_raw = str(item["source"])
@@ -1893,6 +2015,11 @@ def _engine_process_item(source, title, link, published="", extra=""):
     if not title:
         return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
+    # 미국장 뉴스는 수집량보다 선별도가 중요하다.
+    # 국내 수혜주가 없더라도 시황상 중요한 사건/강한 테마/핵심 글로벌 기업의 판도 변화만 통과시킨다.
+    if str(source) == "Google-US" and not _engine_is_us_priority_news(title, extra):
+        _engine_log("info", "[제외] 🇺🇸 미국장 일반뉴스 | 시장분석 핵심도 낮음 | %s", title[:100])
+        return False
     market_state = _engine_market_state(source, published)
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
     if not gate_ok:
