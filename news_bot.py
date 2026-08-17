@@ -1132,6 +1132,26 @@ def _engine_is_global_market_news(text):
 def _engine_is_us_priority_news(title, extra=""):
     text = _engine_clean(f"{title} {extra}")
     low = text.lower()
+
+    # 미국장 도배 방지: 단순 등락·전망·시황 반복 기사는 우선 제외한다.
+    weak_only = [
+        "상승 마감", "하락 마감", "강보합", "약보합", "소폭 상승", "소폭 하락",
+        "주가 상승", "주가 하락", "주가 급등", "주가 급락", "오름세", "내림세",
+        "숨고르기", "혼조세", "보합권", "장중", "마감", "전망", "분석", "전문가",
+        "투자자 관심", "주목", "눈길", "주목받아", "기대감", "랠리", "반등세"
+    ]
+    strong_event = [
+        "결정", "확정", "발표", "공식", "체결", "승인", "허가", "실적", "가이던스",
+        "대규모 투자", "대규모 증설", "생산 중단", "공급 중단", "공급망 차질",
+        "공급망 재편", "인수", "합병", "m&a", "제재", "관세", "금리", "fomc",
+        "cpi", "pce", "고용", "전쟁", "공격", "휴전", "원유", "유가", "천연가스",
+        "대규모 수주", "초대형 계약", "사상 최대", "세계 최대", "신규 칩", "신제품"
+    ]
+    movement_only = any(k in low for k in ["급등", "급락", "폭등", "폭락", "상승", "하락"])
+    if movement_only and not any(k in low for k in strong_event):
+        # 가격 움직임만 전하는 기사는 미국장 후보에서 제외한다.
+        return False
+
     if _engine_is_global_market_news(text):
         return True
 
@@ -1162,7 +1182,13 @@ def _engine_is_us_priority_news(title, extra=""):
         "수주", "계약", "승인", "규제", "출시", "새로운 ai", "ai 칩", "반도체",
     ]
     if any(k in low for k in global_core) and any(k in low for k in transformative):
-        return True
+        # 글로벌 핵심기업도 단순 주가/전망 반복기사는 제외하고 실제 사건이 있어야 한다.
+        event_words = [
+            "실적", "가이던스", "신제품", "신규칩", "양산", "생산 확대", "공급 확대",
+            "공급 중단", "대규모 투자", "인수", "합병", "m&a", "공급망", "수주", "계약",
+            "승인", "규제", "출시", "ai 칩"
+        ]
+        return any(k in low for k in event_words)
 
     # 시장 전체 움직임이면서 특별한 원인이 명시된 기사만 통과.
     market_terms = ["뉴욕증시", "미국증시", "나스닥", "s&p 500", "다우", "반도체주", "m7"]
@@ -1958,12 +1984,39 @@ def _engine_flush_pending():
     groups = []
     for item in _engine_pending:
         placed = False
+        item_text = item["title"] + " " + item["extra"]
         for group in groups:
-            if _engine_similar(item["title"] + " " + item["extra"], group[0]["title"] + " " + group[0]["extra"]):
+            group_text = group[0]["title"] + " " + group[0]["extra"]
+            similar = _engine_similar(item_text, group_text)
+            # 미국장은 같은 사건을 여러 매체가 반복 보도하는 경우가 많으므로
+            # 동일 소스군에서는 더 엄격하게 묶어 한 건만 남긴다.
+            if str(item.get("source", "")) == "Google-US" and str(group[0].get("source", "")) == "Google-US":
+                ca = set(_engine_find_companies(item_text)); cb = set(_engine_find_companies(group_text))
+                ma = set(_engine_market_hit(item_text)); mb = set(_engine_market_hit(group_text))
+                topic_overlap = bool((ca & cb) or (ma & mb))
+                ratio = difflib.SequenceMatcher(None, re.sub(r"[^0-9a-zA-Z가-힣]", "", item_text.lower())[:300], re.sub(r"[^0-9a-zA-Z가-힣]", "", group_text.lower())[:300]).ratio()
+                similar = similar or (topic_overlap and ratio >= 0.58)
+            if similar:
                 group.append(item); placed = True; break
         if not placed:
             groups.append([item])
     candidates = [max(g, key=_engine_score) for g in groups]
+    # 미국장은 약한 후보를 송출 단계에서도 한 번 더 걸러낸다.
+    filtered_candidates = []
+    for item in candidates:
+        if str(item.get("source", "")) == "Google-US":
+            text = item["title"] + " " + item.get("extra", "")
+            hits = _engine_market_hit(text)
+            domestic = _engine_domestic_companies(item.get("companies", []))
+            strong, strong_hits = _engine_strong_material(item)
+            priority = _engine_is_us_priority_news(item["title"], item.get("extra", ""))
+            if not priority:
+                continue
+            # 시장 핵심재료/실제 기업 이벤트/국내 테마 연결 중 하나는 있어야 한다.
+            if not (strong or hits or domestic or any(k in text.lower() for k in ["fomc", "cpi", "pce", "고용", "금리", "관세", "전쟁", "유가", "공급망", "대규모 투자", "실적", "가이던스"])):
+                continue
+        filtered_candidates.append(item)
+    candidates = filtered_candidates
     candidates.sort(key=_engine_score, reverse=True)
     sent = 0
     for item in candidates[:ENGINE_MAX_SEND_PER_CYCLE]:
