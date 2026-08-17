@@ -1943,7 +1943,9 @@ def _engine_format_message(item):
     header = f"<b>✅ [{source}] [{freshness}]</b>"
     if time_text:
         header += f"                                      🕐 {time_text}"
-    lines = [header, "", f"{title_prefix} {title_html}"]
+    # 뉴스 제목은 항상 📌로 시작한다.
+    # 제목 위에는 핵심 부제/강한 재료를 배치하고, 제목 자체는 그 아래에 둔다.
+    lines = [header, ""]
     if freshness == "재탕" and prev:
         prev_source = html.escape(str(prev.get("source", "")))
         prev_time = html.escape(str(prev.get("time_text", "")))
@@ -1958,21 +1960,47 @@ def _engine_format_message(item):
     strong, strong_hits = _engine_strong_material(item)
     historical = _engine_historical_match(item)
     global_companies = _engine_global_companies(companies)
+
+    core, schedule = _engine_summary(
+        item["title"], item["extra"], companies, item["market_hits"]
+    )
+
+    # 모든 뉴스는 제목을 이해할 수 있는 부제/핵심 이유를 제목 위에 둔다.
+    # 단순 종목명 나열이나 기사 제목 복사는 하지 않는다.
     if strong:
-        # 💯 뒤에는 '급등/급락/강한 재료' 같은 결과 표현이 아니라
-        # 뉴스에서 확인되는 실제 원인·핵심 재료를 넣는다.
-        reason_text = _engine_market_reason(item.get("title", "") + " " + item.get("extra", ""))
+        reason_text = _engine_market_reason(
+            item.get("title", "") + " " + item.get("extra", "")
+        )
         if category in ("🌐", "🌐시황") or str(item.get("source", "")) == "Google-US":
-            raw = _engine_clean(item.get("title", "") + " " + item.get("extra", ""))
-            strong_reason = _engine_market_move_reason(item.get("title", ""), item.get("extra", ""))
+            strong_reason = _engine_market_move_reason(
+                item.get("title", ""), item.get("extra", "")
+            )
         elif strong_hits:
-            # 국내/산업 뉴스도 핵심 키워드만 나열하지 않고 문맥을 살려 설명한다.
             strong_reason = ", ".join(strong_hits[:3])
         else:
             strong_reason = reason_text
-        lines.insert(2, "💯 🔎 " + html.escape(strong_reason))
+        lines += [f"💯 🔎 {html.escape(strong_reason)}"]
+
+    if core:
+        lines += [f"🔎 {html.escape(core)}"]
+
     if confidence == "미확인":
-        lines.insert(3, "⚠️ [미확인] 공식 확인 전 소문·전망성 재료")
+        lines += ["⚠️ [미확인] 공식 확인 전 소문·전망성 재료"]
+
+    # 제목은 부제/핵심 설명 아래에 배치하고 📌로 통일한다.
+    lines += [f"📌 {title_html}"]
+
+    if freshness == "재탕" and prev:
+        prev_source = html.escape(str(prev.get("source", "")))
+        prev_time = html.escape(str(prev.get("time_text", "")))
+        if prev_source or prev_time:
+            lines += [f"↳ 최초 보도: <b>{prev_time} / {prev_source}</b>"]
+    elif freshness == "업그레이드" and prev:
+        prev_source = html.escape(str(prev.get("source", "")))
+        prev_time = html.escape(str(prev.get("time_text", "")))
+        if prev_source or prev_time:
+            lines += [f"↳ 선행 보도: <b>{prev_time} / {prev_source}</b>"]
+
     if historical:
         ratio, hrow = historical
         htitle = html.escape(str(hrow.get("title", "과거 유사 사례"))[:180])
@@ -1981,14 +2009,7 @@ def _engine_format_message(item):
             lines += ["", f"📚 과거 유사 급등 사례 ({ratio:.0%})", f'<a href="{hlink}">🔗 {htitle}</a>']
         else:
             lines += ["", f"📚 과거 유사 급등 사례 ({ratio:.0%})", htitle]
-    core, schedule = _engine_summary(item["title"], item["extra"], companies, item["market_hits"])
-    core_html = html.escape(core).replace("⚡️", "⚡️")
-    # 별도 '한국과의 관계 / 관련주' 소제목은 사용하지 않는다.
-    # 한국 기업과의 연결 내용과 수혜/피해 방향을 바로 한 줄로 보여준다.
-    if core:
-        lines += ["", core_html]
-    if market_state in ("시장 마감 후 뉴스", "시장 휴무로 미반영"):
-        lines += ["", f"⏸️ {html.escape(market_state)}"]
+
     if schedule:
         lines += ["", f"<b>📅 일정</b>", html.escape(schedule)]
     if item.get("link"):
