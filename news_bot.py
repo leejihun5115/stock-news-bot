@@ -1,5 +1,3 @@
-# 이지훈 | 2026-08-18 | Google/한국경제 원천문제 수정 최종본
-# 이지훈 | 2026-08-18
 # ============================================================
 
 # ============================================================
@@ -16,14 +14,14 @@
 #
 # 미국장:
 # - 미국 선물 급등/급락 시 별도 브리핑.
-# - 정규 장중 브리핑은 시간만 표시하고 30분 간격으로 운영.
+# - 개장 약 30분 후 개장 브리핑.
 # - 장중 구조적 변화/급등/급락/테마 변화/환율/유가 등 큰 변동 시 브리핑.
 # - 장마감 후 전체 시장흐름 + 강한 종목군 + 원인 + 한국 관련주 +
 #   MSCI + ADR을 정리.
 # - 국내 관련주가 없어도 글로벌 시황은 보존하고 글로벌 외신을 DB에 축적.
 #
-# 주요 재료:
-# - '💯 주요 재료 · 급등/급락' 같은 표현은 사용하지 않음.
+# 강한 재료:
+# - '💯 강한 재료 · 급등/급락' 같은 표현은 사용하지 않음.
 # - 💯는 재료 강도만 표시.
 # - 수주라면 수주 이유/금액/기간 등 확인 가능한 사실을 표시.
 # - 과거 동일/유사 재료가 있으면 당시 주가 상승률과 원문 하이퍼링크를 연결.
@@ -253,8 +251,9 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 CHAT_ID_OVERSEAS = os.environ.get("CHAT_ID_OVERSEAS", "") or CHAT_ID
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
-NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
-NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
+NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "M_8dz3_iN2uEOeGbBwqZ")
+NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "VpqfGQgvV4")
+NAVER_API_MODE = (os.environ.get("NAVER_API_MODE") or "hub").strip().lower()
 def _startup_env_flag(name, default=True):
     val = os.environ.get(name)
     return default if val is None else val.strip().lower() in ("true", "1", "yes", "on")
@@ -271,64 +270,6 @@ ENABLE_YOUTUBE = _startup_env_flag("ENABLE_YOUTUBE")
 # ============================================================
 import logging
 from logging import FileHandler
-
-# ============================================================
-# [NAVER AUTH ROOT FIX]
-# 네이버 뉴스 API 401의 원인을 요청 재시도로 덮지 않고,
-# 실행 시작 전에 자격증명 로딩/정규화/검증을 확실하게 한다.
-# - OS 환경변수 우선
-# - 프로젝트 .env 자동 로딩(외부 패키지 없이)
-# - NAVER_SEARCH_* 별칭도 지원
-# - 따옴표/공백/CRLF 제거
-# - 키가 없거나 placeholder이면 API 호출 자체를 하지 않고 원인을 명확히 표시
-# ============================================================
-def _load_simple_dotenv(path):
-    try:
-        p = Path(path)
-        if not p.exists() or not p.is_file():
-            return
-        for raw in p.read_text(encoding="utf-8-sig").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            k = k.strip()
-            v = v.strip().strip("\"'")
-            if k and k not in os.environ:
-                os.environ[k] = v
-    except Exception:
-        pass
-
-for _env_file in (".env", os.path.join(os.getcwd(), ".env")):
-    _load_simple_dotenv(_env_file)
-
-
-def _clean_secret(value):
-    return str(value or "").strip().strip("\"'").replace("\r", "").replace("\n", "")
-
-
-def _naver_secret(name, *aliases):
-    for key in (name,) + aliases:
-        value = _clean_secret(os.environ.get(key, ""))
-        if value:
-            return value
-    return ""
-
-NAVER_CLIENT_ID = _naver_secret(
-    "NAVER_CLIENT_ID", "NAVER_SEARCH_CLIENT_ID", "X_NAVER_CLIENT_ID"
-)
-NAVER_CLIENT_SECRET = _naver_secret(
-    "NAVER_CLIENT_SECRET", "NAVER_SEARCH_CLIENT_SECRET", "X_NAVER_CLIENT_SECRET"
-)
-
-_NAVER_PLACEHOLDERS = {
-    "your_client_id", "your_client_secret", "client_id", "client_secret",
-    "naver_client_id", "naver_client_secret", "",
-}
-NAVER_AUTH_CONFIGURED = (
-    NAVER_CLIENT_ID.lower() not in _NAVER_PLACEHOLDERS
-    and NAVER_CLIENT_SECRET.lower() not in _NAVER_PLACEHOLDERS
-)
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 try:
     from zoneinfo import ZoneInfo
@@ -428,8 +369,8 @@ sys.excepthook = _log_uncaught_exception
 # 시작 시점에 환경 정보를 남겨 Render 설정 문제도 바로 확인할 수 있게 한다.
 _logger.info("============================================================")
 _logger.info("[뉴스봇 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
-_logger.info("[환경] Render=%s | NAVER=%s | DART=%s | RSS=%s | 미국뉴스=%s | 텔레그램=%s | 유튜브=%s",
-             bool(os.environ.get("PORT")), NAVER_AUTH_CONFIGURED,
+_logger.info("[환경] Render=%s | NAVER=%s | NAVER_MODE=%s | DART=%s | RSS=%s | 미국뉴스=%s | 텔레그램=%s | 유튜브=%s",
+             bool(os.environ.get("PORT")), bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET), NAVER_API_MODE,
              bool(DART_API_KEY), ENABLE_DOMESTIC_NEWS, ENABLE_US_NEWS,
              ENABLE_TELEGRAM_CHANNELS, ENABLE_YOUTUBE)
 _logger.info("[정상] 국내뉴스=시장반영형 | 텔레그램/유튜브=최근60분 기본 | 강한 마감후·휴무 재료만 예외")
@@ -522,7 +463,7 @@ def _env_flag(name, default=True):
 ENABLE_DOMESTIC_NEWS = _env_flag("ENABLE_DOMESTIC_NEWS")         # 국내 RSS
 ENABLE_US_NEWS = _env_flag("ENABLE_US_NEWS")                     # 해외 RSS
 ENABLE_MORNING_BRIEFING = _env_flag("ENABLE_MORNING_BRIEFING")   # 아침 브리핑(해외지수/테마)
-ENABLE_US_INTRADAY_BRIEFING = _env_flag("ENABLE_US_INTRADAY_BRIEFING", True)  # 미국장 정규 브리핑 + 장중 변동 브리핑
+ENABLE_US_INTRADAY_BRIEFING = _env_flag("ENABLE_US_INTRADAY_BRIEFING", True)  # 미국장 개장 30분 + 장중 변동 브리핑
 ENABLE_TELEGRAM_CHANNELS = _env_flag("ENABLE_TELEGRAM_CHANNELS") # 텔레그램1(필터)+2(무조건)
 ENABLE_CUSTOM_SOURCES = _env_flag("ENABLE_CUSTOM_SOURCES")       # 약업신문/전자신문
 ENABLE_DART = _env_flag("ENABLE_DART")                           # DART 공시
@@ -589,6 +530,9 @@ if _SOLO_MODES_VALID:
             ENABLE_YOUTUBE = True
 
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
+NAVER_CLIENT_ID = (os.environ.get("NAVER_APIHUB_CLIENT_ID") or os.environ.get("NAVER_CLIENT_ID") or os.environ.get("NAVER_SEARCH_CLIENT_ID") or "").strip().strip("\'\"")
+NAVER_CLIENT_SECRET = (os.environ.get("NAVER_APIHUB_CLIENT_SECRET") or os.environ.get("NAVER_CLIENT_SECRET") or os.environ.get("NAVER_SEARCH_CLIENT_SECRET") or "").strip().strip("\'\"")
+NAVER_API_MODE = (os.environ.get("NAVER_API_MODE") or "hub").strip().lower()
 
 if not BOT_TOKEN or not CHAT_ID:
     raise SystemExit(
@@ -598,7 +542,6 @@ if not BOT_TOKEN or not CHAT_ID:
 
 RSS_CHECK_INTERVAL = 15          
 CUSTOM_SOURCE_INTERVAL = 300     
-# Google News 503/429 장애는 재시도·보조소스·캐시로 격리하며 전체 봇을 멈추지 않는다.
 TELEGRAM_CHANNEL_INTERVAL = 60   
 TELEGRAM_UNFILTERED_INTERVAL = 60  
 DART_CHECK_INTERVAL = 60         
@@ -1267,122 +1210,52 @@ def _schedule_add_news_item(source, title, extra, link, published='', companies=
     return False
 
 def _schedule_bootstrap_one_year():
-    """
-    최초 1년 일정 DB 구축.
-    [원천 문제 수정]
-    - 시작 시 수백 개 Google RSS를 동시에 폭주시키지 않는다.
-    - cursor/query_index를 JSON으로 저장하고 한 호출 단위만 처리한다.
-    - 메인 실시간 수집과 경쟁하지 않도록 별도 daemon thread가 한 번만
-      실행되는 기존 구조를 유지하되, 각 호출 사이 충분한 간격을 둔다.
-    - 중간 종료/재시작해도 마지막 cursor부터 이어간다.
-    """
-    state = _schedule_load_json(SCHEDULE_BOOTSTRAP_STATE, {})
+    state=_schedule_load_json(SCHEDULE_BOOTSTRAP_STATE,{})
     if state.get('done'):
         return
-
+    # 최초 1회는 최근 1년을 월/주 단위로 잘게 나눠 최대한 빠짐없이 훑는다.
+    # 특히 상한가·특징주·급등 재료를 별도 검색어로 넓게 수집한다.
     from urllib.parse import quote_plus
-    today = _now_kst().date()
-    start_date = today - datetime.timedelta(days=SCHEDULE_LOOKBACK_DAYS)
-
-    cursor_text = state.get("cursor") or start_date.isoformat()
-    query_index = int(state.get("query_index") or 0)
-
-    try:
-        cursor = datetime.date.fromisoformat(cursor_text)
-    except Exception:
-        cursor = start_date
-        query_index = 0
-
-    added = int(state.get("added") or 0)
-    checked = int(state.get("checked") or 0)
-    requests_count = int(state.get("requests") or 0)
-
-    # 1회 실행에서는 Google 검색 1건만 처리한다.
-    # 1년치 전체를 한 번에 긁는 것이 현재 503의 가장 큰 원인이다.
-    if cursor >= today or checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED:
-        _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE, {
-            **state,
-            'done': True,
-            'completed_at': _now_kst().isoformat(),
-            'checked': checked,
-            'added': added,
-            'requests': requests_count,
-            'cursor': today.isoformat(),
-            'query_index': query_index,
-            'lookback_days': SCHEDULE_LOOKBACK_DAYS,
-            'note': '최초 1년 전수형 일정 후보 검색 완료. 이후 매일 뉴스/DART에서 지속 누적.'
-        })
-        _engine_log('info', '[일정DB] 최초 1년 초기화 완료 | 확인=%d | 신규=%d | RSS요청=%d',
-                    checked, added, requests_count)
-        return
-
-    end_date = min(today, cursor + datetime.timedelta(days=14))
-    q = SCHEDULE_BOOTSTRAP_QUERIES[query_index % len(SCHEDULE_BOOTSTRAP_QUERIES)]
-    url = (
-        f'https://news.google.com/rss/search?q={quote_plus(q)}'
-        f'%20after%3A{cursor.isoformat()}%20before%3A{end_date.isoformat()}'
-        f'&hl=ko&gl=KR&ceid=KR:ko'
-    )
-
-    entries = _engine_fetch_rss(url, '일정DB/1년초기검색')
-    requests_count += 1
-
-    for e in entries[:200]:
-        if checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED:
-            break
-        checked += 1
-        title = e.get('title', '')
-        extra = e.get('summary', '') or e.get('description', '')
-        low = _engine_clean(f'{title} {extra}').lower()
-        if not any(x in low for x in (
-            '특징주','급등','상한가','수주','공급계약','임상','승인','허가',
-            '실적','양산','상용화','기술이전','마일스톤','fomc','cpi','pce',
-            '고용','gdp'
-        )):
-            continue
-        row = _schedule_extract_from_text(
-            title, extra, '일정DB/1년초기검색',
-            e.get('published', ''),
-            limitup=('상한가' in low)
-        )
-        if row:
-            row['link'] = e.get('link', '') or ''
-            if _schedule_append(row):
-                added += 1
-
-    # 다음 호출은 같은 기간의 다음 검색어, 마지막 검색어 후 다음 14일.
-    next_query = query_index + 1
-    if next_query >= len(SCHEDULE_BOOTSTRAP_QUERIES):
-        next_query = 0
-        cursor = end_date + datetime.timedelta(days=1)
-
-    new_state = {
-        'done': False,
-        'cursor': cursor.isoformat(),
-        'query_index': next_query,
-        'checked': checked,
-        'added': added,
-        'requests': requests_count,
-        'lookback_days': SCHEDULE_LOOKBACK_DAYS,
-        'last_run_at': _now_kst().isoformat(),
-    }
-
-    if cursor >= today or checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED:
-        new_state['done'] = True
-        new_state['completed_at'] = _now_kst().isoformat()
-
-    _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE, new_state)
-    _engine_log(
-        'info',
-        '[일정DB] 초기검색 진행 | 기간=%s~%s | 검색=%s | 확인=%d | 신규=%d | RSS요청=%d | 완료=%s',
-        cursor.isoformat(), end_date.isoformat(), q[:50], checked, added,
-        requests_count, new_state['done']
-    )
-
+    today=_now_kst().date()
+    start=today-datetime.timedelta(days=SCHEDULE_LOOKBACK_DAYS)
+    added=0; checked=0; requests_count=0
+    cursor=start
+    while cursor < today and checked < SCHEDULE_BOOTSTRAP_MAX_CHECKED:
+        end=min(today,cursor+datetime.timedelta(days=14))
+        for q in SCHEDULE_BOOTSTRAP_QUERIES:
+            if checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED: break
+            url=f'https://news.google.com/rss/search?q={quote_plus(q)}%20after%3A{cursor.isoformat()}%20before%3A{end.isoformat()}&hl=ko&gl=KR&ceid=KR:ko'
+            entries=_engine_fetch_rss(url,'일정DB/1년초기검색')
+            requests_count += 1
+            for e in entries:
+                if checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED: break
+                checked += 1
+                title=e.get('title',''); extra=e.get('summary','') or e.get('description','')
+                low=_engine_clean(f'{title} {extra}').lower()
+                if not any(x in low for x in ('특징주','급등','상한가','수주','공급계약','임상','승인','허가','실적','양산','상용화','기술이전','마일스톤','fomc','cpi','pce','고용','gdp')):
+                    continue
+                row=_schedule_extract_from_text(title, extra, '일정DB/1년초기검색', e.get('published',''), limitup=('상한가' in low))
+                if row:
+                    row['link']=e.get('link','') or ''
+                    if _schedule_append(row): added+=1
+        cursor=end+datetime.timedelta(days=1)
+    _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE,{
+        'done':True,'completed_at':_now_kst().isoformat(),
+        'checked':checked,'added':added,'requests':requests_count,
+        'lookback_days':SCHEDULE_LOOKBACK_DAYS,
+        'note':'최초 1년 전수형 일정 후보 검색 완료. 이후 매일 뉴스/DART에서 지속 누적.'
+    })
+    _engine_log('info','[일정DB] 최초 1년 전수형 초기화 완료 | 확인=%d | 신규=%d | RSS요청=%d',checked,added,requests_count)
 
 def _schedule_add_dart_row(report, corp, link, rcept_dt):
     # 접수일 자체는 과거일이므로 일정으로 넣지 않는다. 다만 보고서명에 미래 이벤트 날짜가 포함된 경우에만 추출한다.
     row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt, limitup=False)
+    if row:
+        row['link']=link
+        _schedule_append(row)
+
+def _schedule_add_dart_row(report, corp, link, rcept_dt):
+    row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt)
     if row:
         row['link']=link
         _schedule_append(row)
@@ -1469,7 +1342,7 @@ MARKET_IMPACT_KEYWORDS = {
     "정책 확정", "정책 시행", "규제 확정", "관세 부과", "세액공제 확정", "법안 통과", "정부 대책 확정",
     "대규모 지원", "지원금 확정", "수주 경쟁",
 }
-# 실제 주가 반응 가능성이 높은 주요 재료.
+# 실제 주가 반응 가능성이 높은 강한 재료.
 # 상장기업이 직접 연결되고 아래 재료가 있으면 시간 제한 없이 시장 반영 여부를 기준으로 검토한다.
 STRONG_MARKET_HITS = {
     "인수", "합병", "M&A", "m&a", "공급계약", "계약 체결", "계약",
@@ -1801,7 +1674,7 @@ def _engine_recent_enough(published, source=""):
 
 def _engine_external_time_gate(source, published, title, extra, market_state, market_hits):
     """텔레그램/유튜브 도배 방지용 시간 관문.
-    60분 초과는 원칙적으로 차단하고, 장 마감 후/휴무의 주요 재료만 예외로 통과시킨다.
+    60분 초과는 원칙적으로 차단하고, 장 마감 후/휴무의 강한 재료만 예외로 통과시킨다.
     """
     if not (str(source).startswith("텔레그램/") or str(source).startswith("유튜브/")):
         return True, ""
@@ -1816,7 +1689,7 @@ def _engine_external_time_gate(source, published, title, extra, market_state, ma
 
     # 60분 예외는 절대로 "강한 단어" 하나만으로 열지 않는다.
     # 시장 마감 후/휴무일에 다음 거래일 주가 반영 가능성이 있는
-    # "국내 상장기업 + 실제 사건 + 주요 재료"가 모두 확인될 때만 허용한다.
+    # "국내 상장기업 + 실제 사건 + 강한 재료"가 모두 확인될 때만 허용한다.
     domestic_companies = {
         "삼성전자", "SK하이닉스", "SK이노베이션", "LG에너지솔루션", "LG전자", "LG화학",
         "현대차", "현대자동차", "기아", "HD현대", "HD한국조선해양", "HD현대중공업",
@@ -2632,12 +2505,8 @@ def _engine_format_message(item):
                     badge = str(row.get("badge") or "🔎 관심종목")
                     # 국내 관심종목으로 최종 선정된 종목명 앞에는 항상 💯를 붙인다.
                     # 대장주/관찰 순위 표시는 종목 선정 이유를 명확히 하기 위한 용도다.
-                    # 미국 뉴스에서 국내 상장기업으로 연결된 최종 관심종목은
-                    # 국내 종목임을 한눈에 구분할 수 있도록 🇰🇷를 종목 바로 앞에 표시한다.
-                    # 국내 뉴스의 기존 출력 형식은 변경하지 않는다.
-                    stock_prefix = "🇰🇷 " if source_raw == "Google-US" else ""
                     lines.append(
-                        f"{html.escape(badge)} — {stock_prefix}💯 <b>{html.escape(name)}</b>"
+                        f"{html.escape(badge)} — 💯 <b>{html.escape(name)}</b>"
                         + (f" /// {html.escape(detail[:360])}" if detail else "")
                     )
             elif row:
@@ -2815,321 +2684,22 @@ def _engine_process_item(source, title, link, published="", extra=""):
     return True
 
 
-# ============================================================
-# [RSS 장애 격리/복구] Google News 503 대응
-# - Google RSS가 일시적으로 503을 반환해도 전체 뉴스/일정 수집을 중단하지 않는다.
-# - 짧은 재시도 + exponential backoff 후 보조 RSS(Bing News)로 우회한다.
-# - 마지막 성공 결과를 메모리에 캐시하여 일시 장애 때 데이터 공백을 최소화한다.
-# - 실패는 소스별로 기록하며 다른 소스의 수집에는 영향을 주지 않는다.
-# - 1년 일정DB 초기검색도 동일한 장애 격리 규칙을 사용한다.
-# ============================================================
-RSS_RETRY_COUNT = int(os.environ.get("RSS_RETRY_COUNT", "3"))
-RSS_RETRY_BACKOFF = float(os.environ.get("RSS_RETRY_BACKOFF", "1.5"))
-RSS_CACHE_TTL = int(os.environ.get("RSS_CACHE_TTL", "900"))
-# 상용 운영 안정화: Google RSS 연속 장애 시 일정 시간 직접 요청을 차단하고
-# Bing/캐시로 우회하여 5~10초짜리 실패 요청이 한 사이클을 잠식하지 않도록 한다.
-RSS_GOOGLE_CIRCUIT_SECONDS = int(os.environ.get("RSS_GOOGLE_CIRCUIT_SECONDS", "300"))
-RSS_GOOGLE_FAILURE_THRESHOLD = int(os.environ.get("RSS_GOOGLE_FAILURE_THRESHOLD", "3"))
-RSS_GOOGLE_REQUEST_TIMEOUT = int(os.environ.get("RSS_GOOGLE_REQUEST_TIMEOUT", str(min(ENGINE_HTTP_TIMEOUT, 10))))
-_RSS_SUCCESS_CACHE = {}
-_RSS_FAILURE_STATE = {}
-_RSS_GOOGLE_FAILURES = 0
-_RSS_GOOGLE_CIRCUIT_UNTIL = 0.0
-
-# YouTube 채널 ID는 프로세스 재시작 후에도 유지한다.
-YOUTUBE_CHANNEL_CACHE_FILE = os.environ.get(
-    "YOUTUBE_CHANNEL_CACHE_FILE",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "youtube_channel_cache.json"),
-)
-
-def _load_youtube_channel_cache():
-    try:
-        if os.path.exists(YOUTUBE_CHANNEL_CACHE_FILE):
-            with open(YOUTUBE_CHANNEL_CACHE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return {str(k): str(v) for k, v in data.items() if v}
-    except Exception:
-        return {}
-
-def _save_youtube_channel_cache(cache):
-    tmp = YOUTUBE_CHANNEL_CACHE_FILE + ".tmp"
-    try:
-        os.makedirs(os.path.dirname(YOUTUBE_CHANNEL_CACHE_FILE) or ".", exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, YOUTUBE_CHANNEL_CACHE_FILE)
-    except Exception:
-        pass
-
-YOUTUBE_CHANNEL_ID_CACHE = _load_youtube_channel_cache()
-YOUTUBE_CHANNEL_FAIL_UNTIL = {}
-YOUTUBE_CHANNEL_FAIL_COOLDOWN_SECONDS = int(os.environ.get("YOUTUBE_CHANNEL_FAIL_COOLDOWN_SECONDS", "1800"))
-
-
-def _rss_is_google(url):
-    return "news.google.com/rss/" in str(url).lower()
-
-
-def _rss_bing_fallback_url(url):
-    """Google News 검색 URL의 검색어를 Bing News RSS 검색으로 변환한다."""
-    try:
-        from urllib.parse import urlsplit, parse_qs, quote_plus
-        q = parse_qs(urlsplit(str(url)).query).get("q", [""])[0]
-        # Google 전용 after:/before: 구문은 Bing이 그대로 이해하지 못하므로 제거한다.
-        q = re.sub(r"\s+(?:after|before):\S+", "", q, flags=re.I).strip()
-        if not q:
-            return None
-        return f"https://www.bing.com/news/search?q={quote_plus(q)}&format=rss"
-    except Exception:
-        return None
-
-
-def _rss_cache_key(url):
-    return hashlib.sha256(str(url).encode("utf-8", errors="ignore")).hexdigest()
-
-
-def _rss_cache_get(url):
-    item = _RSS_SUCCESS_CACHE.get(_rss_cache_key(url))
-    if not item:
-        return None
-    ts, entries = item
-    if time.time() - ts > RSS_CACHE_TTL:
-        return None
-    return list(entries)
-
-
-def _rss_cache_put(url, entries):
-    if entries:
-        _RSS_SUCCESS_CACHE[_rss_cache_key(url)] = (time.time(), list(entries[:100]))
-
-
-
-# ─────────────────────────────────────────────────────────────
-# [ROOT FIX] Google News / 한국경제 RSS 연결 계층
-# ─────────────────────────────────────────────────────────────
-# Google:
-# - 기존 코드의 가장 큰 문제는 1년 일정 bootstrap thread가 시작과 동시에
-#   수백 개의 Google RSS를 연속 호출하면서 실시간 수집과 경쟁한 것.
-# - 이제 Google은 단일 Session + 연결 재사용 + 최소 요청 간격을 사용한다.
-# - 1년 bootstrap은 별도 스레드에서 폭주하지 않고, 아래 persistent cursor를
-#   통해 한 번에 소량씩 처리한다(아래 bootstrap 함수 패치 참조).
-#
-# 한국경제:
-# - 공식 RSS 주소 자체는 유효한 공식 피드임.
-# - 단발성 requests.get 대신 홈페이지 세션을 먼저 만들고 RSS를 같은
-#   Session/cookie/header 맥락에서 읽는다.
-# - XML RSS에 맞는 Accept/Referer/Language/Encoding을 명시한다.
-# - 403을 반복 호출로 덮지 않고, 정상 세션을 먼저 확립한 뒤 한 번만 재요청한다.
-# ─────────────────────────────────────────────────────────────
-
-_RSS_SESSION_LOCK = threading.Lock()
-_GOOGLE_SESSION = requests.Session()
-_HANKYUNG_SESSION = requests.Session()
-_GOOGLE_LAST_REQUEST_AT = 0.0
-_HANKYUNG_SESSION_READY = False
-
-_GOOGLE_HEADERS = {
-    "User-Agent": USER_AGENT,
-    "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, text/html;q=0.7, */*;q=0.5",
-    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Connection": "keep-alive",
-}
-
-_HANKYUNG_HEADERS = {
-    "User-Agent": USER_AGENT,
-    "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
-    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://www.hankyung.com/",
-    "Connection": "keep-alive",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-}
-
-_GOOGLE_MIN_REQUEST_INTERVAL = float(os.environ.get("GOOGLE_MIN_REQUEST_INTERVAL", "2.0"))
-_HANKYUNG_WARMUP_TIMEOUT = int(os.environ.get("HANKYUNG_WARMUP_TIMEOUT", "10"))
-
-
-def _google_session_warmup():
-    """Google News 웹 세션을 한 번 만들어 RSS 요청에 재사용."""
-    try:
-        r = _GOOGLE_SESSION.get(
-            "https://news.google.com/",
-            headers=_GOOGLE_HEADERS,
-            timeout=(5, 10),
-            allow_redirects=True,
-        )
-        return r.status_code < 500
-    except Exception:
-        return False
-
-
-def _google_session_get(url, timeout):
-    """Google RSS 요청 간격을 강제하여 burst 요청을 방지한다."""
-    global _GOOGLE_LAST_REQUEST_AT
-    with _RSS_SESSION_LOCK:
-        now = time.time()
-        wait = _GOOGLE_MIN_REQUEST_INTERVAL - (now - _GOOGLE_LAST_REQUEST_AT)
-        if wait > 0:
-            time.sleep(wait)
-        _GOOGLE_LAST_REQUEST_AT = time.time()
-        return _GOOGLE_SESSION.get(
-            url,
-            headers=_GOOGLE_HEADERS,
-            timeout=(5, timeout),
-            allow_redirects=True,
-        )
-
-
-def _hankyung_session_warmup():
-    """공식 RSS 요청 전에 한국경제 메인 세션/쿠키를 먼저 확립한다."""
-    global _HANKYUNG_SESSION_READY
-    if _HANKYUNG_SESSION_READY:
-        return True
-    try:
-        r = _HANKYUNG_SESSION.get(
-            "https://www.hankyung.com/",
-            headers=_HANKYUNG_HEADERS,
-            timeout=(5, _HANKYUNG_WARMUP_TIMEOUT),
-            allow_redirects=True,
-        )
-        # 메인 페이지가 정상 응답하면 쿠키/세션을 유지한다.
-        if 200 <= r.status_code < 400:
-            _HANKYUNG_SESSION_READY = True
-            return True
-        return False
-    except Exception:
-        return False
-
-
-def _hankyung_session_get(url, timeout):
-    """공식 RSS 피드: 세션 warm-up → 같은 세션으로 XML 요청."""
-    _hankyung_session_warmup()
-    return _HANKYUNG_SESSION.get(
-        url,
-        headers=_HANKYUNG_HEADERS,
-        timeout=(5, timeout),
-        allow_redirects=True,
-    )
-
-
 def _engine_fetch_rss(url, source):
-    """RSS 안정 수집: Google 연속장애 circuit breaker + 재시도 + Bing/캐시 fallback."""
-    global _RSS_GOOGLE_FAILURES, _RSS_GOOGLE_CIRCUIT_UNTIL
-    last_error = None
-    is_google = _rss_is_google(url)
-    google_circuit_open = is_google and time.time() < _RSS_GOOGLE_CIRCUIT_UNTIL
-    if google_circuit_open:
-        _engine_log("warning", "[RSS 회로차단] Google News 연속장애 | %s | %.0fs 남음", source, max(0, _RSS_GOOGLE_CIRCUIT_UNTIL-time.time()))
-    attempts = 0 if google_circuit_open else RSS_RETRY_COUNT
-
-    for attempt in range(1, attempts + 1):
-        try:
-            if is_google:
-                r = _google_session_get(url, RSS_GOOGLE_REQUEST_TIMEOUT)
-            elif source == "한국경제" or "hankyung.com/feed/" in str(url).lower():
-                r = _hankyung_session_get(url, ENGINE_HTTP_TIMEOUT)
-            else:
-                r = requests.get(
-                    url,
-                    headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml, */*"},
-                    timeout=ENGINE_HTTP_TIMEOUT,
-                    allow_redirects=True,
-                )
-            status = getattr(r, "status_code", 0)
-            if 200 <= status < 300:
-                result = feedparser.parse(r.content)
-                if getattr(result, "bozo", False) and not getattr(result, "entries", []):
-                    raise RuntimeError("RSS 파싱 실패")
-                entries = getattr(result, "entries", []) or []
-                _rss_cache_put(url, entries)
-                _RSS_FAILURE_STATE.pop(_rss_cache_key(url), None)
-                if is_google:
-                    _RSS_GOOGLE_FAILURES = 0
-                    _RSS_GOOGLE_CIRCUIT_UNTIL = 0.0
-                _engine_log("info", "[RSS] %s | 수집=%d건 | 시도=%d", source, len(entries), attempt)
-                return entries
-
-            last_error = f"HTTP {status} {getattr(r, 'reason', '') or ''}".strip()
-            # 429/5xx는 일시 장애일 가능성이 높으므로 재시도한다.
-            retryable = status == 429 or status >= 500
-            if not retryable:
-                # 한국경제 403은 세션/쿠키가 오래됐을 수 있으므로,
-                # 동일 세션을 계속 두드리지 않고 세션을 1회 재생성해 재확인한다.
-                if (source == "한국경제" or "hankyung.com/feed/" in str(url).lower()) and status in (401, 403):
-                    global _HANKYUNG_SESSION_READY
-                    try:
-                        _HANKYUNG_SESSION.close()
-                    except Exception:
-                        pass
-                    _HANKYUNG_SESSION_READY = False
-                    _engine_log("warning", "[한국경제 세션 재설정] HTTP=%s | 공식 RSS 재확인", status)
-                    try:
-                        r2 = _hankyung_session_get(url, ENGINE_HTTP_TIMEOUT)
-                        if 200 <= r2.status_code < 300:
-                            result2 = feedparser.parse(r2.content)
-                            entries2 = getattr(result2, "entries", []) or []
-                            if entries2:
-                                _rss_cache_put(url, entries2)
-                                _engine_log("info", "[RSS] %s | 세션 재설정 후 정상 | 수집=%d건", source, len(entries2))
-                                return entries2
-                        last_error = f"HTTP {getattr(r2, 'status_code', status)} {getattr(r2, 'reason', '') or ''}".strip()
-                    except Exception as e2:
-                        last_error = f"{type(e2).__name__}: {e2}"
-                _engine_log("error", "[실패] RSS | %s | 원인=%s", source, last_error)
-                break
-            if attempt < RSS_RETRY_COUNT:
-                delay = RSS_RETRY_BACKOFF ** (attempt - 1)
-                _engine_log("warning", "[RSS 재시도] %s | %s | %d/%d | %.1fs 후 재시도", source, last_error, attempt, RSS_RETRY_COUNT, delay)
-                time.sleep(delay)
-        except Exception as e:
-            last_error = f"{type(e).__name__}: {e}"
-            if attempt < RSS_RETRY_COUNT:
-                delay = RSS_RETRY_BACKOFF ** (attempt - 1)
-                _engine_log("warning", "[RSS 재시도] %s | %s | %d/%d | %.1fs 후 재시도", source, last_error, attempt, RSS_RETRY_COUNT, delay)
-                time.sleep(delay)
-
-    if is_google and last_error:
-        _RSS_GOOGLE_FAILURES += 1
-        if _RSS_GOOGLE_FAILURES >= RSS_GOOGLE_FAILURE_THRESHOLD:
-            _RSS_GOOGLE_CIRCUIT_UNTIL = time.time() + RSS_GOOGLE_CIRCUIT_SECONDS
-            _engine_log("warning", "[RSS 회로차단 시작] Google News | %d회 연속 실패 | %.0fs 차단", _RSS_GOOGLE_FAILURES, RSS_GOOGLE_CIRCUIT_SECONDS)
-
-    # Google News 장애 시 보조소스로 우회한다.
-    if is_google:
-        fallback = _rss_bing_fallback_url(url)
-        if fallback:
-            try:
-                _engine_log("warning", "[RSS 보조소스 전환] %s | Google 실패 → Bing News RSS", source)
-                r = requests.get(
-                    fallback,
-                    headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml, */*"},
-                    timeout=ENGINE_HTTP_TIMEOUT,
-                    allow_redirects=True,
-                )
-                if r.ok:
-                    result = feedparser.parse(r.content)
-                    entries = getattr(result, "entries", []) or []
-                    if entries:
-                        _RSS_FAILURE_STATE[_rss_cache_key(url)] = {"failed_at": time.time(), "fallback": "bing", "last_error": last_error}
-                        _engine_log("info", "[RSS 보조수집 성공] %s | Bing=%d건", source, len(entries))
-                        return entries
-            except Exception as e:
-                last_error = f"보조소스 {type(e).__name__}: {e}"
-
-    # 마지막 성공 캐시가 있으면 짧은 장애 동안에만 사용한다.
-    cached = _rss_cache_get(url)
-    if cached:
-        _RSS_FAILURE_STATE[_rss_cache_key(url)] = {"failed_at": time.time(), "fallback": "cache", "last_error": last_error}
-        _engine_log("warning", "[RSS 캐시 사용] %s | 최근 성공 %d건 | 원인=%s", source, len(cached), last_error)
-        return cached
-
-    _RSS_FAILURE_STATE[_rss_cache_key(url)] = {"failed_at": time.time(), "fallback": None, "last_error": last_error}
-    _engine_log("error", "[실패] RSS | %s | 원인=%s | 다른 소스 수집은 계속", source, last_error or "알 수 없음")
-    return []
+    started = time.time()
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
+        if not r.ok:
+            _engine_log("error", "[실패] RSS | %s | 원인=%s", source, r.reason)
+            return []
+        result = feedparser.parse(r.content)
+        if getattr(result, "bozo", False):
+            _engine_log("warning", "[RSS 경고] %s | 일부 파싱 문제", source)
+        entries = getattr(result, "entries", []) or []
+        _engine_log("info", "[RSS] %s | 수집=%d건", source, len(entries))
+        return entries
+    except Exception as e:
+        log_error("RSS 수집", e, source=source, url=url)
+        return []
 
 
 def _engine_run_google_and_domestic():
@@ -3152,12 +2722,37 @@ def _engine_run_google_and_domestic():
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
 
 
+def _naver_news_api_config():
+    """NAVER Search API 인증/엔드포인트를 중앙에서 관리한다.
+    2026-07-31 이후 신규 사용은 NAVER API HUB 기준이며, 기존 개발자센터 키는
+    기존 신청자에 한해 2027-06-30까지 유예된다.
+    """
+    mode = NAVER_API_MODE
+    if mode in ("legacy", "developer", "developers"):
+        return (
+            "https://openapi.naver.com/v1/search/news.json",
+            {
+                "X-Naver-Client-Id": NAVER_CLIENT_ID,
+                "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+            },
+            "legacy",
+        )
+    return (
+        "https://naverapihub.apigw.ntruss.com/search/v1/news",
+        {
+            "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
+            "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET,
+        },
+        "hub",
+    )
+
+
 def _engine_run_naver():
     if not ENABLE_NAVER_NEWS:
         _engine_log("warning", "[네이버] ENABLE_NAVER_NEWS=OFF")
         return
-    if not NAVER_AUTH_CONFIGURED:
-        _engine_log("error", "[네이버 실패] 인증정보 미설정 | NAVER_CLIENT_ID/NAVER_CLIENT_SECRET 또는 NAVER_SEARCH_CLIENT_ID/NAVER_SEARCH_CLIENT_SECRET를 실행환경에 설정하세요.")
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        _engine_log("error", "[네이버 실패] NAVER_CLIENT_ID / NAVER_CLIENT_SECRET가 없습니다.")
         return
     # 모든 검색어를 한 번에 호출하면 API 제한에 걸릴 수 있으므로 1분마다 순환한다.
     queries = list(dict.fromkeys(NAVER_SEARCH_QUERIES))
@@ -3167,19 +2762,21 @@ def _engine_run_naver():
     selected = [queries[(start+i) % len(queries)] for i in range(batch_size)] if queries else []
     _engine_run_naver.cycle = cycle + 1
     _engine_log("info", "[네이버] 검색 시작 전체검색어=%d | 이번주기=%d | offset=%d", len(queries), len(selected), start)
-    headers = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
+    api_url, headers, api_mode = _naver_news_api_config()
+    _engine_log("info", "[네이버 API] mode=%s | endpoint=%s", api_mode, api_url)
     total = 0
     api_ok = True
     for q in selected:
         try:
-            r = requests.get("https://openapi.naver.com/v1/search/news.json", headers=headers,
-                             params={"query": q, "display": 20, "start": 1, "sort": "date"}, timeout=ENGINE_HTTP_TIMEOUT)
+            params = {"query": q, "display": 20, "start": 1, "sort": "date", "format": "json"}
+            r = requests.get(api_url, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
             if not r.ok:
                 api_ok = False
                 if r.status_code == 401:
-                    _engine_log("error", "[네이버 오류] HTTP=401 Unauthorized | Client ID/Secret가 네이버 애플리케이션의 실제 발급값인지, 뉴스 검색 API 권한이 활성화되어 있는지 확인하세요. 키 값 자체는 로그에 출력하지 않습니다.")
+                    api_ok = False
+                    _engine_log("error", "[네이버 오류] HTTP=401 | NAVER API HUB Client ID/Secret 또는 Application의 Search API 권한을 확인하세요 | mode=%s", api_mode)
                     break
-                _engine_log("error", "[네이버 오류] HTTP=%s | 응답=%s", r.status_code, r.text[:180].replace("\n", " "))
+                _engine_log("error", "[네이버 오류] HTTP=%s | 응답을 확인하세요", r.status_code)
                 continue
             data = r.json()
             items = data.get("items", []) or []
@@ -3196,8 +2793,8 @@ def _engine_run_naver():
 
 def _engine_run_keyword_combinations():
     # 기업명 + 핵심 테마 조합을 실제 네이버 API 검색으로 확인한다.
-    if not NAVER_AUTH_CONFIGURED:
-        _engine_log("warning", "[키워드 조합] 네이버 API 인증정보가 없어 조합검색을 건너뜁니다.")
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        _engine_log("warning", "[키워드 조합] 네이버 API 키가 없어 조합검색을 건너뜁니다.")
         return
     companies = list(dict.fromkeys(GLOBAL_AND_DOMESTIC_GIANTS))
     themes = ["HBM", "반도체", "AI", "로봇", "방산", "원전", "조선", "바이오", "이차전지", "ESS"]
@@ -3205,13 +2802,14 @@ def _engine_run_keyword_combinations():
     cycle = getattr(_engine_run_keyword_combinations, "cycle", 0)
     combos = [(c, themes[(cycle+i) % len(themes)]) for i, c in enumerate(companies[:10])]
     _engine_run_keyword_combinations.cycle = cycle + 1
-    headers = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
+    api_url, headers, api_mode = _naver_news_api_config()
+    _engine_log("info", "[네이버 API] 키워드조합 mode=%s | endpoint=%s", api_mode, api_url)
     _engine_log("info", "[키워드 조합 시작] 이번주기=%d건", len(combos))
     for company, theme in combos:
         q = f'"{company}" {theme}'
         try:
-            r = requests.get("https://openapi.naver.com/v1/search/news.json", headers=headers,
-                             params={"query": q, "display": 10, "start": 1, "sort": "date"}, timeout=ENGINE_HTTP_TIMEOUT)
+            params = {"query": q, "display": 10, "start": 1, "sort": "date", "format": "json"}
+            r = requests.get(api_url, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
             if not r.ok:
                 _engine_log("error", "[실패] 키워드조합 | 원인=%s", r.reason)
                 continue
@@ -3293,45 +2891,18 @@ def _engine_run_telegram_channels():
 
 
 def _engine_youtube_channel_id(handle):
-    """Resolve YouTube channel ID with cache and multi-path fallback."""
     h = str(handle or "").strip().lstrip("@").strip()
-    if not h:
-        return ""
-    now = time.time()
-    cached = YOUTUBE_CHANNEL_ID_CACHE.get(h)
-    if cached:
-        return cached
-    fail_until = YOUTUBE_CHANNEL_FAIL_UNTIL.get(h, 0)
-    if fail_until > now:
-        return ""
-    urls = (
-        f"https://www.youtube.com/@{h}",
-        f"https://www.youtube.com/c/{h}",
-        f"https://www.youtube.com/user/{h}",
-    )
-    for url in urls:
+    if not h: return ""
+    for url in (f"https://www.youtube.com/@{h}", f"https://www.youtube.com/c/{h}", f"https://www.youtube.com/user/{h}"):
         try:
-            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=min(ENGINE_HTTP_TIMEOUT, 8))
-            if not r.ok:
-                continue
-            body = r.text or ""
-            patterns = (
-                r'"channelId":"([A-Za-z0-9_-]{10,})"',
-                r'<meta[^>]+itemprop=["\']channelId["\'][^>]+content=["\']([A-Za-z0-9_-]{10,})',
-                r'/channel/([A-Za-z0-9_-]{10,})',
-            )
-            for pat in patterns:
-                m = re.search(pat, body, re.I)
-                if m:
-                    cid = m.group(1)
-                    YOUTUBE_CHANNEL_ID_CACHE[h] = cid
-                    _save_youtube_channel_cache(YOUTUBE_CHANNEL_ID_CACHE)
-                    YOUTUBE_CHANNEL_FAIL_UNTIL.pop(h, None)
-                    return cid
+            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT)
+            if not r.ok: continue
+            m = re.search(r'"channelId":"([A-Za-z0-9_-]{10,})"', r.text)
+            if m: return m.group(1)
         except Exception:
             continue
-    YOUTUBE_CHANNEL_FAIL_UNTIL[h] = now + YOUTUBE_CHANNEL_FAIL_COOLDOWN_SECONDS
     return ""
+
 
 def _engine_run_youtube():
     if not ENABLE_YOUTUBE:
@@ -3340,11 +2911,6 @@ def _engine_run_youtube():
     ok_channels = 0
     fail_channels = 0
     for name, handle in YOUTUBE_CHANNELS:
-        hkey = str(handle or "").strip().lstrip("@").strip()
-        if YOUTUBE_CHANNEL_FAIL_UNTIL.get(hkey, 0) > time.time():
-            fail_channels += 1
-            _engine_log("warning", "[유튜브 보류] 채널 확인 재시도 대기 | %s", name)
-            continue
         cid = _engine_youtube_channel_id(handle)
         if not cid:
             fail_channels += 1
@@ -3386,7 +2952,7 @@ def _engine_run_test_fixture():
 #    시장 구조가 바뀔 때만 장중 브리핑.
 # 3) 기존 뉴스의 국내 관련주 선별 로직은 건드리지 않는다.
 # 4) 글로벌 기업은 국내 상장기업으로 오인 연결하지 않는다.
-# 5) "💯 주요 재료 · 급락" 같은 방향/강도 혼합 문구를 사용하지 않는다.
+# 5) "💯 강한 재료 · 급락" 같은 방향/강도 혼합 문구를 사용하지 않는다.
 #    방향은 📈 급등 / 📉 급락으로, 재료 강도는 뉴스 분류에서 별도로 처리한다.
 # 6) 실시간 시세가 확인되지 않으면 추정하지 않고 "시세 확인불가"로 남긴다.
 # ============================================================
@@ -3551,13 +3117,7 @@ def _us_briefing_reason(name, theme):
 
 def _us_briefing_fetch_all():
     data = {}
-    watchlist = dict(US_BRIEFING_WATCHLIST)
-    # MSCI는 실제 사용하는 지수/상품 심볼을 환경변수로 지정한다.
-    # 미설정 상태에서는 임의의 종목을 MSCI 지수로 오인하지 않는다.
-    msci_symbol = os.environ.get("MSCI_SYMBOL", "").strip()
-    if msci_symbol:
-        watchlist[msci_symbol] = ("MSCI", "MSCI")
-    for symbol, meta in watchlist.items():
+    for symbol, meta in US_BRIEFING_WATCHLIST.items():
         q = _yahoo_chart_quote(symbol)
         if q:
             q.update({"name": meta[0], "theme": meta[1]})
@@ -3582,14 +3142,14 @@ def _us_open_briefing(snapshot, et):
     macro = ["USDKRW=X", "CL=F", "GC=F"]
     lines = [
         "<b>🇺🇸 [미장 브리핑]</b>",
-        f"🕐 {et.strftime('%H:%M ET')}",
+        f"🕐 개장 30분 · {et.strftime('%H:%M ET')}",
         "",
         "<b>📊 주요 지수</b>",
     ]
     for s in indices:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+            lines.append(f"• {q['name']} {_us_format_pct(q['change_pct'])}")
     movers = []
     for s, q in snapshot.items():
         if s in indices or s in macro:
@@ -3614,7 +3174,7 @@ def _us_open_briefing(snapshot, et):
             pct = q.get("change_pct")
             lines.append(f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)}")
 
-    # 미장 정기 브리핑에도 국내 시장 대응용 ADR을 반드시 포함한다.
+    # 미국장 개장 30분 브리핑에도 국내 시장 대응용 ADR을 반드시 포함한다.
     lines += ["", "<b>🇰🇷 ADR</b>"]
     adr_symbols = ["PKX", "LPL", "KEP", "KB", "SHG", "SKM"]
     found_adr = False
@@ -3627,19 +3187,6 @@ def _us_open_briefing(snapshot, et):
     if not found_adr:
         lines.append("• ADR 시세 확인불가")
 
-    # MSCI 등락률: 실제 시세 심볼이 설정된 경우에만 표시하고 임의 추정은 하지 않는다.
-    msci_symbol = os.environ.get("MSCI_SYMBOL", "").strip()
-    lines += ["", "<b>📌 MSCI</b>"]
-    if msci_symbol:
-        mq = snapshot.get(msci_symbol)
-        if mq and mq.get("change_pct") is not None:
-            mp = mq.get("change_pct")
-            lines.append(f"• MSCI {_us_direction(mp)} {_us_format_pct(mp)}")
-        else:
-            lines.append("• MSCI 등락률 확인불가")
-    else:
-        lines.append("• MSCI 등락률 확인불가 (MSCI_SYMBOL 미설정)")
-
     # 신규 MSCI 재료가 있으면 원문 링크까지, 없으면 확인 결과를 명시한다.
     msci = {}
     with _US_BRIEFING_LOCK:
@@ -3649,6 +3196,7 @@ def _us_open_briefing(snapshot, et):
         if any(k.lower() in tx.lower() for k in ["MSCI", "리밸런싱", "지수 편입", "지수 편출"]):
             msci = row
             break
+    lines += ["", "<b>📌 MSCI</b>"]
     if msci:
         lines.append(f"• {html.escape(str(msci.get('title', ''))[:220])}")
         if msci.get("link"):
@@ -3759,7 +3307,7 @@ def _engine_us_market_monitor():
         msg = _us_open_briefing(snapshot, et)
         if msg and _engine_send_telegram(msg):
             _US_BRIEFING_LAST_OPEN_SENT = et.date()
-            _engine_log("info", "[미장브리핑] 정규 브리핑 브리핑 송출")
+            _engine_log("info", "[미장브리핑] 개장 30분 브리핑 송출")
         _US_BRIEFING_LAST_SNAPSHOT = snapshot
         return
 
@@ -3970,7 +3518,7 @@ def _us_close_briefing(snapshot, et):
     else:
         lines.append("• 확인된 신규 MSCI 재료 없음")
 
-    # 주요 재료는 재료 강도만 표시. 방향(급등/급락)을 붙이지 않는다.
+    # 강한 재료는 재료 강도만 표시. 방향(급등/급락)을 붙이지 않는다.
     strong_rows = []
     for row in reversed(rows[-300:]):
         tx = str(row.get("title","")) + " " + str(row.get("text",""))
@@ -3979,7 +3527,7 @@ def _us_close_briefing(snapshot, et):
             if len(strong_rows) >= 3:
                 break
     if strong_rows:
-        lines += ["", "<b>💯 주요 재료</b>"]
+        lines += ["", "<b>💯 강한 재료</b>"]
         for row in strong_rows:
             tx = str(row.get("title",""))[:220]
             amount = re.search(r"(?:[0-9][0-9,]*(?:\.\d+)?)\s*(?:억|조|억원|조원|달러|USD|million|billion)", tx, re.I)
@@ -4026,12 +3574,6 @@ def _engine_cycle():
     _engine_last_cycle_started = started
     _engine_log("info", "[주기 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
     try:
-        # 실시간 뉴스 수집 전에 일정 bootstrap은 Google 1회 요청만 수행.
-        # 이후 메인 RSS 수집은 세션/요청간격으로 안정화한다.
-        try:
-            _schedule_bootstrap_one_year()
-        except Exception as _e:
-            _engine_log("warning", "[일정DB] 초기검색 진행 실패 | %s", str(_e)[:160])
         _engine_run_google_and_domestic()
     except Exception as e:
         log_error("국내/Google RSS 전체", e)
@@ -4139,21 +3681,19 @@ if __name__ == "__main__":
         health_thread.start()
         time.sleep(0.3)
 
-        # 1년 일정 DB는 Google RSS를 폭주시키지 않도록 1회 작업만 수행하고,
-        # 진행상태를 저장한 뒤 다음 주기/재시작에서 이어간다.
-        try:
-            _schedule_bootstrap_one_year()
-        except Exception as _e:
-            _engine_log("warning", "[일정DB] 초기검색 1회 작업 실패 | %s", str(_e)[:160])
+        # 1년치 특징주/급등 뉴스에서 미래 일정 DB를 최초 1회 구축한다.
+        schedule_bootstrap_thread = threading.Thread(
+            target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True
+        )
+        schedule_bootstrap_thread.start()
 
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
-        _engine_log("info", "[BOOT] NAVER=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
-                    NAVER_AUTH_CONFIGURED,
+        _engine_log("info", "[BOOT] NAVER=%s | NAVER_MODE=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
+                    bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET), NAVER_API_MODE,
                     bool(DART_API_KEY),
                     ENABLE_DOMESTIC_NEWS,
                     ENABLE_US_NEWS,
                     ENABLE_TELEGRAM_CHANNELS)
-        _engine_log("info", "[BOOT] NAVER_AUTH=%s | 키는 로그에 노출하지 않음 | .env/환경변수 로딩 완료", NAVER_AUTH_CONFIGURED)
         _engine_log("info", "[BOOT] 미장30분브리핑=%s | 장중감시=%s", ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING)
 
         _engine_main_loop()
@@ -4162,514 +3702,3 @@ if __name__ == "__main__":
     except Exception as e:
         log_error("프로그램 최상위 오류", e)
         raise
-
-
-# ============================================================================
-# 이지훈 최종 합의사항 MASTER POLICY — 2026-08-17
-# 이 블록은 기존 원본 기능을 교체하지 않고, 모든 후속 판단에서 적용해야 할
-# 상위 정책/검증 규칙을 한 곳에 고정한다.
-# ============================================================================
-
-MASTER_POLICY_VERSION = "LEEJIHUN-MASTER-2026-08-17-V1"
-MASTER_OWNER = "이지훈"
-
-# ---------------------------------------------------------------------------
-# 1. 뉴스 시간 게이트 / 중복 / 품질
-# ---------------------------------------------------------------------------
-NEWS_MAX_AGE_MINUTES = 60
-NEWS_TIME_GATE_STRICT = True
-NEWS_ALLOW_OLDER_ONLY_FOR = {
-    "market_closed_material",
-    "official_disclosure_with_current_impact",
-    "schedule_reminder",
-    "historical_case_db",
-}
-NEWS_DEDUP_SIMILARITY = 0.90
-NEWS_DEDUP_REQUIRE_NEW_FACT = True
-NEWS_STATUS = ("신규", "업데이트", "중복", "미확인", "과거사례")
-
-# 같은 사건의 반복 보도는 도배하지 않는다. 단순 제목 변경은 신규가 아니다.
-# 규모/계약금액/상대방/일정/승인단계/실적수치 등 실질적으로 새로운 사실이
-# 추가된 경우에만 업데이트로 승격한다.
-
-def master_news_is_new_event(title, body, seen_records):
-    """기존 사건과 실질적으로 다른 내용인지 판정하는 보수적 규칙."""
-    import difflib
-    key = f"{title or ''}\n{body or ''}".strip()
-    for old in seen_records or []:
-        old_key = f"{old.get('title','')}\n{old.get('body','')}".strip()
-        if difflib.SequenceMatcher(None, key, old_key).ratio() >= NEWS_DEDUP_SIMILARITY:
-            return False
-    return True
-
-# ---------------------------------------------------------------------------
-# 2. 모든 뉴스의 최종 목적 = 국내 관심종목 연결
-# ---------------------------------------------------------------------------
-INTEREST_SELECTION_DOMESTIC_ONLY = True
-INTEREST_SELECTION_MAX = 3
-INTEREST_SELECTION_REQUIRE_REASON = True
-INTEREST_SELECTION_ALLOW_EMPTY = True
-
-DIRECT_RELATION_REQUIRED = (
-    "사업", "제품", "계약", "수주", "공급", "납품", "투자", "지분",
-    "실적", "매출", "영업이익", "증설", "양산", "출시", "상용화", "승인",
-    "허가", "특허", "임상", "기술이전", "기술수출", "로열티", "마일스톤",
-    "생산", "수출", "판매", "공급계약", "상업화", "정책", "규제",
-)
-MENTION_ONLY_REJECT = (
-    "에 따르면", "인용", "비교", "예시", "광고", "협찬", "추천", "출처",
-    "댓글", "검색", "관련 검색어", "배너", "홍보",
-)
-
-# 해외기업 주가 자체는 국내 종목 선정 근거가 아니다.
-GLOBAL_COMPANY_PRICE_ALONE_IS_NOT_REASON = True
-
-# 국내 상장기업이 뉴스의 핵심 사건 당사자인 경우 최우선.
-# 직접 연결이 없으면 실제 시장에서 동일 테마로 움직인 과거 근거가 있는 경우만 허용.
-# 테마 연결은 '단어가 비슷함'이 아니라 산업/공급망/수혜 구조 + 과거 주가 반응으로 검증.
-
-def master_domestic_interest_gate(article, company, context, is_listed_domestic=True):
-    if not is_listed_domestic:
-        return False, "국내 상장기업 아님"
-    text = f"{article or ''}\n{context or ''}"
-    low = text.lower()
-    if company and any(x.lower() in low for x in MENTION_ONLY_REJECT):
-        # 본문에 실제 사건 당사자 문맥이 별도로 있는 경우 호출부에서 재검증한다.
-        pass
-    if not any(x.lower() in low for x in DIRECT_RELATION_REQUIRED):
-        return False, "직접 사업연관 근거 부족"
-    return True, "직접 사업연관 문맥 확인"
-
-# ---------------------------------------------------------------------------
-# 3. 대장주 알고리즘
-# ---------------------------------------------------------------------------
-LEADER_WEIGHTS = {
-    "direct_business_relation": 35,
-    "same_theme_historical_reaction": 20,
-    "limit_up_history": 15,
-    "surge_history": 10,
-    "theme_leadership_history": 10,
-    "momentum_talent": 5,
-    "recent_strength": 5,
-}
-
-LEADER_ALGORITHM_RULE = (
-    "직접관련이 있으면 최우선. 직접관련이 없고 테마로 움직인다면 같은 섹터에서 "
-    "과거 상한가/급등/테마주도 이력이 많고 끼·탄력이 확인된 종목을 대장급으로 선별. "
-    "그 다음 약한 순으로 약 3종목을 관찰 후보로 제시한다."
-)
-
-def master_leader_score(features):
-    score = 0.0
-    for key, weight in LEADER_WEIGHTS.items():
-        try:
-            value = max(0.0, min(1.0, float(features.get(key, 0))))
-        except Exception:
-            value = 0.0
-        score += weight * value
-    return round(score, 2)
-
-# 대장주 출력은 선정 이유를 반드시 포함한다.
-# 관심종목 앞 💯는 재료/기업 연결성이 실제로 높은 경우에만 사용한다.
-LEADER_OUTPUT_PREFIX = "💯"
-LEADER_REASON_REQUIRED = True
-
-# ---------------------------------------------------------------------------
-# 4. 공시(국내 DART + SEC/EDGAR) 필터 — 약한 공시 억제
-# ---------------------------------------------------------------------------
-DISCLOSURE_HIGH_IMPACT_FORMS = {
-    "8-K", "10-Q", "10-K", "6-K", "20-F", "SCHEDULE 13D", "SCHEDULE 13G",
-    "대량보유상황보고서", "주요사항보고서", "단일판매·공급계약", "유상증자",
-    "전환사채", "최대주주변경", "경영권분쟁", "배당결정", "임상/허가 관련 공시",
-}
-DISCLOSURE_HIGH_IMPACT_TRIGGERS = (
-    "Acquisition", "Merger", "Contract", "Award", "Regulatory Approval",
-    "FDA", "Clearance", "License", "Licensing", "Technology Transfer",
-    "Commercialization", "Supply Agreement", "Investment", "Expansion",
-    "Guidance", "Earnings", "Revenue", "Operating Income", "EPS",
-    "Beneficial Ownership", "Tender Offer", "Buyback", "Material Agreement",
-    "수주", "계약", "공급", "투자", "유치", "지분", "인수", "합병", "허가",
-    "승인", "임상", "기술이전", "기술수출", "로열티", "마일스톤", "증설",
-    "양산", "상용화", "흑자전환", "어닝서프라이즈", "실적", "배당",
-)
-DISCLOSURE_WEAK_PATTERNS = (
-    "정기", "단순", "행정", "의례", "주주총회 안내", "보유목적 변경 없음",
-    "사소한 정정", "오탈자", "형식 변경", "boilerplate", "routine",
-)
-DISCLOSURE_WEAK_FILTER_ENABLED = True
-
-# 약한 공시는 억제하되 다음 강한 신호가 하나라도 있으면 통과:
-# 단독/속보/특징주, 흑자전환, 큰 비율변동, 빅이슈, 실질 계약/수주/투자/허가 등.
-DISCLOSURE_OVERRIDE_SIGNALS = (
-    "단독", "속보", "특징주", "흑자전환", "어닝서프라이즈", "상한가", "급등",
-    "20%", "30%", "50%", "수주", "계약", "허가", "승인", "기술이전", "배당",
-)
-
-# SEC User-Agent: 공식 요청 식별을 위해 사용자가 지정한 이메일 유지
-SEC_USER_AGENT = "news_bot/1.0 (leejihun5115@gmail.com)"
-
-# ---------------------------------------------------------------------------
-# 5. 공시 핵심 숫자 — 원문에 있는 값만 사용
-# ---------------------------------------------------------------------------
-DISCLOSURE_METRICS = (
-    "매출액", "영업이익", "순이익", "EPS", "PER", "시가총액",
-    "전분기", "전년동기", "QoQ", "YoY", "지분율", "계약금액",
-    "수주금액", "투자금액", "배당금액", "배당기준일", "기간", "거래상대방",
-)
-
-DISCLOSURE_COMPARE_THRESHOLDS = {
-    "material": 5.0,
-    "major": 10.0,
-    "large": 20.0,
-    "very_large": 30.0,
-}
-
-def disclosure_ratio(amount, denominator):
-    try:
-        if denominator in (None, 0):
-            return None
-        return float(amount) / abs(float(denominator)) * 100.0
-    except Exception:
-        return None
-
-def disclosure_scale_label(pct):
-    if pct is None:
-        return "비교불가"
-    if pct >= 30:
-        return "매우 큰 규모"
-    if pct >= 20:
-        return "상당히 큰 규모"
-    if pct >= 10:
-        return "주요 규모"
-    if pct >= 5:
-        return "의미 있는 규모"
-    return "소규모"
-
-# 계약금액/수주금액을 곧바로 매출 또는 영업이익으로 간주하지 않는다.
-DISCLOSURE_AMOUNT_IS_NOT_REVENUE = True
-DISCLOSURE_AMOUNT_IS_NOT_PROFIT = True
-
-# 기본 기업분석 카드
-COMPANY_ANALYSIS_FIELDS = (
-    "매출액", "영업이익", "순이익", "EPS", "PER", "시가총액",
-    "QoQ", "YoY", "영업이익률", "지분율", "계약금액", "수주기간",
-)
-
-# 흑자전환/적자전환 및 예상치가 실제 존재할 때의 어닝서프라이즈/쇼크
-EARNINGS_LABELS = {
-    "profit_turnaround": "🔥 흑자전환",
-    "loss_turnaround": "⚠️ 적자전환",
-    "beat": "🔥 어닝서프라이즈",
-    "miss": "⚠️ 어닝쇼크",
-    "margin_up": "📈 수익성 개선",
-    "margin_down": "📉 수익성 악화",
-}
-
-# ---------------------------------------------------------------------------
-# 6. 공시 원문 핵심 추출
-# ---------------------------------------------------------------------------
-# 배당: 배당금액 + 배당기준일을 함께 표시.
-# 대량보유: 누가/몇 주/지분율/기존 지분율/증감폭을 표시.
-# 계약/공급: 거래상대방 + 금액 + 기간을 표시.
-# 원문 실패 시 조용히 숨기지 않고 링크와 함께 확인 불가 상태를 표시.
-DISCLOSURE_ORIGINAL_LINK_REQUIRED = True
-DISCLOSURE_PARSE_FAILURE_MUST_BE_VISIBLE = True
-
-# ---------------------------------------------------------------------------
-# 7. 기업가치/상용화 해석
-# ---------------------------------------------------------------------------
-# 기술이전: 계약금/마일스톤/로열티/상업화 단계/현금흐름 가능성을 구분.
-# 수주: 고객, 제품, 금액, 기간, 반복수주 가능성, 실제 매출 인식 가능성을 구분.
-# 투자: 투자자, 금액, 지분율, 자금 사용처, 사업확장 연결을 구분.
-# 허가/임상: 단계, 적응증, 승인기관, 상업화 단계와 실적 연결 가능성을 구분.
-COMMERCIALIZATION_FACTORS = (
-    "계약금", "마일스톤", "로열티", "상업화", "매출인식", "반복수주",
-    "고객확대", "생산능력", "증설", "현금흐름", "자금사용처", "글로벌판매",
-)
-
-# ---------------------------------------------------------------------------
-# 8. 과거 상한가/급등 재료 DB
-# ---------------------------------------------------------------------------
-HISTORICAL_CASE_DB_REQUIRED = True
-HISTORICAL_CASE_LOOKBACK_DAYS = 3650
-HISTORICAL_CASE_LINK_REQUIRED = True
-HISTORICAL_CASE_RETURN_REQUIRED_WHEN_FOUND = True
-# 유사 재료를 찾으면 '언제 / 어떤 재료 / 당시 주가 반응 / 원문 링크'를 보여준다.
-# 단순히 과거 상한가 종목 이름만 나열하지 않는다.
-
-# ---------------------------------------------------------------------------
-# 9. 💯 표시 규칙
-# ---------------------------------------------------------------------------
-# 금지: '💯 주요 재료 · 급등', '💯 주요 재료 · 폭락' 등 고정 문구.
-# 사용: 실제 중요도가 높은 재료/선정된 국내 상장기업 앞의 💯.
-# 급등/급락은 숫자와 별도 방향 아이콘으로 표현.
-STRONG_MATERIAL_WORDING_FORBIDDEN = True
-DIRECTION_UP = "🔺 상승"
-DIRECTION_DOWN = "▼ 하락"
-
-# ---------------------------------------------------------------------------
-# 10. 미국장 30분 브리핑
-# ---------------------------------------------------------------------------
-US_INTRADAY_INTERVAL_MINUTES = 30
-US_INTRADAY_FROM_OPEN_TO_CLOSE = True
-US_INTRADAY_TITLE = "🇺🇸 [미장 브리핑]"
-US_INTRADAY_TIME_ONLY = True
-# '정규 브리핑'이라는 문구는 반복 브리핑에서 사용하지 않는다.
-
-US_BRIEFING_REQUIRED_FIELDS = (
-    "나스닥", "S&P500", "다우", "필라델피아반도체", "VIX",
-    "강세종목", "약세종목", "강세테마", "약세테마",
-    "원/달러", "WTI", "금", "미국10년물", "MSCI", "ADR", "미국선물",
-)
-
-# 급등/급락/추세반전/테마변화/원자재·환율 급변/중요 신규뉴스 발생 시
-# 정규 30분 주기와 별개로 즉시 업데이트할 수 있다.
-US_INTRADAY_EVENT_TRIGGERS = (
-    "sharp_move", "surge", "plunge", "trend_reversal", "theme_change",
-    "macro_shock", "new_material_news", "futures_sharp_move",
-)
-
-# 장마감: 전체 시장흐름 + 강세 종목군 + 원인 + 국내 관련주 + MSCI + ADR.
-US_CLOSE_BRIEFING_REQUIRED = True
-US_CLOSE_INCLUDE_MSCI_ADR = True
-US_CLOSE_INCLUDE_KOREA_LINK = True
-
-# ---------------------------------------------------------------------------
-# 11. 미국 → 한국 연결 로직
-# ---------------------------------------------------------------------------
-# 해외기업의 상승/하락을 국내 종목으로 복사하지 않는다.
-# '왜 움직였는가'를 먼저 분석하고, 그 원인이 한국 산업/공급망/정책/수혜로
-# 이어지는 경우에만 국내 종목을 선정한다.
-US_TO_KOREA_CAUSAL_CHAIN_REQUIRED = True
-US_TO_KOREA_MAX_STOCKS = 3
-US_TO_KOREA_NO_FORCED_STOCKS = True
-
-# ---------------------------------------------------------------------------
-# 12. 일정 DB — 최초 1년 + 매일 누적
-# ---------------------------------------------------------------------------
-SCHEDULE_INITIAL_LOOKBACK_DAYS = 365
-SCHEDULE_DAILY_ACCUMULATION = True
-SCHEDULE_DAILY_MORNING_HOUR = 7
-SCHEDULE_DAILY_EVENING_HOUR = 19
-SCHEDULE_SORT_BY_NEAREST_DATE = True
-SCHEDULE_TRACK_LIMIT_UP_EVENTS = True
-SCHEDULE_TRACK_US_EVENTS = True
-SCHEDULE_TRACK_COMPANY_EVENTS = True
-SCHEDULE_TRACK_OFFICIAL_DISCLOSURE_EVENTS = True
-SCHEDULE_KEEP_ONLY_MATERIAL_EVENTS = True
-
-# 최초에는 최근 1년 특징주/급등뉴스/중요 뉴스/공시에서 날짜가 확인되는 이벤트를
-# 최대한 수집하고, 이후 매일 새로운 날짜/일정이 확인되면 기존 DB에 누적한다.
-# 동일 일정은 합치고 날짜/규모/단계가 변경되면 업데이트한다.
-
-# ---------------------------------------------------------------------------
-# 13. Telegram 도배 방지 / 봇 감시
-# ---------------------------------------------------------------------------
-TELEGRAM_SPAM_GUARD = True
-TELEGRAM_DEFAULT_MAX_AGE_MINUTES = 60
-TELEGRAM_UNFILTERED_CHANNELS_STILL_REQUIRE_DEDUP = True
-BOT_HEALTH_MONITOR = True
-BOT_HEALTH_ALERT_AFTER_MINUTES = 30
-BOT_HEALTH_LOG_LAST_SUCCESS = True
-
-# ---------------------------------------------------------------------------
-# 14. 상용화 안정성 팁을 로직에 내장
-# ---------------------------------------------------------------------------
-# a) 429/5xx는 지수 백오프 + jitter로 재시도한다.
-# b) 같은 URL/공시는 캐시하여 중복 요청을 줄인다.
-# c) 소스별 circuit breaker를 둬 한 소스 장애가 전체 봇을 멈추지 않게 한다.
-# d) 이벤트 ID를 생성해 idempotent하게 저장/전송한다.
-# e) 메시지 전송 실패 시 재전송 큐를 사용하되 동일 메시지 도배는 막는다.
-# f) 모든 핵심 판단은 원문/수치/링크 근거를 보존해 사후 감사가 가능해야 한다.
-# g) 숫자가 없으면 '확인 불가'로 표시하고 생성하지 않는다.
-# h) 소스 장애는 데이터 부재와 동일시하지 않고 '수집 실패'로 구분한다.
-# i) 시장 시간대는 KST/ET를 명시하고 DST를 자동 처리한다.
-# j) 기능별 상태(뉴스/DART/SEC/미장/RSS/Telegram)를 독립적으로 감시한다.
-
-RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
-RETRY_MAX_ATTEMPTS = 3
-RETRY_BASE_SECONDS = 1.5
-CACHE_TTL_SECONDS = 300
-CIRCUIT_BREAKER_FAILURES = 5
-CIRCUIT_BREAKER_COOLDOWN_SECONDS = 120
-
-# 최종 출력 원칙
-MASTER_OUTPUT_RULES = (
-    "모든 뉴스는 국내 관심종목 연결 가능성을 먼저 검토한다.",
-    "국내 종목이 없으면 억지로 만들지 않고 글로벌 시황은 보존한다.",
-    "기업명이 기사에 단순 등장한 것만으로 관심종목으로 선정하지 않는다.",
-    "선정 종목마다 구체적인 선정 이유를 표시한다.",
-    "테마 대장주는 과거 상한가/급등/주도/끼/최근 강도 근거를 함께 사용한다.",
-    "공시는 원문의 핵심 수치와 비교값을 한눈에 보여준다.",
-    "과거 유사재료가 확인되면 날짜·상승률·원문 링크를 표시한다.",
-    "확인되지 않은 숫자·수익률·계약 규모를 추정하지 않는다.",
-)
-# ============================================================================
-# END MASTER POLICY
-# ============================================================================
-
-
-# ─────────────────────────────────────────────────────────────
-# [STABILITY PATCH] Google RSS / YouTube production hardening
-# ─────────────────────────────────────────────────────────────
-# 목적:
-# 1) Google News RSS 503/429/5xx 연속 장애 시 circuit breaker로 지연 방지
-# 2) 성공한 RSS 응답을 캐시하여 일시 장애 시 보완
-# 3) YouTube 채널 ID를 영구 저장하여 재시작 후 재검색 방지
-# 4) 실패 채널 cooldown으로 반복 확인 방지
-# 5) 기존 뉴스/관심종목/공시 로직은 변경하지 않고 수집 계층만 안정화
-
-import json as _stability_json
-import time as _stability_time
-from pathlib import Path as _StabilityPath
-
-_STABILITY_DIR = _StabilityPath(__file__).resolve().parent / "runtime_state"
-_STABILITY_DIR.mkdir(parents=True, exist_ok=True)
-
-_YT_CACHE_FILE = _STABILITY_DIR / "youtube_channel_cache.json"
-_GOOGLE_STATE_FILE = _STABILITY_DIR / "google_rss_state.json"
-_GOOGLE_CACHE_DIR = _STABILITY_DIR / "google_rss_cache"
-_GOOGLE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-_GOOGLE_FAIL_LIMIT = 3
-_GOOGLE_OPEN_SECONDS = 300
-_YT_FAIL_COOLDOWN = 1800
-
-
-def _stability_load_json(path, default):
-    try:
-        if path.exists():
-            return _stability_json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return default
-
-
-def _stability_save_json(path, data):
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        tmp.write_text(
-            _stability_json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        tmp.replace(path)
-    except Exception:
-        try:
-            path.write_text(
-                _stability_json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
-
-
-def _google_rss_is_open():
-    state = _stability_load_json(
-        _GOOGLE_STATE_FILE,
-        {"failures": 0, "opened_at": 0},
-    )
-    opened_at = float(state.get("opened_at") or 0)
-    if opened_at and (_stability_time.time() - opened_at) < _GOOGLE_OPEN_SECONDS:
-        return True
-    if opened_at:
-        state["opened_at"] = 0
-        state["failures"] = 0
-        _stability_save_json(_GOOGLE_STATE_FILE, state)
-    return False
-
-
-def _google_rss_record_failure():
-    state = _stability_load_json(
-        _GOOGLE_STATE_FILE,
-        {"failures": 0, "opened_at": 0},
-    )
-    state["failures"] = int(state.get("failures") or 0) + 1
-    if state["failures"] >= _GOOGLE_FAIL_LIMIT:
-        state["opened_at"] = _stability_time.time()
-    _stability_save_json(_GOOGLE_STATE_FILE, state)
-
-
-def _google_rss_record_success():
-    _stability_save_json(
-        _GOOGLE_STATE_FILE,
-        {"failures": 0, "opened_at": 0, "last_success": _stability_time.time()},
-    )
-
-
-def _google_rss_cache_key(url):
-    import hashlib as _stability_hashlib
-    return _stability_hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
-
-
-def _google_rss_cache_write(url, body):
-    try:
-        key = _google_rss_cache_key(url)
-        (_GOOGLE_CACHE_DIR / f"{key}.xml").write_text(body, encoding="utf-8")
-    except Exception:
-        pass
-
-
-def _google_rss_cache_read(url, max_age_seconds=3600):
-    try:
-        p = _GOOGLE_CACHE_DIR / f"{_google_rss_cache_key(url)}.xml"
-        if p.exists() and (_stability_time.time() - p.stat().st_mtime) <= max_age_seconds:
-            return p.read_text(encoding="utf-8")
-    except Exception:
-        pass
-    return None
-
-
-def _youtube_cache_load():
-    return _stability_load_json(_YT_CACHE_FILE, {})
-
-
-def _youtube_cache_save(cache):
-    _stability_save_json(_YT_CACHE_FILE, cache)
-
-
-def _youtube_cached_channel(channel_name):
-    cache = _youtube_cache_load()
-    item = cache.get(channel_name)
-    if isinstance(item, dict):
-        return item
-    return None
-
-
-def _youtube_store_channel(channel_name, channel_id):
-    if not channel_name or not channel_id:
-        return
-    cache = _youtube_cache_load()
-    cache[channel_name] = {
-        "channel_id": channel_id,
-        "updated_at": _stability_time.time(),
-        "fail_until": 0,
-    }
-    _youtube_cache_save(cache)
-
-
-def _youtube_mark_failure(channel_name, cooldown=_YT_FAIL_COOLDOWN):
-    if not channel_name:
-        return
-    cache = _youtube_cache_load()
-    item = cache.get(channel_name, {})
-    item["fail_until"] = _stability_time.time() + cooldown
-    item["last_failure"] = _stability_time.time()
-    cache[channel_name] = item
-    _youtube_cache_save(cache)
-
-
-def _youtube_in_cooldown(channel_name):
-    item = _youtube_cached_channel(channel_name)
-    if not item:
-        return False
-    return float(item.get("fail_until") or 0) > _stability_time.time()
-
-
-def _stability_backoff(attempt, base=1.0, cap=30.0):
-    delay = min(cap, base * (2 ** max(0, attempt - 1)))
-    # small deterministic jitter avoids synchronized retries
-    delay += (hash((_stability_time.time_ns(), attempt)) % 250) / 1000.0
-    _stability_time.sleep(delay)
-
-
-# End of stability patch.
