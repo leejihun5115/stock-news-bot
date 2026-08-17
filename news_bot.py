@@ -2746,19 +2746,43 @@ def _engine_run_google_and_domestic():
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
 
 
-def _naver_request_headers():
-    """NAVER API HUB를 우선 사용하고, 기존 개발자센터 Search API도 호환한다."""
-    hub_ready = bool(NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET)
-    if NAVER_API_MODE == "hub" and not hub_ready:
-        return None, None, "hub"
-    if NAVER_API_MODE in ("hub", "auto") and hub_ready:
+_NAVER_RUNTIME_MODE = None
+_NAVER_AUTH_FAILURE_LOGGED = set()
+
+def _naver_credentials():
+    """
+    NAVER API HUB를 1순위로 사용한다.
+    운영환경에서 실수로 HUB 키를 기존 NAVER_CLIENT_ID/SECRET 변수에 넣어도
+    HUB로 먼저 시도할 수 있도록 두 변수명을 모두 후보로 인정한다.
+    """
+    hub_id = NAVER_APIHUB_CLIENT_ID or NAVER_CLIENT_ID
+    hub_secret = NAVER_APIHUB_CLIENT_SECRET or NAVER_CLIENT_SECRET
+    return hub_id.strip(), hub_secret.strip()
+
+def _naver_request_headers(mode=None):
+    """NAVER API HUB 우선 + legacy는 명시적으로 필요할 때만 사용."""
+    global _NAVER_RUNTIME_MODE
+    requested = (mode or NAVER_API_MODE or "auto").strip().lower()
+    hub_id, hub_secret = _naver_credentials()
+    hub_ready = bool(hub_id and hub_secret)
+
+    # 운영환경에서 NAVER_API_MODE=legacy가 남아 있어도 HUB 자격증명이 존재하면
+    # 잘못된 legacy 고정으로 401이 반복되는 것을 방지한다.
+    if requested in ("legacy", "classic") and hub_ready and (NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET):
+        requested = "hub"
+
+    if _NAVER_RUNTIME_MODE in ("hub", "legacy") and mode is None:
+        requested = _NAVER_RUNTIME_MODE
+
+    if requested in ("hub", "auto") and hub_ready:
         return {
-            "X-NCP-APIGW-API-KEY-ID": NAVER_APIHUB_CLIENT_ID,
-            "X-NCP-APIGW-API-KEY": NAVER_APIHUB_CLIENT_SECRET,
+            "X-NCP-APIGW-API-KEY-ID": hub_id,
+            "X-NCP-APIGW-API-KEY": hub_secret,
             "Accept": "application/json",
             "User-Agent": USER_AGENT,
         }, f"{NAVER_APIHUB_BASE_URL}/search/v1/news", "hub"
-    if NAVER_CLIENT_ID and NAVER_CLIENT_SECRET:
+
+    if requested in ("legacy", "auto") and NAVER_CLIENT_ID and NAVER_CLIENT_SECRET:
         return {
             "X-Naver-Client-Id": NAVER_CLIENT_ID,
             "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
@@ -2766,6 +2790,11 @@ def _naver_request_headers():
             "User-Agent": USER_AGENT,
         }, "https://openapi.naver.com/v1/search/news.json", "legacy"
     return None, None, "none"
+
+def _naver_mark_runtime_mode(mode):
+    global _NAVER_RUNTIME_MODE
+    if mode in ("hub", "legacy"):
+        _NAVER_RUNTIME_MODE = mode
 
 
 def _naver_extract_items(response):
@@ -2812,9 +2841,12 @@ def _engine_run_naver():
             if not r.ok:
                 api_ok = False
                 _naver_api_status_log(r.status_code, api_mode)
+                # 401은 자격증명/권한 문제이므로 같은 주기에 반복 호출하지 않는다.
                 if r.status_code == 401:
+                    _NAVER_AUTH_FAILURE_LOGGED.add(api_mode)
                     break
                 continue
+            _naver_mark_runtime_mode(api_mode)
             data = r.json()
             items = data.get("items", []) or []
             new_count = 0
@@ -2840,7 +2872,7 @@ def _engine_run_keyword_combinations():
     cycle = getattr(_engine_run_keyword_combinations, "cycle", 0)
     combos = [(c, themes[(cycle+i) % len(themes)]) for i, c in enumerate(companies[:10])]
     _engine_run_keyword_combinations.cycle = cycle + 1
-    _engine_log("info", "[키워드 조합 시작] 이번주기=%d건 | NAVER_MODE=%s", len(combos), api_mode)
+    _engine_log("info", "[키워드 조합 시작] 이번주기=%d건 | NAVER_MODE=%s | 실제 인증경로=%s", len(combos), api_mode, endpoint)
     for company, theme in combos:
         q = f'"{company}" {theme}'
         try:
@@ -2849,6 +2881,7 @@ def _engine_run_keyword_combinations():
             if not r.ok:
                 _engine_log("error", "[실패] 키워드조합 | 원인=%s", r.reason)
                 continue
+            _naver_mark_runtime_mode(api_mode)
             items = r.json().get("items", []) or []
             new_count = 0
             for item in items:
