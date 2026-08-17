@@ -1757,17 +1757,10 @@ def _engine_format_message(item):
     historical = _engine_historical_match(item)
     global_companies = _engine_global_companies(companies)
     if strong:
-        # 💯는 재료 강도만 표시한다. 급등/급락 방향을 강한 재료 문구에 섞지 않는다.
-        strong_label = ", ".join(strong_hits[:3]) if strong_hits else "시장 영향 가능성이 큰 재료"
-        amount_m = re.search(r"(?:[0-9][0-9,]*(?:\.\d+)?)\s*(?:억|조|억원|조원|달러|USD|million|billion)", item.get("title","") + " " + item.get("extra",""), re.I)
-        detail = f" · {strong_label}"
-        if amount_m:
-            detail += f" · 규모 {amount_m.group(0)}"
-        lines.insert(2, "💯 강한 재료" + html.escape(detail))
-    if confidence == "미확인":
-        lines.insert(3, "⚠️ [미확인] 공식 확인 전 소문·전망성 재료")
-    if global_companies:
-        lines.insert(3, "🌐 해외 수혜기업: " + html.escape(" · ".join(global_companies[:5])))
+        # 💯는 강한 재료에만 사용하고, 방향(급등/급락)이나 고정 문구를 붙이지 않는다.
+        reason = _engine_market_move_reason(item.get("title", ""), item.get("extra", ""))
+        if reason:
+            lines.insert(2, "💯 🔎 " + html.escape(reason))
     if historical:
         ratio, hrow = historical
         htitle = html.escape(str(hrow.get("title", "과거 유사 사례"))[:180])
@@ -1782,8 +1775,6 @@ def _engine_format_message(item):
     # 한국 기업과의 연결 내용과 수혜/피해 방향을 바로 한 줄로 보여준다.
     if core:
         lines += ["", core_html]
-    if market_state in ("시장 마감 후 뉴스", "시장 휴무로 미반영"):
-        lines += ["", f"⏸️ {html.escape(market_state)}"]
     if schedule:
         lines += ["", f"<b>📅 일정</b>", html.escape(schedule)]
     if item.get("link"):
