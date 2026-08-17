@@ -234,237 +234,6 @@ ENABLE_YOUTUBE = _startup_env_flag("ENABLE_YOUTUBE")
 import logging
 from logging import FileHandler
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
-
-
-
-# ==================== 🇺🇸 미국장 30분 주기 브리핑 ====================
-US_MARKET_BRIEFING_ENABLED = True
-US_MARKET_INTERVAL_MINUTES = 30
-
-# ET 기준: 정규장 개장 09:30 ~ 폐장 16:00.
-# 실제 스케줄러는 실행환경의 cron/APScheduler/작업 큐에서 이 값을 사용한다.
-US_MARKET_OPEN_ET = "09:30"
-US_MARKET_CLOSE_ET = "16:00"
-
-US_MARKET_BRIEFING_ITEMS = (
-    "나스닥", "S&P500", "다우", "필라델피아반도체", "VIX",
-    "급등종목", "급락종목", "강세테마", "약세테마",
-    "원/달러", "WTI", "금", "미국10년물",
-    "MSCI", "ADR", "미국선물",
-)
-
-US_MARKET_CHANGE_RULES = {
-    # 매 30분 브리핑은 직전 브리핑과 비교하여 변화가 있을 때 우선 출력
-    "new_surge": 3.0,
-    "new_drop": -3.0,
-    "trend_reversal": True,
-    "theme_leadership_change": True,
-    "macro_sharp_move": True,
-    "new_material_news": True,
-}
-
-def should_update_us_market_briefing(previous, current):
-    """
-    직전 브리핑과 현재 데이터를 비교한다.
-    단순 반복 뉴스는 억제하고 새로운 변화만 우선 송출한다.
-    """
-    if not previous:
-        return True
-
-    # 데이터가 dict 형태일 때의 최소 변화 감지.
-    for key in ("nasdaq", "sp500", "dow", "sox", "vix", "usdkrw", "wti", "gold"):
-        if key in current and key in previous:
-            try:
-                if abs(float(current[key]) - float(previous[key])) >= 0.50:
-                    return True
-            except (TypeError, ValueError):
-                pass
-
-    # 새로운 급등/급락·테마·뉴스가 있으면 송출
-    for key in ("new_surge_stocks", "new_drop_stocks",
-                "new_themes", "new_material_news",
-                "trend_reversals", "macro_events"):
-        if current.get(key):
-            return True
-
-    return False
-
-def us_market_briefing_schedule():
-    """
-    스케줄러가 사용할 브리핑 시각을 생성한다.
-    09:30 ET부터 30분 간격으로 시작하며 16:00 ET 마감 브리핑을 포함한다.
-    """
-    return {
-        "enabled": US_MARKET_BRIEFING_ENABLED,
-        "interval_minutes": US_MARKET_INTERVAL_MINUTES,
-        "open_et": US_MARKET_OPEN_ET,
-        "close_et": US_MARKET_CLOSE_ET,
-        "include_close_briefing": True,
-    }
-
-# 국내 관심종목 연결은 기존 엄격 로직을 그대로 사용한다.
-# 미국 기업의 주가 상승/하락 자체만으로 국내 종목을 선정하지 않는다.
-US_TO_KR_SELECTION_REQUIRES = (
-    "핵심 원인 확인",
-    "산업/공급망/테마 확인",
-    "국내 상장기업 실제 사업 연결성",
-    "과거 급등·상한가 이력",
-    "대장주 선정 기준",
-)
-# ======================================================================
-
-# ==================== 재무공시 한눈에 보기 해석 로직 ====================
-# 공시에서 확인 가능한 수치만 사용한다. 없는 수치는 임의 생성하지 않는다.
-FINANCIAL_HEADLINE_RULES = {
-    "turnaround_profit": "🔥 흑자전환",
-    "turnaround_loss": "⚠️ 적자전환",
-    "earnings_surprise": "🔥 어닝서프라이즈",
-    "earnings_miss": "⚠️ 어닝쇼크",
-    "revenue_growth": "매출 성장",
-    "operating_profit_growth": "영업이익 성장",
-    "operating_margin_improvement": "수익성 개선",
-    "operating_margin_deterioration": "수익성 악화",
-}
-
-def _pct_change(current, previous):
-    """현재값/비교값의 증감률(%). 비교값이 0이면 None."""
-    try:
-        current, previous = float(current), float(previous)
-        if previous == 0:
-            return None
-        return (current - previous) / abs(previous) * 100.0
-    except (TypeError, ValueError):
-        return None
-
-def _fmt_pct(value):
-    if value is None:
-        return "비교불가"
-    return f"{value:+.1f}%"
-
-def _financial_headline(current, previous=None, estimate=None, yoy=None):
-    """
-    한눈에 들어오는 실적 판단.
-    - 전기 실적이 적자/0이고 현재 흑자면 흑자전환
-    - 시장/회사 가이던스 예상치 대비 크게 상회하면 어닝서프라이즈
-    - 예상치 대비 하회하면 어닝쇼크
-    - 예상치가 없으면 임의로 '어닝서프라이즈'라고 쓰지 않는다.
-    """
-    labels = []
-    try:
-        c = float(current)
-    except (TypeError, ValueError):
-        c = None
-
-    try:
-        p = float(previous) if previous is not None else None
-    except (TypeError, ValueError):
-        p = None
-
-    try:
-        e = float(estimate) if estimate is not None else None
-    except (TypeError, ValueError):
-        e = None
-
-    if c is not None and p is not None:
-        if c > 0 and p <= 0:
-            labels.append(FINANCIAL_HEADLINE_RULES["turnaround_profit"])
-        elif c < 0 and p >= 0:
-            labels.append(FINANCIAL_HEADLINE_RULES["turnaround_loss"])
-
-    # '어닝서프라이즈/쇼크'는 비교 예상치가 실제로 있을 때만 사용.
-    if c is not None and e is not None:
-        surprise = _pct_change(c, e)
-        if surprise is not None:
-            if surprise >= 10:
-                labels.append(FINANCIAL_HEADLINE_RULES["earnings_surprise"])
-            elif surprise <= -10:
-                labels.append(FINANCIAL_HEADLINE_RULES["earnings_miss"])
-
-    return " · ".join(dict.fromkeys(labels))
-
-def build_financial_one_glance(data):
-    """
-    data 예:
-    {
-      "revenue": {"current": ..., "qoq": ..., "yoy": ...},
-      "operating_profit": {"current": ..., "qoq": ..., "yoy": ...},
-      "eps": {"current": ..., "qoq": ..., "yoy": ...},
-      "per": {"current": ..., "previous": ..., "yoy": ...},
-      "market_cap": ...,
-      "event_amount": ...,
-      "shareholding_pct": ...,
-      "headline": ...
-    }
-
-    숫자 자체 + QoQ/YoY + 공시규모 비교 + 해석을 한눈에 표시한다.
-    """
-    out = []
-    headline = data.get("headline")
-    if headline:
-        out.append(f"🔥 {headline}")
-
-    metrics = [
-        ("매출액", "revenue"),
-        ("영업이익", "operating_profit"),
-        ("EPS", "eps"),
-        ("PER", "per"),
-    ]
-
-    for label, key in metrics:
-        item = data.get(key) or {}
-        cur = item.get("current")
-        if cur is None:
-            continue
-
-        line = f"• {label}: {cur}"
-        qoq = item.get("qoq")
-        yoy = item.get("yoy")
-        if qoq is not None:
-            line += f"  | QoQ {_fmt_pct(qoq)}"
-        if yoy is not None:
-            line += f"  | YoY {_fmt_pct(yoy)}"
-        out.append(line)
-
-    # 공시금액 대비 기업규모
-    amount = data.get("event_amount")
-    revenue = (data.get("revenue") or {}).get("current")
-    op = (data.get("operating_profit") or {}).get("current")
-    mcap = data.get("market_cap")
-
-    comparisons = []
-    for name, denominator in (
-        ("매출액", revenue),
-        ("영업이익", op),
-        ("시가총액", mcap),
-    ):
-        pct = _pct_change(amount, denominator) if amount is not None and denominator not in (None, 0) else None
-        if pct is not None:
-            comparisons.append(f"{name} 대비 {_fmt_pct(pct)}")
-
-    if comparisons:
-        out.append("📐 규모 비교: " + " · ".join(comparisons))
-
-    share = data.get("shareholding_pct")
-    if share is not None:
-        out.append(f"• 지분율: {share}%")
-
-    interpretation = data.get("interpretation")
-    if interpretation:
-        out.append(f"🔎 해석: {interpretation}")
-
-    return "\n".join(out)
-
-# 기존 관심종목 선정 로직에서 사용할 수 있는 최소 해석 기준.
-FINANCIAL_INTERPRETATION_THRESHOLDS = {
-    "qoq_or_yoy_strong_growth": 20.0,      # 20% 이상 증가
-    "qoq_or_yoy_growth": 10.0,             # 10% 이상 증가
-    "margin_improvement_pp": 2.0,          # 영업이익률 +2%p 이상
-    "surprise_pct": 10.0,                  # 예상치 대비 +10% 이상
-    "miss_pct": -10.0,                     # 예상치 대비 -10% 이하
-}
-
-# ======================================================================
-
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -2832,3 +2601,418 @@ if __name__ == "__main__":
     except Exception as e:
         log_error("프로그램 최상위 오류", e)
         raise
+
+
+
+# ==================== SEC/EDGAR 공시 고도화 + 재무 비교 ====================
+SEC_USER_AGENT = "news_bot/1.0 (leejihun5115@gmail.com)"
+
+SEC_HIGH_IMPACT_TRIGGERS = (
+    "Acquisition", "Merger", "Contract", "Award", "Regulatory Approval",
+    "FDA", "Clearance", "License", "Licensing", "Technology Transfer",
+    "Commercialization", "Supply Agreement", "Investment", "Expansion",
+    "Guidance", "Earnings", "Revenue", "Operating Income", "EPS",
+    "Shareholder", "Beneficial Ownership", "Tender Offer", "Buyback",
+)
+SEC_LOW_IMPACT_BLOCKLIST = (
+    "routine", "administrative", "proxy", "meeting notice",
+    "boilerplate", "formatting", "minor amendment",
+)
+
+DISCLOSURE_FINANCIAL_METRICS = (
+    "매출액", "영업이익", "EPS", "PER", "시가총액",
+    "전분기", "전년동기", "QoQ", "YoY", "지분율",
+)
+
+def disclosure_compare(current, previous=None, yoy=None):
+    result = {}
+    for key, value in (current or {}).items():
+        result[key] = value
+    if previous is not None:
+        result["QoQ"] = _pct_change(current, previous)
+    if yoy is not None:
+        result["YoY"] = _pct_change(current, yoy)
+    return result
+
+def disclosure_headline_label(current, previous=None, estimate=None):
+    try:
+        c = float(current)
+    except (TypeError, ValueError):
+        return ""
+    labels = []
+    if previous is not None:
+        try:
+            p = float(previous)
+            if c > 0 and p <= 0:
+                labels.append("🔥 흑자전환")
+            elif c < 0 and p >= 0:
+                labels.append("⚠️ 적자전환")
+        except (TypeError, ValueError):
+            pass
+    # 예상치가 실제로 있을 때만 서프라이즈/쇼크를 표시
+    if estimate is not None:
+        chg = _pct_change(c, estimate)
+        if chg is not None:
+            if chg >= 10:
+                labels.append("🔥 어닝서프라이즈")
+            elif chg <= -10:
+                labels.append("⚠️ 어닝쇼크")
+    return " · ".join(labels)
+
+def disclosure_scale_compare(event_amount, revenue=None, operating_income=None,
+                             market_cap=None):
+    out = {}
+    for name, denominator in (
+        ("매출액 대비", revenue),
+        ("영업이익 대비", operating_income),
+        ("시가총액 대비", market_cap),
+    ):
+        if event_amount is not None and denominator not in (None, 0):
+            out[name] = float(event_amount) / abs(float(denominator)) * 100
+    return out
+
+def disclosure_scale_interpretation(pct):
+    if pct is None:
+        return "비교불가"
+    if pct >= 30:
+        return "매우 큰 규모"
+    if pct >= 20:
+        return "상당히 큰 규모"
+    if pct >= 10:
+        return "주요 규모"
+    if pct >= 5:
+        return "의미 있는 규모"
+    return "소규모"
+
+# 공시 원문에 실제로 존재하는 핵심 숫자만 사용하고 없는 수치는 생성하지 않는다.
+# 기업명이 단순 인용/광고/비교로 등장한 경우 국내 관심종목 선정 근거로 인정하지 않는다.
+# ======================================================================
+
+
+
+# ==================== 🇺🇸 미국장 30분 주기 브리핑 ====================
+US_MARKET_BRIEFING_ENABLED = True
+US_MARKET_INTERVAL_MINUTES = 30
+US_MARKET_OPEN_ET = "09:30"
+US_MARKET_CLOSE_ET = "16:00"
+
+US_MARKET_BRIEFING_FIELDS = (
+    "나스닥", "S&P500", "다우", "필라델피아반도체", "VIX",
+    "급등종목", "급락종목", "강세테마", "약세테마",
+    "원/달러", "WTI", "금", "미국10년물", "MSCI", "ADR", "미국선물",
+)
+
+US_MARKET_CHANGE_RULES = {
+    "interval_minutes": 30,
+    "new_surge": 3.0,
+    "new_drop": -3.0,
+    "trend_reversal": True,
+    "theme_change": True,
+    "macro_sharp_move": True,
+    "new_material_news": True,
+}
+
+def us_market_briefing_title(time_et):
+    # 반복 브리핑에서는 '개장 30분' 문구를 사용하지 않는다.
+    return f"🇺🇸 [미장 브리핑]\n🕐 {time_et} ET"
+
+def should_send_us_market_update(previous, current):
+    if not previous:
+        return True
+    for key in ("nasdaq", "sp500", "dow", "sox", "vix", "usdkrw", "wti", "gold"):
+        if key in current and key in previous:
+            try:
+                if abs(float(current[key]) - float(previous[key])) >= 0.50:
+                    return True
+            except (TypeError, ValueError):
+                pass
+    return any(current.get(k) for k in (
+        "new_surge_stocks", "new_drop_stocks", "new_themes",
+        "new_material_news", "trend_reversals", "macro_events"
+    ))
+
+# 09:30 ET부터 30분 간격으로 16:00 ET 마감 브리핑까지 실행.
+# 실제 자동 발송은 봇의 스케줄러가 이 설정을 사용한다.
+# ======================================================================
+
+
+
+# ==================== 기업분석 · 한눈에 보기 통합 로직 ====================
+# 목적:
+# 공시/뉴스에서 확인된 사건을 기업의 실제 사업가치와 연결하고,
+# 기본 재무지표 → 전분기/전년동기 → 공시 규모 → 질적 영향 → 과거 사례
+# 순서로 해석한다. 확인되지 않은 숫자나 인과관계는 만들지 않는다.
+
+COMPANY_ANALYSIS_DISPLAY_ORDER = (
+    "핵심판정",
+    "공시/뉴스 핵심",
+    "기업 기본지표",
+    "실적 추세",
+    "공시 규모 비교",
+    "사업가치 연결",
+    "재료의 질",
+    "과거 유사재료",
+    "관심종목 선정 이유",
+)
+
+COMPANY_ANALYSIS_LABELS = {
+    "turnaround_profit": "🔥 흑자전환",
+    "turnaround_loss": "⚠️ 적자전환",
+    "earnings_surprise": "🔥 어닝서프라이즈",
+    "earnings_miss": "⚠️ 어닝쇼크",
+    "sales_growth": "📈 매출 성장",
+    "profit_growth": "📈 영업이익 성장",
+    "margin_improved": "📈 수익성 개선",
+    "margin_deteriorated": "📉 수익성 악화",
+}
+
+def _safe_num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+def _change_pct(current, base):
+    c, b = _safe_num(current), _safe_num(base)
+    if c is None or b is None or b == 0:
+        return None
+    return (c - b) / abs(b) * 100
+
+def _sign_pct(v):
+    return "비교불가" if v is None else f"{v:+.1f}%"
+
+def _business_quality_label(revenue_qoq=None, revenue_yoy=None,
+                            op_qoq=None, op_yoy=None,
+                            operating_margin_qoq_pp=None,
+                            operating_margin_yoy_pp=None):
+    labels = []
+
+    if any(v is not None and v >= 10 for v in
+           (revenue_qoq, revenue_yoy)):
+        labels.append(COMPANY_ANALYSIS_LABELS["sales_growth"])
+
+    if any(v is not None and v >= 10 for v in
+           (op_qoq, op_yoy)):
+        labels.append(COMPANY_ANALYSIS_LABELS["profit_growth"])
+
+    if any(v is not None and v >= 2 for v in
+           (operating_margin_qoq_pp, operating_margin_yoy_pp)):
+        labels.append(COMPANY_ANALYSIS_LABELS["margin_improved"])
+
+    if any(v is not None and v <= -2 for v in
+           (operating_margin_qoq_pp, operating_margin_yoy_pp)):
+        labels.append(COMPANY_ANALYSIS_LABELS["margin_deteriorated"])
+
+    return " · ".join(dict.fromkeys(labels))
+
+def analyze_company_financials(data):
+    """
+    data 구조:
+      revenue.current / previous_quarter / previous_year
+      operating_profit.current / previous_quarter / previous_year
+      eps.current / previous_quarter / previous_year
+      per.current / previous
+      market_cap
+      event_amount
+      ownership.current / previous
+      estimate.operating_profit / estimate.eps (선택)
+      operating_margin.current / previous_quarter / previous_year (선택)
+
+    핵심 원칙:
+    1) 공시 원문/검증된 데이터에 있는 값만 사용.
+    2) QoQ, YoY를 모두 계산.
+    3) 예상치가 실제 존재할 때만 어닝서프라이즈/쇼크 표시.
+    4) 공시금액은 매출·영업이익·시총 대비 비율로 비교.
+    5) 계약금액 자체를 매출/이익으로 간주하지 않는다.
+    """
+    r = data.get("revenue", {})
+    op = data.get("operating_profit", {})
+    eps = data.get("eps", {})
+    per = data.get("per", {})
+    own = data.get("ownership", {})
+    est = data.get("estimate", {})
+
+    rc, rpc, ry = r.get("current"), r.get("previous_quarter"), r.get("previous_year")
+    oc, opc, oy = op.get("current"), op.get("previous_quarter"), op.get("previous_year")
+    ec, epc, ey = eps.get("current"), eps.get("previous_quarter"), eps.get("previous_year")
+
+    result = {
+        "revenue": {
+            "current": rc,
+            "QoQ": _change_pct(rc, rpc),
+            "YoY": _change_pct(rc, ry),
+        },
+        "operating_profit": {
+            "current": oc,
+            "QoQ": _change_pct(oc, opc),
+            "YoY": _change_pct(oc, oy),
+        },
+        "EPS": {
+            "current": ec,
+            "QoQ": _change_pct(ec, epc),
+            "YoY": _change_pct(ec, ey),
+        },
+        "PER": {
+            "current": per.get("current"),
+            "previous": per.get("previous"),
+        },
+        "ownership": {
+            "current": own.get("current"),
+            "previous": own.get("previous"),
+            "change_pp": (
+                _safe_num(own.get("current")) - _safe_num(own.get("previous"))
+                if own.get("current") is not None and own.get("previous") is not None
+                else None
+            ),
+        },
+    }
+
+    # 흑자전환 / 적자전환
+    result["turnaround"] = ""
+    if _safe_num(oc) is not None and _safe_num(opc) is not None:
+        if _safe_num(oc) > 0 and _safe_num(opc) <= 0:
+            result["turnaround"] = COMPANY_ANALYSIS_LABELS["turnaround_profit"]
+        elif _safe_num(oc) < 0 and _safe_num(opc) >= 0:
+            result["turnaround"] = COMPANY_ANALYSIS_LABELS["turnaround_loss"]
+
+    # 예상치가 있을 때만 어닝서프라이즈/쇼크
+    expected_op = est.get("operating_profit")
+    if expected_op is not None and _safe_num(oc) is not None:
+        surprise = _change_pct(oc, expected_op)
+        if surprise is not None:
+            if surprise >= 10:
+                result["earnings"] = COMPANY_ANALYSIS_LABELS["earnings_surprise"]
+            elif surprise <= -10:
+                result["earnings"] = COMPANY_ANALYSIS_LABELS["earnings_miss"]
+            else:
+                result["earnings"] = ""
+            result["earnings_vs_estimate"] = surprise
+    else:
+        result["earnings"] = ""
+
+    # 공시 규모
+    amount = _safe_num(data.get("event_amount"))
+    mcap = _safe_num(data.get("market_cap"))
+    scale = {}
+    if amount is not None:
+        for label, denom in (
+            ("매출액", _safe_num(rc)),
+            ("영업이익", _safe_num(oc)),
+            ("시가총액", mcap),
+        ):
+            if denom not in (None, 0):
+                scale[label] = amount / abs(denom) * 100
+    result["event_scale_pct"] = scale
+
+    def scale_label(v):
+        if v is None:
+            return ""
+        if v >= 30:
+            return "매우 큰 규모"
+        if v >= 20:
+            return "상당히 큰 규모"
+        if v >= 10:
+            return "주요 규모"
+        if v >= 5:
+            return "의미 있는 규모"
+        return "소규모"
+
+    result["event_scale_interpretation"] = {
+        k: scale_label(v) for k, v in scale.items()
+    }
+
+    result["quality"] = _business_quality_label(
+        result["revenue"]["QoQ"], result["revenue"]["YoY"],
+        result["operating_profit"]["QoQ"], result["operating_profit"]["YoY"],
+        data.get("operating_margin", {}).get("QoQ_pp"),
+        data.get("operating_margin", {}).get("YoY_pp"),
+    )
+
+    return result
+
+def format_company_analysis_one_glance(company_name, data, analysis,
+                                       business_link=None,
+                                       historical_case=None,
+                                       selection_reason=None):
+    """
+    출력은 '한눈에 보기' 형태.
+    기업명 앞 💯는 관심종목 선정 로직에서 높은 중요도일 때 호출부가 붙인다.
+    """
+    lines = []
+    lines.append(f"🏢 {company_name}")
+
+    headline = " · ".join(x for x in (
+        analysis.get("turnaround"),
+        analysis.get("earnings"),
+        analysis.get("quality"),
+    ) if x)
+    if headline:
+        lines.append(f"📌 핵심판정: {headline}")
+
+    if data.get("event_summary"):
+        lines.append(f"📌 공시/뉴스 핵심: {data['event_summary']}")
+
+    lines.append("📊 기업 기본지표")
+    r = analysis["revenue"]
+    op = analysis["operating_profit"]
+    ep = analysis["EPS"]
+    per = analysis["PER"]
+
+    if r["current"] is not None:
+        lines.append(f"• 매출액 {r['current']} | QoQ {_sign_pct(r['QoQ'])} | YoY {_sign_pct(r['YoY'])}")
+    if op["current"] is not None:
+        lines.append(f"• 영업이익 {op['current']} | QoQ {_sign_pct(op['QoQ'])} | YoY {_sign_pct(op['YoY'])}")
+    if ep["current"] is not None:
+        lines.append(f"• EPS {ep['current']} | QoQ {_sign_pct(ep['QoQ'])} | YoY {_sign_pct(ep['YoY'])}")
+    if per.get("current") is not None:
+        prev = per.get("previous")
+        per_line = f"• PER {per['current']}배"
+        if prev is not None:
+            per_line += f" | 이전 {prev}배"
+        lines.append(per_line)
+
+    scale = analysis.get("event_scale_pct", {})
+    if scale:
+        lines.append("📐 공시 규모 비교")
+        for key in ("매출액", "영업이익", "시가총액"):
+            if key in scale:
+                lines.append(
+                    f"• {key} 대비 {scale[key]:.1f}%"
+                    f" → {analysis['event_scale_interpretation'].get(key, '')}"
+                )
+
+    own = analysis["ownership"]
+    if own.get("current") is not None:
+        s = f"• 지분율 {own['current']}%"
+        if own.get("previous") is not None and own.get("change_pp") is not None:
+            s += f" | 이전 {own['previous']}% | {own['change_pp']:+.2f}%p"
+        lines.append(s)
+
+    if data.get("business_value"):
+        lines.append(f"🔎 사업가치 연결: {data['business_value']}")
+
+    if data.get("commercialization"):
+        lines.append(f"🔎 상용화/수익화: {data['commercialization']}")
+
+    if historical_case:
+        lines.append(f"📚 과거 유사재료: {historical_case}")
+
+    if business_link:
+        lines.append(f"🔗 관련 근거: {business_link}")
+
+    if selection_reason:
+        lines.append(f"🥇 관심종목 선정 이유: {selection_reason}")
+
+    return "\n".join(lines)
+
+# 관심종목 선정 원칙:
+# - 직접 관련: 뉴스 핵심 사건이 기업의 사업/실적/수주/투자/제품/정책에 직접 연결될 때
+# - 테마 관련: 직접 연결이 없더라도 실제 산업·공급망·수혜 구조가 확인될 때
+# - 단순 기사 인용/광고/비교/검색어 등장만으로 종목 선정 금지
+# - 테마에서는 과거 상한가·급등 이력, 주도 이력, 끼, 최근 강한 움직임을 함께 평가
+# - 대장주 선정 이유를 반드시 설명하고, 후속 약한 종목 약 2개까지 함께 관찰
+# - 해외기업의 주가 상승 자체는 국내 종목 선정 근거가 아니다.
+# - 국내 연결 근거가 없으면 억지로 종목을 채우지 않는다.
+# - 선정된 관심종목은 💯 상장기업명 /// 형식으로 표시 가능하며,
+#   💯는 실제 재료 중요도/기업 연결성이 높은 경우에만 붙인다.
+# ======================================================================
