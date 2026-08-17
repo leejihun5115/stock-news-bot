@@ -1559,8 +1559,38 @@ def _engine_theme_domestic_candidates(text):
                     found.append(s)
     return found
 
+def _engine_context_sentences(text):
+    """뉴스 문맥에서 사업 사건·원인·수혜/피해를 설명할 문장을 추출한다.
+    단순 기업명 나열이나 인용문보다 실제 사건을 설명하는 문장을 우선한다.
+    """
+    t = _engine_clean(text)
+    parts = [x.strip(" -•") for x in re.split(r"(?<=[.!?。])\s+|\n+|;", t) if x.strip()]
+    return parts
+
+
+def _engine_context_for_stock(stock, text):
+    """특정 국내 종목과 가장 가까운 사업 문맥을 찾아 이유에 사용한다."""
+    parts = _engine_context_sentences(text)
+    sl = stock.lower()
+    scored = []
+    for part in parts:
+        low = part.lower()
+        score = 0
+        if sl in low:
+            score += 12
+        score += min(8, sum(1 for w in _DIRECT_BUSINESS_WORDS if w.lower() in low))
+        if any(w in low for w in ("수요", "공급", "투자", "증설", "양산", "출시", "상용화", "계약", "수주", "규제", "관세", "정책", "가격", "점유율")):
+            score += 4
+        if len(part) > 35:
+            score += 2
+        if score:
+            scored.append((score, part))
+    scored.sort(key=lambda x: (-x[0], -len(x[1])))
+    return scored[0][1][:220] if scored else ""
+
+
 def _engine_historical_company_score(stock, text):
-    """과거 급등/상한가 DB에서 해당 종목의 테마 주도 이력을 가점한다."""
+    """과거 급등/상한가 DB에서 현재 재료와 가까운 사례일수록 강하게 가점한다."""
     score = 0
     low = _engine_clean(text).lower()
     for row in _engine_historical_cache[-5000:]:
@@ -1568,23 +1598,51 @@ def _engine_historical_company_score(stock, text):
         if stock not in companies:
             continue
         old = str(row.get("text", "")).lower()
-        # 현재 재료와 유사한 사례면 추가 가점
-        ratio = difflib.SequenceMatcher(None,
-            re.sub(r"[^0-9a-zA-Z가-힣]", "", low)[:220],
-            re.sub(r"[^0-9a-zA-Z가-힣]", "", old)[:220]).ratio()
-        score += 4
+        clean_low = re.sub(r"[^0-9a-zA-Z가-힣]", "", low)[:300]
+        clean_old = re.sub(r"[^0-9a-zA-Z가-힣]", "", old)[:300]
+        ratio = difflib.SequenceMatcher(None, clean_low, clean_old).ratio()
+        score += 3
         if any(x in old for x in ("상한가", "폭등", "급등", "신고가")):
+            score += 5
+        if ratio >= 0.60:
+            score += 7
+        elif ratio >= 0.45:
             score += 4
-        if ratio >= 0.45:
-            score += 3
-    return min(score, 20)
+        # 같은 테마에서 반복적으로 주도했던 종목이면 추가 가점
+        if any(x in old for x in ("대장", "주도", "테마주")):
+            score += 2
+    return min(score, 30)
+
+
+def _engine_historical_detail(stock, text):
+    """가장 가까운 과거 사례의 제목/수치/링크를 관심종목 이유에 활용한다."""
+    low = _engine_clean(text).lower()
+    best = None
+    for row in _engine_historical_cache[-5000:]:
+        if not isinstance(row, dict) or stock not in (row.get("companies", []) or []):
+            continue
+        old = str(row.get("text", ""))
+        ratio = difflib.SequenceMatcher(
+            None,
+            re.sub(r"[^0-9a-zA-Z가-힣]", "", low)[:300],
+            re.sub(r"[^0-9a-zA-Z가-힣]", "", old.lower())[:300]
+        ).ratio()
+        surge = 1 if any(x in old.lower() for x in ("상한가", "폭등", "급등", "신고가")) else 0
+        value = ratio * 10 + surge * 6
+        if best is None or value > best[0]:
+            best = (value, ratio, row)
+    return best[1:] if best else (0, {})
+
 
 def _engine_domestic_watchlist_strict(item):
-    """모든 뉴스에서 국내 관심종목을 선별한다.
-    1) 국내 기업 직접 사건 우선
-    2) 국내 테마가 명확하면 과거 주도/급등 이력이 있는 종목 우선
-    3) 해외 주가 움직임 자체는 근거로 쓰지 않음
-    4) 근거가 약하면 억지로 3종목을 채우지 않음
+    """모든 뉴스에서 국내 시장 대응용 관심종목을 문맥 기반으로 선별한다.
+
+    우선순위:
+    1. 뉴스 핵심 사건과 직접 사업연관성이 있는 국내 상장기업
+    2. 직접 연결이 없으면 실제 재료가 형성한 국내 테마/밸류체인
+    3. 같은 테마에서 최근 강하게 움직였고 과거 상한가·급등·주도 이력이 많은 종목
+    4. 문맥상 왜 수혜/피해가 가능한지 설명할 수 없는 종목은 제외
+    5. 최대 3개만 선정하며 억지로 숫자를 채우지 않는다.
     """
     title = str(item.get("title", ""))
     extra = str(item.get("extra", ""))
@@ -1593,8 +1651,6 @@ def _engine_domestic_watchlist_strict(item):
     direct = _engine_strict_direct_domestic(text, companies)
     theme_candidates = _engine_theme_domestic_candidates(text)
 
-    # 제목에 해외기업만 있고 국내 사업 사건이 없는 경우에도 '원인/산업'으로만 연결.
-    # 해외기업명 자체는 후보에서 제거한다.
     candidates = []
     for s in direct + theme_candidates:
         if s in GLOBAL_COMPANY_KEYWORDS or s not in LISTED_COMPANY_ALIASES:
@@ -1602,37 +1658,86 @@ def _engine_domestic_watchlist_strict(item):
         if s not in candidates:
             candidates.append(s)
 
-    # 사업연관성 + 과거 급등/주도 이력을 점수화한다.
-    rows = []
-    low = text.lower()
-    for rank, stock in enumerate(candidates):
-        score = 0
-        relation = "직접 사업연관"
-        if stock in direct:
-            score += 30
-        else:
-            relation = "테마·밸류체인 연관"
-            score += 15
-        score += _engine_historical_company_score(stock, text)
-        # 실제 사업 키워드가 많을수록 가점
-        score += min(8, sum(1 for x in _DIRECT_BUSINESS_WORDS if x in low))
-        rows.append((score, stock, relation))
-    rows.sort(key=lambda x: (-x[0], candidates.index(x[1])))
-
-    # 근거가 약한 테마는 종목을 만들지 않는다. 최소한 산업 키워드가 있어야 한다.
-    if not rows:
+    if not candidates:
         return []
+
+    low = text.lower()
     theme = _engine_theme(text)
-    result = []
-    for idx, (score, stock, relation) in enumerate(rows[:3], 1):
-        hist = _engine_historical_company_score(stock, text)
-        if idx == 1:
-            why = f"{relation} + 과거 급등·테마 주도 이력{(' 확인' if hist else '')}"
-            label = "🥇 대장주"
+    rows = []
+    for stock in candidates:
+        direct_flag = stock in direct
+        relation = "직접 사업연관" if direct_flag else "테마·밸류체인 연관"
+        score = 50 if direct_flag else 25
+
+        # 뉴스 문맥에 실제 사업 사건이 존재하는지
+        context = _engine_context_for_stock(stock, text)
+        if context:
+            score += 12
+        score += min(8, sum(1 for x in _DIRECT_BUSINESS_WORDS if x.lower() in low))
+
+        hist_score = _engine_historical_company_score(stock, text)
+        score += hist_score
+
+        # 최근 이력 DB가 있으면 '최근 강하게 움직인 종목군'이라는 조건을 반영한다.
+        recent_rows = []
+        for row in _engine_historical_cache[-1500:]:
+            if isinstance(row, dict) and stock in (row.get("companies", []) or []):
+                recent_rows.append(row)
+        recent_surge = sum(1 for r in recent_rows[-20:] if any(x in str(r.get("text", "")).lower() for x in ("상한가", "급등", "폭등")))
+        score += min(12, recent_surge * 2)
+
+        # 직접 관련인데 문맥 설명이 불가능하면 제외한다.
+        if direct_flag and not context:
+            continue
+        # 테마 연결은 테마명과 실제 원인/산업 키워드가 동시에 있어야 한다.
+        if not direct_flag:
+            if not theme or not context:
+                continue
+            if not any(k in low for k in ("수요", "공급", "투자", "증설", "양산", "출시", "상용화", "계약", "수주", "규제", "관세", "정책", "가격", "점유율", "생산")):
+                continue
+
+        hratio, hrow = _engine_historical_detail(stock, text)
+        if direct_flag:
+            why = f"{context} → {stock}의 실제 사업·실적 연결성이 확인됨"
         else:
-            why = f"{relation} + 과거 테마 탄력·급등 이력{(' 확인' if hist else '')}"
-            label = f"{['🥈','🥉'][idx-2]} 관찰종목"
-        result.append({"name": stock, "label": label, "theme": theme, "reason": why, "score": score})
+            why = f"{context} → {theme} 국내 밸류체인에서 연결되며, 과거 급등·주도 이력이 상대적으로 강함"
+
+        if hratio >= 0.45 and hrow:
+            old_title = str(hrow.get("title") or hrow.get("text") or "").strip()
+            if old_title:
+                why += f" / 과거 유사 재료 사례: {old_title[:90]}"
+
+        rows.append({
+            "name": stock,
+            "score": score,
+            "relation": relation,
+            "theme": theme,
+            "reason": why,
+            "context": context,
+            "historical_ratio": hratio,
+            "historical": hrow,
+        })
+
+    rows.sort(key=lambda r: (-r["score"], -r["historical_ratio"]))
+    result = []
+    for idx, row in enumerate(rows[:3], 1):
+        if idx == 1:
+            label = "🥇 대장주"
+            # 대장주 선정 이유를 별도로 명확히 남긴다.
+            hist = row.get("historical") or {}
+            hist_text = str(hist.get("title") or hist.get("text") or "")[:80]
+            if row["relation"] == "직접 사업연관":
+                reason = f"{row['reason']} / 대장주 선정: 직접 사업연관 + 과거 상한가·급등·테마 주도 이력"
+            else:
+                reason = f"{row['reason']} / 대장주 선정: 동일 테마 내 최근 탄력 + 과거 상한가·급등·주도 이력"
+            if hist_text and row.get("historical_ratio", 0) >= 0.45:
+                reason += f" / 과거 사례 근거 확인"
+        else:
+            label = "🥈 관찰종목" if idx == 2 else "🥉 관찰종목"
+            reason = row["reason"]
+        row["label"] = label
+        row["reason"] = reason[:420]
+        result.append(row)
     return result
 
 def _engine_classify(source, title, extra=""):
