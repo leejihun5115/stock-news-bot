@@ -999,6 +999,11 @@ US_RSS_URLS = [
     _google_news_rss_url("미국증시 나스닥 다우 S&P500 반도체", korean=True),
     _google_news_rss_url("미국 연준 금리 FOMC 인플레이션", korean=True),
     _google_news_rss_url("테슬라 엔비디아 마이크론 애플 아마존 급등 급락", korean=True),
+    _google_news_rss_url('("breaking" OR "exclusive" OR "just in" OR "breaking news") AND ("US stocks" OR Nasdaq OR S&P OR Dow) AND (surge OR soar OR plunge OR crash OR rally)'),
+    _google_news_rss_url('("breaking" OR "exclusive") AND (Nvidia OR Micron OR Tesla OR Apple OR AMD OR Broadcom OR TSMC) AND (earnings OR guidance OR contract OR investment OR production OR approval OR chip)'),
+    _google_news_rss_url('("breaking" OR "exclusive") AND (Fed OR FOMC OR CPI OR jobs OR tariffs OR oil OR Iran OR China) AND (market OR stocks)'),
+    _google_news_rss_url('미국 특징주 속보 단독 뉴욕증시 급등 급락 폭등 폭락', korean=True),
+    _google_news_rss_url('미국 특징주 엔비디아 마이크론 테슬라 애플 AMD 브로드컴 TSMC', korean=True),
 ]
 
 NAVER_SEARCH_QUERIES = GLOBAL_AND_DOMESTIC_GIANTS + NAVER_EXTRA_THEME_QUERIES
@@ -1168,6 +1173,10 @@ def _engine_is_us_priority_news(title, extra=""):
         "실적 급증", "실적 급감", "공급계약", "대규모 수주", "초대형 계약",
     ]
     if any(k in low for k in high_impact):
+        if movement_only:
+            pct = [float(x) for x in re.findall(r"(?<![\d.])(\d+(?:\.\d+)?)\s*%", text)]
+            if pct and max(pct) < 3.0 and not any(k in low for k in ["폭등","폭락","crash","soar","plunge","breaking","exclusive"]):
+                return False
         return True
 
     # 글로벌 핵심 기업의 판도를 바꾸는 발표만 보존한다. 단순 주가 등락은 제외.
@@ -1198,6 +1207,17 @@ def _engine_is_us_priority_news(title, extra=""):
         return True
     return False
 
+
+def _engine_us_feature_or_breaking(item):
+    """미국 특징주/속보/단독 여부. 단순 등락 기사는 False."""
+    text = _engine_clean(item.get("title", "") + " " + item.get("extra", "")).lower()
+    breaking = ["속보","단독","특징주","breaking","exclusive","just in","breaking news"]
+    event = ["실적","earnings","guidance","contract","deal","investment","capex","production",
+             "supply","approval","fda","merger","acquisition","tariff","sanction","fed","fomc",
+             "cpi","jobs","payroll","oil","iran","china","대규모 투자","대형 계약","수주",
+             "승인","인수","합병","관세","제재"]
+    move = ["급등","급락","폭등","폭락","surge","soar","plunge","crash"]
+    return any(k in text for k in breaking) and (any(k in text for k in event) or any(k in text for k in move))
 
 def _engine_confidence_state(item):
     """미확인/확인/업그레이드 구분. 소문·전망은 확인 전 상태로 표시한다."""
@@ -1947,7 +1967,15 @@ def _engine_format_message(item):
         # 뉴스에서 확인되는 실제 원인·핵심 재료를 넣는다.
         reason_text = _engine_market_reason(item.get("title", "") + " " + item.get("extra", ""))
         if category in ("🌐", "🌐시황") or str(item.get("source", "")) == "Google-US":
-            strong_reason = reason_text
+            raw = _engine_clean(item.get("title", "") + " " + item.get("extra", ""))
+            candidate = raw.split(" - ", 1)[0].strip()
+            low_raw = raw.lower()
+            for marker in ("때문", "여파", "영향", "따라", "소식", "발표", "결정", "with ", "after ", "amid ", "on "):
+                idx = low_raw.find(marker.lower())
+                if idx >= 0:
+                    candidate = raw[max(0, idx-35):idx+90].strip()
+                    break
+            strong_reason = candidate[:150] if candidate else reason_text[:150]
         elif strong_hits:
             # 국내/산업 뉴스도 핵심 키워드만 나열하지 않고 문맥을 살려 설명한다.
             strong_reason = ", ".join(strong_hits[:3])
