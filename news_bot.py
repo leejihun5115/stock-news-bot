@@ -271,12 +271,12 @@ NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "").strip()
 NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
 NAVER_APIHUB_CLIENT_ID = os.environ.get("NAVER_APIHUB_CLIENT_ID", "").strip()
 NAVER_APIHUB_CLIENT_SECRET = os.environ.get("NAVER_APIHUB_CLIENT_SECRET", "").strip()
-NAVER_API_MODE = os.environ.get("NAVER_API_MODE", "auto").strip().lower()
+NAVER_API_MODE = "hub"  # NAVER API HUB만 사용; legacy 설정값은 무시
 NAVER_APIHUB_BASE_URL = "https://naverapihub.apigw.ntruss.com"
 # NAVER API HUB (2026-07-31 이후 신규 Search API 운영 기준)
 NAVER_APIHUB_CLIENT_ID = os.environ.get("NAVER_APIHUB_CLIENT_ID", "").strip()
 NAVER_APIHUB_CLIENT_SECRET = os.environ.get("NAVER_APIHUB_CLIENT_SECRET", "").strip()
-NAVER_API_MODE = os.environ.get("NAVER_API_MODE", "auto").strip().lower()
+NAVER_API_MODE = "hub"  # NAVER API HUB만 사용; legacy 설정값은 무시
 NAVER_APIHUB_BASE_URL = "https://naverapihub.apigw.ntruss.com"
 
 def _startup_env_flag(name, default=True):
@@ -2755,46 +2755,29 @@ def _naver_credentials():
     운영환경에서 실수로 HUB 키를 기존 NAVER_CLIENT_ID/SECRET 변수에 넣어도
     HUB로 먼저 시도할 수 있도록 두 변수명을 모두 후보로 인정한다.
     """
-    hub_id = NAVER_APIHUB_CLIENT_ID or NAVER_CLIENT_ID
-    hub_secret = NAVER_APIHUB_CLIENT_SECRET or NAVER_CLIENT_SECRET
-    return hub_id.strip(), hub_secret.strip()
+    # 한쪽은 HUB, 다른 한쪽은 legacy 값인 혼합 조합을 절대 만들지 않는다.
+    # HUB 전용 쌍이 있으면 그것만 사용하고, 없을 때만 동일한 NAVER_CLIENT_* 쌍을 HUB 키로 간주한다.
+    if NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET:
+        return NAVER_APIHUB_CLIENT_ID.strip(), NAVER_APIHUB_CLIENT_SECRET.strip()
+    if NAVER_CLIENT_ID and NAVER_CLIENT_SECRET:
+        return NAVER_CLIENT_ID.strip(), NAVER_CLIENT_SECRET.strip()
+    return "", ""
 
 def _naver_request_headers(mode=None):
-    """NAVER API HUB 우선 + legacy는 명시적으로 필요할 때만 사용."""
-    global _NAVER_RUNTIME_MODE
-    requested = (mode or NAVER_API_MODE or "auto").strip().lower()
+    """NAVER API HUB 인증만 사용한다. 기존 Developer Center 방식은 완전히 차단."""
     hub_id, hub_secret = _naver_credentials()
-    hub_ready = bool(hub_id and hub_secret)
-
-    # 운영환경에서 NAVER_API_MODE=legacy가 남아 있어도 HUB 자격증명이 존재하면
-    # 잘못된 legacy 고정으로 401이 반복되는 것을 방지한다.
-    if requested in ("legacy", "classic") and hub_ready and (NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET):
-        requested = "hub"
-
-    if _NAVER_RUNTIME_MODE in ("hub", "legacy") and mode is None:
-        requested = _NAVER_RUNTIME_MODE
-
-    if requested in ("hub", "auto") and hub_ready:
-        return {
-            "X-NCP-APIGW-API-KEY-ID": hub_id,
-            "X-NCP-APIGW-API-KEY": hub_secret,
-            "Accept": "application/json",
-            "User-Agent": USER_AGENT,
-        }, f"{NAVER_APIHUB_BASE_URL}/search/v1/news", "hub"
-
-    if requested in ("legacy", "auto") and NAVER_CLIENT_ID and NAVER_CLIENT_SECRET:
-        return {
-            "X-Naver-Client-Id": NAVER_CLIENT_ID,
-            "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
-            "Accept": "application/json",
-            "User-Agent": USER_AGENT,
-        }, "https://openapi.naver.com/v1/search/news.json", "legacy"
-    return None, None, "none"
+    if not hub_id or not hub_secret:
+        return None, None, "hub-missing-credentials"
+    return {
+        "X-NCP-APIGW-API-KEY-ID": hub_id,
+        "X-NCP-APIGW-API-KEY": hub_secret,
+        "Accept": "application/json",
+        "User-Agent": USER_AGENT,
+    }, f"{NAVER_APIHUB_BASE_URL}/search/v1/news", "hub"
 
 def _naver_mark_runtime_mode(mode):
     global _NAVER_RUNTIME_MODE
-    if mode in ("hub", "legacy"):
-        _NAVER_RUNTIME_MODE = mode
+    _NAVER_RUNTIME_MODE = "hub"
 
 
 def _naver_extract_items(response):
@@ -2807,7 +2790,7 @@ def _naver_extract_items(response):
 
 def _naver_api_status_log(status, mode):
     if status == 401:
-        _engine_log("error", "[네이버 인증 실패] mode=%s | Client ID/Secret 또는 API 권한을 확인하세요.", mode)
+        _engine_log("error", "[네이버 인증 실패] NAVER API HUB | Client ID/Secret가 HUB 발급값인지, Application에 Search API 권한이 있는지 확인하세요.")
     elif status == 403:
         _engine_log("error", "[네이버 호출 거부] mode=%s | HTTPS/요청경로/API 권한을 확인하세요.", mode)
     elif status == 429:
