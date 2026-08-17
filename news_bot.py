@@ -189,6 +189,22 @@
   4. 텔레그램 채널 메시지 전송 시 본문의 초록색 네모 기호 제거 및 원문 링크 버튼에 연두색 체크 표시(✅) 적용.
 """
 
+# ============================================================
+# 이지훈 | 2026-08-18 | 최종 통합 기준파일 수정본
+# ============================================================
+# 원칙: 이 파일을 기준으로 기존 구조/기능을 보존하고 요청된 기능만 수정.
+# 추가 통합:
+# - 네이버 뉴스: NAVER API HUB 우선 + 기존 Search API 호환
+# - 유튜브: 채널 핸들 -> 실제 channel_id 자동 해석/캐시/재시도
+# - 미국장: 정규장 개장~마감까지 30분마다 정기 브리핑
+# - 미장 브리핑: 시간만 표시(개장 30분 문구 제거)
+# - 주요 지수/종목/ADR: 🔺상승 / ▼하락 + 등락률
+# - 미국뉴스에서 실제 국내 관심종목으로 연결될 때만 🇰🇷 표시
+# - 기존 대장주/관심종목/공시/재무/일정/최근1시간/과거사례 로직 보존
+# ============================================================
+
+
+
 import sys
 import time
 import datetime
@@ -251,9 +267,18 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 CHAT_ID_OVERSEAS = os.environ.get("CHAT_ID_OVERSEAS", "") or CHAT_ID
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
-NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "M_8dz3_iN2uEOeGbBwqZ")
-NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "VpqfGQgvV4")
-NAVER_API_MODE = (os.environ.get("NAVER_API_MODE") or "hub").strip().lower()
+NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "").strip()
+NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+NAVER_APIHUB_CLIENT_ID = os.environ.get("NAVER_APIHUB_CLIENT_ID", "").strip()
+NAVER_APIHUB_CLIENT_SECRET = os.environ.get("NAVER_APIHUB_CLIENT_SECRET", "").strip()
+NAVER_API_MODE = os.environ.get("NAVER_API_MODE", "auto").strip().lower()
+NAVER_APIHUB_BASE_URL = "https://naverapihub.apigw.ntruss.com"
+# NAVER API HUB (2026-07-31 이후 신규 Search API 운영 기준)
+NAVER_APIHUB_CLIENT_ID = os.environ.get("NAVER_APIHUB_CLIENT_ID", "").strip()
+NAVER_APIHUB_CLIENT_SECRET = os.environ.get("NAVER_APIHUB_CLIENT_SECRET", "").strip()
+NAVER_API_MODE = os.environ.get("NAVER_API_MODE", "auto").strip().lower()
+NAVER_APIHUB_BASE_URL = "https://naverapihub.apigw.ntruss.com"
+
 def _startup_env_flag(name, default=True):
     val = os.environ.get(name)
     return default if val is None else val.strip().lower() in ("true", "1", "yes", "on")
@@ -369,8 +394,8 @@ sys.excepthook = _log_uncaught_exception
 # 시작 시점에 환경 정보를 남겨 Render 설정 문제도 바로 확인할 수 있게 한다.
 _logger.info("============================================================")
 _logger.info("[뉴스봇 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
-_logger.info("[환경] Render=%s | NAVER=%s | NAVER_MODE=%s | DART=%s | RSS=%s | 미국뉴스=%s | 텔레그램=%s | 유튜브=%s",
-             bool(os.environ.get("PORT")), bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET), NAVER_API_MODE,
+_logger.info("[환경] Render=%s | NAVER=%s(%s) | DART=%s | RSS=%s | 미국뉴스=%s | 텔레그램=%s | 유튜브=%s",
+             bool(os.environ.get("PORT")), bool((NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET) or (NAVER_CLIENT_ID and NAVER_CLIENT_SECRET)), NAVER_API_MODE,
              bool(DART_API_KEY), ENABLE_DOMESTIC_NEWS, ENABLE_US_NEWS,
              ENABLE_TELEGRAM_CHANNELS, ENABLE_YOUTUBE)
 _logger.info("[정상] 국내뉴스=시장반영형 | 텔레그램/유튜브=최근60분 기본 | 강한 마감후·휴무 재료만 예외")
@@ -530,9 +555,8 @@ if _SOLO_MODES_VALID:
             ENABLE_YOUTUBE = True
 
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
-NAVER_CLIENT_ID = (os.environ.get("NAVER_APIHUB_CLIENT_ID") or os.environ.get("NAVER_CLIENT_ID") or os.environ.get("NAVER_SEARCH_CLIENT_ID") or "").strip().strip("\'\"")
-NAVER_CLIENT_SECRET = (os.environ.get("NAVER_APIHUB_CLIENT_SECRET") or os.environ.get("NAVER_CLIENT_SECRET") or os.environ.get("NAVER_SEARCH_CLIENT_SECRET") or "").strip().strip("\'\"")
-NAVER_API_MODE = (os.environ.get("NAVER_API_MODE") or "hub").strip().lower()
+NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
+NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
 
 if not BOT_TOKEN or not CHAT_ID:
     raise SystemExit(
@@ -2722,37 +2746,54 @@ def _engine_run_google_and_domestic():
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
 
 
-def _naver_news_api_config():
-    """NAVER Search API 인증/엔드포인트를 중앙에서 관리한다.
-    2026-07-31 이후 신규 사용은 NAVER API HUB 기준이며, 기존 개발자센터 키는
-    기존 신청자에 한해 2027-06-30까지 유예된다.
-    """
-    mode = NAVER_API_MODE
-    if mode in ("legacy", "developer", "developers"):
-        return (
-            "https://openapi.naver.com/v1/search/news.json",
-            {
-                "X-Naver-Client-Id": NAVER_CLIENT_ID,
-                "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
-            },
-            "legacy",
-        )
-    return (
-        "https://naverapihub.apigw.ntruss.com/search/v1/news",
-        {
-            "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
-            "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET,
-        },
-        "hub",
-    )
+def _naver_request_headers():
+    """NAVER API HUB를 우선 사용하고, 기존 개발자센터 Search API도 호환한다."""
+    hub_ready = bool(NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET)
+    if NAVER_API_MODE == "hub" and not hub_ready:
+        return None, None, "hub"
+    if NAVER_API_MODE in ("hub", "auto") and hub_ready:
+        return {
+            "X-NCP-APIGW-API-KEY-ID": NAVER_APIHUB_CLIENT_ID,
+            "X-NCP-APIGW-API-KEY": NAVER_APIHUB_CLIENT_SECRET,
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        }, f"{NAVER_APIHUB_BASE_URL}/search/v1/news", "hub"
+    if NAVER_CLIENT_ID and NAVER_CLIENT_SECRET:
+        return {
+            "X-Naver-Client-Id": NAVER_CLIENT_ID,
+            "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        }, "https://openapi.naver.com/v1/search/news.json", "legacy"
+    return None, None, "none"
+
+
+def _naver_extract_items(response):
+    try:
+        data = response.json()
+    except Exception:
+        return []
+    return data.get("items", []) or []
+
+
+def _naver_api_status_log(status, mode):
+    if status == 401:
+        _engine_log("error", "[네이버 인증 실패] mode=%s | Client ID/Secret 또는 API 권한을 확인하세요.", mode)
+    elif status == 403:
+        _engine_log("error", "[네이버 호출 거부] mode=%s | HTTPS/요청경로/API 권한을 확인하세요.", mode)
+    elif status == 429:
+        _engine_log("error", "[네이버 호출한도] mode=%s | 일일 호출한도에 도달했습니다.", mode)
+    else:
+        _engine_log("error", "[네이버 오류] mode=%s | HTTP=%s", mode, status)
 
 
 def _engine_run_naver():
     if not ENABLE_NAVER_NEWS:
         _engine_log("warning", "[네이버] ENABLE_NAVER_NEWS=OFF")
         return
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        _engine_log("error", "[네이버 실패] NAVER_CLIENT_ID / NAVER_CLIENT_SECRET가 없습니다.")
+    headers, endpoint, api_mode = _naver_request_headers()
+    if not headers:
+        _engine_log("error", "[네이버 실패] 인증정보가 없습니다. HUB는 NAVER_APIHUB_CLIENT_ID/SECRET, 기존 API는 NAVER_CLIENT_ID/SECRET를 설정하세요.")
         return
     # 모든 검색어를 한 번에 호출하면 API 제한에 걸릴 수 있으므로 1분마다 순환한다.
     queries = list(dict.fromkeys(NAVER_SEARCH_QUERIES))
@@ -2762,21 +2803,17 @@ def _engine_run_naver():
     selected = [queries[(start+i) % len(queries)] for i in range(batch_size)] if queries else []
     _engine_run_naver.cycle = cycle + 1
     _engine_log("info", "[네이버] 검색 시작 전체검색어=%d | 이번주기=%d | offset=%d", len(queries), len(selected), start)
-    api_url, headers, api_mode = _naver_news_api_config()
-    _engine_log("info", "[네이버 API] mode=%s | endpoint=%s", api_mode, api_url)
     total = 0
     api_ok = True
     for q in selected:
         try:
-            params = {"query": q, "display": 20, "start": 1, "sort": "date", "format": "json"}
-            r = requests.get(api_url, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
+            params = {"query": q, "display": 20, "start": 1, "sort": "date", "format": "json"} if api_mode == "hub" else {"query": q, "display": 20, "start": 1, "sort": "date"}
+            r = requests.get(endpoint, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
             if not r.ok:
                 api_ok = False
+                _naver_api_status_log(r.status_code, api_mode)
                 if r.status_code == 401:
-                    api_ok = False
-                    _engine_log("error", "[네이버 오류] HTTP=401 | NAVER API HUB Client ID/Secret 또는 Application의 Search API 권한을 확인하세요 | mode=%s", api_mode)
                     break
-                _engine_log("error", "[네이버 오류] HTTP=%s | 응답을 확인하세요", r.status_code)
                 continue
             data = r.json()
             items = data.get("items", []) or []
@@ -2793,8 +2830,9 @@ def _engine_run_naver():
 
 def _engine_run_keyword_combinations():
     # 기업명 + 핵심 테마 조합을 실제 네이버 API 검색으로 확인한다.
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        _engine_log("warning", "[키워드 조합] 네이버 API 키가 없어 조합검색을 건너뜁니다.")
+    headers, endpoint, api_mode = _naver_request_headers()
+    if not headers:
+        _engine_log("warning", "[키워드 조합] 네이버 API 인증정보가 없어 조합검색을 건너뜁니다.")
         return
     companies = list(dict.fromkeys(GLOBAL_AND_DOMESTIC_GIANTS))
     themes = ["HBM", "반도체", "AI", "로봇", "방산", "원전", "조선", "바이오", "이차전지", "ESS"]
@@ -2802,14 +2840,12 @@ def _engine_run_keyword_combinations():
     cycle = getattr(_engine_run_keyword_combinations, "cycle", 0)
     combos = [(c, themes[(cycle+i) % len(themes)]) for i, c in enumerate(companies[:10])]
     _engine_run_keyword_combinations.cycle = cycle + 1
-    api_url, headers, api_mode = _naver_news_api_config()
-    _engine_log("info", "[네이버 API] 키워드조합 mode=%s | endpoint=%s", api_mode, api_url)
-    _engine_log("info", "[키워드 조합 시작] 이번주기=%d건", len(combos))
+    _engine_log("info", "[키워드 조합 시작] 이번주기=%d건 | NAVER_MODE=%s", len(combos), api_mode)
     for company, theme in combos:
         q = f'"{company}" {theme}'
         try:
-            params = {"query": q, "display": 10, "start": 1, "sort": "date", "format": "json"}
-            r = requests.get(api_url, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
+            params = {"query": q, "display": 10, "start": 1, "sort": "date", "format": "json"} if api_mode == "hub" else {"query": q, "display": 10, "start": 1, "sort": "date"}
+            r = requests.get(endpoint, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
             if not r.ok:
                 _engine_log("error", "[실패] 키워드조합 | 원인=%s", r.reason)
                 continue
@@ -2890,15 +2926,70 @@ def _engine_run_telegram_channels():
     _engine_log("info", "[텔레그램] 확인 완료 | 후보=%d건", total)
 
 
+_YOUTUBE_CHANNEL_ID_CACHE = {}
+_YOUTUBE_CHANNEL_ID_CACHE_TS = {}
+
+
 def _engine_youtube_channel_id(handle):
-    h = str(handle or "").strip().lstrip("@").strip()
-    if not h: return ""
-    for url in (f"https://www.youtube.com/@{h}", f"https://www.youtube.com/c/{h}", f"https://www.youtube.com/user/{h}"):
+    """핸들/기존 ID를 실제 UC channel_id로 해석. HTML 구조 변화에 대비해 여러 단서를 사용."""
+    h = str(handle or "").strip()
+    if not h:
+        return ""
+    # 이미 UC channel ID인 경우 그대로 사용
+    if re.fullmatch(r"UC[A-Za-z0-9_-]{20,}", h):
+        return h
+    key = h.lstrip("@").strip()
+    now_ts = time.time()
+    cached = _YOUTUBE_CHANNEL_ID_CACHE.get(key)
+    if cached and now_ts - _YOUTUBE_CHANNEL_ID_CACHE_TS.get(key, 0) < 24*3600:
+        return cached
+
+    urls = (
+        f"https://www.youtube.com/@{key}",
+        f"https://www.youtube.com/@{key}/videos",
+        f"https://www.youtube.com/c/{key}",
+        f"https://www.youtube.com/user/{key}",
+    )
+    patterns = [
+        r'"channelId":"(UC[A-Za-z0-9_-]{20,})"',
+        r'"externalId":"(UC[A-Za-z0-9_-]{20,})"',
+        r'"browseId":"(UC[A-Za-z0-9_-]{20,})"',
+        r'<meta[^>]+itemprop=["\']channelId["\'][^>]+content=["\'](UC[A-Za-z0-9_-]{20,})',
+        r'<link[^>]+itemprop=["\']url["\'][^>]+href=["\']https://www\.youtube\.com/channel/(UC[A-Za-z0-9_-]{20,})',
+        r'https://www\.youtube\.com/channel/(UC[A-Za-z0-9_-]{20,})',
+    ]
+    for url in urls:
         try:
-            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT)
-            if not r.ok: continue
-            m = re.search(r'"channelId":"([A-Za-z0-9_-]{10,})"', r.text)
-            if m: return m.group(1)
+            r = requests.get(
+                url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                },
+                timeout=ENGINE_HTTP_TIMEOUT,
+                allow_redirects=True,
+            )
+            if not r.ok:
+                continue
+            body = r.text or ""
+            for pat in patterns:
+                m = re.search(pat, body, flags=re.I)
+                if m:
+                    cid = m.group(1)
+                    _YOUTUBE_CHANNEL_ID_CACHE[key] = cid
+                    _YOUTUBE_CHANNEL_ID_CACHE_TS[key] = now_ts
+                    return cid
+            # canonical URL/og:url 보강
+            soup = BeautifulSoup(body, "html.parser")
+            for tag in soup.find_all(["link", "meta"]):
+                val = tag.get("href") or tag.get("content") or ""
+                m = re.search(r"/channel/(UC[A-Za-z0-9_-]{20,})", str(val))
+                if m:
+                    cid = m.group(1)
+                    _YOUTUBE_CHANNEL_ID_CACHE[key] = cid
+                    _YOUTUBE_CHANNEL_ID_CACHE_TS[key] = now_ts
+                    return cid
         except Exception:
             continue
     return ""
@@ -2972,6 +3063,7 @@ US_BRIEFING_WATCHLIST = {
     "^RUT": ("러셀2000", "지수"),
     "^SOX": ("필라델피아반도체", "반도체"),
     "^VIX": ("VIX", "변동성"),
+    "URTH": ("MSCI World", "MSCI"),
     # 매크로
     "USDKRW=X": ("원/달러", "환율"),
     "CL=F": ("WTI", "에너지"),
@@ -3142,14 +3234,14 @@ def _us_open_briefing(snapshot, et):
     macro = ["USDKRW=X", "CL=F", "GC=F"]
     lines = [
         "<b>🇺🇸 [미장 브리핑]</b>",
-        f"🕐 개장 30분 · {et.strftime('%H:%M ET')}",
+        f"🕐 {et.strftime('%H:%M ET')}",
         "",
         "<b>📊 주요 지수</b>",
     ]
     for s in indices:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {q['name']} {_us_format_pct(q['change_pct'])}")
+            lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
     movers = []
     for s, q in snapshot.items():
         if s in indices or s in macro:
@@ -3186,6 +3278,14 @@ def _us_open_briefing(snapshot, et):
             lines.append(f"• {html.escape(q.get('name', s))} {_us_direction(pct)} {_us_format_pct(pct)}")
     if not found_adr:
         lines.append("• ADR 시세 확인불가")
+
+    lines += ["", "<b>📊 MSCI</b>"]
+    msci_quote = snapshot.get("URTH")
+    if msci_quote:
+        pct = msci_quote.get("change_pct")
+        lines.append(f"• {html.escape(msci_quote.get('name', 'MSCI World'))} {_us_direction(pct)} {_us_format_pct(pct)}")
+    else:
+        lines.append("• MSCI 시세 확인불가")
 
     # 신규 MSCI 재료가 있으면 원문 링크까지, 없으면 확인 결과를 명시한다.
     msci = {}
@@ -3284,6 +3384,7 @@ def _us_intraday_briefing(snapshot, events, et):
 
 
 def _engine_us_market_monitor():
+    """미국 정규장 동안 30분 슬롯마다 브리핑. 첫 슬롯은 10:00 ET."""
     global _US_BRIEFING_LAST_RUN_DATE, _US_BRIEFING_LAST_OPEN_SENT
     global _US_BRIEFING_LAST_INTRADAY_SENT, _US_BRIEFING_LAST_SNAPSHOT, _US_BRIEFING_LAST_POLL
     if not ENABLE_US_INTRADAY_BRIEFING or ZoneInfo is None:
@@ -3291,34 +3392,37 @@ def _engine_us_market_monitor():
     et = _us_market_now_et()
     if et is None or not _us_market_session_open(et):
         return
+
     now = _now_kst()
-    # 1분 엔진 안에서 실제 시세 조회는 5분마다만 수행.
+    # 시세는 5분마다 조회하되, 브리핑은 30분 슬롯마다 정확히 1회.
     if _US_BRIEFING_LAST_POLL is not None:
         if (now - _US_BRIEFING_LAST_POLL).total_seconds() < US_INTRADAY_POLL_MIN * 60:
             return
     _US_BRIEFING_LAST_POLL = now
+
     snapshot = _us_briefing_fetch_all()
     if not snapshot:
         _engine_log("warning", "[미장브리핑] 실시간 시세를 가져오지 못함")
         return
 
-    open_due = et.time() >= (datetime.datetime.combine(et.date(), datetime.time(9,30)) + datetime.timedelta(minutes=US_OPEN_BRIEF_DELAY_MIN)).time()
-    if _US_BRIEFING_LAST_OPEN_SENT != et.date() and open_due:
-        msg = _us_open_briefing(snapshot, et)
-        if msg and _engine_send_telegram(msg):
-            _US_BRIEFING_LAST_OPEN_SENT = et.date()
-            _engine_log("info", "[미장브리핑] 개장 30분 브리핑 송출")
+    # 09:30 개장 후 30분이 지난 10:00 ET부터 30분 단위.
+    minutes_from_open = int((et.hour * 60 + et.minute) - (9 * 60 + 30))
+    if minutes_from_open < US_OPEN_BRIEF_DELAY_MIN:
         _US_BRIEFING_LAST_SNAPSHOT = snapshot
         return
 
-    events = _us_intraday_events(snapshot)
-    if events:
-        # 동일한 변동 이벤트의 도배 방지. 단, 20분 후에도 구조가 유지되면 재브리핑 가능.
-        if _US_BRIEFING_LAST_INTRADAY_SENT is None or (now - _US_BRIEFING_LAST_INTRADAY_SENT).total_seconds() >= US_INTRADAY_COOLDOWN_MIN * 60:
-            msg = _us_intraday_briefing(snapshot, events, et)
-            if msg and _engine_send_telegram(msg):
-                _US_BRIEFING_LAST_INTRADAY_SENT = now
-                _engine_log("info", "[미장브리핑] 장중 변동 브리핑 송출 | 이벤트=%d", len(events))
+    slot_index = minutes_from_open // 30
+    slot_key = f"{et.date().isoformat()}-{slot_index}"
+    if getattr(_engine_us_market_monitor, "_last_slot_key", None) == slot_key:
+        _US_BRIEFING_LAST_SNAPSHOT = snapshot
+        return
+
+    msg = _us_open_briefing(snapshot, et)
+    if msg and _engine_send_telegram(msg):
+        _engine_us_market_monitor._last_slot_key = slot_key
+        _US_BRIEFING_LAST_OPEN_SENT = et.date()
+        _US_BRIEFING_LAST_INTRADAY_SENT = now
+        _engine_log("info", "[미장브리핑] 30분 정기 브리핑 송출 | slot=%s", slot_key)
     _US_BRIEFING_LAST_SNAPSHOT = snapshot
 
 
@@ -3500,6 +3604,14 @@ def _us_close_briefing(snapshot, et):
             lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
     if not found:
         lines.append("• ADR 시세 확인불가")
+
+    lines += ["", "<b>📊 MSCI</b>"]
+    msci_quote = snapshot.get("URTH")
+    if msci_quote:
+        pct = msci_quote.get("change_pct")
+        lines.append(f"• {html.escape(msci_quote.get('name', 'MSCI World'))} {_us_direction(pct)} {_us_format_pct(pct)}")
+    else:
+        lines.append("• MSCI 시세 확인불가")
 
     msci = {}
     with _US_BRIEFING_LOCK:
@@ -3688,8 +3800,8 @@ if __name__ == "__main__":
         schedule_bootstrap_thread.start()
 
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
-        _engine_log("info", "[BOOT] NAVER=%s | NAVER_MODE=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
-                    bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET), NAVER_API_MODE,
+        _engine_log("info", "[BOOT] NAVER=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
+                    bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET),
                     bool(DART_API_KEY),
                     ENABLE_DOMESTIC_NEWS,
                     ENABLE_US_NEWS,
