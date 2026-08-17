@@ -271,6 +271,64 @@ ENABLE_YOUTUBE = _startup_env_flag("ENABLE_YOUTUBE")
 # ============================================================
 import logging
 from logging import FileHandler
+
+# ============================================================
+# [NAVER AUTH ROOT FIX]
+# 네이버 뉴스 API 401의 원인을 요청 재시도로 덮지 않고,
+# 실행 시작 전에 자격증명 로딩/정규화/검증을 확실하게 한다.
+# - OS 환경변수 우선
+# - 프로젝트 .env 자동 로딩(외부 패키지 없이)
+# - NAVER_SEARCH_* 별칭도 지원
+# - 따옴표/공백/CRLF 제거
+# - 키가 없거나 placeholder이면 API 호출 자체를 하지 않고 원인을 명확히 표시
+# ============================================================
+def _load_simple_dotenv(path):
+    try:
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            return
+        for raw in p.read_text(encoding="utf-8-sig").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip("\"'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+    except Exception:
+        pass
+
+for _env_file in (".env", os.path.join(os.getcwd(), ".env")):
+    _load_simple_dotenv(_env_file)
+
+
+def _clean_secret(value):
+    return str(value or "").strip().strip("\"'").replace("\r", "").replace("\n", "")
+
+
+def _naver_secret(name, *aliases):
+    for key in (name,) + aliases:
+        value = _clean_secret(os.environ.get(key, ""))
+        if value:
+            return value
+    return ""
+
+NAVER_CLIENT_ID = _naver_secret(
+    "NAVER_CLIENT_ID", "NAVER_SEARCH_CLIENT_ID", "X_NAVER_CLIENT_ID"
+)
+NAVER_CLIENT_SECRET = _naver_secret(
+    "NAVER_CLIENT_SECRET", "NAVER_SEARCH_CLIENT_SECRET", "X_NAVER_CLIENT_SECRET"
+)
+
+_NAVER_PLACEHOLDERS = {
+    "your_client_id", "your_client_secret", "client_id", "client_secret",
+    "naver_client_id", "naver_client_secret", "",
+}
+NAVER_AUTH_CONFIGURED = (
+    NAVER_CLIENT_ID.lower() not in _NAVER_PLACEHOLDERS
+    and NAVER_CLIENT_SECRET.lower() not in _NAVER_PLACEHOLDERS
+)
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 try:
     from zoneinfo import ZoneInfo
@@ -371,7 +429,7 @@ sys.excepthook = _log_uncaught_exception
 _logger.info("============================================================")
 _logger.info("[뉴스봇 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
 _logger.info("[환경] Render=%s | NAVER=%s | DART=%s | RSS=%s | 미국뉴스=%s | 텔레그램=%s | 유튜브=%s",
-             bool(os.environ.get("PORT")), bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET),
+             bool(os.environ.get("PORT")), NAVER_AUTH_CONFIGURED,
              bool(DART_API_KEY), ENABLE_DOMESTIC_NEWS, ENABLE_US_NEWS,
              ENABLE_TELEGRAM_CHANNELS, ENABLE_YOUTUBE)
 _logger.info("[정상] 국내뉴스=시장반영형 | 텔레그램/유튜브=최근60분 기본 | 강한 마감후·휴무 재료만 예외")
@@ -531,8 +589,6 @@ if _SOLO_MODES_VALID:
             ENABLE_YOUTUBE = True
 
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
-NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
-NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
 
 if not BOT_TOKEN or not CHAT_ID:
     raise SystemExit(
@@ -3096,8 +3152,8 @@ def _engine_run_naver():
     if not ENABLE_NAVER_NEWS:
         _engine_log("warning", "[네이버] ENABLE_NAVER_NEWS=OFF")
         return
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        _engine_log("error", "[네이버 실패] NAVER_CLIENT_ID / NAVER_CLIENT_SECRET가 없습니다.")
+    if not NAVER_AUTH_CONFIGURED:
+        _engine_log("error", "[네이버 실패] 인증정보 미설정 | NAVER_CLIENT_ID/NAVER_CLIENT_SECRET 또는 NAVER_SEARCH_CLIENT_ID/NAVER_SEARCH_CLIENT_SECRET를 실행환경에 설정하세요.")
         return
     # 모든 검색어를 한 번에 호출하면 API 제한에 걸릴 수 있으므로 1분마다 순환한다.
     queries = list(dict.fromkeys(NAVER_SEARCH_QUERIES))
@@ -3116,9 +3172,10 @@ def _engine_run_naver():
                              params={"query": q, "display": 20, "start": 1, "sort": "date"}, timeout=ENGINE_HTTP_TIMEOUT)
             if not r.ok:
                 api_ok = False
-                _engine_log("error", "[네이버 오류] HTTP=%s | 인증키/권한을 확인하세요", r.status_code)
                 if r.status_code == 401:
+                    _engine_log("error", "[네이버 오류] HTTP=401 Unauthorized | Client ID/Secret가 네이버 애플리케이션의 실제 발급값인지, 뉴스 검색 API 권한이 활성화되어 있는지 확인하세요. 키 값 자체는 로그에 출력하지 않습니다.")
                     break
+                _engine_log("error", "[네이버 오류] HTTP=%s | 응답=%s", r.status_code, r.text[:180].replace("\n", " "))
                 continue
             data = r.json()
             items = data.get("items", []) or []
@@ -3135,8 +3192,8 @@ def _engine_run_naver():
 
 def _engine_run_keyword_combinations():
     # 기업명 + 핵심 테마 조합을 실제 네이버 API 검색으로 확인한다.
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        _engine_log("warning", "[키워드 조합] 네이버 API 키가 없어 조합검색을 건너뜁니다.")
+    if not NAVER_AUTH_CONFIGURED:
+        _engine_log("warning", "[키워드 조합] 네이버 API 인증정보가 없어 조합검색을 건너뜁니다.")
         return
     companies = list(dict.fromkeys(GLOBAL_AND_DOMESTIC_GIANTS))
     themes = ["HBM", "반도체", "AI", "로봇", "방산", "원전", "조선", "바이오", "이차전지", "ESS"]
@@ -4087,11 +4144,12 @@ if __name__ == "__main__":
 
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
         _engine_log("info", "[BOOT] NAVER=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
-                    bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET),
+                    NAVER_AUTH_CONFIGURED,
                     bool(DART_API_KEY),
                     ENABLE_DOMESTIC_NEWS,
                     ENABLE_US_NEWS,
                     ENABLE_TELEGRAM_CHANNELS)
+        _engine_log("info", "[BOOT] NAVER_AUTH=%s | 키는 로그에 노출하지 않음 | .env/환경변수 로딩 완료", NAVER_AUTH_CONFIGURED)
         _engine_log("info", "[BOOT] 미장30분브리핑=%s | 장중감시=%s", ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING)
 
         _engine_main_loop()
