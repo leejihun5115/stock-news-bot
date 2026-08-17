@@ -1923,7 +1923,11 @@ def _engine_format_message(item):
     freshness, prev = _engine_freshness(item)
     freshness_html = f"<b>[{freshness}]</b>"
     market_state = item.get("market_state", "")
-    lines = [f"<b>✅ [{source}]</b>" + (f"                                      🕐 {time_text}" if time_text else ""), f"{title_prefix} {title_html}", freshness_html]
+    # 모든 뉴스의 상태표시는 헤더로 통일: 소스/상태 → 시각 → 제목 순서.
+    header = f"<b>✅ [{source}] [{freshness}]</b>"
+    if time_text:
+        header += f"                                      🕐 {time_text}"
+    lines = [header, "", f"{title_prefix} {title_html}"]
     if freshness == "재탕" and prev:
         prev_source = html.escape(str(prev.get("source", "")))
         prev_time = html.escape(str(prev.get("time_text", "")))
@@ -2529,43 +2533,108 @@ def _us_format_pct(pct):
 
 
 def _us_open_briefing(snapshot, et):
+    """미국장 개장 30분 브리핑: 시장 전체 → 상승/하락 → 특이사항/테마 → 국내 연결."""
     indices = ["^IXIC", "^GSPC", "^DJI", "^SOX", "^VIX"]
     macro = ["USDKRW=X", "CL=F", "GC=F"]
     lines = [
-        "<b>🌐 [미장 브리핑]</b>",
-        f"🕐 개장 30분 · {et.strftime('%H:%M ET')}",
+        "<b>🌐 [미장 개장 30분 브리핑]</b>",
+        f"🕐 {et.strftime('%Y-%m-%d %H:%M ET')}",
         "",
-        "<b>📊 주요 지수</b>",
+        "<b>📊 시장 전반</b>",
     ]
     for s in indices:
         q = snapshot.get(s)
-        if q:
-            lines.append(f"• {q['name']} {_us_format_pct(q['change_pct'])}")
-    movers = []
-    for s, q in snapshot.items():
-        if s in indices or s in macro:
+        if q and q.get("change_pct") is not None:
+            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q['change_pct'])}")
+
+    rising, falling = [], []
+    for symbol, q in snapshot.items():
+        if symbol in indices or symbol in macro or q.get("change_pct") is None:
             continue
-        if q.get("change_pct") is not None:
-            movers.append(q)
-    movers.sort(key=lambda x: abs(x.get("change_pct") or 0), reverse=True)
-    lines += ["", "<b>🔥 강한 종목/테마</b>"]
-    for q in movers[:6]:
-        pct = q.get("change_pct")
-        if pct is None or abs(pct) < 1.0:
-            continue
-        reason = _us_briefing_reason(q["name"], q["theme"])
-        line = f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
-        if reason:
-            line += f" · 원인: {html.escape(reason)}"
-        lines.append(line)
+        pct = float(q.get("change_pct") or 0)
+        if pct >= 1.0:
+            rising.append(q)
+        elif pct <= -1.0:
+            falling.append(q)
+    rising.sort(key=lambda q: q.get("change_pct") or 0, reverse=True)
+    falling.sort(key=lambda q: q.get("change_pct") or 0)
+
+    if rising:
+        lines += ["", "<b>📈 상승 종목·테마</b>"]
+        for q in rising[:6]:
+            reason = _us_briefing_reason(q["name"], q["theme"])
+            line = f"• {html.escape(q['name'])} {_us_format_pct(q['change_pct'])} · {html.escape(q['theme'])}"
+            if reason:
+                line += f" · 🔎 {html.escape(reason)}"
+            lines.append(line)
+    if falling:
+        lines += ["", "<b>📉 하락 종목·테마</b>"]
+        for q in falling[:6]:
+            reason = _us_briefing_reason(q["name"], q["theme"])
+            line = f"• {html.escape(q['name'])} {_us_format_pct(q['change_pct'])} · {html.escape(q['theme'])}"
+            if reason:
+                line += f" · 🔎 {html.escape(reason)}"
+            lines.append(line)
+
     lines += ["", "<b>🛢️ 환율·원자재</b>"]
     for s in macro:
         q = snapshot.get(s)
-        if q:
-            lines.append(f"• {q['name']} {_us_format_pct(q['change_pct'])}")
-    lines += ["", "※ 글로벌 기업/해외 종목은 국내 관련주로 자동 연결하지 않습니다."]
-    return "\n".join(lines)
+        if q and q.get("change_pct") is not None:
+            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q['change_pct'])}")
 
+    # 미국장 강한 테마가 국내 테마맵과 실제 연결되는 경우에만 국내 종목을 제시.
+    theme_candidates = []
+    for q in rising + falling:
+        theme = str(q.get("theme", "")).strip()
+        if not theme:
+            continue
+        for key, stocks in STOCK_LINK_MAP.items():
+            if key.lower() in theme.lower():
+                theme_candidates.append((abs(float(q.get("change_pct") or 0)), q, key, stocks))
+    if theme_candidates:
+        lines += ["", "<b>🔎 미국장 → 국내 테마 연결</b>"]
+        seen_theme = set()
+        for _, q, key, stocks in sorted(theme_candidates, reverse=True, key=lambda x: x[0])[:4]:
+            if key in seen_theme:
+                continue
+            seen_theme.add(key)
+            lines.append(f"• {html.escape(q['name'])} → <b>{html.escape(key)} 테마</b>")
+            picks = []
+            for stock in stocks:
+                hist = 0; lead_hist = 0
+                for h in _engine_historical_cache[-3000:]:
+                    tx = str(h.get("text", ""))
+                    if stock in tx:
+                        hist += 1
+                        if any(k in tx.lower() for k in ["상한가", "대장", "주도", "급등", "폭등", "신고가"]):
+                            lead_hist += 1
+                score = min(hist, 8) * 2 + min(lead_hist, 8) * 3
+                picks.append((score, hist, lead_hist, stock))
+            picks.sort(reverse=True)
+            for n, (_, hist, lead_hist, stock) in enumerate(picks[:3], 1):
+                badge = "🥇 대장급" if n == 1 else f"🥈 관찰" if n == 2 else "🥉 관찰"
+                why = "동일 테마 연결"
+                if lead_hist:
+                    why += f" + 과거 테마 주도 {lead_hist}건"
+                elif hist:
+                    why += f" + 과거 급등/상한가 {hist}건"
+                lines.append(f"  {badge} {html.escape(stock)} · 🔎 {html.escape(why)}")
+
+    lines += ["", "<b>⚠️ 특이사항·시장 핵심</b>"]
+    with _US_BRIEFING_LOCK:
+        rows = list(_US_BRIEFING_NEWS_MEMORY)
+    priority_rows = []
+    strong_terms = ["FOMC", "CPI", "PCE", "고용", "금리", "연준", "관세", "전쟁", "지정학", "유가", "공급망", "실적", "가이던스", "대규모 투자", "수주", "승인"]
+    for row in reversed(rows[-200:]):
+        tx = str(row.get("title", "")) + " " + str(row.get("text", ""))
+        if any(k.lower() in tx.lower() for k in strong_terms):
+            priority_rows.append(row)
+        if len(priority_rows) >= 3:
+            break
+    for row in priority_rows[:3]:
+        lines.append(f"• {html.escape(str(row.get('title',''))[:220])}")
+
+    return "\n".join(lines)
 
 def _us_intraday_events(snapshot):
     """직전 스냅샷 대비 시장 구조가 달라진 항목만 반환."""
@@ -2685,7 +2754,7 @@ def _engine_us_market_monitor():
 # 🇺🇸 미국장 마감 브리핑
 # ============================================================
 ENABLE_US_CLOSE_BRIEFING = _env_flag("ENABLE_US_CLOSE_BRIEFING", True)
-US_CLOSE_BRIEF_DELAY_MIN = int(os.environ.get("US_CLOSE_BRIEF_DELAY_MIN", "5"))
+US_CLOSE_BRIEF_DELAY_MIN = int(os.environ.get("US_CLOSE_BRIEF_DELAY_MIN", "30"))
 _US_CLOSE_BRIEF_LAST_SENT = None
 
 def _us_close_reason(name, theme):
@@ -2747,162 +2816,133 @@ def _us_extract_past_move(row):
     return ms[0] if ms else ""
 
 def _us_close_briefing(snapshot, et):
+    """미국장 마감 30분 브리핑: 전체지수/지표 → 상승/하락 분리 → 특이사항 → 국내 연결."""
     lines = [
-        "<b>🌐 [미장 마감 브리핑]</b>",
+        "<b>🌐 [미장 마감 30분 브리핑]</b>",
         f"🕐 {et.strftime('%Y-%m-%d %H:%M ET')} · 정규장 마감",
         "",
-        "<b>📊 전체 시장 흐름</b>",
+        "<b>📊 시장 전반</b>",
     ]
-    for s in ["^IXIC","^GSPC","^DJI","^RUT","^SOX","^VIX"]:
+    for s in ["^IXIC", "^GSPC", "^DJI", "^RUT", "^SOX", "^VIX"]:
         q = snapshot.get(s)
-        if q:
-            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
+        if q and q.get("change_pct") is not None:
+            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q['change_pct'])}")
 
-    ranked = _us_close_rank_themes(snapshot)
-    if ranked:
-        lines += ["", "<b>🔥 오늘의 강한 종목군·테마</b>"]
-        for _, theme, qs in ranked[:4]:
-            members = sorted(qs, key=lambda q: abs(q.get("change_pct") or 0), reverse=True)[:4]
-            member_text = " · ".join(f"{html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}" for q in members)
-            lines.append(f"• <b>{html.escape(theme)}</b> · {member_text}")
+    excluded = {"^IXIC","^GSPC","^DJI","^RUT","^SOX","^VIX","USDKRW=X","CL=F","GC=F"}
+    rising, falling = [], []
+    for symbol, q in snapshot.items():
+        if symbol in excluded or q.get("change_pct") is None:
+            continue
+        pct = float(q.get("change_pct") or 0)
+        if pct >= 1.0:
+            rising.append(q)
+        elif pct <= -1.0:
+            falling.append(q)
+    rising.sort(key=lambda q: q.get("change_pct") or 0, reverse=True)
+    falling.sort(key=lambda q: q.get("change_pct") or 0)
 
-            lead = members[0] if members else {}
-            reason = _us_close_reason(lead.get("name",""), theme)
+    def add_move_section(title, rows):
+        if not rows:
+            return
+        lines.extend(["", title])
+        for q in rows[:8]:
+            reason = _us_close_reason(q.get("name", ""), q.get("theme", ""))
+            line = f"• {html.escape(q['name'])} {_us_format_pct(q['change_pct'])} · {html.escape(q.get('theme',''))}"
             if reason:
-                rtitle = html.escape(str(reason.get("title",""))[:220])
-                lines.append(f"  ↳ 움직인 이유: {rtitle}")
-            else:
-                lines.append("  ↳ 움직인 이유: 확인된 뉴스 없음")
+                line += f" · 🔎 {html.escape(str(reason.get('title',''))[:180])}"
+            lines.append(line)
 
-            # 국내 관련주 연결은 기존 STOCK_LINK_MAP + 과거 DB를 그대로 사용.
-            # 글로벌 종목명만으로 국내 종목을 만들지 않는다.
-            candidates = []
-            for key, stocks in STOCK_LINK_MAP.items():
-                if key.lower() not in theme.lower():
-                    continue
-                for stock in stocks:
-                    hist = 0
-                    lead_hist = 0
-                    for h in _engine_historical_cache[-3000:]:
-                        tx = str(h.get("text",""))
-                        if stock in tx:
-                            hist += 1
-                            if any(k in tx.lower() for k in ["상한가","대장","주도","급등","폭등","신고가"]):
-                                lead_hist += 1
-                    direct = 10 if key.lower() in theme.lower() else 0
-                    score = direct + min(hist,8)*2 + min(lead_hist,8)*3
-                    candidates.append((score, stock, hist, lead_hist, key))
-            best = {}
-            for c in candidates:
-                if c[1] not in best or c[0] > best[c[1]][0]:
-                    best[c[1]] = c
-            picks = sorted(best.values(), reverse=True, key=lambda x:x[0])[:3]
-            if picks:
-                lines.append("  🇰🇷 한국 연결")
-                for n, (_, stock, hist, lead_hist, key) in enumerate(picks, 1):
-                    if n == 1:
-                        badge = "🥇 대장주"
-                    elif n == 2:
-                        badge = "🥈 관찰"
-                    else:
-                        badge = "🥉 관찰"
-                    why = ["동일 테마 연결"]
-                    if hist:
-                        why.append(f"과거 급등/상한가 사례 {hist}건")
-                    if lead_hist:
-                        why.append("과거 테마 주도 이력")
-                    if hist >= 2 or lead_hist >= 2:
-                        why.append("끼·탄력 확인")
-                    lines.append(f"  {badge} {html.escape(stock)} — " + " + ".join(why))
-            else:
-                lines.append("  🇰🇷 한국 연결: 확인되는 국내 관련주 없음")
+    add_move_section("<b>📈 상승 종목·테마</b>", rising)
+    add_move_section("<b>📉 하락 종목·테마</b>", falling)
 
-            # 유사 과거 사례: 실제 수익률과 링크가 DB에 있을 때만 표시.
-            if reason:
-                past = _engine_historical_cache[-3000:]
-                best = None
-                cur = str(reason.get("title",""))
-                for h in past:
-                    old = str(h.get("text",""))
-                    ratio = difflib.SequenceMatcher(
-                        None,
-                        re.sub(r"[^0-9a-zA-Z가-힣]","",cur.lower())[:220],
-                        re.sub(r"[^0-9a-zA-Z가-힣]","",old.lower())[:220]
-                    ).ratio()
-                    if ratio >= HISTORICAL_MATCH_THRESHOLD and (best is None or ratio > best[0]):
-                        best = (ratio,h)
-                if best:
-                    h = best[1]
-                    pct = _us_extract_past_move(h)
-                    htitle = html.escape(str(h.get("title","과거 유사 사례"))[:180])
-                    link = html.escape(str(h.get("link","")), quote=True)
-                    label = f"과거 실제 반응 {pct}" if pct else "과거 유사 사례"
-                    lines.append(f"  📚 {label}")
-                    if link:
-                        lines.append(f'  <a href="{link}">🔗 과거 사례 원문</a>')
-                    else:
-                        lines.append(f"  {htitle}")
-
-    lines += ["", "<b>🛢️ 환율·유가·금</b>"]
-    for s in ["USDKRW=X","CL=F","GC=F"]:
+    lines += ["", "<b>🛢️ 주요 지표·원자재</b>"]
+    for s in ["USDKRW=X", "CL=F", "GC=F"]:
         q = snapshot.get(s)
-        if q:
-            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
+        if q and q.get("change_pct") is not None:
+            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q['change_pct'])}")
 
-    lines += ["", "<b>🇰🇷 ADR</b>"]
-    adr_symbols = ["PKX","LPL","KEP","KB","SHG","SKM"]
-    found = False
-    for s in adr_symbols:
-        q = snapshot.get(s)
-        if q:
-            found = True
-            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
-    if not found:
-        lines.append("• ADR 시세 확인불가")
+    # 상승/하락이 뚜렷한 테마만 국내 연결. 단순 글로벌 종목명만으로 연결하지 않는다.
+    theme_map = {}
+    for q in rising + falling:
+        theme = str(q.get("theme", "")).strip()
+        if not theme:
+            continue
+        direction = "상승" if (q.get("change_pct") or 0) > 0 else "하락"
+        for key, stocks in STOCK_LINK_MAP.items():
+            if key.lower() in theme.lower():
+                item = theme_map.setdefault(key, {"direction": direction, "leaders": [], "stocks": stocks})
+                item["leaders"].append(q)
+    if theme_map:
+        lines += ["", "<b>🔎 미국장 핵심 테마 → 국내 관심종목</b>"]
+        for key, info in list(theme_map.items())[:5]:
+            leaders = sorted(info["leaders"], key=lambda q: abs(q.get("change_pct") or 0), reverse=True)
+            lead = leaders[0]
+            lines.append(f"• {html.escape(lead['name'])} {html.escape(info['direction'])} → <b>{html.escape(key)} 테마</b>")
+            picks = []
+            for stock in info["stocks"]:
+                hist = lead_hist = 0
+                for h in _engine_historical_cache[-3000:]:
+                    tx = str(h.get("text", ""))
+                    if stock in tx:
+                        hist += 1
+                        if any(k in tx.lower() for k in ["상한가", "대장", "주도", "급등", "폭등", "신고가"]):
+                            lead_hist += 1
+                score = min(hist, 8) * 2 + min(lead_hist, 8) * 3
+                picks.append((score, hist, lead_hist, stock))
+            picks.sort(reverse=True)
+            for n, (_, hist, lead_hist, stock) in enumerate(picks[:3], 1):
+                badge = "🥇 대장급" if n == 1 else "🥈 관찰" if n == 2 else "🥉 관찰"
+                why = "미국장 해당 테마와 사업 연결"
+                if lead_hist:
+                    why += f" + 과거 테마 주도 {lead_hist}건"
+                elif hist:
+                    why += f" + 과거 급등/상한가 {hist}건"
+                lines.append(f"  {badge} {html.escape(stock)} · 🔎 {html.escape(why)}")
 
-    msci = {}
+    lines += ["", "<b>⚠️ 오늘의 특이사항·시장 핵심 원인</b>"]
     with _US_BRIEFING_LOCK:
         rows = list(_US_BRIEFING_NEWS_MEMORY)
-    for row in reversed(rows):
-        tx = str(row.get("text",""))
-        if any(k.lower() in tx.lower() for k in ["MSCI","리밸런싱","리밸런싱","지수 편입","지수 편출"]):
-            msci = row
+    seen = set(); special = []
+    strong_terms = ["FOMC", "CPI", "PCE", "고용", "연준", "금리", "관세", "전쟁", "지정학", "유가", "공급망", "대규모 투자", "실적", "가이던스", "수주", "승인", "인수", "규제"]
+    for row in reversed(rows[-400:]):
+        title = str(row.get("title", ""))
+        tx = title + " " + str(row.get("text", ""))
+        if not any(k.lower() in tx.lower() for k in strong_terms):
+            continue
+        norm = re.sub(r"[^0-9a-zA-Z가-힣]", "", title.lower())
+        if norm in seen:
+            continue
+        seen.add(norm)
+        special.append(row)
+        if len(special) >= 5:
             break
-    lines += ["", "<b>📌 MSCI</b>"]
-    if msci:
-        lines.append(f"• {html.escape(str(msci.get('title',''))[:220])}")
-        if msci.get("link"):
-            link = html.escape(str(msci["link"]), quote=True)
-            lines.append(f'<a href="{link}">🔗 MSCI 관련 원문</a>')
-    else:
-        lines.append("• 확인된 신규 MSCI 재료 없음")
+    for row in special:
+        lines.append(f"• {html.escape(str(row.get('title',''))[:220])}")
 
-    # 강한 재료는 재료 강도만 표시. 방향(급등/급락)을 붙이지 않는다.
+    # 💯는 시장 전체에 의미 있는 강한 재료만. 단순 상승/하락은 제외.
     strong_rows = []
+    strong_materials = ["대규모 수주", "수주 확정", "공급계약 체결", "대규모 투자", "승인", "허가", "사상 최대", "금리 결정", "FOMC", "CPI", "PCE", "관세 부과", "전쟁", "공급망 재편"]
     for row in reversed(rows[-300:]):
-        tx = str(row.get("title","")) + " " + str(row.get("text",""))
-        if any(k in tx.lower() for k in ["계약 체결","공급계약","대규모 수주","수주 확정","승인","허가","사상 최대","대규모 투자"]):
+        tx = str(row.get("title", "")) + " " + str(row.get("text", ""))
+        if any(k.lower() in tx.lower() for k in strong_materials):
             strong_rows.append(row)
-            if len(strong_rows) >= 3:
-                break
+        if len(strong_rows) >= 3:
+            break
     if strong_rows:
-        lines += ["", "<b>💯 강한 재료</b>"]
+        lines += ["", "<b>💯 🔎 강한 재료</b>"]
         for row in strong_rows:
-            tx = str(row.get("title",""))[:220]
-            amount = re.search(r"(?:[0-9][0-9,]*(?:\.\d+)?)\s*(?:억|조|억원|조원|달러|USD|million|billion)", tx, re.I)
-            suffix = f" · 금액 {amount.group(0)}" if amount else ""
-            lines.append(f"• {html.escape(tx)}{html.escape(suffix)}")
+            title = html.escape(str(row.get("title", ""))[:220])
+            lines.append(f"• {title}")
             if row.get("link"):
                 lines.append(f'<a href="{html.escape(str(row["link"]), quote=True)}">🔗 원문</a>')
 
     lines += [
         "",
-        "<b>👀 다음 한국장 관찰 기준</b>",
-        "• 직접 사업연관 우선",
-        "• 동일 테마 실제 움직임 확인",
-        "• 과거 상한가/급등 + 테마 주도 이력으로 대장주 선별",
-        "• 대장주 선정 이유를 함께 표시",
-        "• 글로벌 기업을 국내 관련주로 강제 연결하지 않음",
+        "<b>🇰🇷 다음 한국장 대응 포인트</b>",
+        "• 미국장 상승 테마는 국내 직접 수혜·동일 테마 여부를 먼저 확인",
+        "• 미국장 하락 테마는 국내 관련주의 피해·약세 가능성을 우선 확인",
+        "• 과거 상한가/급등 및 테마 주도 이력으로 대장급을 선별",
+        "• 글로벌 기업명만으로 국내 종목을 강제 연결하지 않음",
     ]
     return "\n".join(lines)
 
