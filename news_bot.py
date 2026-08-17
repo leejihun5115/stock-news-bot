@@ -1965,8 +1965,11 @@ def _engine_format_message(item):
         item["title"], item["extra"], companies, item["market_hits"]
     )
 
-    # 모든 뉴스는 제목을 이해할 수 있는 부제/핵심 이유를 제목 위에 둔다.
-    # 단순 종목명 나열이나 기사 제목 복사는 하지 않는다.
+    # 절대 원칙: 제목은 항상 헤더 바로 아래, 서브주제보다 위에 표시한다.
+    # 제목 문구 자체는 원문 그대로 유지하고 강조만 적용한다.
+    lines += [f"<b>📌 {title_html}</b>"]
+
+    # 제목 아래에만 핵심 이유/부제목/강한 재료를 표시한다.
     if strong:
         reason_text = _engine_market_reason(
             item.get("title", "") + " " + item.get("extra", "")
@@ -1986,9 +1989,6 @@ def _engine_format_message(item):
 
     if confidence == "미확인":
         lines += ["⚠️ [미확인] 공식 확인 전 소문·전망성 재료"]
-
-    # 제목은 부제/핵심 설명 아래에 배치하고 📌로 통일한다.
-    lines += [f"📌 {title_html}"]
 
     if freshness == "재탕" and prev:
         prev_source = html.escape(str(prev.get("source", "")))
