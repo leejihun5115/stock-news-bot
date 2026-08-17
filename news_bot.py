@@ -2033,106 +2033,242 @@ def _engine_relation_reason(text, companies, market_hits):
 
 
 def _engine_domestic_watchlist(item):
-    """모든 뉴스에서 국내 관심종목을 최종 선정한다.
-    직접 관련 → 테마 검증 → 과거 급등/상한가/주도 이력 순으로 점수화한다.
-    기업명 단순 등장, URL/출처/광고/인용은 절대 선정 근거로 쓰지 않는다.
+    """모든 뉴스에 동일한 국내 관심종목 선정 알고리즘을 적용한다.
+
+    선정 우선순위
+    1) 뉴스 핵심 사건과 국내 상장기업의 직접 사업연관성
+    2) 직접 관련 기업이 없으면 실제 사건과 연결되는 국내 테마
+    3) 해당 테마 안에서 과거 상한가/급등/주도 이력과 반복 등장 빈도,
+       최근성 및 끼(급등 탄력)를 종합해 대장주를 먼저 선정
+    4) 그 다음 강도가 낮은 순서로 최대 3종목을 관찰
+    5) 기업명 단순 등장, 인용/출처/광고/URL/비교/예시만으로는 절대 선정하지 않는다.
+    6) 글로벌 기업의 미국 주가 움직임 자체는 국내 관심종목 선정 근거로 사용하지 않는다.
     """
     text = _engine_clean(item.get("title", "") + " " + item.get("extra", ""))
+    low = text.lower()
     companies = item.get("companies", []) or []
     theme = _engine_theme(text)
     rows = []
 
-    # 1. 직접 관련 기업: 기사 문맥상 사건 당사자인 경우만 최우선.
+    # 기사 본문에서 기업명이 여러 번 나오더라도 '사건 당사자'인지 먼저 검증한다.
     direct = []
     for c in companies:
         if c in GLOBAL_COMPANY_KEYWORDS:
             continue
-        if _engine_company_is_directly_related(text, c):
-            direct.append(c)
+        if c in LISTED_COMPANY_ALIASES and _engine_company_is_directly_related(text, c):
+            if c not in direct:
+                direct.append(c)
 
-    # 종목코드가 붙은 회사명은 회사명 후보로 직접 검증
+    # 종목코드가 붙은 국내 상장기업도 동일하게 문맥 검증한다.
     for m in re.finditer(r"([가-힣A-Za-z][가-힣A-Za-z0-9·&\-]{1,30})\s*\((?:KRX:)?\d{6}\)", text):
         c = m.group(1).strip()
-        if c not in GLOBAL_COMPANY_KEYWORDS and _engine_company_is_directly_related(text, c) and c not in direct:
-            direct.append(c)
+        if c in LISTED_COMPANY_ALIASES and c not in GLOBAL_COMPANY_KEYWORDS:
+            if _engine_company_is_directly_related(text, c) and c not in direct:
+                direct.append(c)
 
+    # 광고/인용/출처성 문장에 기업명이 들어간 경우를 한 번 더 배제한다.
+    def _direct_event_strength(stock):
+        contexts = _engine_company_direct_context(text, stock)
+        score = 0
+        best_ctx = ""
+        event_terms = {
+            "수주": 12, "공급계약": 12, "계약": 10, "납품": 9, "투자": 9,
+            "유치": 10, "지분": 9, "매수": 8, "실적": 10, "매출": 10,
+            "영업이익": 10, "증설": 9, "양산": 10, "출시": 10, "상용화": 12,
+            "승인": 11, "허가": 11, "임상": 10, "기술이전": 12, "기술수출": 12,
+            "로열티": 12, "마일스톤": 11, "생산": 8, "수출": 8, "판매": 8,
+            "제품": 6, "개발": 7, "사업": 5, "공급": 8, "수혜": 7, "피해": 7,
+        }
+        for ctx in contexts:
+            cl = ctx.lower()
+            local = sum(v for k, v in event_terms.items() if k in cl)
+            # 인용/광고/비교 문구만 있는 문맥은 점수에서 제외
+            if any(b in cl for b in ["광고", "협찬", "캠페인", "출처", "원문", "예시", "비교"]):
+                if local < 10:
+                    continue
+            if local > score:
+                score = local
+                best_ctx = ctx
+        return score, best_ctx
+
+    # 과거 DB에서 해당 종목의 '끼'와 주도 이력을 계산한다.
+    def _history(stock):
+        hist = leader = limitup = surge = recent = 0
+        pct_values = []
+        for h in _engine_historical_cache[-5000:]:
+            tx = _engine_clean(str(h.get("text", "")) + " " + str(h.get("title", "")))
+            if stock.lower() not in tx.lower():
+                continue
+            hist += 1
+            tl = tx.lower()
+            if any(w in tl for w in ["상한가", "대장주", "대장", "주도주", "주도"]):
+                leader += 1
+            if "상한가" in tl:
+                limitup += 1
+            if any(w in tl for w in ["급등", "폭등", "신고가", "상승"]):
+                surge += 1
+            # DB에 날짜가 있으면 최근 사례를 별도 가산
+            d = str(h.get("ts", "") or h.get("published", ""))
+            if d and d[:10] >= _now_kst().strftime("%Y-%m-%d")[:4] + "-01-01":
+                recent += 1
+            for pm in re.findall(r"([+-]?\d+(?:\.\d+)?)\s*%", tx):
+                try:
+                    pct_values.append(float(pm))
+                except Exception:
+                    pass
+        max_pct = max(pct_values) if pct_values else None
+        return hist, leader, limitup, surge, recent, max_pct
+
+    # 1) 직접 관련 기업은 무조건 테마 후보보다 우선한다.
     for c in direct:
-        contexts = _engine_company_direct_context(text, c)
-        context = max(contexts, key=lambda x: sum(w in x.lower() for w in ["계약","수주","투자","지분","임상","상업화","기술이전","로열티","실적","공급"])) if contexts else ""
-        hist = 0
-        leader = 0
-        for h in _engine_historical_cache[-3000:]:
-            tx = str(h.get("text", "")) + " " + str(h.get("title", ""))
-            if c.lower() in tx.lower():
-                hist += 1
-                if any(w in tx.lower() for w in ["상한가","대장","주도","급등","폭등","신고가"]):
-                    leader += 1
-        score = 100 + min(hist, 10)*2 + min(leader, 10)*4
-        reason = _engine_relation_reason(text, [c], item.get("market_hits", []))
-        if hist or leader:
-            reason += f"; 과거 동일/유사 재료에서 급등·주도 이력 {hist}건, 주도 사례 {leader}건"
-        rows.append({"name":c,"theme":theme or "직접 관련","reason":reason,"score":score,"direct":True,"hist":hist,"leader":leader})
+        event_score, context = _direct_event_strength(c)
+        if event_score < 10:
+            continue
+        hist, leader, limitup, surge, recent, max_pct = _history(c)
+        score = (
+            1000
+            + event_score * 8
+            + min(hist, 15) * 4
+            + min(leader, 12) * 12
+            + min(limitup, 8) * 15
+            + min(surge, 12) * 6
+            + min(recent, 8) * 3
+        )
+        reason_parts = []
+        if context:
+            # 사건 문맥에서 가장 중요한 한 구절을 짧게 뽑는다.
+            ctx = re.sub(r"\s+", " ", context).strip()
+            reason_parts.append(f"뉴스 핵심 사건과 직접 사업연관: {ctx[:150]}")
+        if hist:
+            reason_parts.append(f"과거 관련 재료 반응 {hist}건")
+        if limitup:
+            reason_parts.append(f"상한가 이력 {limitup}건")
+        if leader:
+            reason_parts.append(f"테마 주도 이력 {leader}건")
+        if max_pct is not None:
+            reason_parts.append(f"과거 확인 최고 상승폭 {max_pct:g}%")
+        rows.append({
+            "name": c, "theme": theme or "직접 관련",
+            "reason": " + ".join(reason_parts) or "뉴스 핵심 사건의 직접 당사자로 확인",
+            "score": score, "direct": True, "hist": hist,
+            "leader": leader, "limitup": limitup, "surge": surge,
+            "recent": recent, "event_score": event_score, "max_pct": max_pct
+        })
 
-    # 직접 관련 기업이 있으면 그 기업을 우선하고 테마 종목으로 억지 확장하지 않는다.
     if rows:
-        rows.sort(key=lambda r:(r["score"], r["hist"], r["leader"]), reverse=True)
-        if rows:
-            rows[0]["reason"] = "직접 사업연관 + " + rows[0]["reason"]
-            if rows[0]["hist"] or rows[0]["leader"]:
-                rows[0]["badge"] = "🥇 대장주"
-                rows[0]["reason"] += " → 과거 급등·테마 주도 이력까지 확인되어 대장주 우선"
-            for i,r in enumerate(rows[1:3],2):
-                r["badge"] = "🥈 관찰" if i==2 else "🥉 관찰"
+        rows.sort(key=lambda r: (r["score"], r["limitup"], r["leader"], r["surge"]), reverse=True)
+        for i, r in enumerate(rows[:3]):
+            if i == 0:
+                r["badge"] = "🥇 대장주"
+                r["reason"] = (
+                    "직접 사업연관 + "
+                    + r["reason"]
+                    + " → 직접 관련 후보 중 과거 주도/급등 이력과 시장 탄력이 가장 높은 종목을 대장주로 우선 선정"
+                )
+            else:
+                r["badge"] = "🥈 관찰" if i == 1 else "🥉 관찰"
+                r["reason"] += " → 직접 관련 후보 중 후순위 관찰"
         return rows[:3]
 
-    # 2. 직접 관련 기업이 없으면 테마 후보를 '실제 사건'이 있을 때만 만든다.
-    low = text.lower()
-    event = any(k in low for k in ["수주","계약","공급","투자","증설","양산","출시","상용화","승인","허가","기술이전","기술수출","임상","지분","실적","매출","수출","급등","급락","폭등","폭락","정책","규제","관세","수요","가격"])
-    if not event:
+    # 2) 직접 관련 기업이 없으면 '실제 사건'이 확인되는 테마만 허용한다.
+    event_words = [
+        "수주", "계약", "공급", "납품", "투자", "증설", "양산", "출시", "상용화",
+        "승인", "허가", "기술이전", "기술수출", "임상", "지분", "실적", "매출",
+        "수출", "정책", "규제", "관세", "수요", "가격", "공급부족", "공급 확대",
+        "원가", "금리", "유가", "환율", "전력수요", "데이터센터", "AI칩", "H200", "HBM"
+    ]
+    if not any(k.lower() in low for k in event_words):
         return []
 
     theme_keys = [k for k in sorted(STOCK_LINK_MAP, key=len, reverse=True) if k.lower() in low]
-    # 미국 기업 뉴스도 원인에서 국내 테마가 명확하면 연결 가능하지만, 해외기업 주가 자체는 근거로 사용하지 않는다.
+
+    # 본문에 명시된 핵심 재료로 테마를 보강한다.
     if not theme_keys:
-        # 글로벌 반도체 기업 움직임은 반도체 재료가 본문에 실제 있을 때만 연결
-        if any(k in low for k in ["h200","hbm","ai칩","ai 반도체","반도체","메모리"]):
-            theme_keys=["HBM"]
-        elif any(k in low for k in ["바이오","신약","임상","fda","키트루다","로열티","마일스톤"]):
-            theme_keys=["바이오"]
+        if any(k in low for k in ["h200", "hbm", "ai칩", "ai 반도체", "반도체", "메모리"]):
+            theme_keys = ["HBM"]
+        elif any(k in low for k in ["바이오", "신약", "임상", "fda", "키트루다", "로열티", "마일스톤"]):
+            theme_keys = ["바이오"]
+        elif any(k in low for k in ["lng선", "lng", "조선", "선박"]):
+            theme_keys = ["조선"]
+        elif any(k in low for k in ["방산", "미사일", "무기", "전투기"]):
+            theme_keys = ["방산"]
 
     if not theme_keys:
         return []
 
-    scored=[]
-    for key in theme_keys[:4]:
+    scored = []
+    for key in theme_keys[:5]:
+        # 테마 자체가 기사 사건과 연결되는지 확인
+        key_context = ""
+        for m in re.finditer(re.escape(key), text, re.I):
+            key_context = text[max(0, m.start()-180):min(len(text), m.end()+180)]
+            if any(w.lower() in key_context.lower() for w in event_words):
+                break
+        if not key_context:
+            continue
+
         for stock in STOCK_LINK_MAP.get(key, []):
-            hist=0; leader=0
-            for h in _engine_historical_cache[-3000:]:
-                tx=str(h.get("text",""))+" "+str(h.get("title",""))
-                if stock.lower() in tx.lower():
-                    hist += 1
-                    if any(w in tx.lower() for w in ["상한가","대장","주도","급등","폭등","신고가"]):
-                        leader += 1
-            # 테마 직접성 + 과거 시장 반응 + 끼를 함께 반영
-            score=50 + min(hist,10)*3 + min(leader,10)*6
-            scored.append((score,stock,key,hist,leader))
+            hist, leader, limitup, surge, recent, max_pct = _history(stock)
 
-    best={}
-    for row in scored:
-        if row[1] not in best or row[0]>best[row[1]][0]: best[row[1]]=row
-    picks=sorted(best.values(), reverse=True, key=lambda x:(x[0],x[4],x[3]))[:3]
-    for i,(score,stock,key,hist,leader) in enumerate(picks):
-        badge="🥇 대장주" if i==0 else ("🥈 관찰" if i==1 else "🥉 관찰")
-        why=f"{key} 테마 직접 연결"
-        if leader:
-            why += f" + 과거 테마 주도/급등 사례 {leader}건"
-        if hist:
-            why += f" + 과거 관련 재료 반응 {hist}건"
-        if i==0:
-            why += " → 최근/과거 시장 탄력이 가장 강한 후보를 대장주 우선"
-        rows.append({"name":stock,"theme":key,"reason":why,"score":score,"direct":False,"hist":hist,"leader":leader,"badge":badge})
+            # 테마 종목 점수:
+            # 과거 상한가 > 주도 이력 > 급등 빈도 > 최근 반응 > 일반 등장 빈도
+            score = (
+                300
+                + min(limitup, 8) * 30
+                + min(leader, 12) * 22
+                + min(surge, 12) * 10
+                + min(recent, 8) * 4
+                + min(hist, 15) * 2
+            )
+            scored.append({
+                "name": stock, "theme": key, "score": score,
+                "hist": hist, "leader": leader, "limitup": limitup,
+                "surge": surge, "recent": recent, "max_pct": max_pct,
+                "context": key_context
+            })
+
+    if not scored:
+        return []
+
+    best = {}
+    for r in scored:
+        if r["name"] not in best or r["score"] > best[r["name"]]["score"]:
+            best[r["name"]] = r
+
+    picks = sorted(
+        best.values(),
+        key=lambda r: (r["score"], r["limitup"], r["leader"], r["surge"], r["hist"]),
+        reverse=True
+    )[:3]
+
+    for i, r in enumerate(picks):
+        if i == 0:
+            badge = "🥇 대장주"
+            reason = (
+                f"{r['theme']} 테마의 실제 사건 연결 + "
+                f"상한가 이력 {r['limitup']}건 + 테마 주도 이력 {r['leader']}건 + "
+                f"급등/폭등 이력 {r['surge']}건"
+            )
+            if r["max_pct"] is not None:
+                reason += f" + 과거 확인 최고 상승폭 {r['max_pct']:g}%"
+            reason += " → 과거 테마 주도력과 급등 탄력이 가장 높은 후보를 대장주로 선정"
+        else:
+            badge = "🥈 관찰" if i == 1 else "🥉 관찰"
+            reason = (
+                f"{r['theme']} 테마 연결 + 상한가 {r['limitup']}건 + "
+                f"주도 이력 {r['leader']}건 + 급등 이력 {r['surge']}건"
+            )
+            if r["max_pct"] is not None:
+                reason += f" + 과거 확인 최고 상승폭 {r['max_pct']:g}%"
+            reason += " → 대장주 다음 순서의 움직임 관찰 후보"
+        rows.append({
+            "name": r["name"], "theme": r["theme"], "reason": reason,
+            "score": r["score"], "direct": False, "hist": r["hist"],
+            "leader": r["leader"], "limitup": r["limitup"],
+            "surge": r["surge"], "recent": r["recent"],
+            "max_pct": r["max_pct"], "badge": badge
+        })
     return rows
-
 
 def _engine_schedule(text):
     """실제 투자 일정만 추출한다.
@@ -2174,8 +2310,9 @@ def _engine_summary(title, extra, companies, market_hits):
     elif domestic:
         core = f"🔎 [직접 관련] {reason} → " + "·".join(domestic[:4])
     elif global_companies:
-        # 글로벌 기업은 국내 상장기업 문구를 절대 만들지 않는다.
-        core = f"🔎 글로벌 기업 → " + "·".join(global_companies[:4])
+        # 글로벌 기업명 자체를 국내 관심종목으로 재출력하지 않는다.
+        # 해외 뉴스는 원인/시장재료만 요약하고 국내 종목은 별도의 엄격한 알고리즘에서 선정한다.
+        core = "🔎 [글로벌 시황] " + "·".join(market_hits[:4] or ["해외 시장 재료"])
     elif market_hits:
         core = "🔎 [글로벌 시황] 시장 핵심 재료 → " + "·".join(market_hits[:4])
     else:
@@ -2330,7 +2467,7 @@ def _engine_format_message(item):
                 keypoint = extra_key
 
     # ------------------------------------------------------------
-    # 2) 강한 재료
+    # 2) 재료 강도 표시
     # ------------------------------------------------------------
     strong, strong_hits = _engine_strong_material(item)
     if strong and keypoint:
@@ -2364,9 +2501,11 @@ def _engine_format_message(item):
                 if name:
                     detail = " | ".join(x for x in (theme, reason) if x)
                     badge = str(row.get("badge") or "🔎 관심종목")
+                    # 국내 관심종목으로 최종 선정된 종목명 앞에는 항상 💯를 붙인다.
+                    # 대장주/관찰 순위 표시는 종목 선정 이유를 명확히 하기 위한 용도다.
                     lines.append(
-                        f"{html.escape(badge)} <b>{html.escape(name)}</b>"
-                        + (f" → {html.escape(detail[:320])}" if detail else "")
+                        f"{html.escape(badge)} — 💯 <b>{html.escape(name)}</b>"
+                        + (f" /// {html.escape(detail[:360])}" if detail else "")
                     )
             elif row:
                 lines.append(f"🔎 국내 관심종목: {html.escape(str(row)[:240])}")
