@@ -1369,7 +1369,7 @@ def _schedule_daily_message():
         seen.add(key); rows.append((dt,r))
     rows.sort(key=lambda x:(x[0], str(x[1].get('category',''))))
     rows=rows[:SCHEDULE_MAX_ITEMS]
-    lines=['<b>🌅 [시장 일정_브리핑]</b>',f'🕐 {_now_kst().strftime("%Y-%m-%d %H:%M")} KST','', '<b>가까운 일정 순</b>']
+    lines=['<b>📅 [시장 일정 브리핑]</b>',f'🕐 {_now_kst().strftime("%Y-%m-%d %H:%M")} KST','', '<b>가까운 일정 순</b>']
     if not rows:
         lines.append('• 현재 DB에서 확인된 중요 일정 없음')
         return '\n'.join(lines)
@@ -1695,92 +1695,13 @@ def _engine_item_key(title, link):
     return difflib.SequenceMatcher(None, title[:200].lower(), link[:200].lower()).ratio() and (link or title[:200])
 
 
-def _engine_make_briefing_banner():
-    """브리핑 메시지에 함께 붙일 간단한 배너 이미지를 메모리에서 생성한다."""
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-        from io import BytesIO
-        img = Image.new("RGB", (1280, 420), (20, 28, 42))
-        draw = ImageDraw.Draw(img)
-        font_paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-        ]
-        font = None
-        small = None
-        for fp in font_paths:
-            try:
-                font = ImageFont.truetype(fp, 88)
-                small = ImageFont.truetype(fp, 34)
-                break
-            except Exception:
-                continue
-        if font is None:
-            font = ImageFont.load_default()
-            small = font
-        draw.text((70, 90), "🌅 BRIEFING", font=font, fill=(255,255,255))
-        draw.text((75, 225), "Market briefing · News · Flow · Key points", font=small, fill=(205,215,230))
-        out = BytesIO()
-        img.save(out, format="PNG")
-        out.seek(0)
-        return out
-    except Exception as e:
-        _engine_log("warning", "[브리핑 이미지] 생성 실패 | %s", str(e)[:120])
-        return None
-
-
 def _engine_send_telegram(text):
     if not BOT_TOKEN or not CHAT_ID:
         _engine_log("error", "[실패] Telegram | BOT_TOKEN/CHAT_ID 없음")
         return False
-
-    # 브리핑 메시지는 제목을 표준화하고, 항상 이미지가 메시지의 첫 요소가 되도록 전송한다.
-    # 예: 🌅 [프리마켓_브리핑], 🌅 [장중_브리핑], 🌅 [장마감_브리핑], 🌅 [미국장_브리핑]
-    raw_text = str(text or "")
-    is_briefing = "브리핑" in raw_text
-    if is_briefing:
-        replacements = [
-            (r"(?:🌅\s*)?\[국내장(?:\s*[_ ]?\s*)브리핑\]", "🌅 [장중_브리핑]"),
-            (r"(?:🌅\s*)?\[국내장_?브리핑\]", "🌅 [장중_브리핑]"),
-            (r"(?:🌅\s*)?\[미장 장중_?브리핑\]", "🌅 [미국장_브리핑]"),
-            (r"(?:🌅\s*)?\[미장_?브리핑\]", "🌅 [미국장_브리핑]"),
-            (r"(?:🌅\s*)?\[미장 장마감_?브리핑\]", "🌅 [미국장_장마감_브리핑]"),
-            (r"(?:🌅\s*)?\[미장_?마감_?브리핑\]", "🌅 [미국장_장마감_브리핑]"),
-            (r"(?:🌅\s*)?\[프리마켓\s*_?\s*브리핑\]", "🌅 [프리마켓_브리핑]"),
-            (r"(?:🌅\s*)?\[애프터마켓\s*_?\s*브리핑\]", "🌅 [애프터마켓_브리핑]"),
-            (r"(?:🌅\s*)?\[시장 일정\s*_?\s*브리핑\]", "🌅 [시장 일정_브리핑]"),
-        ]
-        for pattern, replacement in replacements:
-            raw_text = re.sub(pattern, replacement, raw_text, count=1)
-        # 기타 브리핑 제목도 맨 앞에 🌅를 붙인다. 이미 표준화된 제목은 그대로 둔다.
-        if "🌅 [" not in raw_text and "브리핑" in raw_text:
-            raw_text = "🌅 " + raw_text
-        text = raw_text
-
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
-        if is_briefing:
-            photo = _engine_make_briefing_banner()
-            if photo is not None:
-                url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-                r = requests.post(
-                    url,
-                    data={"chat_id": CHAT_ID, "caption": text, "parse_mode": "HTML"},
-                    files={"photo": ("briefing_banner.png", photo, "image/png")},
-                    timeout=ENGINE_HTTP_TIMEOUT,
-                )
-                api_result = r.json() if r.headers.get("content-type", "").lower().startswith("application/json") else {}
-                if r.ok and api_result.get("ok", True):
-                    _engine_log("info", "[성공] Telegram 브리핑 전송(이미지 포함)")
-                    return True
-                _engine_log("error", "[실패] Telegram 브리핑 이미지 전송 | 원인=%s", api_result.get("description") or r.reason)
-
-        # 이미지 생성/전송이 실패해도 기존 텍스트 전송은 반드시 시도한다.
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        r = requests.post(
-            url,
-            data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False},
-            timeout=ENGINE_HTTP_TIMEOUT,
-        )
+        r = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False}, timeout=ENGINE_HTTP_TIMEOUT)
         api_result = r.json() if r.headers.get("content-type", "").lower().startswith("application/json") else {}
         if r.ok and api_result.get("ok", True):
             _engine_log("info", "[성공] Telegram 전송")
@@ -2249,8 +2170,6 @@ def _engine_relation_reason(text, companies, market_hits):
         if "hbm" in low or "반도체" in low or "ai" in low:
             return "AI·반도체 수요 변화가 국내 HBM·메모리 공급망에 전이되는 테마"
         return "계약·수주·공급 변화가 국내 관련 산업의 실적에 전이되는 테마"
-    if any(x in low for x in ["트럼프", "김정은", "북미 정상회담", "북미회담", "남북 정상회담", "남북회담", "정상회담", "남북경협", "대북 제재 완화", "대북제재 완화", "개성공단", "금강산"]):
-        return "북미·남북관계 개선 및 경협 기대감이 국내 대북·남북경협 테마에 연결되는 재료"
     if any(x in low for x in ["투자", "증설", "양산", "수요"]):
         return "투자·증설·수요 변화가 국내 공급망과 관련 종목의 실적 기대에 연결되는 테마"
     if market_hits:
@@ -2275,29 +2194,6 @@ def _engine_domestic_watchlist(item):
     companies = item.get("companies", []) or []
     theme = _engine_theme(text)
     rows = []
-
-    # 북한/북미·남북관계처럼 기사에 종목명이 직접 없어도 실제 국내 증시 테마가 형성되는 경우
-    # 시장에서 반복적으로 거래되는 대북·남북경협 테마를 후보로 연결한다.
-    # 단순 북한 언급이 아니라 정상회담/회담 추진/경협/제재완화/개성공단 등 강한 이벤트 신호가 있을 때만 작동.
-    north_terms = (
-        "트럼프" , "김정은", "북미 정상회담", "북미회담", "남북 정상회담", "남북회담",
-        "정상회담", "남북경협", "대북 제재 완화", "대북제재 완화", "개성공단", "금강산",
-        "남북 철도", "남북 철도 연결", "남북 도로", "대북 지원", "북한 경제개방", "북한 개방"
-    )
-    if any(t.lower() in low for t in north_terms):
-        north_theme = "대북·남북경협"
-        north_candidates = [
-            ("좋은사람들", 86), ("인디에프", 84), ("일신석재", 82),
-            ("신원", 80), ("아난티", 78), ("제이에스티나", 76)
-        ]
-        # 강한 정상회담/경협 이벤트일수록 상위 대북 테마를 우선 노출한다.
-        for name, base in north_candidates:
-            rows.append({
-                "name": name, "theme": north_theme,
-                "reason": "북미·남북관계 개선 및 경협 기대감과 연결되는 국내 대북 테마",
-                "score": base, "direct": False, "hist": 0, "leader": 0,
-                "limitup": 0, "surge": 0, "recent": 0, "event_score": 0, "max_pct": None
-            })
 
     # 기사 본문에서 기업명이 여러 번 나오더라도 '사건 당사자'인지 먼저 검증한다.
     direct = []
@@ -2692,42 +2588,6 @@ _engine_pending = []
 _engine_sent_fingerprints = []  # {text, source, time_text, published, title}
 
 
-def _engine_is_us_external_news(item):
-    """미국장 외신 뉴스 여부. 국내/텔레그램/유튜브 뉴스에는 적용하지 않는다."""
-    source = str(item.get("source", ""))
-    return source == "Google-US" or source.startswith("해외RSS/") or source in {"Reuters", "Reuters-US", "AP-US", "Bloomberg-US"}
-
-
-def _engine_story_repetition_count(item):
-    """같은 미국 외신 스토리가 지금까지 몇 번 송출됐는지 계산한다.
-    제목 문구가 달라도 핵심 사건이 같으면 _engine_similar()로 묶는다.
-    """
-    full = item.get("title", "") + " " + item.get("extra", "")
-    count = 0
-    for prev in _engine_sent_fingerprints:
-        if not isinstance(prev, dict):
-            continue
-        prev_source_item = {"source": prev.get("source", "")}
-        if not _engine_is_us_external_news(prev_source_item):
-            continue
-        prev_text = prev.get("text", "")
-        if _engine_similar(full, prev_text):
-            count += 1
-    return count
-
-
-def _engine_us_duplicate_block(item):
-    """미국장 외신의 동일/유사 스토리는 [재탕]으로 분류하고 3회째부터 송출 차단.
-    단, 명확한 신규 정보가 붙은 업그레이드는 3회 이전까지 정상 송출한다.
-    """
-    if not _engine_is_us_external_news(item):
-        return False, 0
-    count = _engine_story_repetition_count(item)
-    if count >= 2:
-        return True, count + 1
-    return False, count + 1
-
-
 def _engine_freshness(item):
     """시장 반영 가능 여부를 고려한 신규/업그레이드/재탕 판정."""
     full = item["title"] + " " + item.get("extra", "")
@@ -2788,120 +2648,34 @@ def _engine_is_commercial_value(item, title, keypoint=""):
     return any(str(w).lower() in text for w in COMMERCIAL_VALUE_WORDS)
 
 def _engine_telegram_title(raw_text, channel_name=""):
-    """텔레그램 원문에서 기자식 제목과 본문 요약용 원문을 분리한다.
-    - 명확한 제목이 있으면 제목을 그대로 보존한다.
-    - 제목이 없거나 본문과 뒤섞이면 첫 번째 핵심 사실문을 기자식 제목으로 만든다.
-    - 채널명/홍보문구/조회수/시간은 제목에서 불필요한 접두어만 제거하고,
-      사용자가 원한 경우 조회수·시간 표기는 제목 끝에 보존한다.
-    """
-    raw_original = str(raw_text or "").replace("\r", "")
-    if not raw_original.strip():
+    """텔레그램 본문에서 실제 기사 제목만 추출한다. [그로쓰리서치] 속보/단독 특징주는 직접 중계하지 않는다."""
+    raw = _engine_clean(raw_text)
+    if not raw:
         return "", ""
-
-    lines = []
-    for line in raw_original.split("\n"):
-        line = _engine_clean(line).strip(" -—|")
-        if not line:
-            continue
-        lines.append(line)
-
-    # 채널명 접두어 제거. 채널명이 긴 경우에도 첫 줄에서만 제거한다.
-    channel_prefix = _engine_clean(str(channel_name or "")).strip(" -—|")
-    if channel_prefix and lines:
-        lines[0] = re.sub(
-            rf'^\s*{re.escape(channel_prefix)}\s*[-—|:]?\s*',
-            '', lines[0], count=1, flags=re.I
-        ).strip()
-
-    # 흔한 채널 홍보/메타 문구 제거
-    cleaned = []
-    for line in lines:
-        if re.match(r'https?://', line, re.I):
-            continue
-        if "view/" in line or "t.me/" in line:
-            continue
-        if any(x in line for x in ("구독", "받기", "실시간 특징주 받기", "텔레그램 채널")):
-            continue
-        if line.startswith("[그로쓰리서치]") or "[그로쓰리서치]" in line:
-            continue
-        cleaned.append(line)
-    lines = cleaned
-    if not lines:
-        return "", ""
-
-    raw = "\n".join(lines)
     low = raw.lower()
     if "그로쓰리서치" in low and ("특징주 종목" in low or "실시간 특징주" in low or "특징주 뉴스 속보" in low):
         return "", ""
-
-    # 제목 후보를 만든다. 줄 단위 제목을 우선하고, 문장 단위로도 탐색한다.
+    # URL/홍보문구/텔레그램 채널 안내를 제거하고 문장 후보를 만든다.
+    parts = re.split(r"(?<=[.!?])\s+|\s{2,}|\n+", str(raw))
     candidates = []
-    for line in lines:
-        parts = re.split(r'(?<=[.!?。])\s+', line)
-        candidates.extend([_engine_clean(x).strip("-—|") for x in parts if _engine_clean(x).strip("-—|")])
-
-    noise_re = re.compile(
-        r'^(?:조회수\s*\d[\d,.]*|\d+(?:\.\d+)?[KkMm]?\s*views?|\d{1,2}:\d{2}|좋아요\s*\d+|댓글\s*\d+)$', re.I
-    )
-    candidates = [x for x in candidates if not noise_re.fullmatch(x)]
-
-    fact_words = (
-        '계약','수주','공급','투자','증설','실적','매출','영업이익','임상','승인','허가',
-        '인수','지분','출시','양산','재고','금리','환율','수출','가격','정책','회담','만남',
-        '협상','발표','추진','확대','감소','급등','급락','사망','전쟁','제재','관세','APEC'
-    )
-    title_markers = ('[속보]','[단독]','[특징주]','[속보]','[단독]')
-
-    def title_score(x):
-        compact = re.sub(r'[^가-힣A-Za-z0-9]', '', x)
-        score = 0
-        if len(compact) >= 12: score += 2
-        if any(w in x for w in fact_words): score += 4
-        if any(x.startswith(m) for m in title_markers): score += 2
-        if re.search(r'…|\.{3}|[,:：]', x): score += 1
-        if len(compact) > 180: score -= 2
-        if noise_re.fullmatch(x): score -= 10
-        return score
-
-    # 명확한 제목은 첫 줄을 우선. 첫 줄이 너무 짧거나 메타데이터면 핵심 문장을 자동 생성.
-    title = candidates[0] if candidates else ""
-    if title and (len(re.sub(r'[^가-힣A-Za-z0-9]', '', title)) < 8 or noise_re.fullmatch(title)):
-        ranked = sorted(candidates, key=lambda x: title_score(x), reverse=True)
-        title = ranked[0] if ranked else title
-
-    # 제목이 본문처럼 길고 불명확한 경우 기자식으로 압축한다.
-    compact_title = re.sub(r'\s+', ' ', title).strip()
-    if len(compact_title) > 150:
-        clauses = [x.strip() for x in re.split(r'[,，:：]|\s+다\s+|\.\s+', compact_title) if x.strip()]
-        if clauses:
-            ranked = sorted(clauses, key=title_score, reverse=True)
-            compact_title = ranked[0][:110]
-
-    # 제목 후보가 없거나 첫 문장이 명백한 본문이면 핵심 사실을 기자식 제목으로 만든다.
-    if not compact_title or title_score(compact_title) < 2:
-        ranked = sorted(candidates, key=title_score, reverse=True)
-        if ranked and title_score(ranked[0]) >= 2:
-            compact_title = ranked[0][:120]
-        else:
-            compact_title = candidates[0][:120] if candidates else raw[:120]
-
-    # 제목 양끝의 기사 인용부호는 제거한다. [속보]/[단독] 같은 라벨은 유지한다.
-    compact_title = compact_title.strip().strip("“”\"'")
-
-    # 조회수/시간은 제목 원문에 붙어 있던 경우 보존한다.
-    meta = re.search(r'(\d+(?:\.\d+)?[KkMm]?\s*views?\s+\d{1,2}:\d{2})\s*$', raw, re.I)
-    if meta and meta.group(1) not in compact_title:
-        compact_title = f"{compact_title.rstrip()} {meta.group(1)}"
-
-    # 본문 요약용 extra는 제목 자체를 제외한 나머지 원문.
-    remaining = raw
-    if title and title in remaining:
-        remaining = remaining.replace(title, '', 1).strip()
-    remaining = re.sub(r'\s+', ' ', remaining).strip(' -|')
-    if not remaining:
-        remaining = raw
-
-    return compact_title[:240], remaining[:4000]
+    for part in parts:
+        part = _engine_clean(part).strip("-—|")
+        if not part:
+            continue
+        if re.match(r"https?://", part, re.I):
+            continue
+        if any(x in part for x in ["구독", "받기", "실시간 특징주 받기", "채널", "텔레그램"]):
+            continue
+        if "view/" in part or "t.me/" in part:
+            continue
+        if part.startswith("[그로쓰리서치]") or "[그로쓰리서치]" in part:
+            continue
+        candidates.append(part)
+    # 가장 먼저 등장하는 충분히 긴 기사형 문장을 제목으로 사용.
+    for part in candidates:
+        if len(re.sub(r"[^가-힣A-Za-z0-9]", "", part)) >= 8:
+            return part[:240], raw
+    return (candidates[0][:240] if candidates else raw[:240]), raw
 
 def _engine_format_message(item):
     """뉴스 카드 최종 출력.
@@ -2955,7 +2729,7 @@ def _engine_format_message(item):
     # 기존 summary가 제목을 그대로 반복하는 경우 제거.
     def _compact_keypoint(text):
         text = _engine_clean(str(text or ""))
-        text = re.sub(r"^🔎\s*", "", text).strip().strip("“”\"'")
+        text = re.sub(r"^🔎\s*", "", text).strip()
         if not text:
             return ""
 
@@ -3090,12 +2864,6 @@ def _engine_flush_pending():
             continue
         cycle_keys.add(key)
         if not _engine_telegram_spam_allowed(item):
-            continue
-        # 미국장 외신은 동일/유사 스토리의 반복 송출을 제한한다.
-        # 1회 신규, 2회째 재탕으로 표시, 3회째부터 송출 차단한다.
-        us_dup_block, us_dup_count = _engine_us_duplicate_block(item)
-        if us_dup_block:
-            _engine_log("info", "[제외] 🇺🇸 외신 재탕 3회 이상 | %d번째 유사보도 | %s", us_dup_count, item.get("title", "")[:100])
             continue
         # 기존 상태파일에 이미 저장된 URL은 같은 기사의 무한 반복만 방지한다.
         # 서로 다른 보도 링크/재보도는 차단하지 않고 반드시 [재탕]으로 송출한다.
@@ -3528,7 +3296,7 @@ def _engine_run_telegram_channels():
             posts = soup.select("div.tgme_widget_message_wrap")[-10:]
             _engine_log("debug", "[텔레그램] %s | 확인=%d건", name, len(posts))
             for post in posts:
-                txt = post.get_text("\n")
+                txt = _engine_clean(post.get_text(" "))
                 a = post.select_one("a.tgme_widget_message_date")
                 link = a.get("href", "") if a else url
                 time_node = post.select_one("time")
@@ -3703,7 +3471,7 @@ def _krx_intraday_events(snapshot):
 
 def _krx_briefing_message(snapshot, et, events=None, opening=False):
     events=events or []
-    lines=["<b>🌅 [장중_브리핑]</b>", f"🕐 {et.strftime('%H:%M KST')}", ""]
+    lines=["<b>🇰🇷 [국내장 브리핑]</b>", f"🕐 {et.strftime('%H:%M KST')}", ""]
     lines.append("<b>📊 주요 지수</b>")
     for s in ("^KS11","^KQ11"):
         q=snapshot.get(s)
@@ -3749,11 +3517,10 @@ def _engine_krx_market_monitor():
     if getattr(_engine_krx_market_monitor,"_last_slot_key",None)==key:
         _KRX_BRIEFING_LAST_SNAPSHOT=snapshot; return
     events=_krx_intraday_events(snapshot)
-    # 국내장도 변화 유무와 관계없이 30분 슬롯마다 반드시 1회 정기 브리핑한다.
-    # 변화가 있으면 변화 내용을 포함하고, 변화가 없으면 현재 시황만 간결하게 표시한다.
+    # 첫 30분은 정기 브리핑, 이후에는 변화가 있으면 즉시/슬롯 브리핑
     if slot==1: msg=_krx_briefing_message(snapshot,now,opening=True)
     elif events: msg=_krx_briefing_message(snapshot,now,events=events)
-    else: msg=_krx_briefing_message(snapshot,now)
+    else: msg=_krx_briefing_message(snapshot,now) if slot%1==0 else ""
     if msg and _engine_send_telegram(msg):
         _engine_krx_market_monitor._last_slot_key=key
         _engine_log("info","[국내장브리핑] 송출 완료 | slot=%s | 변동=%d",key,len(events))
@@ -4029,7 +3796,7 @@ def _us_intraday_events(snapshot):
 
 def _us_intraday_briefing(snapshot, events, et):
     lines = [
-        "<b>🌅 [미국장_브리핑]</b>",
+        "<b>🌐 [미장 장중 브리핑]</b>",
         f"🕐 {et.strftime('%H:%M ET')}",
         "",
     ]
@@ -4068,20 +3835,7 @@ def _us_intraday_briefing(snapshot, events, et):
             lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q['change_pct'])}")
         lines.append("")
     if not events:
-        # 변화가 없어도 30분 정기 브리핑은 반드시 송출한다.
-        # 현재 주요 지수/테마/환율·원자재 현황만 간결하게 표시한다.
-        lines.append("<b>📊 현재 시장 현황</b>")
-        current = []
-        for symbol in ("^IXIC", "^GSPC", "^DJI", "^SOX", "SOXX", "XLK", "XLE", "USDKRW=X", "CL=F", "GC=F"):
-            q = snapshot.get(symbol)
-            if q and q.get("change_pct") is not None:
-                current.append(q)
-        current.sort(key=lambda q: q.get("change_pct", 0), reverse=True)
-        for q in current[:8]:
-            lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
-        if not current:
-            lines.append("• 현재 확인 가능한 주요 시세 없음")
-        lines.append("• 30분간 시장 구조의 유의미한 변화 없음")
+        return ""
     lines.append("※ 방향(급등/급락)과 재료 강도는 별도로 표기하며, 시세만으로 국내 관련주를 강제 연결하지 않습니다.")
     return "\n".join(lines)
 
@@ -4120,13 +3874,15 @@ def _engine_us_market_monitor():
         _US_BRIEFING_LAST_SNAPSHOT = snapshot
         return
 
-    # 첫 슬롯은 개장 브리핑. 이후에도 변화 유무와 관계없이 30분마다 반드시 송출한다.
-    # 변화가 있으면 변화 중심, 변화가 없으면 현재 시장 현황 + "변화 없음"으로 간결하게 표시한다.
+    # 첫 슬롯은 개장 브리핑, 그 이후는 직전 5분 스냅샷 대비 구조 변화가 있을 때만 장중 브리핑.
     if slot_index == 1:
         msg = _us_open_briefing(snapshot, et)
     else:
         events = _us_intraday_events(snapshot)
         msg = _us_intraday_briefing(snapshot, events, et)
+        if not msg:
+            _US_BRIEFING_LAST_SNAPSHOT = snapshot
+            return
     if msg and _engine_send_telegram(msg):
         _engine_us_market_monitor._last_slot_key = slot_key
         _US_BRIEFING_LAST_OPEN_SENT = et.date() if slot_index == 1 else _US_BRIEFING_LAST_OPEN_SENT
@@ -4202,7 +3958,7 @@ def _us_extract_past_move(row):
 
 def _us_close_briefing(snapshot, et):
     lines = [
-        "<b>🌅 [미국장_장마감_브리핑]</b>",
+        "<b>🌐 [미장 마감 브리핑]</b>",
         f"🕐 {et.strftime('%Y-%m-%d %H:%M ET')} · 정규장 마감",
         "",
         "<b>📊 전체 시장 흐름</b>",
@@ -4357,128 +4113,6 @@ def _us_close_briefing(snapshot, et):
     ]
     return "\n".join(lines)
 
-
-# ============================================================
-# 🇰🇷 프리마켓 / 애프터마켓 요약 브리핑
-# 08:50 KST : 국내장 개장 전 특이 테마·종목 + 미국/글로벌 연계 재료
-# 20:00 KST : 국내장 마감 후 당일 강한 테마·종목 + 움직인 이유 정리
-# ============================================================
-ENABLE_KR_PRE_AFTER_BRIEFING = _env_flag("ENABLE_KR_PRE_AFTER_BRIEFING", True)
-_KR_PRE_AFTER_LAST_SENT = {"AM": None, "PM": None}
-
-def _kr_pre_after_rows(snapshot=None):
-    rows=[]
-    if snapshot:
-        for s,q in snapshot.items():
-            if s in {"^KS11","^KQ11","USDKRW=X"}:
-                continue
-            pct=q.get("change_pct")
-            if pct is not None:
-                rows.append(q)
-    rows.sort(key=lambda q: abs(q.get("change_pct") or 0), reverse=True)
-    return rows
-
-def _kr_news_reason(name, theme=""):
-    needles=[str(name or ""), str(theme or "")]
-    with _US_BRIEFING_LOCK:
-        rows=list(_US_BRIEFING_NEWS_MEMORY)
-    for row in reversed(rows[-500:]):
-        tx=str(row.get("title", ""))+" "+str(row.get("text", ""))
-        if any(n and n.lower() in tx.lower() for n in needles):
-            title=str(row.get("title", "")).strip()
-            if title:
-                return title[:180]
-    return ""
-
-def _kr_pre_after_message(mode, now):
-    snapshot=_krx_briefing_fetch_all()
-    rows=_kr_pre_after_rows(snapshot)
-    title="🌅 [프리마켓_브리핑]" if mode=="AM" else "🌅 [애프터마켓_브리핑]"
-    lines=[f"<b>{title}</b>", f"🕐 {now.strftime('%Y-%m-%d %H:%M KST')}", ""]
-
-    if mode=="AM":
-        lines.append("<b>🌅 오늘 아침 특이사항</b>")
-        strong=[q for q in rows if abs(q.get("change_pct") or 0)>=1.0][:8]
-        if strong:
-            for q in strong:
-                pct=q.get("change_pct")
-                reason=_kr_news_reason(q.get("name",""),q.get("theme",""))
-                line=f"• ⚡️{html.escape(q['name'])} {_us_direction(pct)} {_us_format_pct(pct)} · {html.escape(str(q.get('theme','')))}"
-                if reason: line += f" · 이유: {html.escape(reason)}"
-                lines.append(line)
-        else:
-            lines.append("• 현재 확인되는 국내 주요 종목의 특이한 변동 없음")
-
-        lines += ["", "<b>🎯 오늘 주목할 테마</b>"]
-        themes=[]
-        for q in strong:
-            t=str(q.get("theme","")).strip()
-            if t and t not in themes: themes.append(t)
-        if themes:
-            for t in themes[:5]:
-                lines.append(f"• {html.escape(t)}")
-        else:
-            lines.append("• 새롭게 강하게 확인되는 테마 없음")
-        lines += ["", "<b>🌐 미국·글로벌 연계</b>"]
-        us=_us_briefing_fetch_all()
-        movers=sorted([q for s,q in us.items() if s not in {"^IXIC","^GSPC","^DJI","^SOX","^VIX","USDKRW=X","CL=F","GC=F"} and q.get("change_pct") is not None], key=lambda q: abs(q.get("change_pct") or 0), reverse=True)[:5]
-        if movers:
-            for q in movers:
-                lines.append(f"• {html.escape(q['name'])} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))} · {html.escape(q.get('theme',''))}")
-        else:
-            lines.append("• 확인 가능한 미국 주요 종목 특이사항 없음")
-        lines.append("※ 실제 재료가 확인된 테마·종목을 우선 언급하며, 단순 시세만으로 이유를 추정하지 않습니다.")
-    else:
-        lines.append("<b>📊 오늘 장 마감 핵심</b>")
-        indices=[("^KS11","코스피"),("^KQ11","코스닥") ]
-        for s,n in indices:
-            q=snapshot.get(s)
-            if q: lines.append(f"• {n} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
-        lines += ["", "<b>🔥 오늘 강했던 종목·테마</b>"]
-        strong=[q for q in rows if abs(q.get("change_pct") or 0)>=1.0][:10]
-        if strong:
-            for q in strong:
-                pct=q.get("change_pct")
-                reason=_kr_news_reason(q.get("name",""),q.get("theme",""))
-                line=f"• ⚡️{html.escape(q['name'])} {_us_direction(pct)} {_us_format_pct(pct)} · {html.escape(str(q.get('theme','')))}"
-                if reason: line += f" · 이유: {html.escape(reason)}"
-                lines.append(line)
-        else:
-            lines.append("• 오늘 큰 폭으로 움직인 주요 종목 없음")
-        lines += ["", "<b>🎯 오늘의 핵심 테마</b>"]
-        themes=[]
-        for q in strong:
-            t=str(q.get("theme","")).strip()
-            if t and t not in themes: themes.append(t)
-        if themes:
-            for t in themes[:5]: lines.append(f"• {html.escape(t)}")
-        else: lines.append("• 뚜렷한 주도 테마 없음")
-        lines += ["", "<b>📝 장 마감 후 체크포인트</b>"]
-        lines.append("• 내일 갭상승/갭하락 가능성을 만들 수 있는 신규 계약·수주·승인·정책·실적 재료를 우선 확인")
-        lines.append("• 단순 급등 종목은 재료가 확인된 경우에만 원인을 표시")
-    return "\n".join(lines)
-
-def _engine_kr_pre_after_monitor():
-    if not ENABLE_KR_PRE_AFTER_BRIEFING:
-        return
-    now=_now_kst()
-    mode=None
-    if now.hour==8 and 50 <= now.minute < 52:
-        mode="AM"
-    elif now.hour==20 and 0 <= now.minute < 2:
-        mode="PM"
-    if not mode or now.weekday()>=5:
-        return
-    if mode=="AM" and now.strftime('%Y-%m-%d') in KRX_HOLIDAYS_2026:
-        return
-    key=f"{now.date().isoformat()}-{mode}"
-    if _KR_PRE_AFTER_LAST_SENT.get(mode)==key:
-        return
-    msg=_kr_pre_after_message(mode,now)
-    if msg and _engine_send_telegram(msg):
-        _KR_PRE_AFTER_LAST_SENT[mode]=key
-        _engine_log("info","[국내 프리/애프터] %s 브리핑 송출 완료",mode)
-
 def _engine_us_market_close_monitor():
     global _US_CLOSE_BRIEF_LAST_SENT
     if not ENABLE_US_CLOSE_BRIEFING or ZoneInfo is None:
@@ -4545,10 +4179,6 @@ def _engine_cycle():
         _engine_us_market_close_monitor()
     except Exception as e:
         log_error("미장 장마감 브리핑", e)
-    try:
-        _engine_kr_pre_after_monitor()
-    except Exception as e:
-        log_error("국내 프리/애프터 브리핑", e)
     try:
         _engine_schedule_daily_monitor()
     except Exception as e:
