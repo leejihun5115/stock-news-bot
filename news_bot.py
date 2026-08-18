@@ -2583,6 +2583,11 @@ def _engine_telegram_title(raw_text, channel_name=""):
     low = raw.lower()
     if "그로쓰리서치" in low and ("특징주 종목" in low or "실시간 특징주" in low or "특징주 뉴스 속보" in low):
         return "", ""
+    # 채널명·장식문자·홍보문구는 출처 헤더에서만 표시하고 본문에서는 제거한다.
+    channel_clean = re.sub(r"^텔레그램/", "", str(channel_name or "")).strip()
+    if channel_clean:
+        raw = re.sub(re.escape(channel_clean), " ", raw, flags=re.I)
+        raw = re.sub(r"\s+", " ", raw).strip()
     # URL/홍보문구/텔레그램 채널 안내를 제거하고 문장 후보를 만든다.
     parts = re.split(r"(?<=[.!?])\s+|\s{2,}|\n+", str(raw))
     candidates = []
@@ -2594,6 +2599,9 @@ def _engine_telegram_title(raw_text, channel_name=""):
             continue
         if any(x in part for x in ["구독", "받기", "실시간 특징주 받기", "채널", "텔레그램"]):
             continue
+        # 텔레그램 게시물 장식·출처 꼬리표 제거
+        part = re.sub(r"^[🎯🛞📌📊💎🚨🚀✨]+\s*", "", part).strip()
+        part = re.sub(r"\s*[-–—]?\s*\d+\s*$", "", part).strip()
         if "view/" in part or "t.me/" in part:
             continue
         if part.startswith("[그로쓰리서치]") or "[그로쓰리서치]" in part:
@@ -2604,6 +2612,32 @@ def _engine_telegram_title(raw_text, channel_name=""):
         if len(re.sub(r"[^가-힣A-Za-z0-9]", "", part)) >= 8:
             return part[:240], raw
     return (candidates[0][:240] if candidates else raw[:240]), raw
+
+def _engine_telegram_points(title, extra):
+    """텔레그램 원문을 그대로 노출하지 않고 핵심 사실을 기자식 번호 요점으로 압축."""
+    raw = _engine_clean(f"{title} {extra}")
+    raw = re.sub(r'https?://\S+|조회수\s*\d[\d,.]*|\d+(?:\.\d+)?[KkMm]?\s*views?', ' ', raw, flags=re.I)
+    raw = re.sub(r'\s+', ' ', raw).strip()
+    # 제목 반복과 채널성 문구 제거
+    tn = re.sub(r'[^가-힣A-Za-z0-9]', '', title.lower())
+    parts = [p.strip(' -•') for p in re.split(r'(?<=[.!?。])\s+|(?=①|②|③|④|⑤)|\s{2,}', raw) if p.strip(' -•')]
+    clean=[]
+    seen=set()
+    for p in parts:
+        p=re.sub(r'^[①②③④⑤]\s*', '', p).strip()
+        pn=re.sub(r'[^가-힣A-Za-z0-9]', '', p.lower())
+        if not pn or pn==tn or (len(pn)>30 and tn and tn in pn): continue
+        if pn in seen: continue
+        seen.add(pn)
+        if re.fullmatch(r'(?:상승|하락|강세|약세|급등|급락|폭등|폭락|신고가|신저가)(?:[·/ ,]+(?:상승|하락|강세|약세|급등|급락|폭등|폭락|신고가|신저가))*',p,re.I): continue
+        # 기자식 압축: 지나치게 긴 원문은 핵심 앞부분만 사용
+        p=re.sub(r'\s+', ' ', p).strip()
+        if len(p)>150: p=p[:150].rsplit(' ',1)[0]
+        clean.append(p)
+    # 숫자·원인·변화가 있는 문장을 우선
+    ranked=sorted(clean,key=lambda p:(bool(re.search(r'\d|%|억|조|GW|계약|수주|증설|투자|출시|승인|허가|실적|매출|금리|환율|재고|수요|공급',p)), -len(p)), reverse=True)
+    return ranked[:4]
+
 
 def _engine_format_message(item):
     """뉴스 카드 최종 출력.
@@ -2699,6 +2733,15 @@ def _engine_format_message(item):
     if keypoint:
         lines.append(f"🔎 {html.escape(keypoint)}")
 
+    # 텔레그램은 원문을 화면 그대로 복사하지 않고 번호형 핵심 포인트로 재작성한다.
+    if source_raw.startswith("텔레그램/"):
+        points = _engine_telegram_points(title, extra)
+        for idx, point in enumerate(points, 1):
+            # 🔎 한 줄과 동일한 내용을 반복하지 않는다.
+            if keypoint and re.sub(r"[^가-힣A-Za-z0-9]", "", point.lower()) == re.sub(r"[^가-힣A-Za-z0-9]", "", keypoint.lower()):
+                continue
+            lines.append(f"{chr(0x245F + idx)} {html.escape(point)}")
+
     # ------------------------------------------------------------
     # 3) 국내 관련 테마/관심종목
     # ------------------------------------------------------------
@@ -2719,9 +2762,9 @@ def _engine_format_message(item):
                 names.append(name)
     if names:
         stock_text = " · ".join(f"⚡️{html.escape(n)}" for n in names)
-        lines.append(f"✔👀관련주 : {stock_text}")
+        lines.append(f"✔️👀관련주 : {stock_text}")
     else:
-        lines.append("✔👀관련주 : 無")
+        lines.append("✔️👀관련주 : 無")
 
     # ------------------------------------------------------------
     # 4) 과거 유사 급등/상한가 사례
@@ -2762,9 +2805,9 @@ def _engine_format_message(item):
             event = re.sub(r"^(?:예정|계획|발표)\s*[:：-]?\s*", "", event)
             event = re.sub(r"\s+", " ", event)[:180]
             if date_text and event:
-                lines.extend(["📅 일정", f"{html.escape(date_text)} 📋 {html.escape(event)}"])
+                lines.extend([f"⏰일정 {html.escape(date_text)}", "", f"✔️👀 {html.escape(event)}"])
             elif date_text:
-                lines.extend(["📅 일정", f"{html.escape(date_text)} 📋 일정 확인"])
+                lines.extend([f"⏰일정 {html.escape(date_text)}", "", "✔️👀 일정 확인"])
 
     if item.get("link"):
         link = html.escape(str(item["link"]), quote=True)
