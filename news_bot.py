@@ -2640,6 +2640,71 @@ def _engine_telegram_points(title, extra):
     return ranked[:4]
 
 
+
+def _engine_telegram_disclosure_card(title, extra):
+    """공시알리미 텔레그램 원문을 기자식 공시 카드로 재작성한다.
+    원문 화면을 복사하지 않고 공시 목적 1줄 + 비교 가능한 핵심 항목으로 정렬한다.
+    """
+    raw = _engine_clean(f"{title} {extra}")
+    if not raw:
+        return None
+    # 채널 홍보/메타 제거
+    raw = re.sub(r'https?://\S+|\d+(?:\.\d+)?[KkMm]?\s*views?', ' ', raw, flags=re.I)
+    raw = re.sub(r'실시간 주식 공시 채널\s*', ' ', raw, flags=re.I)
+    raw = re.sub(r'\s+', ' ', raw).strip()
+
+    # 기업명/종목코드
+    mcorp = re.search(r'([가-힣A-Za-z0-9·&.]+)\s*\((\d{6})\)', raw)
+    if not mcorp:
+        return None
+    corp, code = mcorp.group(1).strip(), mcorp.group(2)
+
+    # 공시명: 날짜 뒤의 📋~잠정실적/N 구간에서 추출
+    report = ''
+    mr = re.search(r'📋\s*([^|]+?)(?:\s+잠정실적\s*:\s*[YN])?(?:\s+━━|\s+💹|\s*$)', raw)
+    if mr:
+        report = mr.group(1).strip()
+    if not report:
+        mr = re.search(r'(기재정정[^|💹]+|주요사항보고서[^|💹]+)', raw)
+        if mr:
+            report = mr.group(1).strip()
+    report = re.sub(r'\s+', ' ', report).strip(' -|')
+    report = re.sub(r'\s*잠정실적\s*:\s*[YN]\s*$', '', report, flags=re.I).strip()
+
+    # 시세 정보
+    price = re.search(r'현재가\s*₩\s*([\d,]+)', raw)
+    change = re.search(r'([+-]\d+(?:\.\d+)?%)', raw)
+    mcap = re.search(r'시총\s*([\d,.]+\s*(?:억|조))', raw)
+    date = re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2})', raw)
+    price_text = f"₩{price.group(1)}" if price else '—'
+    change_text = change.group(1) if change else '—'
+    mcap_text = mcap.group(1) if mcap else '—'
+    date_text = date.group(1).replace('/','.') .replace('-','.') if date else ''
+
+    # 공시 유형을 사람이 바로 이해할 수 있게 압축
+    clean_report = report
+    clean_report = clean_report.replace('기재정정', '').strip()
+    if '타법인주식및출자증권양수결정' in clean_report:
+        purpose = f"{corp}, 타법인 주식 양수결정 정정 공시"
+        one = "타법인 주식 양수결정 관련 공시 내용을 정정해 주요 변경사항을 알림."
+        event = '타법인주식·출자증권 양수결정'
+    elif clean_report:
+        short = re.sub(r'주요사항보고서\s*\(?', '', clean_report).strip()
+        short = short[:80]
+        purpose = f"{corp}, {short} 공시"
+        one = f"{corp}가 {short} 관련 내용을 공시해 주요 변경사항을 알림."
+        event = short
+    else:
+        purpose = f"{corp}, 주요 공시 발표"
+        one = f"{corp}의 주요 경영사항이 공시됨."
+        event = '주요 경영사항'
+
+    return {
+        'corp': corp, 'code': code, 'date': date_text, 'report': event,
+        'purpose': purpose, 'one': one, 'mcap': mcap_text,
+        'price': price_text, 'change': change_text
+    }
+
 def _engine_format_message(item):
     """뉴스 카드 최종 출력.
     원문 수집/필터/DB/시장상태/스케줄 로직은 변경하지 않고,
@@ -2682,6 +2747,42 @@ def _engine_format_message(item):
         header,
         f"<b>📌 {html.escape(title)}</b>",
     ]
+    # 공시알리미 텔레그램은 원문 복사 금지: 제목 1줄 + 비교형 핵심표로 재작성한다.
+    if source_raw.startswith("텔레그램/공시알리미"):
+        card = _engine_telegram_disclosure_card(title, extra)
+        if card:
+            lines = [
+                header,
+                f"<b>📌 {html.escape(card['purpose'])}</b>",
+                f"🔎 {html.escape(card['one'])}",
+                "<pre>" + html.escape(
+                    f"항목      내용\n"
+                    f"기업      {card['corp']} ({card['code']})\n"
+                    f"공시      {card['report']}\n"
+                    f"공시일    {card['date'] or '—'}\n"
+                    f"시가총액  {card['mcap']}\n"
+                    f"현재가    {card['price']}\n"
+                    f"등락      {card['change']}\n"
+                    f"잠정실적  없음"
+                ) + "</pre>",
+            ]
+            # 관련주는 동일 고정 형식으로만 표시
+            try:
+                drows = _engine_domestic_watchlist(item)
+            except (NameError, AttributeError):
+                drows = []
+            names=[]
+            for row in drows[:3]:
+                if isinstance(row, dict):
+                    n=str(row.get('name') or row.get('company') or '').strip()
+                    if n and n not in names: names.append(n)
+            lines.append("✔️👀관련주 : " + (" · ".join(f"⚡️{html.escape(n)}" for n in names) if names else "無"))
+            # 공시 접수일은 일정이 아니다. 미래 이벤트 날짜가 별도로 확인될 때만 일정 로직에서 출력한다.
+            if item.get("link"):
+                link = html.escape(str(item["link"]), quote=True)
+                lines.append(f'<a href="{link}">🔗 원문 보기</a>')
+            return "\n\n".join(x for x in lines if str(x).strip())
+
 
     if freshness in ("재탕", "업그레이드") and prev:
         prev_source = html.escape(str(prev.get("source", "")))
@@ -2695,6 +2796,9 @@ def _engine_format_message(item):
     core, schedule, summary_links, summary_relation = _engine_summary(
         title, extra, companies, market_hits
     )
+    # 공시 접수일/보고서명은 미래 일정이 아니다. 공시알리미의 현재일자는 일정으로 재출력하지 않는다.
+    if source_raw.startswith("텔레그램/공시알리미") or source_raw == "DART":
+        schedule = ""
 
     # 기존 summary가 제목을 그대로 반복하는 경우 제거.
     def _compact_keypoint(text):
