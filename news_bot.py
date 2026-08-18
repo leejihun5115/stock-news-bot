@@ -2934,12 +2934,38 @@ def _engine_process_item(source, title, link, published="", extra=""):
         _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
         return False
 
-    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
-    # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
-    if not _engine_is_within_recent_window(published, 60):
-        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
+    # 국내 뉴스는 RSS/네이버 발행시간 지연을 감안해 최근 3시간까지 허용한다.
+    # 미국/외부 채널의 기존 60분 정책은 그대로 유지한다.
+    domestic_source = (
+        str(source) == "네이버뉴스"
+        or str(source) in set(DOMESTIC_RSS_SOURCE_NAMES.values())
+        or str(source) == "국내RSS"
+    )
+    recent_window = 180 if domestic_source else 60
+    if not _engine_is_within_recent_window(published, recent_window):
+        _engine_log("info", "[제외] ⏱️ 최근 %d분 밖의 뉴스 | source=%s | %s", recent_window, source, title[:80])
         return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
+
+    # 국내 RSS/네이버 뉴스는 '기업명 + 주가재료'가 동시에 있어야만 통과시키던
+    # 기존 공통 필터 때문에 일반적인 국내 증시/경제 뉴스가 대량 누락됐다.
+    # 국내 투자자가 실제로 확인할 가치가 있는 시장/산업/정책/기업 뉴스는
+    # 관련주가 자동으로 잡히지 않아도 송출한다.
+    if domestic_source and not ok:
+        domestic_news_words = {
+            "증시", "코스피", "코스닥", "주식", "주가", "상장", "거래", "투자",
+            "금리", "환율", "채권", "원자재", "유가", "반도체", "AI", "인공지능",
+            "배터리", "2차전지", "바이오", "제약", "임상", "신약", "조선", "방산",
+            "원전", "전력", "로봇", "자동차", "수출", "수입", "실적", "매출",
+            "영업이익", "수주", "계약", "공급", "증설", "투자유치", "인수", "합병",
+            "공시", "정책", "산업", "기업", "금융", "은행", "증권", "세제",
+            "관세", "정부", "한국은행", "기준금리", "공급망", "경기", "GDP",
+        }
+        domestic_signal = any(w.lower() in (title + " " + extra).lower() for w in domestic_news_words)
+        if domestic_signal:
+            ok = True
+            category = "🇰🇷국내뉴스"
+            _engine_log("info", "[국내뉴스 완화통과] source=%s | %s", source, title[:100])
     market_state = _engine_market_state(source, published)
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
     if not gate_ok:
