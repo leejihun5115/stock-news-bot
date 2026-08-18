@@ -983,6 +983,9 @@ DART_STRONG_REPORT_KEYWORDS = {
     "주식등의대량보유상황보고서",
     "양수결정", "양도결정",
     "추가상장",
+    # 정정공시/주요경영사항은 제목이 길거나 표기가 붙어도 놓치지 않는다.
+    "기재정정", "정정", "주요경영사항", "주요사항",
+    "배당", "주주명부폐쇄", "잠정실적", "영업실적",
 }
 
 DART_ALWAYS_EXPOSE_KEYWORDS = DART_STRONG_REPORT_KEYWORDS - {
@@ -1633,6 +1636,16 @@ def _engine_mark_seen(key):
 
 def _engine_clean(text):
     return re.sub(r"\s+", " ", BeautifulSoup(str(text or ""), "html.parser").get_text(" ")).strip()
+
+
+def _engine_clean_news_title(title):
+    """송출 제목에서 기자/채널 라벨만 제거한다. 핵심 내용과 실제 가격·재료 표현은 보존한다."""
+    t = _engine_clean(title)
+    # 앞쪽 라벨
+    t = re.sub(r"^\s*(?:\[\s*)?(?:속보|단독|특징주|리포트|특허)(?:\s*\])?\s*[:：|\-—]*\s*", "", t, flags=re.I)
+    # 제목 중간에 반복 삽입된 라벨은 삭제하되 일반 문장 속 단어는 건드리지 않는다.
+    t = re.sub(r"(?:^|\s)\[(?:속보|단독|특징주|리포트|특허)\](?=\s|$)", " ", t, flags=re.I)
+    return re.sub(r"\s{2,}", " ", t).strip(" -—|:")
 
 
 def _engine_item_key(title, link):
@@ -2888,7 +2901,7 @@ def _engine_is_within_recent_window(published, window_minutes=60):
 
 
 def _engine_process_item(source, title, link, published="", extra=""):
-    title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
+    title = _engine_clean_news_title(title); extra = _engine_clean(extra); link = str(link or "").strip()
     if not title:
         return False
 
@@ -2903,7 +2916,7 @@ def _engine_process_item(source, title, link, published="", extra=""):
     # 당일 접수일만 조회하므로 DART는 이 시간창을 적용하지 않는다.
     if not str(source).upper().startswith("DART"):
         if not _engine_is_within_recent_window(published, 60):
-            _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
+            _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | published=%s | %s", source, _engine_entry_published({"published": published}) if published else "없음", title[:80])
             return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
@@ -2960,6 +2973,20 @@ def _engine_fetch_rss(url, source):
                 _engine_log("info", "[RSS] %s | 수집=%d건", source, len(entries))
                 return entries
             status = getattr(r, "status_code", 0)
+            # 한국경제가 Render/클라우드 IP에서 403을 반환하는 경우가 있어
+            # Google News의 site:hankyung.com RSS로 즉시 대체 수집한다.
+            if status == 403 and source == "한국경제":
+                try:
+                    fallback_url = _google_news_rss_url("site:hankyung.com 주식 증권 기업 실적 수주 공시")
+                    fr = requests.get(fallback_url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
+                    if fr.ok:
+                        fres = feedparser.parse(fr.content)
+                        fentries = getattr(fres, "entries", []) or []
+                        _engine_log("warning", "[RSS 대체] 한국경제 403 → Google News site:hankyung.com | 수집=%d건", len(fentries))
+                        return fentries
+                    _engine_log("error", "[RSS 대체 실패] 한국경제 | HTTP=%s", fr.status_code)
+                except Exception as fe:
+                    _engine_log("error", "[RSS 대체 실패] 한국경제 | %s", str(fe)[:160])
             if status in retry_status and attempt < len(delays):
                 _engine_log("warning", "[RSS 재시도] %s | HTTP=%s | %s초 후 %d/%d", source, status, delays[attempt], attempt+1, len(delays))
                 time.sleep(delays[attempt])
@@ -2975,6 +3002,23 @@ def _engine_fetch_rss(url, source):
             return []
 
 
+def _engine_entry_published(entry):
+    """RSS마다 published/updated 필드가 제각각인 문제를 보완한다.
+    feedparser의 *_parsed 값도 사용해 최신 기사 시각을 최대한 정확히 복원한다."""
+    for key in ("published", "updated", "pubDate", "date", "dc_date"):
+        value = entry.get(key) if hasattr(entry, "get") else None
+        if value:
+            return value
+    for key in ("published_parsed", "updated_parsed", "pubdate_parsed"):
+        value = entry.get(key) if hasattr(entry, "get") else None
+        if value:
+            try:
+                return datetime.datetime(*value[:6], tzinfo=datetime.timezone.utc).astimezone(_KST).isoformat()
+            except Exception:
+                pass
+    return ""
+
+
 def _engine_run_google_and_domestic():
     total = 0
     if ENABLE_DOMESTIC_NEWS:
@@ -2982,7 +3026,7 @@ def _engine_run_google_and_domestic():
             source = DOMESTIC_RSS_SOURCE_NAMES.get(url, "국내RSS")
             entries = _engine_fetch_rss(url, source)
             for e in entries[:50]:
-                if _engine_process_item(source, e.get("title", ""), e.get("link", ""), e.get("published", "") or e.get("updated", ""), e.get("summary", "")):
+                if _engine_process_item(source, e.get("title", ""), e.get("link", ""), _engine_entry_published(e), e.get("summary", "")):
                     total += 1
     else:
         _engine_log("warning", "[국내뉴스] ENABLE_DOMESTIC_NEWS=OFF")
@@ -2990,7 +3034,7 @@ def _engine_run_google_and_domestic():
         for url in US_RSS_URLS:
             entries = _engine_fetch_rss(url, "Google-US")
             for e in entries[:50]:
-                if _engine_process_item("Google-US", e.get("title", ""), e.get("link", ""), e.get("published", "") or e.get("updated", ""), e.get("summary", "")):
+                if _engine_process_item("Google-US", e.get("title", ""), e.get("link", ""), _engine_entry_published(e), e.get("summary", "")):
                     total += 1
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
     if ENABLE_US_NEWS and total == 0:
@@ -3250,7 +3294,7 @@ def _engine_run_dart():
             if len(rows) < 100:
                 break
             time.sleep(0.4)
-        _engine_log("info", "[DART] 오늘 공시 점검 완료 | 페이지=%d | 전체=%d건 | 후보송출=%d건", total_pages, total_rows, sent)
+        _engine_log("info", "[DART] 오늘 공시 점검 완료 | API키=%s | 페이지=%d | 전체=%d건 | 후보송출=%d건", "OK" if DART_API_KEY else "없음", total_pages, total_rows, sent)
     except Exception as e:
         log_error("DART 검사", e)
 
@@ -3376,7 +3420,7 @@ def _engine_run_youtube():
         for e in entries[:10]:
             title = e.get("title", "")
             desc = e.get("summary", "") or e.get("description", "")
-            published = e.get("published", "") or e.get("updated", "")
+            published = _engine_entry_published(e)
             if _engine_process_item(f"유튜브/{name}", title, e.get("link", ""), published, desc): total += 1
     _engine_log("info", "[유튜브 완료] 채널=%d/%d 성공 | 실패=%d | 신규후보=%d", ok_channels, len(YOUTUBE_CHANNELS), fail_channels, total)
 
