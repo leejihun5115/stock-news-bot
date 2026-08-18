@@ -303,7 +303,7 @@ ENABLE_YOUTUBE = _startup_env_flag("ENABLE_YOUTUBE")
 # 처리되지 않은 예외도 마지막 traceback까지 기록
 # ============================================================
 import logging
-from logging.handlers import RotatingFileHandler
+from logging import FileHandler
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 try:
     from zoneinfo import ZoneInfo
@@ -355,7 +355,7 @@ if not _logger.handlers:
     _console.setFormatter(_fmt)
     _logger.addHandler(_console)
     try:
-        _file = RotatingFileHandler(LOG_FILE, mode="a", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        _file = FileHandler(LOG_FILE, mode="w", encoding="utf-8")
         _file.setLevel(logging.INFO)
         _file.setFormatter(_fmt)
         _logger.addHandler(_file)
@@ -1280,13 +1280,7 @@ def _schedule_bootstrap_one_year():
     _engine_log('info','[일정DB] 최초 1년 전수형 초기화 완료 | 확인=%d | 신규=%d | RSS요청=%d',checked,added,requests_count)
 
 def _schedule_add_dart_row(report, corp, link, rcept_dt):
-    # 접수일 자체는 과거일이므로 일정으로 넣지 않는다. 다만 보고서명에 미래 이벤트 날짜가 포함된 경우에만 추출한다.
-    row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt, limitup=False)
-    if row:
-        row['link']=link
-        _schedule_append(row)
-
-def _schedule_add_dart_row(report, corp, link, rcept_dt):
+    # DART 접수일 자체는 과거 일정으로 저장하지 않고, 보고서명에 미래 이벤트가 있을 때만 추출한다.
     row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt)
     if row:
         row['link']=link
@@ -1965,7 +1959,14 @@ def _engine_classify(source, title, extra=""):
             return True, "🌐", global_companies, k1, k2, market_hits
         return False, "외부콘텐츠", [], k1, k2, market_hits
 
-    if k1 and k2 and stock_linked and market_relevant:
+    # 일반 뉴스는 '키워드 2개'가 없다는 이유만으로 좋은 재료를 버리지 않는다.
+    # 국내 상장기업 + 명확한 시장재료, 또는 강한 이벤트 신호가 있으면 통과시킨다.
+    strong_event_hits = [x for x in (
+        "수주", "공급계약", "계약 체결", "양산", "상용화", "출시", "승인", "허가",
+        "임상", "기술이전", "마일스톤", "실적", "어닝서프라이즈", "대규모 투자",
+        "증설", "공개매수", "자사주", "배당", "신제품"
+    ) if x.lower() in low]
+    if stock_linked and (market_relevant or strong_event_hits or (k1 and k2)):
         return True, "📌", domestic, k1, k2, market_hits
     if global_relevant:
         return True, "🌐", global_companies, k1, k2, market_hits
@@ -2736,7 +2737,7 @@ def _engine_is_within_recent_window(published, window_minutes=60):
     return 0 <= age_seconds <= window_minutes * 60
 
 
-def _engine_process_item(source, title, link, published="", extra="", force_test=False):
+def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
     if not title:
         return False
@@ -2758,18 +2759,17 @@ def _engine_process_item(source, title, link, published="", extra="", force_test
         _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
         return False
 
-    # 일반 뉴스만 최근 60분/시장시간 게이트를 적용한다.
-    # 부팅 테스트는 실제 데이터가 아니므로 이 게이트를 건너뛰되, 일반 뉴스 로직에는 영향을 주지 않는다.
+    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
+    # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
+    if not _engine_is_within_recent_window(published, 60):
+        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
+        return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
-    if not force_test:
-        if not _engine_is_within_recent_window(published, 60):
-            _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
-            return False
-        gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
-        if not gate_ok:
-            _engine_log("info", "[제외] ⏱️ %s | %s", gate_reason, title[:80])
-            return False
+    gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
+    if not gate_ok:
+        _engine_log("info", "[제외] ⏱️ %s | %s", gate_reason, title[:80])
+        return False
     if market_state == "시장시간 확인불가":
         _engine_log("warning", "[로직] 시장시간 확인 필요 | source=%s | %s", source, title[:80])
     # 송출 대상이 아니어도 미래의 중요 일정은 별도 DB에 누적한다.
@@ -2782,7 +2782,7 @@ def _engine_process_item(source, title, link, published="", extra="", force_test
     with _engine_lock:
         if key in _engine_seen:
             return False
-    if not ok and not force_test:
+    if not ok:
         reason = "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
         _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80])
         return False
@@ -2802,6 +2802,21 @@ def _engine_process_item(source, title, link, published="", extra="", force_test
     _engine_log("info", "[후보] %s | 기업=%s | 재료=%s | %s", category, ",".join(companies[:3]) or "없음", ",".join(market_hits[:3]) or "없음", market_state)
     return True
 
+
+def _engine_entry_published(entry):
+    """RSS 발행시각을 최대한 안정적으로 복원한다. 문자열이 없어도 feedparser 구조화 날짜를 사용한다."""
+    for key in ("published", "updated", "created", "pubDate", "date"):
+        value = entry.get(key)
+        if value:
+            return value
+    for key in ("published_parsed", "updated_parsed", "created_parsed"):
+        value = entry.get(key)
+        if value:
+            try:
+                return datetime.datetime(*value[:6], tzinfo=datetime.timezone.utc)
+            except Exception:
+                continue
+    return ""
 
 def _engine_fetch_rss(url, source):
     started = time.time()
@@ -2828,7 +2843,7 @@ def _engine_run_google_and_domestic():
             source = DOMESTIC_RSS_SOURCE_NAMES.get(url, "국내RSS")
             entries = _engine_fetch_rss(url, source)
             for e in entries[:50]:
-                if _engine_process_item(source, e.get("title", ""), e.get("link", ""), e.get("published", "") or e.get("updated", ""), e.get("summary", "")):
+                if _engine_process_item(source, e.get("title", ""), e.get("link", ""), _engine_entry_published(e), e.get("summary", "")):
                     total += 1
     else:
         _engine_log("warning", "[국내뉴스] ENABLE_DOMESTIC_NEWS=OFF")
@@ -2836,7 +2851,7 @@ def _engine_run_google_and_domestic():
         for url in US_RSS_URLS:
             entries = _engine_fetch_rss(url, "Google-US")
             for e in entries[:50]:
-                if _engine_process_item("Google-US", e.get("title", ""), e.get("link", ""), e.get("published", "") or e.get("updated", ""), e.get("summary", "")):
+                if _engine_process_item("Google-US", e.get("title", ""), e.get("link", ""), _engine_entry_published(e), e.get("summary", "")):
                     total += 1
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
     if ENABLE_US_NEWS and total == 0:
@@ -3206,7 +3221,7 @@ def _engine_run_youtube():
         for e in entries[:10]:
             title = e.get("title", "")
             desc = e.get("summary", "") or e.get("description", "")
-            published = e.get("published", "") or e.get("updated", "")
+            published = _engine_entry_published(e)
             if _engine_process_item(f"유튜브/{name}", title, e.get("link", ""), published, desc): total += 1
     _engine_log("info", "[유튜브 완료] 채널=%d/%d 성공 | 실패=%d | 신규후보=%d", ok_channels, len(YOUTUBE_CHANNELS), fail_channels, total)
 
@@ -4032,10 +4047,7 @@ def _engine_cycle():
         _engine_run_youtube()
     except Exception as e:
         log_error("유튜브 전체", e)
-    try:
-        _engine_run_test_fixture()
-    except Exception as e:
-        log_error("테스트 파일 전체", e)
+    # 테스트는 부팅 시 1회만 송출한다. 일반 주기에서는 실행하지 않는다.
     try:
         _engine_krx_market_monitor()
     except Exception as e:
@@ -4052,9 +4064,9 @@ def _engine_cycle():
         _engine_schedule_daily_monitor()
     except Exception as e:
         log_error("일정 일일 브리핑", e)
-    _engine_flush_pending()
+    sent = _engine_flush_pending()
     _engine_last_cycle_finished = time.time()
-    _engine_log("info", "[주기 완료] %.2f초", time.time()-started)
+    _engine_log("info", "[주기 완료] %.2f초 | Telegram 신규송출=%d | pending=%d", time.time()-started, sent, len(_engine_pending))
 
 
 
@@ -4139,36 +4151,45 @@ BOOT_TEST_ITEMS = [
     },
 ]
 
+_BOOT_TEST_ALREADY_RAN = False
+
 def _engine_run_embedded_boot_test():
-    """부팅 직후 테스트를 단독 실행한다. 일반 뉴스의 시간/시장/관련성 게이트와 분리한다."""
-    total = 0
-    source_items = None
+    global _BOOT_TEST_ALREADY_RAN
+    if _BOOT_TEST_ALREADY_RAN:
+        _engine_log("debug", "[BOOT 테스트] 이미 실행됨 → 재송출하지 않음")
+        return 0
+    _BOOT_TEST_ALREADY_RAN = True
+    # 테스트는 일반 뉴스의 최근 60분/주가재료 게이트를 타지 않도록 별도 pending 경로를 사용한다.
+    items = []
     if NEWS_TEST_FILE and os.path.exists(NEWS_TEST_FILE):
         try:
             with open(NEWS_TEST_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            source_items = data if isinstance(data, list) else data.get("items", [])
-            if not isinstance(source_items, list):
-                source_items = None
-            else:
-                _engine_log("info", "[BOOT 테스트] 외부 테스트 파일 사용 | path=%s | 입력=%d", NEWS_TEST_FILE, len(source_items))
+            items = data if isinstance(data, list) else data.get("items", [])
+            _engine_log("info", "[BOOT 테스트] 외부 테스트 파일 사용 | %d건", len(items))
         except Exception as e:
-            _engine_log("error", "[BOOT 테스트] 외부 테스트 파일 읽기 실패 | path=%s | 원인=%s", NEWS_TEST_FILE, str(e)[:160])
-    if source_items is None:
-        source_items = BOOT_TEST_ITEMS
-        _engine_log("info", "[BOOT 테스트] 내장 테스트 사용 | 입력=%d", len(source_items))
-
-    for item in source_items:
-        key = str(item.get("link") or "").strip() or f'{item.get("source", "TEST")}|{item.get("title", "")}'
+            _engine_log("warning", "[BOOT 테스트] 외부 파일 읽기 실패 → 내장 테스트 사용 | %s", str(e)[:120])
+    if not items:
+        items = BOOT_TEST_ITEMS
+    sent=0
+    for item in items:
+        key=str(item.get("link") or "") or f"TEST|{item.get('title','')}"
         with _engine_lock:
-            _engine_seen.discard(key)
-        if _engine_process_item(
-            item.get("source", "TEST"), item.get("title", ""), item.get("link", ""),
-            item.get("published", ""), item.get("extra", ""), force_test=True
-        ):
-            total += 1
-    sent = _engine_flush_pending()
-    _engine_log("info", "[BOOT 테스트 완료] 입력=%d | 송출대기=%d | 실제송출=%d", len(source_items), total, sent)
+            if key in _engine_seen:
+                continue
+        title=_engine_clean(item.get("title", "")); extra=_engine_clean(item.get("extra", ""))
+        if not title:
+            continue
+        # 테스트 카드는 실제 뉴스와 동일한 포맷터를 사용하되 필터만 우회한다.
+        _engine_pending.append({
+            "source": item.get("source", "TEST"), "title": title, "link": key,
+            "published": item.get("published", ""), "extra": extra, "key": key,
+            "category": "🧪테스트", "companies": [], "k1": False, "k2": False,
+            "market_hits": [], "time_text": _now_kst().strftime("%H:%M"),
+            "market_state": "테스트"
+        })
+    sent=_engine_flush_pending()
+    _engine_log("info", "[BOOT 테스트] 입력=%d | 실제송출=%d | 1회 실행 완료", len(items), sent)
     return sent
 
 if __name__ == "__main__":
