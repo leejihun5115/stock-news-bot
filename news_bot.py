@@ -1280,8 +1280,8 @@ def _schedule_bootstrap_one_year():
     _engine_log('info','[일정DB] 최초 1년 전수형 초기화 완료 | 확인=%d | 신규=%d | RSS요청=%d',checked,added,requests_count)
 
 def _schedule_add_dart_row(report, corp, link, rcept_dt):
-    # 접수일 자체는 과거일이므로 일정으로 넣지 않는다. 다만 보고서명에 미래 이벤트 날짜가 포함된 경우에만 추출한다.
-    row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt, limitup=False)
+    # DART 접수일 자체는 과거 일정으로 저장하지 않고, 보고서명에 미래 이벤트가 있을 때만 추출한다.
+    row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt)
     if row:
         row['link']=link
         _schedule_append(row)
@@ -1959,7 +1959,14 @@ def _engine_classify(source, title, extra=""):
             return True, "🌐", global_companies, k1, k2, market_hits
         return False, "외부콘텐츠", [], k1, k2, market_hits
 
-    if k1 and k2 and stock_linked and market_relevant:
+    # 일반 뉴스는 '키워드 2개'가 없다는 이유만으로 좋은 재료를 버리지 않는다.
+    # 국내 상장기업 + 명확한 시장재료, 또는 강한 이벤트 신호가 있으면 통과시킨다.
+    strong_event_hits = [x for x in (
+        "수주", "공급계약", "계약 체결", "양산", "상용화", "출시", "승인", "허가",
+        "임상", "기술이전", "마일스톤", "실적", "어닝서프라이즈", "대규모 투자",
+        "증설", "공개매수", "자사주", "배당", "신제품"
+    ) if x.lower() in low]
+    if stock_linked and (market_relevant or strong_event_hits or (k1 and k2)):
         return True, "📌", domestic, k1, k2, market_hits
     if global_relevant:
         return True, "🌐", global_companies, k1, k2, market_hits
@@ -2337,126 +2344,45 @@ def _engine_telegram_title(raw_text, channel_name=""):
 # 번역 여부와 무관하게 동일한 요약 규칙을 적용한다.
 # ============================================================
 def _engine_force_numbered_keypoint(title: str, extra: str) -> str:
-    """모든 뉴스 공통 기자식 서브헤드 1·2·3 생성기.
-
-    원칙:
-    - Telegram/RSS에서 받은 제목은 제목 영역에 그대로 활용한다.
-    - 🔎 아래에는 제목을 반복하지 않고, 본문/서브본문에서 실제 사실을 추려
-      기자가 붙인 소제목처럼 1~3개만 정렬한다.
-    - 숫자·증감·원인·전망·일정·계약/수주 등 정보성이 높은 문장을 우선한다.
-    - 내용이 없는 번호는 절대 만들지 않는다.
-    """
     title = re.sub(r"\s+", " ", str(title or "")).strip()
     body = re.sub(r"\s+", " ", str(extra or "")).strip()
     if not body:
         return ""
 
-    # 매체명/기자명/불필요한 메타 꼬리표 제거
-    body = re.sub(
-        r"^\s*(?:모닝스타|Reuters|로이터|연합뉴스|조선일보|매일경제|한국경제)\s*",
-        "", body, flags=re.I
-    )
+    # Remove publisher-only prefixes and common article boilerplate.
+    body = re.sub(r"^\s*(?:모닝스타|Reuters|로이터|연합뉴스|조선일보|매일경제)\s*", "", body, flags=re.I)
     body = re.sub(r"^\s*\([^)]{1,100}\)\s*[^:]{1,40}기자\s*[:：]\s*", "", body)
 
-    # 이미 원문에 1·2·3 소제목이 있다면 그것을 최우선으로 보존한다.
+    # Prefer explicit numbered/source points.
     pts = re.findall(
         r"(?:^|\s)(?:[①②③④⑤⑥⑦⑧⑨⑩]|\d+[.)])\s*"
         r"(.+?)(?=\s*(?:[①②③④⑤⑥⑦⑧⑨⑩]|\d+[.)])|$)",
         body
     )
-    pts = [re.sub(r"\s+", " ", x).strip(" .,-") for x in pts if x.strip()]
+    pts = [re.sub(r"\s+", " ", p).strip(" .,-") for p in pts if p.strip()]
 
-    # 문장/구분자 기준으로 후보를 만든다.
     if len(pts) < 2:
-        parts = re.split(
-            r"(?<=[.!?。！？])\s+|"
-            r"\s+(?=시장 동향|시장 전망|3분기 전망|4분기 전망|전망|배경|원인|"
-            r"공급 부족|가격 상승|실적|관련주|관련 종목|일정)\s*[:：]?\s*|"
-            r"\s*[-•▶️]\s*",
-            body
-        )
-        parts = [re.sub(r"\s+", " ", x).strip(" .,-:：") for x in parts if x.strip()]
-
-        # 제목과 동일하거나 제목으로 시작하는 긴 반복 문장은 잘라낸다.
-        title_norm = re.sub(r"[^0-9A-Za-z가-힣]", "", title).lower()
-        cleaned = []
-        for part in parts:
-            norm = re.sub(r"[^0-9A-Za-z가-힣]", "", part).lower()
-            if not part or norm in {"원문보기", "view", "kb", "html"}:
+        # Split prose into factual clauses/sentences.
+        parts = re.split(r"(?<=[.!?。！？])\s+|(?<=\s)•\s*|(?<=\s)▶️\s*", body)
+        parts = [re.sub(r"\s+", " ", p).strip(" .,-") for p in parts if p.strip()]
+        # Drop title-equivalent and meta-only fragments.
+        nt = re.sub(r"[^0-9A-Za-z가-힣]", "", title).lower()
+        filtered = []
+        for p in parts:
+            np = re.sub(r"[^0-9A-Za-z가-힣]", "", p).lower()
+            if not p or np == nt:
                 continue
-            if title_norm and (norm == title_norm or title_norm in norm[:max(25, len(title_norm))]):
-                # 제목 뒤에 붙은 추가 정보가 있으면 제목 이후만 사용
-                idx = part.lower().find(title.lower())
-                if idx >= 0:
-                    tail = part[idx + len(title):].strip(" -:：")
-                    if len(tail) >= 15:
-                        part = tail
-                    else:
-                        continue
-                else:
-                    continue
-            cleaned.append(part)
-        pts = cleaned
+            if any(x in p.lower() for x in ["원문 보기", "view", "kb", "html"]):
+                continue
+            filtered.append(p)
+        pts = filtered
 
-    # 너무 긴 한 덩어리는 정보 구분자로 다시 나눈다.
-    expanded = []
-    for part in pts:
-        chunks = re.split(
-            r"\s+(?=(?:시장 동향|시장 전망|3분기 전망|4분기 전망|전망|"
-            r"공급 부족|가격 상승|수요 증가|수요 급증|실적|배경|원인)\s*[:：])",
-            part
-        )
-        expanded.extend([x.strip(" .,-:：") for x in chunks if x.strip()])
-    pts = expanded
+    # Guarantee the requested 1·2·3 display when meaningful content exists.
+    pts = pts[:3]
+    if not pts:
+        return ""
 
-    # 기자식 우선순위: 숫자/변화 + 실제 이벤트 + 원인/전망.
-    event_terms = (
-        "수주","계약","공급","납품","양산","출시","상용화","승인","허가",
-        "임상","실적","매출","영업이익","투자","증설","가격","수요","공급 부족",
-        "전망","예정","발표","착공","가동","상장","락업","해제","정책","금리"
-    )
-    cause_terms = (
-        "때문","따라","배경","원인","여파","증가","감소","확대","축소",
-        "상승","하락","인상","인하","전환","강화","약화","기록"
-    )
-
-    ranked = []
-    seen_norm = set()
-    for idx, part in enumerate(pts):
-        part = re.sub(r"\s+", " ", part).strip(" .,-:：")
-        if len(re.sub(r"[^가-힣A-Za-z0-9]", "", part)) < 12:
-            continue
-        norm = re.sub(r"[^가-힣A-Za-z0-9]", "", part).lower()
-        if norm in seen_norm:
-            continue
-        seen_norm.add(norm)
-        numbers = bool(re.search(r"\d|%|억|조|달러|원|배|만대|개", part))
-        events = sum(term in part for term in event_terms)
-        causes = sum(term in part for term in cause_terms)
-        # 첫 문장이 단순 제목 반복이면 후순위.
-        title_sim = difflib.SequenceMatcher(None, norm[:180], title_norm[:180]).ratio() if title_norm else 0
-        score = events * 5 + causes * 2 + (5 if numbers else 0) + min(len(part), 180)/100
-        score -= title_sim * 7
-        ranked.append((score, idx, part))
-
-    ranked.sort(key=lambda x: (-x[0], x[1]))
-    selected = [x[2] for x in ranked[:3]]
-
-    # 원문이 명시적으로 1·2·3을 제공했다면 원래 순서를 우선한다.
-    if len(pts) >= 2 and re.search(r"(?:①|②|\b1[.)])", body):
-        selected = pts[:3]
-
-    # 기자 소제목처럼 읽히도록 길이만 정리한다.
-    result = []
-    for x in selected:
-        x = re.sub(r"\s+", " ", x).strip(" .,-:：")
-        if len(x) > 220:
-            x = x[:220].rsplit(" ", 1)[0] + "…"
-        if x and x not in result:
-            result.append(x)
-
-    return "\n".join(f"{i}. {x}" for i, x in enumerate(result[:3], 1))
-
+    return "\n".join(f"{i}. {p}" for i, p in enumerate(pts, 1))
 
 # ============================================================
 # [CORE IMMUTABLE RULE] 외신 번역 게이트
@@ -2588,12 +2514,61 @@ def _engine_format_message(item):
         lines.append(f"↳ 선행 보도: <b>{prev_time} / {prev_source}</b>")
 
     # ------------------------------------------------------------
-    # 1) 기자식 제목 + 서브헤드 1·2·3
+    # 1) 원문 기반 한 줄 핵심요약
     # ------------------------------------------------------------
-    # 제목은 제목 영역에, 본문에서 추출한 핵심 사실은 🔎 아래에 1~3개로 정렬한다.
-    # 모든 뉴스 채널에 동일하게 적용한다.
-    keypoint = _engine_force_numbered_keypoint(title, extra)
-    core, schedule = _engine_summary(title, extra, companies, market_hits)
+    # 제목 반복을 피하고 extra/본문 요약 결과에서 핵심정보만 사용한다.
+    core, schedule = _engine_summary(
+        title, extra, companies, market_hits
+    )
+
+    # 기존 summary가 제목을 그대로 반복하는 경우 제거.
+    def _compact_keypoint(text):
+        text = _engine_clean(str(text or ""))
+        text = re.sub(r"^🔎\s*", "", text).strip()
+        if not text:
+            return ""
+
+        # 제목과 동일/거의 동일한 문장을 핵심요약으로 사용하지 않는다.
+        title_norm = re.sub(r"[^가-힣A-Za-z0-9]+", "", title.lower())
+        text_norm = re.sub(r"[^가-힣A-Za-z0-9]+", "", text.lower())
+        if title_norm and (
+            text_norm == title_norm
+            or (len(title_norm) >= 25 and title_norm in text_norm)
+        ):
+            return ""
+
+        # 원문이 긴 경우 첫 문장 전체가 아니라 핵심 1문장만.
+        parts = re.split(r"(?<=[.!?。])\s+|\n+", text)
+        parts = [p.strip(" -•") for p in parts if p.strip()]
+        if len(parts) > 1:
+            # 수치/원인/변화가 포함된 문장을 우선
+            ranked = sorted(
+                parts,
+                key=lambda p: (
+                    bool(re.search(r"\d|%|억|조|만|배|계약|수주|증설|투자|생산|판매|출시|승인|인수|합병|정책|금리|유가", p)),
+                    -abs(len(p) - 80)
+                ),
+                reverse=True
+            )
+            text = ranked[0]
+        else:
+            text = parts[0] if parts else text
+
+        return text[:260]
+
+    keypoint = _compact_keypoint(core)
+
+    # extra에 실제 수치/금액/확정·예정 정보가 있고 summary에 없으면 보강.
+    if extra:
+        extra_key = _compact_keypoint(extra)
+        if extra_key and extra_key != keypoint:
+            important = re.search(
+                r"(\d[\d,.]*\s*(?:억|조|만원|억원|조원|%|달러|USD|만대|대|개|명|배))"
+                r"|(\b(?:확정|체결|계약|수주|승인|출시|착공|가동|예정)\b)",
+                extra_key
+            )
+            if important and not re.search(r"\d|확정|체결|계약|수주|승인|출시|예정", keypoint):
+                keypoint = extra_key
 
     # 상용화 가치가 요약에서 확인되는 경우에도 제목에 🎯를 보장한다.
     if _engine_is_commercial_value(item, title, keypoint) and not title.startswith("🎯"):
@@ -2828,6 +2803,21 @@ def _engine_process_item(source, title, link, published="", extra=""):
     return True
 
 
+def _engine_entry_published(entry):
+    """RSS 발행시각을 최대한 안정적으로 복원한다. 문자열이 없어도 feedparser 구조화 날짜를 사용한다."""
+    for key in ("published", "updated", "created", "pubDate", "date"):
+        value = entry.get(key)
+        if value:
+            return value
+    for key in ("published_parsed", "updated_parsed", "created_parsed"):
+        value = entry.get(key)
+        if value:
+            try:
+                return datetime.datetime(*value[:6], tzinfo=datetime.timezone.utc)
+            except Exception:
+                continue
+    return ""
+
 def _engine_fetch_rss(url, source):
     started = time.time()
     try:
@@ -2853,7 +2843,7 @@ def _engine_run_google_and_domestic():
             source = DOMESTIC_RSS_SOURCE_NAMES.get(url, "국내RSS")
             entries = _engine_fetch_rss(url, source)
             for e in entries[:50]:
-                if _engine_process_item(source, e.get("title", ""), e.get("link", ""), e.get("published", "") or e.get("updated", ""), e.get("summary", "")):
+                if _engine_process_item(source, e.get("title", ""), e.get("link", ""), _engine_entry_published(e), e.get("summary", "")):
                     total += 1
     else:
         _engine_log("warning", "[국내뉴스] ENABLE_DOMESTIC_NEWS=OFF")
@@ -2861,7 +2851,7 @@ def _engine_run_google_and_domestic():
         for url in US_RSS_URLS:
             entries = _engine_fetch_rss(url, "Google-US")
             for e in entries[:50]:
-                if _engine_process_item("Google-US", e.get("title", ""), e.get("link", ""), e.get("published", "") or e.get("updated", ""), e.get("summary", "")):
+                if _engine_process_item("Google-US", e.get("title", ""), e.get("link", ""), _engine_entry_published(e), e.get("summary", "")):
                     total += 1
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
     if ENABLE_US_NEWS and total == 0:
@@ -3231,7 +3221,7 @@ def _engine_run_youtube():
         for e in entries[:10]:
             title = e.get("title", "")
             desc = e.get("summary", "") or e.get("description", "")
-            published = e.get("published", "") or e.get("updated", "")
+            published = _engine_entry_published(e)
             if _engine_process_item(f"유튜브/{name}", title, e.get("link", ""), published, desc): total += 1
     _engine_log("info", "[유튜브 완료] 채널=%d/%d 성공 | 실패=%d | 신규후보=%d", ok_channels, len(YOUTUBE_CHANNELS), fail_channels, total)
 
@@ -4057,10 +4047,7 @@ def _engine_cycle():
         _engine_run_youtube()
     except Exception as e:
         log_error("유튜브 전체", e)
-    try:
-        _engine_run_test_fixture()
-    except Exception as e:
-        log_error("테스트 파일 전체", e)
+    # 테스트는 부팅 시 1회만 송출한다. 일반 주기에서는 실행하지 않는다.
     try:
         _engine_krx_market_monitor()
     except Exception as e:
@@ -4077,9 +4064,9 @@ def _engine_cycle():
         _engine_schedule_daily_monitor()
     except Exception as e:
         log_error("일정 일일 브리핑", e)
-    _engine_flush_pending()
+    sent = _engine_flush_pending()
     _engine_last_cycle_finished = time.time()
-    _engine_log("info", "[주기 완료] %.2f초", time.time()-started)
+    _engine_log("info", "[주기 완료] %.2f초 | Telegram 신규송출=%d | pending=%d", time.time()-started, sent, len(_engine_pending))
 
 
 
@@ -4164,19 +4151,45 @@ BOOT_TEST_ITEMS = [
     },
 ]
 
+_BOOT_TEST_ALREADY_RAN = False
+
 def _engine_run_embedded_boot_test():
-    total = 0
-    for item in BOOT_TEST_ITEMS:
-        key = str(item.get("link") or "")
+    global _BOOT_TEST_ALREADY_RAN
+    if _BOOT_TEST_ALREADY_RAN:
+        _engine_log("debug", "[BOOT 테스트] 이미 실행됨 → 재송출하지 않음")
+        return 0
+    _BOOT_TEST_ALREADY_RAN = True
+    # 테스트는 일반 뉴스의 최근 60분/주가재료 게이트를 타지 않도록 별도 pending 경로를 사용한다.
+    items = []
+    if NEWS_TEST_FILE and os.path.exists(NEWS_TEST_FILE):
+        try:
+            with open(NEWS_TEST_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            items = data if isinstance(data, list) else data.get("items", [])
+            _engine_log("info", "[BOOT 테스트] 외부 테스트 파일 사용 | %d건", len(items))
+        except Exception as e:
+            _engine_log("warning", "[BOOT 테스트] 외부 파일 읽기 실패 → 내장 테스트 사용 | %s", str(e)[:120])
+    if not items:
+        items = BOOT_TEST_ITEMS
+    sent=0
+    for item in items:
+        key=str(item.get("link") or "") or f"TEST|{item.get('title','')}"
         with _engine_lock:
-            _engine_seen.discard(key)
-        if _engine_process_item(
-            item["source"], item["title"], item["link"],
-            item.get("published", ""), item.get("extra", "")
-        ):
-            total += 1
-    sent = _engine_flush_pending()
-    _engine_log("info", "[BOOT 테스트] 내장=%d | 실제송출=%d", total, sent)
+            if key in _engine_seen:
+                continue
+        title=_engine_clean(item.get("title", "")); extra=_engine_clean(item.get("extra", ""))
+        if not title:
+            continue
+        # 테스트 카드는 실제 뉴스와 동일한 포맷터를 사용하되 필터만 우회한다.
+        _engine_pending.append({
+            "source": item.get("source", "TEST"), "title": title, "link": key,
+            "published": item.get("published", ""), "extra": extra, "key": key,
+            "category": "🧪테스트", "companies": [], "k1": False, "k2": False,
+            "market_hits": [], "time_text": _now_kst().strftime("%H:%M"),
+            "market_state": "테스트"
+        })
+    sent=_engine_flush_pending()
+    _engine_log("info", "[BOOT 테스트] 입력=%d | 실제송출=%d | 1회 실행 완료", len(items), sent)
     return sent
 
 if __name__ == "__main__":
