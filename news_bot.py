@@ -2335,6 +2335,52 @@ def _engine_telegram_title(raw_text, channel_name=""):
     return (candidates[0][:240] if candidates else raw[:240]), raw
 
 
+
+# ============================================================
+# [CORE IMMUTABLE RULE] 국내·외신 공통 🔎 1·2·3 핵심요약
+# 번역 여부와 무관하게 동일한 요약 규칙을 적용한다.
+# ============================================================
+def _engine_force_numbered_keypoint(title: str, extra: str) -> str:
+    title = re.sub(r"\s+", " ", str(title or "")).strip()
+    body = re.sub(r"\s+", " ", str(extra or "")).strip()
+    if not body:
+        return ""
+
+    # Remove publisher-only prefixes and common article boilerplate.
+    body = re.sub(r"^\s*(?:모닝스타|Reuters|로이터|연합뉴스|조선일보|매일경제)\s*", "", body, flags=re.I)
+    body = re.sub(r"^\s*\([^)]{1,100}\)\s*[^:]{1,40}기자\s*[:：]\s*", "", body)
+
+    # Prefer explicit numbered/source points.
+    pts = re.findall(
+        r"(?:^|\s)(?:[①②③④⑤⑥⑦⑧⑨⑩]|\d+[.)])\s*"
+        r"(.+?)(?=\s*(?:[①②③④⑤⑥⑦⑧⑨⑩]|\d+[.)])|$)",
+        body
+    )
+    pts = [re.sub(r"\s+", " ", p).strip(" .,-") for p in pts if p.strip()]
+
+    if len(pts) < 2:
+        # Split prose into factual clauses/sentences.
+        parts = re.split(r"(?<=[.!?。！？])\s+|(?<=\s)•\s*|(?<=\s)▶️\s*", body)
+        parts = [re.sub(r"\s+", " ", p).strip(" .,-") for p in parts if p.strip()]
+        # Drop title-equivalent and meta-only fragments.
+        nt = re.sub(r"[^0-9A-Za-z가-힣]", "", title).lower()
+        filtered = []
+        for p in parts:
+            np = re.sub(r"[^0-9A-Za-z가-힣]", "", p).lower()
+            if not p or np == nt:
+                continue
+            if any(x in p.lower() for x in ["원문 보기", "view", "kb", "html"]):
+                continue
+            filtered.append(p)
+        pts = filtered
+
+    # Guarantee the requested 1·2·3 display when meaningful content exists.
+    pts = pts[:3]
+    if not pts:
+        return ""
+
+    return "\n".join(f"{i}. {p}" for i, p in enumerate(pts, 1))
+
 # ============================================================
 # [CORE IMMUTABLE RULE] 외신 번역 게이트
 # Google-US 및 영문 비중이 높은 뉴스는 송출 전에 한국어로 변환.
@@ -2698,6 +2744,11 @@ def _engine_process_item(source, title, link, published="", extra=""):
     title, extra, translation_ok = _engine_translate_foreign_item(source, title, extra)
     if not translation_ok:
         return False
+
+    # Domestic and foreign news share exactly the same numbered keypoint rule.
+    shared_keypoint = _engine_force_numbered_keypoint(title, extra)
+    if shared_keypoint:
+        extra = shared_keypoint
 
     # 사용자가 원치 않는 [그로쓰리서치] 속보/단독/특징주 채널은 원천 제외.
     growth_block = ("그로쓰리서치" in str(source)) or ("rocket_news1" in link) or ("growth_semi" in link) or ("growthbio" in link) or ("growthresearch" in link)
