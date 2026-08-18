@@ -21,8 +21,8 @@
 # - 국내 관련주가 없어도 글로벌 시황은 보존하고 글로벌 외신을 DB에 축적.
 #
 # 강한 재료:
-# - '💯 강한 재료 · 급등/급락' 같은 표현은 사용하지 않음.
-# - 💯는 재료 강도만 표시.
+# - '👍 강한 재료 · 급등/급락' 같은 표현은 사용하지 않음.
+# - 👍는 재료 강도만 표시.
 # - 수주라면 수주 이유/금액/기간 등 확인 가능한 사실을 표시.
 # - 과거 동일/유사 재료가 있으면 당시 주가 상승률과 원문 하이퍼링크를 연결.
 # - 확인되지 않은 금액/수익률은 추정하지 않음.
@@ -262,30 +262,31 @@ def print(*args, **kwargs):
 
 
 # ============================================================
-# 나유정 | 2026-08-18 | 전체 수정 완료본
-# 포함: 네이버 뉴스, 유튜브, 미국장 30분 브리핑, 국내장 30분 장중브리핑,
-# 미국뉴스→국내관심종목 연결/🇰🇷 표시, 특징주·단독·속보 우선 노출,
-# [그로쓰리서치] 중계 제외, 텔레그램 제목 중심 노출, 동일/유사 뉴스 중복 방지,
-# 글로벌 시황 제목 간소화, 일정 1년 초기 DB + 매일 누적/갱신 + 과거 일정 보존,
-# DART 공시 수집/시장관련성 강화 및 진단로그.
-# ============================================================
-# ============================================================
 # --- 시작 로그에 필요한 환경변수 선행 초기화 ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 CHAT_ID_OVERSEAS = os.environ.get("CHAT_ID_OVERSEAS", "") or CHAT_ID
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
-NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "").strip()
-NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
-NAVER_APIHUB_CLIENT_ID = os.environ.get("NAVER_APIHUB_CLIENT_ID", "").strip()
-NAVER_APIHUB_CLIENT_SECRET = os.environ.get("NAVER_APIHUB_CLIENT_SECRET", "").strip()
-NAVER_API_MODE = os.environ.get("NAVER_API_MODE", "auto").strip().lower()
+
+def _clean_secret_env(name):
+    # Render 환경변수에 실수로 따옴표/앞뒤 공백이 붙어도 인증값 자체는 깨끗하게 사용한다.
+    value = os.environ.get(name, "")
+    if value is None:
+        return ""
+    value = str(value).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("\"", "'"):
+        value = value[1:-1].strip()
+    return value
+
+# ⚠️ 중요: NAVER_CLIENT_*는 구형 Developer Center Search API용,
+# NAVER_APIHUB_CLIENT_*는 NAVER API HUB용이다. 서로 섞어서 보내지 않는다.
+NAVER_CLIENT_ID = _clean_secret_env("NAVER_CLIENT_ID")
+NAVER_CLIENT_SECRET = _clean_secret_env("NAVER_CLIENT_SECRET")
+NAVER_APIHUB_CLIENT_ID = _clean_secret_env("NAVER_APIHUB_CLIENT_ID")
+NAVER_APIHUB_CLIENT_SECRET = _clean_secret_env("NAVER_APIHUB_CLIENT_SECRET")
+NAVER_API_MODE = "auto"
 NAVER_APIHUB_BASE_URL = "https://naverapihub.apigw.ntruss.com"
-# NAVER API HUB (2026-07-31 이후 신규 Search API 운영 기준)
-NAVER_APIHUB_CLIENT_ID = os.environ.get("NAVER_APIHUB_CLIENT_ID", "").strip()
-NAVER_APIHUB_CLIENT_SECRET = os.environ.get("NAVER_APIHUB_CLIENT_SECRET", "").strip()
-NAVER_API_MODE = os.environ.get("NAVER_API_MODE", "auto").strip().lower()
-NAVER_APIHUB_BASE_URL = "https://naverapihub.apigw.ntruss.com"
+NAVER_LEGACY_BASE_URL = "https://openapi.naver.com/v1/search/news.json"
 
 def _startup_env_flag(name, default=True):
     val = os.environ.get(name)
@@ -499,7 +500,7 @@ ENABLE_MORNING_BRIEFING = _env_flag("ENABLE_MORNING_BRIEFING")   # 아침 브리
 ENABLE_US_INTRADAY_BRIEFING = _env_flag("ENABLE_US_INTRADAY_BRIEFING", True)  # 미국장 개장 30분 + 장중 변동 브리핑
 ENABLE_TELEGRAM_CHANNELS = _env_flag("ENABLE_TELEGRAM_CHANNELS") # 텔레그램1(필터)+2(무조건)
 ENABLE_CUSTOM_SOURCES = _env_flag("ENABLE_CUSTOM_SOURCES")       # 약업신문/전자신문
-ENABLE_DART = _env_flag("ENABLE_DART", True)                   # DART 공시: 기본 ON (SOLO_MODE로 명시 비활성화 가능)
+ENABLE_DART = _env_flag("ENABLE_DART")                           # DART 공시
 ENABLE_NAVER_NEWS = _env_flag("ENABLE_NAVER_NEWS")               # 네이버 뉴스
 ENABLE_BLOG = _env_flag("ENABLE_BLOG")                           # 분석 블로그
 ENABLE_YOUTUBE = _env_flag("ENABLE_YOUTUBE")                     # 유튜브
@@ -563,8 +564,7 @@ if _SOLO_MODES_VALID:
             ENABLE_YOUTUBE = True
 
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
-NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
-NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
+# NAVER_CLIENT_ID / NAVER_CLIENT_SECRET는 위에서 이미 정규화한 값을 그대로 사용한다.
 
 if not BOT_TOKEN or not CHAT_ID:
     raise SystemExit(
@@ -608,10 +608,6 @@ TARGET_TELEGRAM_CHANNELS_UNFILTERED = [
     ("D의 테크 투자", "https://t.me/s/DrDtech"),
     ("요약하는 고잉", "https://t.me/s/one_going"),
     ("하나 중국/신흥국 전략 김경환", "https://t.me/s/HANAchina"),
-    ("반도체 소부장 [그로쓰리서치]", "https://t.me/s/growth_semi"),
-    ("실시간 특징주 뉴스 속보 [그로쓰리서치]", "https://t.me/s/rocket_news1"),
-    ("바이오섹터 분석 [그로쓰리서치]", "https://t.me/s/growthbio"),
-    ("그로쓰리서치 [독립리서치]", "https://t.me/s/growthresearch"),
     ("재야의 고수들", "https://t.me/s/gaoshoukorea"),
     ("도널드 J. 트럼프 대통령", "https://t.me/s/goddessTTF"),
     ("디일렉_IT신문사", "https://t.me/s/theelec"),
@@ -984,17 +980,6 @@ DART_STRONG_REPORT_KEYWORDS = {
     "주식등의대량보유상황보고서",
     "양수결정", "양도결정",
     "추가상장",
-    # 시장 흐름/수급에 의미가 큰 추가 공시 유형
-    "임원ㆍ주요주주특정증권등소유상황보고서", "임원·주요주주특정증권등소유상황보고서",
-    "임원및주요주주특정증권등소유상황보고서", "주식소유상황보고서",
-    "최대주주등소유주식변동신고서", "주주명부", "주주총회소집결의",
-    "주주총회결과", "주식매수선택권", "자기주식", "전환사채", "신주인수권부사채",
-    "교환사채", "채무증권발행결정", "기업설명회", "기업설명회(IR)",
-    "매출액", "영업이익", "당기순이익", "실적", "분기보고서", "반기보고서", "사업보고서",
-    "연결재무제표", "감사보고서", "자본금", "유상증자", "무상증자",
-    "주식배당", "현금배당", "주식취득", "주식처분", "시설투자", "신규시설",
-    "특허", "기술이전", "임상", "허가", "승인", "계약", "공급계약", "수주",
-    "소송", "횡령", "배임", "부도", "회생", "파산", "상장폐지", "관리종목",
 }
 
 DART_ALWAYS_EXPOSE_KEYWORDS = DART_STRONG_REPORT_KEYWORDS - {
@@ -1384,6 +1369,12 @@ MARKET_IMPACT_KEYWORDS = {
     # 정책·규제·테마 중 실제 주가 반응으로 이어질 가능성이 높은 재료
     "정책 확정", "정책 시행", "규제 확정", "관세 부과", "세액공제 확정", "법안 통과", "정부 대책 확정",
     "대규모 지원", "지원금 확정", "수주 경쟁",
+    # 특징주/실시간 주가 재료: 실제 종목 움직임을 포착하기 위한 가격·목표가 신호
+    "급등", "폭등", "급락", "폭락", "상승", "하락", "강세", "약세",
+    "신고가", "신저가", "목표가 상향", "목표가 하향", "목표주가 상향",
+    "어닝서프라이즈", "어닝 서프라이즈", "어닝쇼크", "실적 서프라이즈",
+    "자사주 공개매수", "공개매수", "자사주 매입", "자사주 소각",
+    "수혜", "수혜주", "관련주", "테마주", "모멘텀", "호재", "악재",
 }
 # 실제 주가 반응 가능성이 높은 강한 재료.
 # 상장기업이 직접 연결되고 아래 재료가 있으면 시간 제한 없이 시장 반영 여부를 기준으로 검토한다.
@@ -1395,6 +1386,9 @@ STRONG_MARKET_HITS = {
     "상용화", "공급 확대", "매각", "공개매수", "자사주", "배당",
     "정책 확정", "정책 시행", "규제 확정", "관세 부과", "세액공제 확정", "법안 통과", "정부 대책 확정",
     "대규모 지원", "지원금 확정", "수주 경쟁",
+    "급등", "폭등", "급락", "폭락", "신고가", "신저가",
+    "목표가 상향", "목표가 하향", "어닝서프라이즈", "어닝 서프라이즈", "어닝쇼크",
+    "자사주 공개매수", "공개매수", "자사주 매입", "자사주 소각", "수혜", "수혜주",
 }
 BREAKING_WORDS = {"속보"}
 FEATURE_WORDS = {"특징주"}
@@ -1795,6 +1789,7 @@ def _engine_company_mentions(text):
     ]
 
     # (000000) 형태의 종목코드 바로 앞 회사명은 강한 직접기업 신호로 사용한다.
+    # 정적 관심종목 목록에 없는 종목도 코드가 붙으면 국내 상장사 후보로 인정한다.
     for m in re.finditer(r"([가-힣A-Za-z][가-힣A-Za-z0-9·&\-]{1,30})\s*\((?:KRX:)?\d{6}\)", t):
         name = m.group(1).strip()
         if name and name not in found and len(name) >= 2:
@@ -1883,9 +1878,19 @@ def _engine_is_weak_nonstock_news(text):
     return any(x in low for x in weak) and not any(x in low for x in strong_business)
 
 
-def _engine_domestic_companies(companies):
-    """글로벌 기업을 국내 상장기업으로 오인하지 않도록 국내 종목만 반환."""
-    return [c for c in companies if c in LISTED_COMPANY_ALIASES and c not in GLOBAL_COMPANY_KEYWORDS]
+def _engine_domestic_companies(companies, text=""):
+    """글로벌 기업을 국내 상장기업으로 오인하지 않도록 국내 종목만 반환.
+    종목코드(6자리)가 붙은 회사명은 정적 목록에 없어도 국내 상장사 후보로 인정한다."""
+    text = _engine_clean(text)
+    out = []
+    for c in companies:
+        if c in GLOBAL_COMPANY_KEYWORDS:
+            continue
+        code_bearing = bool(re.search(rf"{re.escape(str(c))}\s*\((?:KRX:)?\d{{6}}\)", text, re.I)) if text else False
+        if c in LISTED_COMPANY_ALIASES or code_bearing:
+            if c not in out:
+                out.append(c)
+    return out
 
 
 def _engine_global_companies(companies):
@@ -1895,7 +1900,7 @@ def _engine_global_companies(companies):
 def _engine_classify(source, title, extra=""):
     text = _engine_clean(f"{title} {extra}")
     companies = _engine_find_companies(text)
-    domestic = _engine_domestic_companies(companies)
+    domestic = _engine_domestic_companies(companies, text)
     global_companies = _engine_global_companies(companies)
     k1, k2 = _engine_has_keyword_pair(text)
     market_hits = _engine_market_hit(text)
@@ -1913,17 +1918,31 @@ def _engine_classify(source, title, extra=""):
     # 국내 테마 연결을 별도 검증한 경우에만 허용한다.
     stock_links = _engine_stock_links(text, domestic)
     stock_linked = bool(domestic) or bool(stock_links)
-    market_relevant = bool(market_hits)
+    # 특징주/속보/단독은 '기업 + 실제 가격/재료 신호'가 있으면 통과시킨다.
+    # 기존처럼 계약/FDA 등 강한 재료만 요구하면 목표가 상향, 어닝서프라이즈, 공개매수,
+    # 급등/급락 같은 실제 시장 특징주가 과도하게 누락된다.
+    FEATURE_PRICE_HITS = {
+        "급등", "폭등", "급락", "폭락", "상승", "하락", "강세", "약세",
+        "신고가", "신저가", "목표가 상향", "목표가 하향", "목표주가 상향",
+        "어닝서프라이즈", "어닝 서프라이즈", "어닝쇼크", "실적 서프라이즈",
+        "자사주 공개매수", "공개매수", "자사주 매입", "자사주 소각",
+        "수혜", "수혜주", "관련주", "모멘텀", "호재", "악재",
+    }
+    feature_price_hits = [x for x in FEATURE_PRICE_HITS if x.lower() in low]
+    market_relevant = bool(market_hits) or bool(feature_price_hits)
 
     # 글로벌 기업 자체 뉴스는 글로벌 뉴스로 노출할 수 있지만
     # 글로벌 기업명을 국내 상장기업/관련주로 절대 사용하지 않는다.
     global_relevant = bool(global_companies) and market_relevant
 
-    if is_breaking and (stock_linked or global_relevant) and market_relevant:
+    # 주식시장 관련 속보/특징주/단독은 최대한 보존한다.
+    # 제목에 강한 표지가 있거나 실제 국내 상장기업/종목코드/주가재료가 확인되면 통과.
+    strong_stock_signal = bool(domestic or stock_linked or re.search(r"(?:\(|KRX:)\d{6}\)", text))
+    if is_breaking and (strong_stock_signal or global_relevant or market_relevant):
         return True, "🚀속보", domestic or global_companies, k1, k2, market_hits
-    if is_feature and (stock_linked or global_relevant) and market_relevant:
+    if is_feature and (strong_stock_signal or global_relevant or market_relevant):
         return True, "🚨특징주", domestic or global_companies, k1, k2, market_hits
-    if is_exclusive and (stock_linked or global_relevant) and market_relevant:
+    if is_exclusive and (strong_stock_signal or global_relevant or market_relevant):
         return True, "🚀단독", domestic or global_companies, k1, k2, market_hits
 
     if is_external:
@@ -2100,14 +2119,15 @@ def _engine_domestic_watchlist(item):
     for c in companies:
         if c in GLOBAL_COMPANY_KEYWORDS:
             continue
-        if c in LISTED_COMPANY_ALIASES and _engine_company_is_directly_related(text, c):
+        code_bearing = bool(re.search(rf"{re.escape(c)}\s*\((?:KRX:)?\d{{6}}\)", text, re.I))
+        if (c in LISTED_COMPANY_ALIASES or code_bearing) and _engine_company_is_directly_related(text, c):
             if c not in direct:
                 direct.append(c)
 
     # 종목코드가 붙은 국내 상장기업도 동일하게 문맥 검증한다.
     for m in re.finditer(r"([가-힣A-Za-z][가-힣A-Za-z0-9·&\-]{1,30})\s*\((?:KRX:)?\d{6}\)", text):
         c = m.group(1).strip()
-        if c in LISTED_COMPANY_ALIASES and c not in GLOBAL_COMPANY_KEYWORDS:
+        if c not in GLOBAL_COMPANY_KEYWORDS:
             if _engine_company_is_directly_related(text, c) and c not in direct:
                 direct.append(c)
 
@@ -2351,15 +2371,15 @@ def _engine_summary(title, extra, companies, market_hits):
             direction = "관련주"
         theme_text = f"[{theme} 테마] " if theme else ""
         relation_type = "직접 관련" if domestic else "테마·간접 수혜"
-        core = f"🔎 {theme_text}{reason} / {direction} → " + "·".join(links[:3])
+        core = f"🔎 [{relation_type}] {theme_text}{reason} / {direction} → " + "·".join(links[:3])
     elif domestic:
-        core = f"🔎 {reason} → " + "·".join(domestic[:4])
+        core = f"🔎 [직접 관련] {reason} → " + "·".join(domestic[:4])
     elif global_companies:
         # 글로벌 기업명 자체를 국내 관심종목으로 재출력하지 않는다.
         # 해외 뉴스는 원인/시장재료만 요약하고 국내 종목은 별도의 엄격한 알고리즘에서 선정한다.
-        core = "🔎 " + "·".join(market_hits[:4] or ["해외 시장 재료"])
+        core = "·".join(market_hits[:4] or ["해외 시장 재료"])
     elif market_hits:
-        core = "🔎 시장 핵심 재료 → " + "·".join(market_hits[:4])
+        core = "시장 핵심 재료 → " + "·".join(market_hits[:4])
     else:
         core = ""
     return core, _engine_schedule(text)
@@ -2417,6 +2437,49 @@ def _engine_similar(a, b):
     return bool(ca & cb) and bool(ma & mb) and difflib.SequenceMatcher(None, ta[:180], tb[:180]).ratio() >= 0.52
 
 
+COMMERCIAL_VALUE_WORDS = {
+    "상용화", "상업화", "양산", "출시", "판매개시", "판매 개시", "공급계약", "공급 계약",
+    "수주", "대규모 수주", "계약 체결", "본계약", "독점계약", "기술수출", "기술이전",
+    "라이선스", "마일스톤", "FDA 승인", "식약처 승인", "품목허가", "허가취득", "임상3상",
+    "임상 성공", "신약 승인", "대규모 투자", "증설", "신규시설투자", "인수", "합병",
+    "M&A", "공개매수", "자사주", "흑자전환", "어닝서프라이즈", "사상 최대", "세계 최초",
+    "세계최초", "국내 최초", "국내최초", "수출계약", "판매계약", "공급 확대", "수요 급증",
+}
+
+def _engine_is_commercial_value(item, title, keypoint=""):
+    text = _engine_clean(f"{title} {keypoint} {item.get('extra','')}").lower()
+    return any(str(w).lower() in text for w in COMMERCIAL_VALUE_WORDS)
+
+def _engine_telegram_title(raw_text, channel_name=""):
+    """텔레그램 본문에서 실제 기사 제목만 추출한다. [그로쓰리서치] 속보/단독 특징주는 직접 중계하지 않는다."""
+    raw = _engine_clean(raw_text)
+    if not raw:
+        return "", ""
+    low = raw.lower()
+    if "그로쓰리서치" in low and ("특징주 종목" in low or "실시간 특징주" in low or "특징주 뉴스 속보" in low):
+        return "", ""
+    # URL/홍보문구/텔레그램 채널 안내를 제거하고 문장 후보를 만든다.
+    parts = re.split(r"(?<=[.!?])\s+|\s{2,}|\n+", str(raw))
+    candidates = []
+    for part in parts:
+        part = _engine_clean(part).strip("-—|")
+        if not part:
+            continue
+        if re.match(r"https?://", part, re.I):
+            continue
+        if any(x in part for x in ["구독", "받기", "실시간 특징주 받기", "채널", "텔레그램"]):
+            continue
+        if "view/" in part or "t.me/" in part:
+            continue
+        if part.startswith("[그로쓰리서치]") or "[그로쓰리서치]" in part:
+            continue
+        candidates.append(part)
+    # 가장 먼저 등장하는 충분히 긴 기사형 문장을 제목으로 사용.
+    for part in candidates:
+        if len(re.sub(r"[^가-힣A-Za-z0-9]", "", part)) >= 8:
+            return part[:240], raw
+    return (candidates[0][:240] if candidates else raw[:240]), raw
+
 def _engine_format_message(item):
     """뉴스 카드 최종 출력.
     원문 수집/필터/DB/시장상태/스케줄 로직은 변경하지 않고,
@@ -2430,9 +2493,8 @@ def _engine_format_message(item):
 
     # 국내 상장기업이 실제로 제목/본문에서 확인되는 경우에만 표시.
     domestic = _engine_domestic_companies(companies)
-    global_companies = _engine_global_companies(companies)
-    for c in list(dict.fromkeys(domestic + global_companies)):
-        title = re.sub(rf"(?<!⚡️)({re.escape(c)})", r"⚡️\1", title, count=1)
+    for c in domestic:
+        title = re.sub(rf"(?<!⚡️)({re.escape(c)})", r"⚡️\1", title)
 
     source_raw = str(item.get("source", ""))
     source_display = "🇺🇸" if source_raw == "Google-US" else source_raw
@@ -2443,6 +2505,10 @@ def _engine_format_message(item):
     header = f"<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>"
     if time_text:
         header += f"                                      🕐 {html.escape(time_text)}"
+
+    # 상용화 가치가 있는 뉴스는 제목 맨 앞에 🎯를 붙여 한눈에 식별한다.
+    if _engine_is_commercial_value(item, title, "") and not title.startswith("🎯"):
+        title = "🎯 " + title
 
     # 제목은 절대 요약문보다 아래/위로 이동시키지 않는다.
     lines = [
@@ -2467,7 +2533,6 @@ def _engine_format_message(item):
     def _compact_keypoint(text):
         text = _engine_clean(str(text or ""))
         text = re.sub(r"^🔎\s*", "", text).strip()
-        text = re.sub(r"^\[(?:글로벌 시황|국내 시황|직접 관련|테마·간접 수혜|특징주|속보)\]\s*", "", text).strip()
         if not text:
             return ""
 
@@ -2513,6 +2578,11 @@ def _engine_format_message(item):
             if important and not re.search(r"\d|확정|체결|계약|수주|승인|출시|예정", keypoint):
                 keypoint = extra_key
 
+    # 상용화 가치가 요약에서 확인되는 경우에도 제목에 🎯를 보장한다.
+    if _engine_is_commercial_value(item, title, keypoint) and not title.startswith("🎯"):
+        title = "🎯 " + title
+        lines[1] = f"<b>📌 {html.escape(title)}</b>"
+
     # ------------------------------------------------------------
     # 2) 재료 강도 표시
     # ------------------------------------------------------------
@@ -2548,10 +2618,11 @@ def _engine_format_message(item):
                 if name:
                     detail = " | ".join(x for x in (theme, reason) if x)
                     badge = str(row.get("badge") or "🔎 관심종목")
-                    # 국내 관심종목으로 최종 선정된 종목명 앞에는 항상 💯를 붙인다.
+                    # 국내 관심종목으로 최종 선정된 종목명 앞에는 항상 👍를 붙인다.
                     # 대장주/관찰 순위 표시는 종목 선정 이유를 명확히 하기 위한 용도다.
+                    us_flag = "🇰🇷 " if source_raw == "Google-US" else ""
                     lines.append(
-                        f"{html.escape(badge)} — 💯 <b>{html.escape(name)}</b>"
+                        f"{html.escape(badge)} — 👍 <b>{us_flag}{html.escape(name)}</b>"
                         + (f" /// {html.escape(detail[:360])}" if detail else "")
                     )
             elif row:
@@ -2685,6 +2756,12 @@ def _engine_process_item(source, title, link, published="", extra=""):
     if not title:
         return False
 
+    # 사용자가 원치 않는 [그로쓰리서치] 속보/단독/특징주 채널은 원천 제외.
+    growth_block = ("그로쓰리서치" in str(source)) or ("rocket_news1" in link) or ("growth_semi" in link) or ("growthbio" in link) or ("growthresearch" in link)
+    if growth_block:
+        _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
+        return False
+
     # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
     # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
     if not _engine_is_within_recent_window(published, 60):
@@ -2767,39 +2844,87 @@ def _engine_run_google_and_domestic():
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
 
 
-def _naver_request_headers():
-    """NAVER API HUB를 우선 사용하고, 기존 개발자센터 Search API도 호환한다."""
-    hub_ready = bool(NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET)
-    if NAVER_API_MODE == "hub" and not hub_ready:
-        return None, None, "hub"
-    if NAVER_API_MODE in ("hub", "auto") and hub_ready:
-        return {
-            "X-NCP-APIGW-API-KEY-ID": NAVER_APIHUB_CLIENT_ID,
-            "X-NCP-APIGW-API-KEY": NAVER_APIHUB_CLIENT_SECRET,
-            "Accept": "application/json",
-            "User-Agent": USER_AGENT,
-        }, f"{NAVER_APIHUB_BASE_URL}/search/v1/news", "hub"
+_NAVER_RUNTIME_MODE = None
+_NAVER_AUTH_FAILURE_LOGGED = set()
+
+def _naver_credential_candidates():
+    """
+    NAVER 인증 방식을 자동 선택한다.
+
+    1) NAVER_APIHUB_CLIENT_ID/SECRET가 있으면 NAVER API HUB를 먼저 사용한다.
+    2) HUB가 401이고 NAVER_CLIENT_ID/SECRET가 별도로 있으면 구형 Search API로 재시도한다.
+
+    핵심 수정: 구형 NAVER_CLIENT_*를 HUB 헤더에 억지로 넣지 않는다.
+    이 혼용이 HUB에서 401을 만드는 대표적인 원인이다.
+    """
+    candidates = []
+    if NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET:
+        candidates.append((
+            "hub",
+            {
+                "X-NCP-APIGW-API-KEY-ID": NAVER_APIHUB_CLIENT_ID,
+                "X-NCP-APIGW-API-KEY": NAVER_APIHUB_CLIENT_SECRET,
+                "Accept": "application/json",
+                "User-Agent": USER_AGENT,
+            },
+            NAVER_APIHUB_BASE_URL + "/search/v1/news",
+        ))
     if NAVER_CLIENT_ID and NAVER_CLIENT_SECRET:
-        return {
-            "X-Naver-Client-Id": NAVER_CLIENT_ID,
-            "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
-            "Accept": "application/json",
-            "User-Agent": USER_AGENT,
-        }, "https://openapi.naver.com/v1/search/news.json", "legacy"
-    return None, None, "none"
+        candidates.append((
+            "legacy",
+            {
+                "X-Naver-Client-Id": NAVER_CLIENT_ID,
+                "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+                "Accept": "application/json",
+                "User-Agent": USER_AGENT,
+            },
+            NAVER_LEGACY_BASE_URL,
+        ))
+    return candidates
 
 
-def _naver_extract_items(response):
-    try:
-        data = response.json()
-    except Exception:
-        return []
-    return data.get("items", []) or []
+def _naver_credentials():
+    """하위 호환용: 실제 사용 가능한 첫 인증쌍을 반환하되 서로 다른 쌍을 섞지 않는다."""
+    candidates = _naver_credential_candidates()
+    if not candidates:
+        return "", ""
+    mode, headers, _ = candidates[0]
+    if mode == "hub":
+        return NAVER_APIHUB_CLIENT_ID, NAVER_APIHUB_CLIENT_SECRET
+    return NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
+
+
+def _naver_request_headers(mode=None):
+    """요청 모드에 맞는 NAVER 인증 헤더/엔드포인트를 반환한다."""
+    candidates = _naver_credential_candidates()
+    if not candidates:
+        return None, None, "missing-credentials"
+    if mode:
+        for candidate_mode, headers, endpoint in candidates:
+            if candidate_mode == mode:
+                return headers, endpoint, candidate_mode
+        return None, None, "missing-credentials"
+    candidate_mode, headers, endpoint = candidates[0]
+    return headers, endpoint, candidate_mode
+
+
+def _naver_mark_runtime_mode(mode):
+    global _NAVER_RUNTIME_MODE
+    _NAVER_RUNTIME_MODE = mode
+
+
+def _naver_params(query, display):
+    params = {"query": query, "display": display, "start": 1, "sort": "date"}
+    # HUB는 format=json을 명시해도 되고, legacy는 기존 형식을 그대로 사용한다.
+    return params
 
 
 def _naver_api_status_log(status, mode):
     if status == 401:
-        _engine_log("error", "[네이버 인증 실패] mode=%s | Client ID/Secret 또는 API 권한을 확인하세요.", mode)
+        if mode == "hub":
+            _engine_log("error", "[네이버 인증 실패] mode=HUB | HUB Client ID/Secret 또는 Application의 Search API 권한을 확인하세요.")
+        else:
+            _engine_log("error", "[네이버 인증 실패] mode=legacy | NAVER_CLIENT_ID/SECRET 또는 기존 Search API 권한을 확인하세요.")
     elif status == 403:
         _engine_log("error", "[네이버 호출 거부] mode=%s | HTTPS/요청경로/API 권한을 확인하세요.", mode)
     elif status == 429:
@@ -2808,84 +2933,116 @@ def _naver_api_status_log(status, mode):
         _engine_log("error", "[네이버 오류] mode=%s | HTTP=%s", mode, status)
 
 
+def _naver_request(mode, query, display):
+    headers, endpoint, actual_mode = _naver_request_headers(mode)
+    if not headers:
+        return None, actual_mode
+    params = _naver_params(query, display)
+    if actual_mode == "hub":
+        params["format"] = "json"
+    response = requests.get(endpoint, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
+    return response, actual_mode
+
+
 def _engine_run_naver():
     if not ENABLE_NAVER_NEWS:
         _engine_log("warning", "[네이버] ENABLE_NAVER_NEWS=OFF")
         return
-    headers, endpoint, api_mode = _naver_request_headers()
-    if not headers:
-        _engine_log("error", "[네이버 실패] 인증정보가 없습니다. HUB는 NAVER_APIHUB_CLIENT_ID/SECRET, 기존 API는 NAVER_CLIENT_ID/SECRET를 설정하세요.")
+    candidates = _naver_credential_candidates()
+    if not candidates:
+        _engine_log("error", "[네이버 실패] 인증정보가 없습니다. HUB는 NAVER_APIHUB_CLIENT_ID/SECRET, legacy는 NAVER_CLIENT_ID/SECRET를 설정하세요.")
         return
-    # 모든 검색어를 한 번에 호출하면 API 제한에 걸릴 수 있으므로 1분마다 순환한다.
+
     queries = list(dict.fromkeys(NAVER_SEARCH_QUERIES))
     batch_size = min(12, len(queries))
     cycle = getattr(_engine_run_naver, "cycle", 0)
     start = (cycle * batch_size) % max(1, len(queries))
     selected = [queries[(start+i) % len(queries)] for i in range(batch_size)] if queries else []
     _engine_run_naver.cycle = cycle + 1
-    _engine_log("info", "[네이버] 검색 시작 전체검색어=%d | 이번주기=%d | offset=%d", len(queries), len(selected), start)
+    _engine_log("info", "[네이버] 검색 시작 전체검색어=%d | 이번주기=%d | offset=%d | 후보인증=%s", len(queries), len(selected), start, "/".join(m for m,_,_ in candidates))
+
     total = 0
     api_ok = True
     for q in selected:
-        try:
-            params = {"query": q, "display": 20, "start": 1, "sort": "date", "format": "json"} if api_mode == "hub" else {"query": q, "display": 20, "start": 1, "sort": "date"}
-            r = requests.get(endpoint, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
-            if not r.ok:
-                api_ok = False
-                _naver_api_status_log(r.status_code, api_mode)
-                if r.status_code == 401:
+        item_success = False
+        last_status = None
+        for mode, _, _ in candidates:
+            try:
+                r, actual_mode = _naver_request(mode, q, 20)
+                if r is None:
+                    continue
+                if not r.ok:
+                    last_status = r.status_code
+                    _naver_api_status_log(r.status_code, actual_mode)
+                    # 인증 실패면 다음 인증 방식으로만 1회 전환한다.
+                    if r.status_code == 401:
+                        continue
                     break
-                continue
-            data = r.json()
-            items = data.get("items", []) or []
-            new_count = 0
-            for item in items:
-                if _engine_process_item("네이버뉴스", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), item.get("description", "")):
-                    new_count += 1
-                    total += 1
-            _engine_log("debug", "[네이버] %s | 검색=%d건 | 후보=%d", q, len(items), new_count)
-        except Exception as e:
-            log_error("네이버 뉴스 검색", e, query=q)
-    _engine_log("info", "[네이버] 이번주기=%d개 검색 | 후보=%d | API=%s", len(selected), total, "정상" if api_ok else "오류")
+                _naver_mark_runtime_mode(actual_mode)
+                items = _naver_extract_items(r)
+                new_count = 0
+                for item in items:
+                    if _engine_process_item("네이버뉴스", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), item.get("description", "")):
+                        new_count += 1
+                        total += 1
+                _engine_log("debug", "[네이버] mode=%s | %s | 검색=%d건 | 후보=%d", actual_mode, q, len(items), new_count)
+                item_success = True
+                break
+            except Exception as e:
+                log_error("네이버 뉴스 검색", e, query=q, mode=mode)
+                break
+        if not item_success and last_status == 401:
+            api_ok = False
+
+    _engine_log("info", "[네이버] 이번주기=%d개 검색 | 후보=%d | API=%s | runtime=%s", len(selected), total, "정상" if api_ok else "오류", _NAVER_RUNTIME_MODE or "없음")
 
 
 def _engine_run_keyword_combinations():
-    # 기업명 + 핵심 테마 조합을 실제 네이버 API 검색으로 확인한다.
-    headers, endpoint, api_mode = _naver_request_headers()
-    if not headers:
+    candidates = _naver_credential_candidates()
+    if not candidates:
         _engine_log("warning", "[키워드 조합] 네이버 API 인증정보가 없어 조합검색을 건너뜁니다.")
         return
     companies = list(dict.fromkeys(GLOBAL_AND_DOMESTIC_GIANTS))
     themes = ["HBM", "반도체", "AI", "로봇", "방산", "원전", "조선", "바이오", "이차전지", "ESS"]
-    # 매 분기마다 10개 조합. 1분 주기 전체 호출량을 제한한다.
     cycle = getattr(_engine_run_keyword_combinations, "cycle", 0)
     combos = [(c, themes[(cycle+i) % len(themes)]) for i, c in enumerate(companies[:10])]
     _engine_run_keyword_combinations.cycle = cycle + 1
-    _engine_log("info", "[키워드 조합 시작] 이번주기=%d건 | NAVER_MODE=%s", len(combos), api_mode)
+    _engine_log("info", "[키워드 조합 시작] 이번주기=%d건 | 인증후보=%s", len(combos), "/".join(m for m,_,_ in candidates))
+
     for company, theme in combos:
         q = f'"{company}" {theme}'
-        try:
-            params = {"query": q, "display": 10, "start": 1, "sort": "date", "format": "json"} if api_mode == "hub" else {"query": q, "display": 10, "start": 1, "sort": "date"}
-            r = requests.get(endpoint, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
-            if not r.ok:
-                _engine_log("error", "[실패] 키워드조합 | 원인=%s", r.reason)
-                continue
-            items = r.json().get("items", []) or []
-            new_count = 0
-            for item in items:
-                if _engine_process_item("키워드조합", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), f"{q} {item.get('description', '')}"):
-                    new_count += 1
-            _engine_log("info", "[키워드 조합] %s | 결과=%d | 신규=%d", q, len(items), new_count)
-        except Exception as e:
-            log_error("키워드 조합 검색", e, query=q)
-
+        success = False
+        for mode, _, _ in candidates:
+            try:
+                r, actual_mode = _naver_request(mode, q, 10)
+                if r is None:
+                    continue
+                if not r.ok:
+                    _naver_api_status_log(r.status_code, actual_mode)
+                    if r.status_code == 401:
+                        continue
+                    break
+                _naver_mark_runtime_mode(actual_mode)
+                items = _naver_extract_items(r)
+                new_count = 0
+                for item in items:
+                    if _engine_process_item("키워드조합", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), f"{q} {item.get('description', '')}"):
+                        new_count += 1
+                _engine_log("info", "[키워드 조합] mode=%s | %s | 결과=%d | 신규=%d", actual_mode, q, len(items), new_count)
+                success = True
+                break
+            except Exception as e:
+                log_error("키워드 조합 검색", e, query=q, mode=mode)
+                break
+        if not success:
+            _engine_log("error", "[실패] 키워드조합 | %s | 모든 NAVER 인증경로 실패", q)
 
 def _engine_run_dart():
     if not ENABLE_DART:
-        _engine_log("warning", "[DART] ENABLE_DART=OFF | 공시 수집 중단됨 (SOLO_MODE/환경설정 확인)")
+        _engine_log("warning", "[DART] ENABLE_DART=OFF")
         return
     if not DART_API_KEY:
-        _engine_log("error", "[DART 실패] DART_API_KEY가 없습니다. Render 환경변수 DART_API_KEY를 확인하세요.")
+        _engine_log("error", "[DART 실패] DART_API_KEY가 없습니다.")
         return
     try:
         today = _now_kst().strftime("%Y%m%d")
@@ -2906,26 +3063,9 @@ def _engine_run_dart():
         sent = 0
         for row in rows:
             report = row.get("report_nm", "")
-            corp = row.get("corp_name", "")
-            report_low = str(report or "").replace(" ", "").lower()
-            # 공시는 "강한 공시"만 기다리면 실제 시장에서 중요한 실적/주주/자사주/
-            # 투자/계약/임원·주요주주 변동 등이 모두 누락될 수 있다.
-            # ① 강한 공시는 항상 후보, ② 시장 관련 일반 공시도 후보,
-            # ③ 관심/대형주 공시는 보고서명이 약해도 후보로 보존한다.
-            dart_market_terms = (
-                "실적","분기보고서","반기보고서","사업보고서","감사보고서","매출액","영업이익",
-                "당기순이익","배당","자기주식","자사주","최대주주","주요주주","임원",
-                "소유상황","주식등","증자","전환사채","신주인수권","교환사채","채무증권",
-                "취득","처분","양수","양도","합병","분할","투자","시설","계약","공급","수주",
-                "특허","임상","허가","승인","소송","횡령","배임","회생","파산","상장폐지",
-                "관리종목","주주총회","주식매수선택권","기업설명회","추가상장"
-            )
-            is_strong = any(k in report for k in DART_STRONG_REPORT_KEYWORDS)
-            is_market = any(k in report_low for k in dart_market_terms)
-            is_watched = corp in DART_WATCH_COMPANIES
-            if not (is_strong or is_market or is_watched):
-                _engine_log("debug", "[DART 제외] 시장관련성 낮음 | %s | %s", corp, report[:100])
+            if not any(k in report for k in DART_STRONG_REPORT_KEYWORDS):
                 continue
+            corp = row.get("corp_name", "")
             title = f"{corp} | {report}"
             link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
             _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""))
@@ -2935,42 +3075,6 @@ def _engine_run_dart():
     except Exception as e:
         log_error("DART 검사", e)
 
-
-
-def _engine_telegram_title_body(text):
-    """외부 텔레그램은 화면에 제목만 표시하고, 본문은 🔎 요약 생성용으로만 사용한다."""
-    raw = _engine_clean(str(text or ""))
-    if not raw:
-        return "", ""
-    lines = [re.sub(r"\s+", " ", x).strip() for x in raw.splitlines() if x.strip()]
-    if not lines:
-        return "", ""
-
-    # 채널 홍보/고정 문구가 제목으로 올라오는 경우 제거.
-    drop_prefix = (
-        "📌", "📈", "📣", "🔔", "🚨", "[그로쓰리서치]", "[뉴스속보]",
-        "실시간 특징주 뉴스 속보", "특징주 뉴스 속보"
-    )
-    title = lines[0]
-    title = re.sub(r"^(?:📌|📈|📣|🔔|🚨)+\s*", "", title).strip()
-    title = re.sub(r"^실시간 특징주 뉴스 속보\s*", "", title).strip()
-    title = re.sub(r"^\[그로쓰리서치\]\s*", "", title).strip()
-    title = re.sub(r"^✅\s*특징주\s*종목\s*:\s*", "", title).strip()
-    title = re.sub(r"\s+https?://\S+.*$", "", title).strip()
-
-    # 첫 줄이 홍보 헤더뿐이면 다음 실제 기사 제목을 사용.
-    if (not title or title in drop_prefix or
-        ("구독" in title and len(title) < 100) or
-        ("특징주 종목" in title and len(title) < 60)):
-        for candidate in lines[1:]:
-            c = re.sub(r"^(?:📌|📈|📣|🔔|🚨|✅)+\s*", "", candidate).strip()
-            if c and not c.startswith("http") and "구독" not in c:
-                title = c
-                break
-
-    # 텔레그램 본문은 제목 아래 요약 생성용으로만 유지한다.
-    body = " ".join(lines[1:])
-    return title[:320], body[:1600]
 
 def _engine_run_telegram_channels():
     if not ENABLE_TELEGRAM_CHANNELS:
@@ -2989,15 +3093,18 @@ def _engine_run_telegram_channels():
             _engine_log("debug", "[텔레그램] %s | 확인=%d건", name, len(posts))
             for post in posts:
                 txt = _engine_clean(post.get_text(" "))
-                tg_title, tg_body = _engine_telegram_title_body(txt)
                 a = post.select_one("a.tgme_widget_message_date")
                 link = a.get("href", "") if a else url
                 time_node = post.select_one("time")
                 published = time_node.get("datetime", "") if time_node else ""
-                # [그로쓰리서치] 실시간 특징주 속보/단독 중계는 제외한다.
-                if "실시간 특징주 뉴스 속보 [그로쓰리서치]" in name:
+                if not txt:
                     continue
-                if tg_title and _engine_process_item(f"텔레그램/{name}", tg_title, link, published, tg_body):
+                telegram_title, telegram_extra = _engine_telegram_title(txt, name)
+                if not telegram_title:
+                    _engine_log("info", "[제외] Telegram | 그로쓰리서치 특징주/속보 직접중계 차단 | source=%s", name)
+                    continue
+                # 제목만 title로 저장하고 원문은 요약 생성용 extra에만 둔다.
+                if _engine_process_item(f"텔레그램/{name}", telegram_title, link, published, telegram_extra):
                     total += 1
         except Exception as e:
             log_error("텔레그램 채널 수집", e, channel=name, url=url)
@@ -3121,7 +3228,7 @@ def _engine_run_test_fixture():
 #    시장 구조가 바뀔 때만 장중 브리핑.
 # 3) 기존 뉴스의 국내 관련주 선별 로직은 건드리지 않는다.
 # 4) 글로벌 기업은 국내 상장기업으로 오인 연결하지 않는다.
-# 5) "💯 강한 재료 · 급락" 같은 방향/강도 혼합 문구를 사용하지 않는다.
+# 5) "👍 강한 재료 · 급락" 같은 방향/강도 혼합 문구를 사용하지 않는다.
 #    방향은 📈 급등 / 📉 급락으로, 재료 강도는 뉴스 분류에서 별도로 처리한다.
 # 6) 실시간 시세가 확인되지 않으면 추정하지 않고 "시세 확인불가"로 남긴다.
 # ============================================================
@@ -3636,7 +3743,7 @@ def _us_close_briefing(snapshot, et):
                         why.append("과거 테마 주도 이력")
                     if hist >= 2 or lead_hist >= 2:
                         why.append("끼·탄력 확인")
-                    lines.append(f"  {badge} {html.escape(stock)} — " + " + ".join(why))
+                    lines.append(f"  {badge} 🇰🇷 {html.escape(stock)} — " + " + ".join(why))
             else:
                 lines.append("  🇰🇷 한국 연결: 확인되는 국내 관련주 없음")
 
@@ -3717,7 +3824,7 @@ def _us_close_briefing(snapshot, et):
             if len(strong_rows) >= 3:
                 break
     if strong_rows:
-        lines += ["", "<b>💯 강한 재료</b>"]
+        lines += ["", "<b>👍 강한 재료</b>"]
         for row in strong_rows:
             tx = str(row.get("title",""))[:220]
             amount = re.search(r"(?:[0-9][0-9,]*(?:\.\d+)?)\s*(?:억|조|억원|조원|달러|USD|million|billion)", tx, re.I)
@@ -3878,7 +3985,8 @@ if __name__ == "__main__":
         schedule_bootstrap_thread.start()
 
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
-        _engine_log("info", "[BOOT] NAVER=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
+        _engine_log("info", "[BOOT] NAVER_HUB=%s | NAVER_LEGACY=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
+                    bool(NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET),
                     bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET),
                     bool(DART_API_KEY),
                     ENABLE_DOMESTIC_NEWS,
