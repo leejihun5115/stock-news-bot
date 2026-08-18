@@ -1057,12 +1057,11 @@ US_MARKET_INDICES = [
 ENGINE_INTERVAL = 60
 
 # ============================================================
-# [일정 DB / 1년 과거 특징주·급등뉴스 + 중요 공시 + 미국/기업 일정]
-# - 과거 약 1년의 특징주/급등/상한가/대형재료 뉴스에서 미래 일정만 추출
-# - 뉴스 속 일정은 큰 이벤트만 저장
-# - DART는 급등 가능성이 있는 주요 공시만 일정화
-# - 미국 시장/기업 일정은 가까운 날짜순으로 병합
-# - 매일 KST 07:00 / 19:00에 한 번씩 자동 전송
+# [일정 DB / 03:00 전용 갱신 + 공식소스 + 이벤트 구조화]
+# - 부팅 시 1년치 수집 금지
+# - 매일 KST 03:00에 최초 1년 구축 또는 이후 증분 갱신
+# - DART/KIND 공식 일정 보강 + 뉴스 기반 이벤트 추출
+# - 07:00 / 19:00은 기존 DB를 읽기만 하여 브리핑
 # ============================================================
 SCHEDULE_DB_FILE = os.environ.get("NEWS_BOT_SCHEDULE_DB", "news_bot_schedule.jsonl")
 SCHEDULE_STATE_FILE = os.environ.get("NEWS_BOT_SCHEDULE_STATE", "news_bot_schedule_send_state.json")
@@ -1072,23 +1071,60 @@ SCHEDULE_FORWARD_DAYS = max(7, int(os.environ.get("NEWS_BOT_SCHEDULE_FORWARD_DAY
 SCHEDULE_MAX_ITEMS = max(10, int(os.environ.get("NEWS_BOT_SCHEDULE_MAX_ITEMS", "80")))
 SCHEDULE_BOOTSTRAP_MAX_CHECKED = max(1000, int(os.environ.get("NEWS_BOT_SCHEDULE_BOOTSTRAP_MAX_CHECKED", "6000")))
 SCHEDULE_DAILY_FORWARD_DAYS = max(30, int(os.environ.get("NEWS_BOT_SCHEDULE_DAILY_FORWARD_DAYS", "180")))
+# 일정 검색어는 '재료 뉴스'뿐 아니라 실제 날짜가 발생하는 이벤트까지 넓게 잡는다.
 SCHEDULE_BOOTSTRAP_QUERIES = [
-    '특징주 상한가 급등 일정 발표 예정',
-    '상한가 종목 재료 일정 실적 발표 임상 승인',
-    '급등주 특징주 수주 공급계약 양산 출시 상용화 일정',
-    '상한가 급등 종목 계약 투자 증설 기술이전 마일스톤 일정',
-    '특징주 종목 임상 결과 FDA 승인 기술수출 일정',
+    '특징주 상한가 급등 일정 발표 예정 실적발표',
+    '수주 공급계약 계약체결 납품 출하 선적 일정',
+    '임상 임상시험 환자모집 투약 탑라인 중간결과 결과발표 학회 일정',
+    'FDA EMA PMDA 허가 승인 PDUFA AdCom NDA BLA IND 일정',
+    '기술이전 기술수출 라이선스 LO MOU LOI 마일스톤 일정',
+    '샘플 공급 고객사 인증 퀄테스트 양산 승인 양산개시 상용화 출시 일정',
+    '증설 공장 준공 공장가동 상업생산 생산개시 장비반입 일정',
+    '유상증자 무상증자 CB BW 전환청구 신주상장 보호예수 해제 일정',
+    '주주총회 배당 기준일 배당락 합병 분할 공개매수 자사주 일정',
+    '실적발표 컨퍼런스콜 IR NDR Investor Day Capital Markets Day 일정',
+    'IPO 수요예측 공모주청약 납입 환불 신규상장 이전상장 SPAC 일정',
+    '정책 시행일 규제 보조금 세액공제 정부발표 산업부 과기부 금융위 일정',
     '미국 기업 실적 발표 일정 반도체 AI 빅테크',
-    '미국 주요 경제지표 FOMC CPI PCE 고용 GDP 일정',
-    '한국 증시 주요 일정 실적발표 임상 수주 공시',
+    '미국 주요 경제지표 FOMC CPI PCE 고용 GDP ISM PPI 일정',
 ]
 SCHEDULE_MAJOR_WORDS = {
-    '실적발표','실적 발표','어닝','임상','임상시험','허가','승인','품목허가','FDA',
-    '수주','공급계약','계약 체결','공급 개시','양산','출시','상용화','기술이전',
-    '마일스톤','주주총회','합병','분할','공개매수','증자','신규시설투자','증설',
-    'FOMC','CPI','PCE','고용지표','금리결정','잭슨홀','GDP','ISM','소비자물가',
+    # 실적/기업행사
+    '실적발표','실적 발표','어닝','어닝콜','컨퍼런스콜','기업설명회','IR','NDR','Investor Day','Capital Markets Day',
+    '주주총회','정기주총','임시주총','배당 기준일','배당락',
+    # 바이오/헬스케어
+    '임상','임상시험','임상 개시','환자 모집','환자모집','첫 환자 투약','환자 등록','탑라인','중간 결과','중간결과',
+    '주요 결과','결과 발표','학회 발표','학회','초록 공개','포스터 발표','구두 발표','PDUFA','AdCom','NDA','BLA','IND',
+    'FDA','EMA','PMDA','신약허가','허가 신청','허가심사','품목허가','우선심사','신속심사','혁신치료제','적응증 확대',
+    '기술이전','기술수출','라이선스','마일스톤','계약금','파트너링','기술반환','권리 반환','LO','L/O','MOU','LOI',
+    # 수주/제조/AI/반도체
+    '수주','공급계약','계약 체결','본계약','독점공급','장기공급','공급 개시','공급 확대','납품','출하','선적','검수',
+    '샘플 공급','샘플','고객사 인증','퀄 테스트','퀄리피케이션','양산 승인','양산 개시','양산개시','초도 물량','초도 공급',
+    '신제품 출시','제품 공개','제품 발표','상업생산','상업운전','생산 개시','공장 준공','공장 가동','장비 반입','장비 설치','증설','수율',
+    # 자본/상장/오버행
+    '유상증자','무상증자','주주배정','일반공모','제3자배정','증자 납입일','신주 상장','감자','감자 기준일','주식분할','주식병합',
+    '액면분할','전환사채','CB','전환청구','전환가능일','신주인수권','BW','신주인수권 행사','교환사채','EB','자사주 취득','자사주 처분','소각',
+    '보호예수','보호예수 해제','의무보유','의무보유 해제','락업','Lock-up','추가상장','스톡옵션 행사','최대주주 변경','공개매수','합병','분할',
+    # IPO
+    '예비심사','심사청구','심사승인','공모','수요예측','공모주 청약','청약 시작','청약 종료','환불','납입','신규상장','상장','이전상장','합병상장','SPAC',
+    # 정책/산업/미국 일정
+    '정부 발표','정책 발표','시행일','법안 시행','규제 시행','규제 완화','보조금','지원금','세액공제','인허가','산업부','과기부','복지부','환경부','국토부','금융위',
+    '전기차 보조금','배터리 정책','반도체 지원','AI 정책','원전 정책','방산 수출','우주 발사','수소 정책','로봇 정책','바이오 정책',
+    'FOMC','CPI','PCE','고용지표','금리결정','잭슨홀','GDP','ISM','소비자물가','PPI',
 }
 SCHEDULE_NOISE_WORDS = {'텔레그램','조회수','좋아요','구독','광고','이벤트','쿠폰','게시','업로드'}
+SCHEDULE_EVENT_STATUS_WORDS = {
+    '확정': ('확정','확정 발표','개최한다','진행한다','예정이다','일정 확정'),
+    '예정': ('예정','개최 예정','발표 예정','출시 예정','양산 예정','상장 예정','공급 예정'),
+    '협의': ('협의','논의','추진','검토','계획','목표'),
+    'MOU/LOI': ('MOU','LOI','업무협약','의향서'),
+}
+SCHEDULE_SOURCE_CONFIDENCE = {
+    'DART': 1.00, 'KIND': 1.00, 'KIND-IPO': 1.00, 'KIND-IR': 0.98,
+    '기업공식': 0.98, '정부기관': 0.98, 'Google-US': 0.82, '뉴스일정': 0.72,
+}
+SCHEDULE_POLICY_WORDS = {'정책 발표','시행일','법안 시행','규제 시행','규제 완화','보조금','지원금','세액공제','정부 발표'}
+SCHEDULE_INDUSTRY_EVENT_WORDS = {'샘플','고객사 인증','퀄 테스트','양산 승인','양산 개시','증설','상업생산','상업운전','공장 가동','장비 반입','신제품 출시','제품 발표'}
 
 def _schedule_load_json(path, default):
     try:
@@ -1109,26 +1145,46 @@ def _schedule_save_json(path, obj):
         _engine_log('warning', '[일정] 상태 저장 실패 | %s | %s', path, str(e)[:120])
 
 def _schedule_append(row):
+    """일정 DB에 추가하되 동일 이벤트의 날짜 변경/상태 변경은 갱신한다."""
     key = str(row.get('key') or '')
     if not key:
         key = '|'.join([str(row.get('date','')), str(row.get('title','')), str(row.get('source',''))])
         row['key'] = key
     try:
-        existing = set()
+        rows=[]; replaced=False; exact=False
         if os.path.exists(SCHEDULE_DB_FILE):
             with open(SCHEDULE_DB_FILE, 'r', encoding='utf-8') as f:
                 for line in f:
                     try:
-                        x=json.loads(line); existing.add(str(x.get('key','')))
+                        x=json.loads(line)
+                        if x.get('key') == key:
+                            exact=True
+                        rows.append(x)
                     except Exception:
                         pass
-        if key in existing:
+        if exact:
             return False
-        with open(SCHEDULE_DB_FILE, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(row, ensure_ascii=False) + '\n')
-        return True
+        # 기업+이벤트 유형+제목의 핵심어가 같은 경우 날짜 변경으로 간주한다.
+        identity = str(row.get('event_identity') or '')
+        if identity:
+            for i,x in enumerate(rows):
+                if str(x.get('event_identity') or '') == identity and x.get('event_type') == row.get('event_type'):
+                    old_date=str(x.get('date','')); new_date=str(row.get('date',''))
+                    if old_date != new_date or x.get('status') != row.get('status'):
+                        row['previous_date']=old_date or x.get('previous_date','')
+                        row['updated_at']=_now_kst().isoformat()
+                        rows[i]=row; replaced=True
+                    break
+        if not replaced:
+            rows.append(row)
+        tmp=SCHEDULE_DB_FILE+'.tmp'
+        with open(tmp,'w',encoding='utf-8') as f:
+            for x in rows:
+                f.write(json.dumps(x,ensure_ascii=False)+'\n')
+        os.replace(tmp,SCHEDULE_DB_FILE)
+        return not replaced
     except Exception as e:
-        _engine_log('warning', '[일정] DB 저장 실패 | %s', str(e)[:160])
+        _engine_log('warning','[일정] DB 저장 실패 | %s',str(e)[:160])
         return False
 
 def _schedule_load_rows():
@@ -1217,15 +1273,29 @@ def _schedule_extract_from_text(title, extra, source, published='', companies=No
     snippet=text[max(0,pos-160):min(len(text),pos+260)].strip()
     if not any(w.lower() in snippet.lower() for w in SCHEDULE_MAJOR_WORDS):
         return None
-    category='공시' if str(source).startswith('DART') else ('미국일정' if 'US' in str(source) or 'Google-US' in str(source) else '뉴스일정')
+    category='공시' if str(source).startswith('DART') else ('IPO' if 'KIND-IPO' in str(source) else ('IR' if 'KIND-IR' in str(source) else ('미국일정' if 'US' in str(source) or 'Google-US' in str(source) else '뉴스일정')))
     tag='상한가연계' if limitup else '특징주연계' if any(x in text.lower() for x in ('특징주','급등')) else '주요뉴스'
+    event_type='기타일정'
+    for ew in sorted(SCHEDULE_MAJOR_WORDS,key=len,reverse=True):
+        if ew.lower() in text.lower():
+            event_type=ew; break
+    status='예정'
+    for st, words in SCHEDULE_EVENT_STATUS_WORDS.items():
+        if any(w.lower() in text.lower() for w in words): status=st; break
+    if event_type in ('MOU','LOI','업무협약','의향서'): status='MOU/LOI'
+    confidence=SCHEDULE_SOURCE_CONFIDENCE.get(str(source),0.70)
+    if status=='확정': confidence=min(1.0,confidence+0.05)
+    if status in ('협의','MOU/LOI'): confidence=max(0.40,confidence-0.18)
+    impact='정책' if any(w.lower() in text.lower() for w in SCHEDULE_POLICY_WORDS) else ('산업' if any(w.lower() in text.lower() for w in SCHEDULE_INDUSTRY_EVENT_WORDS) else '기업')
     company_text='·'.join((companies or [])[:3])
+    identity_text=re.sub(r'[^0-9a-zA-Z가-힣]','',f'{company_text}|{event_type}|{snippet[:100]}'.lower())
     key=f'{dt.isoformat()}|{category}|{tag}|{company_text}|{re.sub(r"[^0-9a-zA-Z가-힣]", "", snippet.lower())[:120]}'
     return {
-        'key':key,
+        'key':key, 'event_identity':identity_text, 'event_type':event_type,
         'date':dt.isoformat(),'category':category,'source':str(source),
         'tag':tag,'companies':list((companies or [])[:5]),
         'title':str(title).strip()[:220],'detail':snippet[:300],
+        'status':status,'confidence':round(confidence,2),'impact_scope':impact,
         'link':'','created_at':_now_kst().isoformat(),
     }
 
@@ -1241,43 +1311,112 @@ def _schedule_add_news_item(source, title, extra, link, published='', companies=
             return True
     return False
 
-def _schedule_bootstrap_one_year():
-    state=_schedule_load_json(SCHEDULE_BOOTSTRAP_STATE,{})
-    if state.get('done'):
-        return
-    # 최초 1회는 최근 1년을 월/주 단위로 잘게 나눠 최대한 빠짐없이 훑는다.
-    # 특히 상한가·특징주·급등 재료를 별도 검색어로 넓게 수집한다.
+def _schedule_fetch_kind_page(url, source, category_hint):
+    """KIND의 공개 IR/IPO 화면을 일정 DB 전용으로 읽는다. 실패해도 뉴스 엔진에는 영향이 없다."""
+    try:
+        r=requests.get(url,headers={"User-Agent":USER_AGENT},timeout=min(ENGINE_HTTP_TIMEOUT,12))
+        if not r.ok: return 0
+        soup=BeautifulSoup(r.text,'html.parser'); added=0
+        text=soup.get_text(' ',strip=True)
+        # KIND 화면의 날짜/기업명/제목을 보수적으로 추출한다.
+        dates=re.findall(r'20\\d{2}[./-]\\d{1,2}[./-]\\d{1,2}',text)
+        for d in dates[:80]:
+            try: dt=datetime.date.fromisoformat(d.replace('.','-').replace('/','-'))
+            except Exception: continue
+            if dt < _now_kst().date() or dt > _now_kst().date()+datetime.timedelta(days=SCHEDULE_DAILY_FORWARD_DAYS): continue
+            pos=text.find(d); snippet=text[max(0,pos-180):pos+260]
+            title=f'KIND | {category_hint} | {snippet[:180]}'
+            row=_schedule_extract_from_text(title,snippet,source,d)
+            if not row:
+                # 공식 KIND 일정은 키워드가 약해도 날짜 자체가 공식 일정이므로 보수적으로 저장
+                row={'key':f'{dt.isoformat()}|{source}|{re.sub(r"[^0-9A-Za-z가-힣]","",snippet)[:140]}','event_identity':re.sub(r'[^0-9A-Za-z가-힣]','',snippet[:140]),'event_type':category_hint,'date':dt.isoformat(),'category':category_hint,'source':source,'tag':'공식일정','companies':[],'title':title[:220],'detail':snippet[:300],'status':'확정','confidence':1.0,'impact_scope':'기업','link':url,'created_at':_now_kst().isoformat()}
+            else:
+                row['link']=url; row['source']=source; row['confidence']=max(float(row.get('confidence',0)),0.98)
+            if _schedule_append(row): added+=1
+        return added
+    except Exception as e:
+        _engine_log('warning','[일정/KIND] %s | %s',category_hint,str(e)[:120]); return 0
+
+
+def _schedule_collect_official_sources():
+    """03시 전용 공식 일정 보강: DART/KIND. 모두 실패 허용형으로 실행한다."""
+    total=0
+    # KIND 공개 IR 일정/IPO 화면
+    total += _schedule_fetch_kind_page('https://kind.krx.co.kr/corpgeneral/irschedule.do?gubun=iRSchedule&method=searchIRScheduleMain','KIND-IR','IR')
+    total += _schedule_fetch_kind_page('https://kind.krx.co.kr/batch.do?method=selectMainIPOSList&scrnmode=1','KIND-IPO','IPO')
+    # DART는 당일/최근 며칠 공시를 일정 후보로 보강한다. API 키가 없으면 조용히 건너뛴다.
+    if DART_API_KEY and ENABLE_DART:
+        try:
+            end=_now_kst().date(); start=end-datetime.timedelta(days=7)
+            r=requests.get('https://opendart.fss.or.kr/api/list.json',params={'crtfc_key':DART_API_KEY,'bgn_de':start.strftime('%Y%m%d'),'end_de':end.strftime('%Y%m%d'),'page_no':1,'page_count':100},timeout=min(ENGINE_HTTP_TIMEOUT,15))
+            if r.ok:
+                data=r.json()
+                for x in data.get('list',[]) or []:
+                    report=x.get('report_nm',''); corp=x.get('corp_name','')
+                    if not any(k in report for k in DART_STRONG_REPORT_KEYWORDS) and not any(k.lower() in report.lower() for k in ('유상증자','무상증자','전환사채','신주인수권','합병','분할','공개매수','주주총회','배당')): continue
+                    link=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={x.get('rcept_no','')}"
+                    row=_schedule_extract_from_text(f'{corp} | {report}','', 'DART-공식', x.get('rcept_dt',''))
+                    if row:
+                        row['link']=link; row['confidence']=1.0; row['status']='확정'; total += 1 if _schedule_append(row) else 0
+        except Exception as e: _engine_log('warning','[일정/DART 공식보강] %s',str(e)[:120])
+    return total
+
+
+def _schedule_collect_incremental():
+    """03시 작업. 최초에는 1년, 이후에는 마지막 갱신일부터 증분 수집한다."""
     from urllib.parse import quote_plus
+    state=_schedule_load_json(SCHEDULE_BOOTSTRAP_STATE,{})
     today=_now_kst().date()
-    start=today-datetime.timedelta(days=SCHEDULE_LOOKBACK_DAYS)
-    added=0; checked=0; requests_count=0
-    cursor=start
+    if not state.get('done'):
+        start=today-datetime.timedelta(days=SCHEDULE_LOOKBACK_DAYS)
+        mode='1년 초기구축'
+    else:
+        try: last=datetime.date.fromisoformat(str(state.get('last_incremental',''))[:10])
+        except Exception: last=today-datetime.timedelta(days=3)
+        start=max(today-datetime.timedelta(days=SCHEDULE_LOOKBACK_DAYS), last-datetime.timedelta(days=2))
+        mode='증분갱신'
+    added=0; checked=0; requests_count=0; cursor=start
     while cursor < today and checked < SCHEDULE_BOOTSTRAP_MAX_CHECKED:
         end=min(today,cursor+datetime.timedelta(days=14))
         for q in SCHEDULE_BOOTSTRAP_QUERIES:
             if checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED: break
             url=f'https://news.google.com/rss/search?q={quote_plus(q)}%20after%3A{cursor.isoformat()}%20before%3A{end.isoformat()}&hl=ko&gl=KR&ceid=KR:ko'
-            entries=_engine_fetch_rss(url,'일정DB/1년초기검색')
-            requests_count += 1
+            entries=_engine_fetch_rss(url,'일정DB/03시')
+            requests_count+=1
             for e in entries:
-                if checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED: break
-                checked += 1
-                title=e.get('title',''); extra=e.get('summary','') or e.get('description','')
-                low=_engine_clean(f'{title} {extra}').lower()
-                if not any(x in low for x in ('특징주','급등','상한가','수주','공급계약','임상','승인','허가','실적','양산','상용화','기술이전','마일스톤','fomc','cpi','pce','고용','gdp')):
-                    continue
-                row=_schedule_extract_from_text(title, extra, '일정DB/1년초기검색', e.get('published',''), limitup=('상한가' in low))
+                if checked>=SCHEDULE_BOOTSTRAP_MAX_CHECKED: break
+                checked+=1; title=e.get('title',''); extra=e.get('summary','') or e.get('description',''); low=_engine_clean(f'{title} {extra}').lower()
+                if not any(x.lower() in low for x in SCHEDULE_MAJOR_WORDS): continue
+                row=_schedule_extract_from_text(title,extra,'일정DB/03시',e.get('published',''),limitup=('상한가' in low))
                 if row:
                     row['link']=e.get('link','') or ''
                     if _schedule_append(row): added+=1
         cursor=end+datetime.timedelta(days=1)
-    _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE,{
-        'done':True,'completed_at':_now_kst().isoformat(),
-        'checked':checked,'added':added,'requests':requests_count,
-        'lookback_days':SCHEDULE_LOOKBACK_DAYS,
-        'note':'최초 1년 전수형 일정 후보 검색 완료. 이후 매일 뉴스/DART에서 지속 누적.'
-    })
-    _engine_log('info','[일정DB] 최초 1년 전수형 초기화 완료 | 확인=%d | 신규=%d | RSS요청=%d',checked,added,requests_count)
+    official=_schedule_collect_official_sources()
+    _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE,{'done':True,'completed_at':_now_kst().isoformat(),'last_incremental':today.isoformat(),'checked':checked,'added':added,'official_added':official,'requests':requests_count,'lookback_days':SCHEDULE_LOOKBACK_DAYS,'note':'03시 일정 전용 갱신: 최초 1년 구축 후 마지막 갱신일 기준 증분 갱신'})
+    _engine_log('info','[일정DB/03시] %s 완료 | 확인=%d | 신규=%d | 공식=%d | RSS=%d',mode,checked,added,official,requests_count)
+    return added+official
+
+
+def _schedule_03am_worker():
+    """메인 뉴스 수집과 분리된 03:00 일정 DB 작업 스레드."""
+    last_run=''
+    while True:
+        try:
+            now=_now_kst(); key=now.date().isoformat()
+            if now.hour==3 and now.minute<5 and last_run != key:
+                last_run=key
+                try: _schedule_collect_incremental()
+                except Exception as e: log_error('03시 일정 DB 작업',e)
+            time.sleep(10)
+        except Exception as e:
+            log_error('03시 일정 스케줄러',e); time.sleep(30)
+
+
+def _schedule_bootstrap_one_year():
+    # 기존 호출 호환용. 실제 작업은 03:00 전용 증분 엔진에서 수행한다.
+    return _schedule_collect_incremental()
+
 
 def _schedule_add_dart_row(report, corp, link, rcept_dt):
     # DART 접수일 자체는 과거 일정으로 저장하지 않고, 보고서명에 미래 이벤트가 있을 때만 추출한다.
@@ -1463,6 +1602,57 @@ def _engine_strong_material(item):
     amount = bool(re.search(r"(?:[0-9][0-9,]*\s*(?:억|조|억원|조원|달러|usd|million|billion))", text, re.I))
     hits = [x for x in strong if x in text]
     return bool(hits or amount or len(item.get("market_hits", [])) >= 2), hits[:5]
+
+
+def _engine_two_stage_filter(source, title, extra, companies, domestic, market_hits, k1, k2):
+    """뉴스를 두 단계로 거르는 최종 관문.
+
+    1단계: 키워드/시장신호 기반 고재현율 필터.
+    2단계: 기사 내용의 실제 사건성·구체성·확정성을 점수화해 강한 재료만 우선 통과시킨다.
+    검색어가 제목에 없더라도 금액/날짜/확정 동작/실제 기업 이벤트가 함께 있으면 잡는다.
+    """
+    text = _engine_clean(f"{title} {extra}")
+    low = text.lower()
+
+    # 방법 1: 기존 시장 키워드/가격 반응/기업 연결을 이용한 고재현율 탐색.
+    method1_hits = list(dict.fromkeys(list(market_hits or []) + [x for x in STRONG_MARKET_HITS if x.lower() in low]))
+    price_hits = [x for x in ("급등", "폭등", "급락", "폭락", "상한가", "신고가", "신저가", "목표가 상향", "어닝서프라이즈", "어닝쇼크") if x in low]
+    method1 = bool(domestic or companies) and bool(method1_hits or price_hits or (k1 and k2))
+
+    # 방법 2: 내용 자체가 강한 재료인지 구조적으로 판정.
+    strong_terms = (
+        "수주", "공급계약", "계약 체결", "대규모 계약", "대형 계약", "기술수출", "기술이전",
+        "임상 결과", "임상 성공", "탑라인", "허가", "승인", "FDA", "EMA", "PDUFA",
+        "양산", "상용화", "신제품 출시", "고객사 인증", "퀄 테스트", "퀄리피케이션",
+        "대규모 투자", "증설", "공장 가동", "상업생산", "실적 서프라이즈", "어닝서프라이즈",
+        "인수 확정", "합병", "공개매수", "자사주 소각", "유상증자", "제3자배정",
+        "신규상장", "수요예측", "공모주 청약", "보호예수 해제", "배당 기준일",
+        "정책 확정", "법안 통과", "규제 확정", "세액공제 확정", "지원금 확정"
+    )
+    confirmation_terms = ("확정", "공식", "체결", "발표", "승인", "허가", "수주", "공시", "상장", "개시", "완료")
+    weak_terms = ("가능성", "전망", "관측", "추정", "검토", "추진", "논의", "기대감", "수혜 기대", "관련주로 부각")
+    amount = bool(re.search(r"(?:[0-9][0-9,]*\s*(?:억|조|억원|조원|달러|usd|million|billion))", low, re.I))
+    date_signal = bool(re.search(r"20\d{2}[./-]\d{1,2}[./-]\d{1,2}|20\d{2}\s*년\s*\d{1,2}\s*월|\d{1,2}\s*월\s*\d{1,2}\s*일", text))
+    action_signal = any(x in low for x in ("체결", "착수", "개시", "출시", "납품", "출하", "양산", "승인", "허가", "발표", "소각", "상장", "수주"))
+    strong_hit_count = sum(1 for x in strong_terms if x.lower() in low)
+    confirm_count = sum(1 for x in confirmation_terms if x.lower() in low)
+    weak_count = sum(1 for x in weak_terms if x.lower() in low)
+
+    method2_score = 0
+    method2_score += min(strong_hit_count, 3) * 3
+    method2_score += min(confirm_count, 2) * 2
+    method2_score += 3 if amount else 0
+    method2_score += 2 if date_signal else 0
+    method2_score += 2 if action_signal else 0
+    method2_score += 2 if domestic else 0
+    method2_score -= min(weak_count, 2) * 2
+
+    method2 = method2_score >= 6 and bool(companies or domestic or market_hits)
+
+    # 두 방법 중 하나라도 강하게 잡으면 후보로 보존하되, 두 방법 모두 잡힌 경우를 최우선 강재료로 취급한다.
+    passed = method1 or method2
+    level = "강" if method1 and method2 else ("중" if passed else "약")
+    return passed, level, method1, method2, method2_score, method1_hits[:8]
 
 
 def _engine_historical_match(item):
@@ -1931,6 +2121,13 @@ def _engine_classify(source, title, extra=""):
     feature_price_hits = [x for x in FEATURE_PRICE_HITS if x.lower() in low]
     market_relevant = bool(market_hits) or bool(feature_price_hits)
 
+    # 2중 필터: 1차 시장 키워드/가격신호 + 2차 실제 사건성/구체성/확정성 평가.
+    two_pass, material_level, method1_ok, method2_ok, material_score, material_hits = _engine_two_stage_filter(
+        source, title, extra, companies, domestic, market_hits, k1, k2
+    )
+    if not two_pass and not is_breaking and not is_feature and not is_exclusive and not _engine_is_global_market_news(text):
+        return False, "약한재료", [], k1, k2, market_hits
+
     # 글로벌 기업 자체 뉴스는 글로벌 뉴스로 노출할 수 있지만
     # 글로벌 기업명을 국내 상장기업/관련주로 절대 사용하지 않는다.
     global_relevant = bool(global_companies) and market_relevant
@@ -1966,8 +2163,8 @@ def _engine_classify(source, title, extra=""):
         "임상", "기술이전", "마일스톤", "실적", "어닝서프라이즈", "대규모 투자",
         "증설", "공개매수", "자사주", "배당", "신제품"
     ) if x.lower() in low]
-    if stock_linked and (market_relevant or strong_event_hits or (k1 and k2)):
-        return True, "📌", domestic, k1, k2, market_hits
+    if stock_linked and (market_relevant or strong_event_hits or (k1 and k2)) and (method2_ok or method1_ok):
+        return True, ("📌" if material_level != "강" else "🔥"), domestic, k1, k2, market_hits
     if global_relevant:
         return True, "🌐", global_companies, k1, k2, market_hits
     # 국내 관련주가 없어도 의미 있는 글로벌 시황은 보존한다.
@@ -4290,11 +4487,11 @@ if __name__ == "__main__":
         health_thread.start()
         time.sleep(0.3)
 
-        # 1년치 특징주/급등 뉴스에서 미래 일정 DB를 최초 1회 구축한다.
-        schedule_bootstrap_thread = threading.Thread(
-            target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True
+        # 일정 DB는 부팅 시 구축하지 않는다. 매일 KST 03:00 전용 스레드에서만 갱신한다.
+        schedule_03am_thread = threading.Thread(
+            target=_schedule_03am_worker, name="schedule-03am", daemon=True
         )
-        schedule_bootstrap_thread.start()
+        schedule_03am_thread.start()
 
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
         _engine_log("info", "[BOOT] NAVER_HUB=%s | NAVER_LEGACY=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
