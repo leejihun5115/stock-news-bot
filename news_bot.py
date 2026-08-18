@@ -2733,11 +2733,11 @@ def _engine_format_message(item):
                 theme = str(row.get("theme") or "").strip()
                 if name:
                     detail = " | ".join(x for x in (theme, reason) if x)
-                    badge = str(row.get("badge") or "🔎 관심종목")
+                    badge = "✔️"
                     # 국내 관심종목은 항상 ⚡️ 종목명 형식으로만 표시한다. 🥇는 사용하지 않는다.
                     strong_stock_flag = ""
                     lines.append(
-                        f"{html.escape(badge)} — {strong_stock_flag}⚡️ <b>{html.escape(name)}</b>"
+                        f"{html.escape(badge)} ⚡️<b>{html.escape(name)}</b>"
                         + (f" /// {html.escape(detail[:360])}" if detail else "")
                     )
             elif row:
@@ -3475,12 +3475,12 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     gainers = [q for q in rows if (q.get("change_pct") or 0) > 0]
     losers = [q for q in rows if (q.get("change_pct") or 0) < 0]
 
-    lines.append("<b>🚀 오늘의 주도 대장주</b>")
+    lines.append("<b>✔👀관련주 :</b>")
     if gainers:
         for rank, q in enumerate(gainers[:3], 1):
-            lines.append(f"{rank}등 ⚡️ {q['name']} {_us_format_pct(q.get('change_pct'))} · {q['theme']}")
+            lines.append(f"✔️ ⚡️{q['name']} {_us_format_pct(q.get('change_pct'))} · {q['theme']}")
     else:
-        lines.append("• 상승 대장주 부재 — 하락 방어력이 높은 테마 확인")
+        lines.append("• 관련주 없음")
 
     themes = _krx_theme_rotation(snapshot)
     if themes:
@@ -3491,7 +3491,7 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
         for rank, item in enumerate(positive[:3], 1):
             avg, lead_pct, theme, leader, theme_rows = item
             members = ", ".join(f"{r['name']} {_us_format_pct(r.get('change_pct'))}" for r in theme_rows[:3])
-            lines.append(f"{rank}등 {theme} · 평균 {avg:+.2f}% | 대장 ⚡️ {leader['name']} {_us_format_pct(lead_pct)}")
+            lines.append(f"{rank}등 {theme} · 평균 {avg:+.2f}% | ⚡️ {leader['name']} {_us_format_pct(lead_pct)}")
             lines.append(f"   ↳ {members}")
         if negative:
             top_down = negative[:2]
@@ -3511,7 +3511,7 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
         elif samsung >= 2.0:
             lines.append("• 삼성전자 강세: 반도체 주도력이 유지되는지 확인하고 HBM·전력기기 등 공급망 후속주로 수급 확산 여부를 확인")
         else:
-            lines.append("• 삼성전자 보합권: 지수보다 개별 테마 대장주의 거래·등락 지속 여부를 우선 확인")
+            lines.append("• 삼성전자 보합권: 지수보다 개별 테마 주도 종목의 거래·등락 지속 여부를 우선 확인")
     if hynix is not None:
         lines.append(f"• SK하이닉스 {_us_format_pct(hynix)}: HBM 주도력 유지 여부가 반도체·장비 순환매의 핵심")
 
@@ -4081,14 +4081,9 @@ def _us_close_briefing(snapshot, et):
                     best[c[1]] = c
             picks = sorted(best.values(), reverse=True, key=lambda x:x[0])[:3]
             if picks:
-                lines.append("  🇰🇷 한국 연결")
+                lines.append("  ✔👀관련주 :")
                 for n, (_, stock, hist, lead_hist, key) in enumerate(picks, 1):
-                    if n == 1:
-                        badge = "✔ 대장주"
-                    elif n == 2:
-                        badge = "☑️ 관찰"
-                    else:
-                        badge = "☑️ 관찰"
+                    badge = "✔️"
                     strong_stock_flag = ""
                     why = ["동일 테마 연결"]
                     if hist:
@@ -4097,9 +4092,9 @@ def _us_close_briefing(snapshot, et):
                         why.append("과거 테마 주도 이력")
                     if hist >= 2 or lead_hist >= 2:
                         why.append("끼·탄력 확인")
-                    lines.append(f"  {badge} {strong_stock_flag}⚡️ 🇰🇷 {html.escape(stock)} — " + " + ".join(why))
+                    lines.append(f"  {badge} ⚡️{html.escape(stock)} — " + " + ".join(why))
             else:
-                lines.append("  🇰🇷 한국 연결: 확인되는 국내 관련주 없음")
+                lines.append("  ✔👀관련주 : 無")
 
             # 유사 과거 사례: 실제 수익률과 링크가 DB에 있을 때만 표시.
             if reason:
@@ -4192,8 +4187,8 @@ def _us_close_briefing(snapshot, et):
         "<b>👀 다음 한국장 관찰 기준</b>",
         "• 직접 사업연관 우선",
         "• 동일 테마 실제 움직임 확인",
-        "• 과거 상한가/급등 + 테마 주도 이력으로 대장주 선별",
-        "• 대장주 선정 이유를 함께 표시",
+        "• 과거 상한가/급등 + 테마 주도 이력으로 관련주 선별",
+        "• 관련주 선정 이유를 함께 표시",
         "• 글로벌 기업을 국내 관련주로 강제 연결하지 않음",
     ]
     return "\n".join(lines)
