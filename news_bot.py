@@ -262,31 +262,30 @@ def print(*args, **kwargs):
 
 
 # ============================================================
+# 나유정 | 2026-08-18 | 전체 수정 완료본
+# 포함: 네이버 뉴스, 유튜브, 미국장 30분 브리핑, 국내장 30분 장중브리핑,
+# 미국뉴스→국내관심종목 연결/🇰🇷 표시, 특징주·단독·속보 우선 노출,
+# [그로쓰리서치] 중계 제외, 텔레그램 제목 중심 노출, 동일/유사 뉴스 중복 방지,
+# 글로벌 시황 제목 간소화, 일정 1년 초기 DB + 매일 누적/갱신 + 과거 일정 보존,
+# DART 공시 수집/시장관련성 강화 및 진단로그.
+# ============================================================
+# ============================================================
 # --- 시작 로그에 필요한 환경변수 선행 초기화 ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 CHAT_ID_OVERSEAS = os.environ.get("CHAT_ID_OVERSEAS", "") or CHAT_ID
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
-
-def _clean_secret_env(name):
-    # Render 환경변수에 실수로 따옴표/앞뒤 공백이 붙어도 인증값 자체는 깨끗하게 사용한다.
-    value = os.environ.get(name, "")
-    if value is None:
-        return ""
-    value = str(value).strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("\"", "'"):
-        value = value[1:-1].strip()
-    return value
-
-# ⚠️ 중요: NAVER_CLIENT_*는 구형 Developer Center Search API용,
-# NAVER_APIHUB_CLIENT_*는 NAVER API HUB용이다. 서로 섞어서 보내지 않는다.
-NAVER_CLIENT_ID = _clean_secret_env("NAVER_CLIENT_ID")
-NAVER_CLIENT_SECRET = _clean_secret_env("NAVER_CLIENT_SECRET")
-NAVER_APIHUB_CLIENT_ID = _clean_secret_env("NAVER_APIHUB_CLIENT_ID")
-NAVER_APIHUB_CLIENT_SECRET = _clean_secret_env("NAVER_APIHUB_CLIENT_SECRET")
-NAVER_API_MODE = "auto"
+NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "").strip()
+NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+NAVER_APIHUB_CLIENT_ID = os.environ.get("NAVER_APIHUB_CLIENT_ID", "").strip()
+NAVER_APIHUB_CLIENT_SECRET = os.environ.get("NAVER_APIHUB_CLIENT_SECRET", "").strip()
+NAVER_API_MODE = os.environ.get("NAVER_API_MODE", "auto").strip().lower()
 NAVER_APIHUB_BASE_URL = "https://naverapihub.apigw.ntruss.com"
-NAVER_LEGACY_BASE_URL = "https://openapi.naver.com/v1/search/news.json"
+# NAVER API HUB (2026-07-31 이후 신규 Search API 운영 기준)
+NAVER_APIHUB_CLIENT_ID = os.environ.get("NAVER_APIHUB_CLIENT_ID", "").strip()
+NAVER_APIHUB_CLIENT_SECRET = os.environ.get("NAVER_APIHUB_CLIENT_SECRET", "").strip()
+NAVER_API_MODE = os.environ.get("NAVER_API_MODE", "auto").strip().lower()
+NAVER_APIHUB_BASE_URL = "https://naverapihub.apigw.ntruss.com"
 
 def _startup_env_flag(name, default=True):
     val = os.environ.get(name)
@@ -500,7 +499,7 @@ ENABLE_MORNING_BRIEFING = _env_flag("ENABLE_MORNING_BRIEFING")   # 아침 브리
 ENABLE_US_INTRADAY_BRIEFING = _env_flag("ENABLE_US_INTRADAY_BRIEFING", True)  # 미국장 개장 30분 + 장중 변동 브리핑
 ENABLE_TELEGRAM_CHANNELS = _env_flag("ENABLE_TELEGRAM_CHANNELS") # 텔레그램1(필터)+2(무조건)
 ENABLE_CUSTOM_SOURCES = _env_flag("ENABLE_CUSTOM_SOURCES")       # 약업신문/전자신문
-ENABLE_DART = _env_flag("ENABLE_DART")                           # DART 공시
+ENABLE_DART = _env_flag("ENABLE_DART", True)                   # DART 공시: 기본 ON (SOLO_MODE로 명시 비활성화 가능)
 ENABLE_NAVER_NEWS = _env_flag("ENABLE_NAVER_NEWS")               # 네이버 뉴스
 ENABLE_BLOG = _env_flag("ENABLE_BLOG")                           # 분석 블로그
 ENABLE_YOUTUBE = _env_flag("ENABLE_YOUTUBE")                     # 유튜브
@@ -564,7 +563,8 @@ if _SOLO_MODES_VALID:
             ENABLE_YOUTUBE = True
 
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
-# NAVER_CLIENT_ID / NAVER_CLIENT_SECRET는 위에서 이미 정규화한 값을 그대로 사용한다.
+NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
+NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
 
 if not BOT_TOKEN or not CHAT_ID:
     raise SystemExit(
@@ -984,6 +984,17 @@ DART_STRONG_REPORT_KEYWORDS = {
     "주식등의대량보유상황보고서",
     "양수결정", "양도결정",
     "추가상장",
+    # 시장 흐름/수급에 의미가 큰 추가 공시 유형
+    "임원ㆍ주요주주특정증권등소유상황보고서", "임원·주요주주특정증권등소유상황보고서",
+    "임원및주요주주특정증권등소유상황보고서", "주식소유상황보고서",
+    "최대주주등소유주식변동신고서", "주주명부", "주주총회소집결의",
+    "주주총회결과", "주식매수선택권", "자기주식", "전환사채", "신주인수권부사채",
+    "교환사채", "채무증권발행결정", "기업설명회", "기업설명회(IR)",
+    "매출액", "영업이익", "당기순이익", "실적", "분기보고서", "반기보고서", "사업보고서",
+    "연결재무제표", "감사보고서", "자본금", "유상증자", "무상증자",
+    "주식배당", "현금배당", "주식취득", "주식처분", "시설투자", "신규시설",
+    "특허", "기술이전", "임상", "허가", "승인", "계약", "공급계약", "수주",
+    "소송", "횡령", "배임", "부도", "회생", "파산", "상장폐지", "관리종목",
 }
 
 DART_ALWAYS_EXPOSE_KEYWORDS = DART_STRONG_REPORT_KEYWORDS - {
@@ -2537,9 +2548,8 @@ def _engine_format_message(item):
                     badge = str(row.get("badge") or "🔎 관심종목")
                     # 국내 관심종목으로 최종 선정된 종목명 앞에는 항상 💯를 붙인다.
                     # 대장주/관찰 순위 표시는 종목 선정 이유를 명확히 하기 위한 용도다.
-                    us_flag = "🇰🇷 " if source_raw == "Google-US" else ""
                     lines.append(
-                        f"{html.escape(badge)} — 💯 <b>{us_flag}{html.escape(name)}</b>"
+                        f"{html.escape(badge)} — 💯 <b>{html.escape(name)}</b>"
                         + (f" /// {html.escape(detail[:360])}" if detail else "")
                     )
             elif row:
@@ -2755,87 +2765,39 @@ def _engine_run_google_and_domestic():
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
 
 
-_NAVER_RUNTIME_MODE = None
-_NAVER_AUTH_FAILURE_LOGGED = set()
-
-def _naver_credential_candidates():
-    """
-    NAVER 인증 방식을 자동 선택한다.
-
-    1) NAVER_APIHUB_CLIENT_ID/SECRET가 있으면 NAVER API HUB를 먼저 사용한다.
-    2) HUB가 401이고 NAVER_CLIENT_ID/SECRET가 별도로 있으면 구형 Search API로 재시도한다.
-
-    핵심 수정: 구형 NAVER_CLIENT_*를 HUB 헤더에 억지로 넣지 않는다.
-    이 혼용이 HUB에서 401을 만드는 대표적인 원인이다.
-    """
-    candidates = []
-    if NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET:
-        candidates.append((
-            "hub",
-            {
-                "X-NCP-APIGW-API-KEY-ID": NAVER_APIHUB_CLIENT_ID,
-                "X-NCP-APIGW-API-KEY": NAVER_APIHUB_CLIENT_SECRET,
-                "Accept": "application/json",
-                "User-Agent": USER_AGENT,
-            },
-            NAVER_APIHUB_BASE_URL + "/search/v1/news",
-        ))
+def _naver_request_headers():
+    """NAVER API HUB를 우선 사용하고, 기존 개발자센터 Search API도 호환한다."""
+    hub_ready = bool(NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET)
+    if NAVER_API_MODE == "hub" and not hub_ready:
+        return None, None, "hub"
+    if NAVER_API_MODE in ("hub", "auto") and hub_ready:
+        return {
+            "X-NCP-APIGW-API-KEY-ID": NAVER_APIHUB_CLIENT_ID,
+            "X-NCP-APIGW-API-KEY": NAVER_APIHUB_CLIENT_SECRET,
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        }, f"{NAVER_APIHUB_BASE_URL}/search/v1/news", "hub"
     if NAVER_CLIENT_ID and NAVER_CLIENT_SECRET:
-        candidates.append((
-            "legacy",
-            {
-                "X-Naver-Client-Id": NAVER_CLIENT_ID,
-                "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
-                "Accept": "application/json",
-                "User-Agent": USER_AGENT,
-            },
-            NAVER_LEGACY_BASE_URL,
-        ))
-    return candidates
+        return {
+            "X-Naver-Client-Id": NAVER_CLIENT_ID,
+            "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        }, "https://openapi.naver.com/v1/search/news.json", "legacy"
+    return None, None, "none"
 
 
-def _naver_credentials():
-    """하위 호환용: 실제 사용 가능한 첫 인증쌍을 반환하되 서로 다른 쌍을 섞지 않는다."""
-    candidates = _naver_credential_candidates()
-    if not candidates:
-        return "", ""
-    mode, headers, _ = candidates[0]
-    if mode == "hub":
-        return NAVER_APIHUB_CLIENT_ID, NAVER_APIHUB_CLIENT_SECRET
-    return NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
-
-
-def _naver_request_headers(mode=None):
-    """요청 모드에 맞는 NAVER 인증 헤더/엔드포인트를 반환한다."""
-    candidates = _naver_credential_candidates()
-    if not candidates:
-        return None, None, "missing-credentials"
-    if mode:
-        for candidate_mode, headers, endpoint in candidates:
-            if candidate_mode == mode:
-                return headers, endpoint, candidate_mode
-        return None, None, "missing-credentials"
-    candidate_mode, headers, endpoint = candidates[0]
-    return headers, endpoint, candidate_mode
-
-
-def _naver_mark_runtime_mode(mode):
-    global _NAVER_RUNTIME_MODE
-    _NAVER_RUNTIME_MODE = mode
-
-
-def _naver_params(query, display):
-    params = {"query": query, "display": display, "start": 1, "sort": "date"}
-    # HUB는 format=json을 명시해도 되고, legacy는 기존 형식을 그대로 사용한다.
-    return params
+def _naver_extract_items(response):
+    try:
+        data = response.json()
+    except Exception:
+        return []
+    return data.get("items", []) or []
 
 
 def _naver_api_status_log(status, mode):
     if status == 401:
-        if mode == "hub":
-            _engine_log("error", "[네이버 인증 실패] mode=HUB | HUB Client ID/Secret 또는 Application의 Search API 권한을 확인하세요.")
-        else:
-            _engine_log("error", "[네이버 인증 실패] mode=legacy | NAVER_CLIENT_ID/SECRET 또는 기존 Search API 권한을 확인하세요.")
+        _engine_log("error", "[네이버 인증 실패] mode=%s | Client ID/Secret 또는 API 권한을 확인하세요.", mode)
     elif status == 403:
         _engine_log("error", "[네이버 호출 거부] mode=%s | HTTPS/요청경로/API 권한을 확인하세요.", mode)
     elif status == 429:
@@ -2844,116 +2806,84 @@ def _naver_api_status_log(status, mode):
         _engine_log("error", "[네이버 오류] mode=%s | HTTP=%s", mode, status)
 
 
-def _naver_request(mode, query, display):
-    headers, endpoint, actual_mode = _naver_request_headers(mode)
-    if not headers:
-        return None, actual_mode
-    params = _naver_params(query, display)
-    if actual_mode == "hub":
-        params["format"] = "json"
-    response = requests.get(endpoint, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
-    return response, actual_mode
-
-
 def _engine_run_naver():
     if not ENABLE_NAVER_NEWS:
         _engine_log("warning", "[네이버] ENABLE_NAVER_NEWS=OFF")
         return
-    candidates = _naver_credential_candidates()
-    if not candidates:
-        _engine_log("error", "[네이버 실패] 인증정보가 없습니다. HUB는 NAVER_APIHUB_CLIENT_ID/SECRET, legacy는 NAVER_CLIENT_ID/SECRET를 설정하세요.")
+    headers, endpoint, api_mode = _naver_request_headers()
+    if not headers:
+        _engine_log("error", "[네이버 실패] 인증정보가 없습니다. HUB는 NAVER_APIHUB_CLIENT_ID/SECRET, 기존 API는 NAVER_CLIENT_ID/SECRET를 설정하세요.")
         return
-
+    # 모든 검색어를 한 번에 호출하면 API 제한에 걸릴 수 있으므로 1분마다 순환한다.
     queries = list(dict.fromkeys(NAVER_SEARCH_QUERIES))
     batch_size = min(12, len(queries))
     cycle = getattr(_engine_run_naver, "cycle", 0)
     start = (cycle * batch_size) % max(1, len(queries))
     selected = [queries[(start+i) % len(queries)] for i in range(batch_size)] if queries else []
     _engine_run_naver.cycle = cycle + 1
-    _engine_log("info", "[네이버] 검색 시작 전체검색어=%d | 이번주기=%d | offset=%d | 후보인증=%s", len(queries), len(selected), start, "/".join(m for m,_,_ in candidates))
-
+    _engine_log("info", "[네이버] 검색 시작 전체검색어=%d | 이번주기=%d | offset=%d", len(queries), len(selected), start)
     total = 0
     api_ok = True
     for q in selected:
-        item_success = False
-        last_status = None
-        for mode, _, _ in candidates:
-            try:
-                r, actual_mode = _naver_request(mode, q, 20)
-                if r is None:
-                    continue
-                if not r.ok:
-                    last_status = r.status_code
-                    _naver_api_status_log(r.status_code, actual_mode)
-                    # 인증 실패면 다음 인증 방식으로만 1회 전환한다.
-                    if r.status_code == 401:
-                        continue
+        try:
+            params = {"query": q, "display": 20, "start": 1, "sort": "date", "format": "json"} if api_mode == "hub" else {"query": q, "display": 20, "start": 1, "sort": "date"}
+            r = requests.get(endpoint, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
+            if not r.ok:
+                api_ok = False
+                _naver_api_status_log(r.status_code, api_mode)
+                if r.status_code == 401:
                     break
-                _naver_mark_runtime_mode(actual_mode)
-                items = _naver_extract_items(r)
-                new_count = 0
-                for item in items:
-                    if _engine_process_item("네이버뉴스", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), item.get("description", "")):
-                        new_count += 1
-                        total += 1
-                _engine_log("debug", "[네이버] mode=%s | %s | 검색=%d건 | 후보=%d", actual_mode, q, len(items), new_count)
-                item_success = True
-                break
-            except Exception as e:
-                log_error("네이버 뉴스 검색", e, query=q, mode=mode)
-                break
-        if not item_success and last_status == 401:
-            api_ok = False
-
-    _engine_log("info", "[네이버] 이번주기=%d개 검색 | 후보=%d | API=%s | runtime=%s", len(selected), total, "정상" if api_ok else "오류", _NAVER_RUNTIME_MODE or "없음")
+                continue
+            data = r.json()
+            items = data.get("items", []) or []
+            new_count = 0
+            for item in items:
+                if _engine_process_item("네이버뉴스", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), item.get("description", "")):
+                    new_count += 1
+                    total += 1
+            _engine_log("debug", "[네이버] %s | 검색=%d건 | 후보=%d", q, len(items), new_count)
+        except Exception as e:
+            log_error("네이버 뉴스 검색", e, query=q)
+    _engine_log("info", "[네이버] 이번주기=%d개 검색 | 후보=%d | API=%s", len(selected), total, "정상" if api_ok else "오류")
 
 
 def _engine_run_keyword_combinations():
-    candidates = _naver_credential_candidates()
-    if not candidates:
+    # 기업명 + 핵심 테마 조합을 실제 네이버 API 검색으로 확인한다.
+    headers, endpoint, api_mode = _naver_request_headers()
+    if not headers:
         _engine_log("warning", "[키워드 조합] 네이버 API 인증정보가 없어 조합검색을 건너뜁니다.")
         return
     companies = list(dict.fromkeys(GLOBAL_AND_DOMESTIC_GIANTS))
     themes = ["HBM", "반도체", "AI", "로봇", "방산", "원전", "조선", "바이오", "이차전지", "ESS"]
+    # 매 분기마다 10개 조합. 1분 주기 전체 호출량을 제한한다.
     cycle = getattr(_engine_run_keyword_combinations, "cycle", 0)
     combos = [(c, themes[(cycle+i) % len(themes)]) for i, c in enumerate(companies[:10])]
     _engine_run_keyword_combinations.cycle = cycle + 1
-    _engine_log("info", "[키워드 조합 시작] 이번주기=%d건 | 인증후보=%s", len(combos), "/".join(m for m,_,_ in candidates))
-
+    _engine_log("info", "[키워드 조합 시작] 이번주기=%d건 | NAVER_MODE=%s", len(combos), api_mode)
     for company, theme in combos:
         q = f'"{company}" {theme}'
-        success = False
-        for mode, _, _ in candidates:
-            try:
-                r, actual_mode = _naver_request(mode, q, 10)
-                if r is None:
-                    continue
-                if not r.ok:
-                    _naver_api_status_log(r.status_code, actual_mode)
-                    if r.status_code == 401:
-                        continue
-                    break
-                _naver_mark_runtime_mode(actual_mode)
-                items = _naver_extract_items(r)
-                new_count = 0
-                for item in items:
-                    if _engine_process_item("키워드조합", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), f"{q} {item.get('description', '')}"):
-                        new_count += 1
-                _engine_log("info", "[키워드 조합] mode=%s | %s | 결과=%d | 신규=%d", actual_mode, q, len(items), new_count)
-                success = True
-                break
-            except Exception as e:
-                log_error("키워드 조합 검색", e, query=q, mode=mode)
-                break
-        if not success:
-            _engine_log("error", "[실패] 키워드조합 | %s | 모든 NAVER 인증경로 실패", q)
+        try:
+            params = {"query": q, "display": 10, "start": 1, "sort": "date", "format": "json"} if api_mode == "hub" else {"query": q, "display": 10, "start": 1, "sort": "date"}
+            r = requests.get(endpoint, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
+            if not r.ok:
+                _engine_log("error", "[실패] 키워드조합 | 원인=%s", r.reason)
+                continue
+            items = r.json().get("items", []) or []
+            new_count = 0
+            for item in items:
+                if _engine_process_item("키워드조합", item.get("title", ""), item.get("originallink") or item.get("link", ""), item.get("pubDate", ""), f"{q} {item.get('description', '')}"):
+                    new_count += 1
+            _engine_log("info", "[키워드 조합] %s | 결과=%d | 신규=%d", q, len(items), new_count)
+        except Exception as e:
+            log_error("키워드 조합 검색", e, query=q)
+
 
 def _engine_run_dart():
     if not ENABLE_DART:
-        _engine_log("warning", "[DART] ENABLE_DART=OFF")
+        _engine_log("warning", "[DART] ENABLE_DART=OFF | 공시 수집 중단됨 (SOLO_MODE/환경설정 확인)")
         return
     if not DART_API_KEY:
-        _engine_log("error", "[DART 실패] DART_API_KEY가 없습니다.")
+        _engine_log("error", "[DART 실패] DART_API_KEY가 없습니다. Render 환경변수 DART_API_KEY를 확인하세요.")
         return
     try:
         today = _now_kst().strftime("%Y%m%d")
@@ -2974,9 +2904,26 @@ def _engine_run_dart():
         sent = 0
         for row in rows:
             report = row.get("report_nm", "")
-            if not any(k in report for k in DART_STRONG_REPORT_KEYWORDS):
-                continue
             corp = row.get("corp_name", "")
+            report_low = str(report or "").replace(" ", "").lower()
+            # 공시는 "강한 공시"만 기다리면 실제 시장에서 중요한 실적/주주/자사주/
+            # 투자/계약/임원·주요주주 변동 등이 모두 누락될 수 있다.
+            # ① 강한 공시는 항상 후보, ② 시장 관련 일반 공시도 후보,
+            # ③ 관심/대형주 공시는 보고서명이 약해도 후보로 보존한다.
+            dart_market_terms = (
+                "실적","분기보고서","반기보고서","사업보고서","감사보고서","매출액","영업이익",
+                "당기순이익","배당","자기주식","자사주","최대주주","주요주주","임원",
+                "소유상황","주식등","증자","전환사채","신주인수권","교환사채","채무증권",
+                "취득","처분","양수","양도","합병","분할","투자","시설","계약","공급","수주",
+                "특허","임상","허가","승인","소송","횡령","배임","회생","파산","상장폐지",
+                "관리종목","주주총회","주식매수선택권","기업설명회","추가상장"
+            )
+            is_strong = any(k in report for k in DART_STRONG_REPORT_KEYWORDS)
+            is_market = any(k in report_low for k in dart_market_terms)
+            is_watched = corp in DART_WATCH_COMPANIES
+            if not (is_strong or is_market or is_watched):
+                _engine_log("debug", "[DART 제외] 시장관련성 낮음 | %s | %s", corp, report[:100])
+                continue
             title = f"{corp} | {report}"
             link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
             _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""))
@@ -3647,7 +3594,7 @@ def _us_close_briefing(snapshot, et):
                         why.append("과거 테마 주도 이력")
                     if hist >= 2 or lead_hist >= 2:
                         why.append("끼·탄력 확인")
-                    lines.append(f"  {badge} 🇰🇷 {html.escape(stock)} — " + " + ".join(why))
+                    lines.append(f"  {badge} {html.escape(stock)} — " + " + ".join(why))
             else:
                 lines.append("  🇰🇷 한국 연결: 확인되는 국내 관련주 없음")
 
@@ -3889,8 +3836,7 @@ if __name__ == "__main__":
         schedule_bootstrap_thread.start()
 
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
-        _engine_log("info", "[BOOT] NAVER_HUB=%s | NAVER_LEGACY=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
-                    bool(NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET),
+        _engine_log("info", "[BOOT] NAVER=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
                     bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET),
                     bool(DART_API_KEY),
                     ENABLE_DOMESTIC_NEWS,
