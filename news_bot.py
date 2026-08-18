@@ -2470,6 +2470,95 @@ def _engine_translate_foreign_item(source: str, title: str, extra: str):
     return ko_title, ko_extra, True
 
 
+# ============================================================
+# 원문 실제 부제목(소제목) 조회
+# og:description / twitter:description / meta description 순으로
+# 원문 페이지에서 실제 부제목을 가져온다. 실패해도 조용히 빈 값으로
+# 넘어가며(전체 송출을 지연/차단하지 않음), 결과는 링크 기준으로 캐시한다.
+# ============================================================
+_SUBTITLE_CACHE = {}
+SUBTITLE_FETCH_TIMEOUT = min(ENGINE_HTTP_TIMEOUT, 5)
+
+def _engine_fetch_subtitle(link: str) -> str:
+    link = str(link or "").strip()
+    if not link.startswith("http"):
+        return ""
+    if link in _SUBTITLE_CACHE:
+        return _SUBTITLE_CACHE[link]
+    subtitle = ""
+    try:
+        r = requests.get(
+            link,
+            headers={"User-Agent": USER_AGENT},
+            timeout=SUBTITLE_FETCH_TIMEOUT,
+            allow_redirects=True,
+        )
+        if r.ok:
+            soup = BeautifulSoup(r.text, "html.parser")
+            for attrs in (
+                {"property": "og:description"},
+                {"name": "twitter:description"},
+                {"name": "description"},
+            ):
+                tag = soup.find("meta", attrs=attrs)
+                content = tag.get("content") if tag else ""
+                content = _engine_clean(content)
+                # 제목과 동일하거나 너무 짧으면 실제 부제목으로 보지 않는다.
+                if content and len(content) >= 8:
+                    subtitle = content
+                    break
+    except Exception as e:
+        _engine_log("debug", "[부제목 조회 실패] %s | %s", link[:80], str(e)[:100])
+        subtitle = ""
+    subtitle = subtitle[:120]
+    _SUBTITLE_CACHE[link] = subtitle
+    return subtitle
+
+
+# ============================================================
+# 🔎 핵심요약 라인 조립
+# ①②③... 번호가 매겨진 항목이 2개 이상이면 줄바꿈+들여쓰기로 나열하고,
+# 항목이 1개(번호 없음 포함)면 기존처럼 한 줄로 출력한다.
+# 원문에서 실제 부제목을 가져온 경우, 마지막 줄 끝에 " / 부제목"으로 병기한다.
+# ============================================================
+_KEYPOINT_MARKER_RE = re.compile(r"([①②③④⑤⑥⑦⑧⑨⑩]|(?<!\d)\d+[.)])\s*")
+
+def _engine_format_keypoint_lines(keypoint: str, subtitle: str = "") -> list:
+    text = str(keypoint or "").strip()
+    if not text:
+        return []
+
+    markers = list(_KEYPOINT_MARKER_RE.finditer(text))
+    segments = []
+    for i, m in enumerate(markers):
+        start = m.end()
+        end = markers[i + 1].start() if i + 1 < len(markers) else len(text)
+        marker = m.group(1)
+        body = re.sub(r"🔎\s*", "", text[start:end]).strip(" .,-")
+        if body:
+            segments.append((marker, body))
+
+    subtitle = str(subtitle or "").strip()
+
+    if len(segments) >= 2:
+        out_lines = []
+        for i, (marker, body) in enumerate(segments):
+            escaped = f"{marker} {html.escape(body)}"
+            if i == 0:
+                out_lines.append(f"🔎 {escaped}")
+            elif i == len(segments) - 1 and subtitle:
+                out_lines.append(f"        {escaped}   /  {html.escape(subtitle)}")
+            else:
+                out_lines.append(f"        {escaped}")
+        return out_lines
+
+    # 항목이 1개(또는 번호 없음)인 경우: 기존처럼 한 줄로 출력.
+    line = f"🔎 {html.escape(text)}"
+    if subtitle:
+        line += f"   /  {html.escape(subtitle)}"
+    return [line]
+
+
 def _engine_format_message(item):
     """뉴스 카드 최종 출력.
     원문 수집/필터/DB/시장상태/스케줄 로직은 변경하지 않고,
@@ -2576,13 +2665,11 @@ def _engine_format_message(item):
         lines[1] = f"<b>📌 {html.escape(title)}</b>"
 
     # ------------------------------------------------------------
-    # 2) 재료 강도 표시
+    # 2) 핵심요약 (①②③ 여러 항목이면 줄바꿈/들여쓰기 + 원문 실제 부제목 병기)
     # ------------------------------------------------------------
-    strong, strong_hits = _engine_strong_material(item)
-    if strong and keypoint:
-        lines.append(f"🔎 {html.escape(keypoint)}")
-    elif keypoint:
-        lines.append(f"🔎 {html.escape(keypoint)}")
+    if keypoint:
+        subtitle = _engine_fetch_subtitle(item.get("link", ""))
+        lines.extend(_engine_format_keypoint_lines(keypoint, subtitle))
 
     # ------------------------------------------------------------
     # 3) 국내 관련 테마/관심종목
