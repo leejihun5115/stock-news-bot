@@ -971,6 +971,9 @@ DART_STRONG_REPORT_KEYWORDS = {
     "유형자산양수결정", "유형자산양도결정",
     "주식병합결정", "주식분할결정",
     "배당결정",
+    "현금ㆍ현물배당결정", "현금·현물배당결정", "현금현물배당결정",
+    "현금ㆍ현물배당을위한주주명부폐쇄(기준일)결정", "주주명부폐쇄(기준일)결정",
+    "잠정실적", "영업실적", "연결재무제표기준영업(잠정)실적", "영업(잠정)실적",
     "신규시설투자",
     "소송등의제기",
     "투자판단관련주요경영사항",
@@ -1069,7 +1072,7 @@ SCHEDULE_BOOTSTRAP_STATE = os.environ.get("NEWS_BOT_SCHEDULE_BOOTSTRAP_STATE", "
 SCHEDULE_LOOKBACK_DAYS = max(30, int(os.environ.get("NEWS_BOT_SCHEDULE_LOOKBACK_DAYS", "365")))
 SCHEDULE_FORWARD_DAYS = max(7, int(os.environ.get("NEWS_BOT_SCHEDULE_FORWARD_DAYS", "120")))
 SCHEDULE_MAX_ITEMS = max(10, int(os.environ.get("NEWS_BOT_SCHEDULE_MAX_ITEMS", "80")))
-SCHEDULE_BOOTSTRAP_MAX_CHECKED = max(1000, int(os.environ.get("NEWS_BOT_SCHEDULE_BOOTSTRAP_MAX_CHECKED", "6000")))
+SCHEDULE_BOOTSTRAP_MAX_CHECKED = max(300, int(os.environ.get("NEWS_BOT_SCHEDULE_BOOTSTRAP_MAX_CHECKED", "1500")))
 SCHEDULE_DAILY_FORWARD_DAYS = max(30, int(os.environ.get("NEWS_BOT_SCHEDULE_DAILY_FORWARD_DAYS", "180")))
 SCHEDULE_BOOTSTRAP_QUERIES = [
     '특징주 상한가 급등 일정 발표 예정',
@@ -1258,6 +1261,7 @@ def _schedule_bootstrap_one_year():
             url=f'https://news.google.com/rss/search?q={quote_plus(q)}%20after%3A{cursor.isoformat()}%20before%3A{end.isoformat()}&hl=ko&gl=KR&ceid=KR:ko'
             entries=_engine_fetch_rss(url,'일정DB/1년초기검색')
             requests_count += 1
+            time.sleep(1.0)
             for e in entries:
                 if checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED: break
                 checked += 1
@@ -1270,26 +1274,42 @@ def _schedule_bootstrap_one_year():
                     row['link']=e.get('link','') or ''
                     if _schedule_append(row): added+=1
         cursor=end+datetime.timedelta(days=1)
+    completed = cursor >= today and checked < SCHEDULE_BOOTSTRAP_MAX_CHECKED
     _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE,{
-        'done':True,'completed_at':_now_kst().isoformat(),
+        'done':completed,'completed_at':_now_kst().isoformat() if completed else '',
         'checked':checked,'added':added,'requests':requests_count,
         'lookback_days':SCHEDULE_LOOKBACK_DAYS,
-        'note':'최초 1년 전수형 일정 후보 검색 완료. 이후 매일 뉴스/DART에서 지속 누적.'
+        'note':'최초 1년 전수형 일정 후보 검색 완료. 이후 매일 뉴스/DART에서 지속 누적.' if completed else '초기화 일부 완료. 다음 재시작에서 남은 기간을 다시 확인.'
     })
-    _engine_log('info','[일정DB] 최초 1년 전수형 초기화 완료 | 확인=%d | 신규=%d | RSS요청=%d',checked,added,requests_count)
+    _engine_log('info','[일정DB] 최초 1년 초기화 %s | 확인=%d | 신규=%d | RSS요청=%d', '완료' if completed else '부분완료', checked, added, requests_count)
 
 def _schedule_add_dart_row(report, corp, link, rcept_dt):
-    # 접수일 자체는 과거일이므로 일정으로 넣지 않는다. 다만 보고서명에 미래 이벤트 날짜가 포함된 경우에만 추출한다.
-    row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt, limitup=False)
-    if row:
-        row['link']=link
-        _schedule_append(row)
-
-def _schedule_add_dart_row(report, corp, link, rcept_dt):
-    row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt)
-    if row:
-        row['link']=link
-        _schedule_append(row)
+    """DART 공시는 접수일 자체도 '오늘의 일정/공시'로 보존한다.
+    특히 잠정실적·배당·주주명부 폐쇄 등은 보고서명에 미래 날짜가 없어서
+    기존 _schedule_extract_from_text()로는 일정DB에 들어가지 않던 문제를 수정한다."""
+    report = _engine_clean(report)
+    if not report or not any(k in report for k in DART_STRONG_REPORT_KEYWORDS):
+        return False
+    try:
+        dt = datetime.datetime.strptime(str(rcept_dt)[:8], '%Y%m%d').date()
+    except Exception:
+        dt = _now_kst().date()
+    row = {
+        'key': f"{dt.isoformat()}|공시|{corp}|{report}",
+        'date': dt.isoformat(),
+        'category': '공시',
+        'source': 'DART',
+        'tag': '공시',
+        'companies': [corp] if corp else [],
+        'title': report[:220],
+        'detail': report[:300],
+        'link': str(link or ''),
+        'created_at': _now_kst().isoformat(),
+    }
+    if _schedule_append(row):
+        _engine_log('info','[일정DB 공시] %s | %s | %s', row['date'], corp, report[:90])
+        return True
+    return False
 
 def _schedule_daily_message():
     today=_now_kst().date()
@@ -1305,7 +1325,7 @@ def _schedule_daily_message():
         seen.add(key); rows.append((dt,r))
     rows.sort(key=lambda x:(x[0], str(x[1].get('category',''))))
     rows=rows[:SCHEDULE_MAX_ITEMS]
-    lines=['<b>📅 [시장 일정 브리핑]</b>',f'🕐 {_now_kst().strftime("%Y-%m-%d %H:%M")} KST','', '<b>가까운 일정 순</b>']
+    lines=['<b>📅 일정</b>',f'🕐 {_now_kst().strftime("%Y-%m-%d %H:%M")} KST']
     if not rows:
         lines.append('• 현재 DB에서 확인된 중요 일정 없음')
         return '\n'.join(lines)
@@ -1313,16 +1333,12 @@ def _schedule_daily_message():
     for dt,r in rows:
         if current != dt:
             current=dt
-            lines += ['',f'<b>📌 {dt.strftime("%m/%d (%a)")}</b>']
-        cat=html.escape(str(r.get('category','뉴스일정')))
+            lines += ['',f'<b>{dt.strftime("%Y.%m.%d")}</b>']
         detail=html.escape(str(r.get('detail') or r.get('title',''))[:260])
-        tag=html.escape(str(r.get('tag','')))
-        companies='·'.join([str(x) for x in (r.get('companies') or [])[:3]])
-        suffix=(f' | {html.escape(companies)}' if companies else '')
-        lines.append(f'• [{cat}] {detail}{suffix}')
+        lines.append(f'✔️ {detail}')
         if r.get('link'):
             lines.append(f'<a href="{html.escape(str(r["link"]),quote=True)}">🔗 원문</a>')
-    lines += ['', '※ 특징주·급등 재료와 직접 연결되는 주요 일정 및 고영향 공시만 선별.']
+    lines += ['', '※ 주요 일정과 중요 공시만 선별.']
     return '\n'.join(lines)
 
 def _engine_schedule_daily_monitor():
@@ -2733,11 +2749,11 @@ def _engine_format_message(item):
                 theme = str(row.get("theme") or "").strip()
                 if name:
                     detail = " | ".join(x for x in (theme, reason) if x)
-                    badge = "✔️"
+                    badge = str(row.get("badge") or "🔎 관심종목")
                     # 국내 관심종목은 항상 ⚡️ 종목명 형식으로만 표시한다. 🥇는 사용하지 않는다.
                     strong_stock_flag = ""
                     lines.append(
-                        f"{html.escape(badge)} ⚡️<b>{html.escape(name)}</b>"
+                        f"{html.escape(badge)} — {strong_stock_flag}⚡️ <b>{html.escape(name)}</b>"
                         + (f" /// {html.escape(detail[:360])}" if detail else "")
                     )
             elif row:
@@ -2882,11 +2898,13 @@ def _engine_process_item(source, title, link, published="", extra=""):
         _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
         return False
 
-    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
-    # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
-    if not _engine_is_within_recent_window(published, 60):
-        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
-        return False
+    # DART는 rcept_dt가 '접수일(YYYYMMDD)'만 제공되는 경우가 있어 시각으로
+    # 해석하면 오후에는 전부 '최근 1시간 밖'으로 오판된다. DART 수집 함수가
+    # 당일 접수일만 조회하므로 DART는 이 시간창을 적용하지 않는다.
+    if not str(source).upper().startswith("DART"):
+        if not _engine_is_within_recent_window(published, 60):
+            _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
+            return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
@@ -2927,21 +2945,34 @@ def _engine_process_item(source, title, link, published="", extra=""):
 
 
 def _engine_fetch_rss(url, source):
-    started = time.time()
-    try:
-        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
-        if not r.ok:
-            _engine_log("error", "[실패] RSS | %s | 원인=%s", source, r.reason)
+    """RSS 수집. Google News 등의 일시적 429/5xx에 지수형 재시도 적용."""
+    retry_status = {429, 500, 502, 503, 504}
+    delays = (1.5, 3.0, 6.0)
+    for attempt in range(len(delays) + 1):
+        started = time.time()
+        try:
+            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
+            if r.ok:
+                result = feedparser.parse(r.content)
+                if getattr(result, "bozo", False):
+                    _engine_log("warning", "[RSS 경고] %s | 일부 파싱 문제", source)
+                entries = getattr(result, "entries", []) or []
+                _engine_log("info", "[RSS] %s | 수집=%d건", source, len(entries))
+                return entries
+            status = getattr(r, "status_code", 0)
+            if status in retry_status and attempt < len(delays):
+                _engine_log("warning", "[RSS 재시도] %s | HTTP=%s | %s초 후 %d/%d", source, status, delays[attempt], attempt+1, len(delays))
+                time.sleep(delays[attempt])
+                continue
+            _engine_log("error", "[실패] RSS | %s | HTTP=%s | 원인=%s", source, status, r.reason)
             return []
-        result = feedparser.parse(r.content)
-        if getattr(result, "bozo", False):
-            _engine_log("warning", "[RSS 경고] %s | 일부 파싱 문제", source)
-        entries = getattr(result, "entries", []) or []
-        _engine_log("info", "[RSS] %s | 수집=%d건", source, len(entries))
-        return entries
-    except Exception as e:
-        log_error("RSS 수집", e, source=source, url=url)
-        return []
+        except Exception as e:
+            if attempt < len(delays):
+                _engine_log("warning", "[RSS 재시도] %s | %s | %s초 후 %d/%d", source, type(e).__name__, delays[attempt], attempt+1, len(delays))
+                time.sleep(delays[attempt])
+                continue
+            log_error("RSS 수집", e, source=source, url=url)
+            return []
 
 
 def _engine_run_google_and_domestic():
@@ -3179,31 +3210,47 @@ def _engine_run_dart():
     try:
         today = _now_kst().strftime("%Y%m%d")
         url = "https://opendart.fss.or.kr/api/list.json"
-        r = requests.get(url, params={"crtfc_key": DART_API_KEY, "bgn_de": today, "end_de": today, "page_no": 1, "page_count": 100}, timeout=ENGINE_HTTP_TIMEOUT)
-        if not r.ok:
-            _engine_log("error", "[DART 실패] HTTP=%s | reason=%s", r.status_code, r.reason)
-            return
-        data = r.json()
-        if data.get("status") not in ("000", None):
-            if data.get("status") == "013":
-                _engine_log("info", "[DART] 오늘 공시 없음")
-            else:
-                _engine_log("error", "[DART 오류] status=%s | message=%s", data.get("status"), data.get("message"))
-            return
-        rows = data.get("list", []) or []
-        _engine_log("info", "[DART] 오늘 공시=%d건", len(rows))
         sent = 0
-        for row in rows:
-            report = row.get("report_nm", "")
-            if not any(k in report for k in DART_STRONG_REPORT_KEYWORDS):
-                continue
-            corp = row.get("corp_name", "")
-            title = f"{corp} | {report}"
-            link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
-            _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""))
-            if _engine_process_item("DART", title, link, row.get("rcept_dt", "")):
-                sent += 1
-        _engine_log("info", "[DART] 후보=%d건", sent)
+        total_rows = 0
+        total_pages = 0
+        # 하루 공시가 100건을 넘는 날에도 뒤쪽 페이지를 놓치지 않도록 최대 5페이지 조회.
+        for page_no in range(1, 6):
+            params = {
+                "crtfc_key": DART_API_KEY, "bgn_de": today, "end_de": today,
+                "page_no": page_no, "page_count": 100, "sort": "date", "sort_mth": "desc"
+            }
+            r = requests.get(url, params=params, timeout=ENGINE_HTTP_TIMEOUT)
+            if not r.ok:
+                _engine_log("error", "[DART 실패] page=%d HTTP=%s | reason=%s", page_no, r.status_code, r.reason)
+                break
+            data = r.json()
+            status = data.get("status")
+            if status == "013":
+                if page_no == 1:
+                    _engine_log("info", "[DART] 오늘 공시 없음")
+                break
+            if status not in ("000", None):
+                _engine_log("error", "[DART 오류] page=%d status=%s | message=%s", page_no, status, data.get("message"))
+                break
+            rows = data.get("list", []) or []
+            total_rows += len(rows); total_pages = page_no
+            _engine_log("info", "[DART] page=%d 수집=%d건", page_no, len(rows))
+            if not rows:
+                break
+            for row in rows:
+                report = row.get("report_nm", "")
+                if not any(k in report for k in DART_STRONG_REPORT_KEYWORDS):
+                    continue
+                corp = row.get("corp_name", "")
+                title = f"{corp} | {report}"
+                link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
+                _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""))
+                if _engine_process_item("DART", title, link, row.get("rcept_dt", "")):
+                    sent += 1
+            if len(rows) < 100:
+                break
+            time.sleep(0.4)
+        _engine_log("info", "[DART] 오늘 공시 점검 완료 | 페이지=%d | 전체=%d건 | 후보송출=%d건", total_pages, total_rows, sent)
     except Exception as e:
         log_error("DART 검사", e)
 
@@ -3475,12 +3522,12 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     gainers = [q for q in rows if (q.get("change_pct") or 0) > 0]
     losers = [q for q in rows if (q.get("change_pct") or 0) < 0]
 
-    lines.append("<b>✔👀관련주 :</b>")
+    lines.append("<b>🚀 오늘의 주도 대장주</b>")
     if gainers:
         for rank, q in enumerate(gainers[:3], 1):
-            lines.append(f"✔️ ⚡️{q['name']} {_us_format_pct(q.get('change_pct'))} · {q['theme']}")
+            lines.append(f"{rank}등 ⚡️ {q['name']} {_us_format_pct(q.get('change_pct'))} · {q['theme']}")
     else:
-        lines.append("• 관련주 없음")
+        lines.append("• 상승 대장주 부재 — 하락 방어력이 높은 테마 확인")
 
     themes = _krx_theme_rotation(snapshot)
     if themes:
@@ -3491,7 +3538,7 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
         for rank, item in enumerate(positive[:3], 1):
             avg, lead_pct, theme, leader, theme_rows = item
             members = ", ".join(f"{r['name']} {_us_format_pct(r.get('change_pct'))}" for r in theme_rows[:3])
-            lines.append(f"{rank}등 {theme} · 평균 {avg:+.2f}% | ⚡️ {leader['name']} {_us_format_pct(lead_pct)}")
+            lines.append(f"{rank}등 {theme} · 평균 {avg:+.2f}% | 대장 ⚡️ {leader['name']} {_us_format_pct(lead_pct)}")
             lines.append(f"   ↳ {members}")
         if negative:
             top_down = negative[:2]
@@ -3511,7 +3558,7 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
         elif samsung >= 2.0:
             lines.append("• 삼성전자 강세: 반도체 주도력이 유지되는지 확인하고 HBM·전력기기 등 공급망 후속주로 수급 확산 여부를 확인")
         else:
-            lines.append("• 삼성전자 보합권: 지수보다 개별 테마 주도 종목의 거래·등락 지속 여부를 우선 확인")
+            lines.append("• 삼성전자 보합권: 지수보다 개별 테마 대장주의 거래·등락 지속 여부를 우선 확인")
     if hynix is not None:
         lines.append(f"• SK하이닉스 {_us_format_pct(hynix)}: HBM 주도력 유지 여부가 반도체·장비 순환매의 핵심")
 
@@ -4081,9 +4128,14 @@ def _us_close_briefing(snapshot, et):
                     best[c[1]] = c
             picks = sorted(best.values(), reverse=True, key=lambda x:x[0])[:3]
             if picks:
-                lines.append("  ✔👀관련주 :")
+                lines.append("  🇰🇷 한국 연결")
                 for n, (_, stock, hist, lead_hist, key) in enumerate(picks, 1):
-                    badge = "✔️"
+                    if n == 1:
+                        badge = "✔ 대장주"
+                    elif n == 2:
+                        badge = "☑️ 관찰"
+                    else:
+                        badge = "☑️ 관찰"
                     strong_stock_flag = ""
                     why = ["동일 테마 연결"]
                     if hist:
@@ -4092,9 +4144,9 @@ def _us_close_briefing(snapshot, et):
                         why.append("과거 테마 주도 이력")
                     if hist >= 2 or lead_hist >= 2:
                         why.append("끼·탄력 확인")
-                    lines.append(f"  {badge} ⚡️{html.escape(stock)} — " + " + ".join(why))
+                    lines.append(f"  {badge} {strong_stock_flag}⚡️ 🇰🇷 {html.escape(stock)} — " + " + ".join(why))
             else:
-                lines.append("  ✔👀관련주 : 無")
+                lines.append("  🇰🇷 한국 연결: 확인되는 국내 관련주 없음")
 
             # 유사 과거 사례: 실제 수익률과 링크가 DB에 있을 때만 표시.
             if reason:
@@ -4187,8 +4239,8 @@ def _us_close_briefing(snapshot, et):
         "<b>👀 다음 한국장 관찰 기준</b>",
         "• 직접 사업연관 우선",
         "• 동일 테마 실제 움직임 확인",
-        "• 과거 상한가/급등 + 테마 주도 이력으로 관련주 선별",
-        "• 관련주 선정 이유를 함께 표시",
+        "• 과거 상한가/급등 + 테마 주도 이력으로 대장주 선별",
+        "• 대장주 선정 이유를 함께 표시",
         "• 글로벌 기업을 국내 관련주로 강제 연결하지 않음",
     ]
     return "\n".join(lines)
