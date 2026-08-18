@@ -2113,7 +2113,7 @@ def _engine_domestic_watchlist(item):
     2) 직접 관련 기업이 없으면 실제 사건과 연결되는 국내 테마
     3) 해당 테마 안에서 과거 상한가/급등/주도 이력과 반복 등장 빈도,
        최근성 및 끼(급등 탄력)를 종합해 관련주를 먼저 선정
-    4) 그 다음 강도가 낮은 순서로 최대 3종목을 관찰
+    4) 그 다음 강도가 낮은 순서로 최대 3종목을 후보로 정리
     5) 기업명 단순 등장, 인용/출처/광고/URL/비교/예시만으로는 절대 선정하지 않는다.
     6) 글로벌 기업의 미국 주가 움직임 자체는 국내 관심종목 선정 근거로 사용하지 않는다.
     """
@@ -2617,6 +2617,7 @@ def _engine_telegram_points(title, extra):
     """텔레그램 원문을 그대로 노출하지 않고 핵심 사실을 기자식 번호 요점으로 압축."""
     raw = _engine_clean(f"{title} {extra}")
     raw = re.sub(r'https?://\S+|조회수\s*\d[\d,.]*|\d+(?:\.\d+)?[KkMm]?\s*views?', ' ', raw, flags=re.I)
+    raw = re.sub(r'^(?:세상의 모든 뉴스|실시간 주식 공시 채널|재야의 고수들)\s*[:：|>\-–—]*\s*', '', raw, flags=re.I)
     raw = re.sub(r'\s+', ' ', raw).strip()
     # 제목 반복과 채널성 문구 제거
     tn = re.sub(r'[^가-힣A-Za-z0-9]', '', title.lower())
@@ -2645,7 +2646,15 @@ def _engine_format_message(item):
     제목·핵심요약·국내 관련성 출력만 담당한다.
     """
     category = item["category"]
+    source_raw = str(item.get("source", "")).strip()
     title = _engine_translate_ko(str(item["title"]).strip())
+    # 텔레그램 채널명은 출처 헤더에만 표시하고 제목/본문에서는 제거한다.
+    if source_raw.startswith("텔레그램/"):
+        channel_name = source_raw.split("/", 1)[1].strip()
+        if channel_name:
+            title = re.sub(rf"(?i)^{re.escape(channel_name)}\\s*[:：|>\\-–—]*\\s*", "", title).strip()
+        title = re.sub(r"^(?:세상의 모든 뉴스|실시간 주식 공시 채널)(?:\\s*[📊💎📌])?\\s*[:：|>\\-–—]*\\s*", "", title, flags=re.I).strip()
+        title = re.sub(r"\\s+\\d+\\s*$", "", title).strip()
     companies = item.get("companies", [])
     extra = _engine_clean(str(item.get("extra", "")).strip())
     market_hits = item.get("market_hits", [])
@@ -2655,7 +2664,6 @@ def _engine_format_message(item):
     for c in domestic:
         title = re.sub(rf"(?<!⚡️)({re.escape(c)})", r"⚡️\1", title)
 
-    source_raw = str(item.get("source", ""))
     source_display = "🇺🇸" if source_raw == "Google-US" else source_raw
     time_text = str(item.get("time_text", "")).strip()
 
