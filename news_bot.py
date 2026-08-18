@@ -2536,6 +2536,17 @@ def _engine_telegram_title(raw_text, channel_name=""):
     raw = _engine_clean(raw_text)
     if not raw:
         return "", ""
+    # 텔레그램 재전송 채널의 홍보 헤더는 기사 제목/요약에서 완전히 제거한다.
+    raw = re.sub(
+        r"(?is)세상의\s*모든\s*뉴스\s*-\s*좋은뉴스\s*,?\s*단독\s*,?\s*속보\s*,?\s*리포트\s*,?\s*특허\s*,?\s*타\s*채널\s*뉴스\s*-\s*세모뉴\s*",
+        " ",
+        raw,
+    )
+    # 분류 라벨이 문장 앞이 아니라 중간에 붙어도 출력에서는 제거한다.
+    raw = re.sub(r"(?i)(?:\[\s*(?:속보|단독|특징주|리포트|특허)\s*\]|(?:속보|단독|특징주|리포트|특허))\s*(?=[:：|\-—\s])", " ", raw)
+    raw = _engine_clean(raw)
+    if not raw:
+        return "", ""
     low = raw.lower()
     if "그로쓰리서치" in low and ("특징주 종목" in low or "실시간 특징주" in low or "특징주 뉴스 속보" in low):
         return "", ""
@@ -2551,7 +2562,8 @@ def _engine_telegram_title(raw_text, channel_name=""):
         if any(x in part for x in ["구독", "받기", "실시간 특징주 받기", "채널", "텔레그램"]):
             continue
         if "view/" in part or "t.me/" in part:
-            continue
+            part = re.sub(r"https?://\S+", " ", part, flags=re.I)
+            part = _engine_clean(part)
         if part.startswith("[그로쓰리서치]") or "[그로쓰리서치]" in part:
             continue
         # 텔레그램 본문에 붙는 분류 라벨은 검색 키워드로는 허용하지만
@@ -2564,8 +2576,9 @@ def _engine_telegram_title(raw_text, channel_name=""):
     # 가장 먼저 등장하는 충분히 긴 기사형 문장을 제목으로 사용.
     for part in candidates:
         if len(re.sub(r"[^가-힣A-Za-z0-9]", "", part)) >= 8:
-            return part[:240], raw
-    return (candidates[0][:240] if candidates else raw[:240]), raw
+            return part[:240], part[:1200]
+    fallback = candidates[0][:240] if candidates else raw[:240]
+    return fallback, fallback[:1200]
 
 def _engine_format_message(item):
     """뉴스 카드 최종 출력.
