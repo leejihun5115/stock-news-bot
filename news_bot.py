@@ -2351,15 +2351,15 @@ def _engine_summary(title, extra, companies, market_hits):
             direction = "관련주"
         theme_text = f"[{theme} 테마] " if theme else ""
         relation_type = "직접 관련" if domestic else "테마·간접 수혜"
-        core = f"🔎 [{relation_type}] {theme_text}{reason} / {direction} → " + "·".join(links[:3])
+        core = f"🔎 {theme_text}{reason} / {direction} → " + "·".join(links[:3])
     elif domestic:
-        core = f"🔎 [직접 관련] {reason} → " + "·".join(domestic[:4])
+        core = f"🔎 {reason} → " + "·".join(domestic[:4])
     elif global_companies:
         # 글로벌 기업명 자체를 국내 관심종목으로 재출력하지 않는다.
         # 해외 뉴스는 원인/시장재료만 요약하고 국내 종목은 별도의 엄격한 알고리즘에서 선정한다.
-        core = "🔎 [글로벌 시황] " + "·".join(market_hits[:4] or ["해외 시장 재료"])
+        core = "🔎 " + "·".join(market_hits[:4] or ["해외 시장 재료"])
     elif market_hits:
-        core = "🔎 [글로벌 시황] 시장 핵심 재료 → " + "·".join(market_hits[:4])
+        core = "🔎 시장 핵심 재료 → " + "·".join(market_hits[:4])
     else:
         core = ""
     return core, _engine_schedule(text)
@@ -2430,7 +2430,8 @@ def _engine_format_message(item):
 
     # 국내 상장기업이 실제로 제목/본문에서 확인되는 경우에만 표시.
     domestic = _engine_domestic_companies(companies)
-    for c in domestic:
+    global_companies = _engine_global_companies(companies)
+    for c in list(dict.fromkeys(domestic + global_companies)):
         title = re.sub(rf"(?<!⚡️)({re.escape(c)})", r"⚡️\1", title, count=1)
 
     source_raw = str(item.get("source", ""))
@@ -2466,6 +2467,7 @@ def _engine_format_message(item):
     def _compact_keypoint(text):
         text = _engine_clean(str(text or ""))
         text = re.sub(r"^🔎\s*", "", text).strip()
+        text = re.sub(r"^\[(?:글로벌 시황|국내 시황|직접 관련|테마·간접 수혜|특징주|속보)\]\s*", "", text).strip()
         if not text:
             return ""
 
@@ -2934,6 +2936,42 @@ def _engine_run_dart():
         log_error("DART 검사", e)
 
 
+
+def _engine_telegram_title_body(text):
+    """외부 텔레그램은 화면에 제목만 표시하고, 본문은 🔎 요약 생성용으로만 사용한다."""
+    raw = _engine_clean(str(text or ""))
+    if not raw:
+        return "", ""
+    lines = [re.sub(r"\s+", " ", x).strip() for x in raw.splitlines() if x.strip()]
+    if not lines:
+        return "", ""
+
+    # 채널 홍보/고정 문구가 제목으로 올라오는 경우 제거.
+    drop_prefix = (
+        "📌", "📈", "📣", "🔔", "🚨", "[그로쓰리서치]", "[뉴스속보]",
+        "실시간 특징주 뉴스 속보", "특징주 뉴스 속보"
+    )
+    title = lines[0]
+    title = re.sub(r"^(?:📌|📈|📣|🔔|🚨)+\s*", "", title).strip()
+    title = re.sub(r"^실시간 특징주 뉴스 속보\s*", "", title).strip()
+    title = re.sub(r"^\[그로쓰리서치\]\s*", "", title).strip()
+    title = re.sub(r"^✅\s*특징주\s*종목\s*:\s*", "", title).strip()
+    title = re.sub(r"\s+https?://\S+.*$", "", title).strip()
+
+    # 첫 줄이 홍보 헤더뿐이면 다음 실제 기사 제목을 사용.
+    if (not title or title in drop_prefix or
+        ("구독" in title and len(title) < 100) or
+        ("특징주 종목" in title and len(title) < 60)):
+        for candidate in lines[1:]:
+            c = re.sub(r"^(?:📌|📈|📣|🔔|🚨|✅)+\s*", "", candidate).strip()
+            if c and not c.startswith("http") and "구독" not in c:
+                title = c
+                break
+
+    # 텔레그램 본문은 제목 아래 요약 생성용으로만 유지한다.
+    body = " ".join(lines[1:])
+    return title[:320], body[:1600]
+
 def _engine_run_telegram_channels():
     if not ENABLE_TELEGRAM_CHANNELS:
         _engine_log("warning", "[텔레그램] ENABLE_TELEGRAM_CHANNELS=OFF")
@@ -2951,11 +2989,15 @@ def _engine_run_telegram_channels():
             _engine_log("debug", "[텔레그램] %s | 확인=%d건", name, len(posts))
             for post in posts:
                 txt = _engine_clean(post.get_text(" "))
+                tg_title, tg_body = _engine_telegram_title_body(txt)
                 a = post.select_one("a.tgme_widget_message_date")
                 link = a.get("href", "") if a else url
                 time_node = post.select_one("time")
                 published = time_node.get("datetime", "") if time_node else ""
-                if txt and _engine_process_item(f"텔레그램/{name}", txt[:1000], link, published, txt[:1200]):
+                # [그로쓰리서치] 실시간 특징주 속보/단독 중계는 제외한다.
+                if "실시간 특징주 뉴스 속보 [그로쓰리서치]" in name:
+                    continue
+                if tg_title and _engine_process_item(f"텔레그램/{name}", tg_title, link, published, tg_body):
                     total += 1
         except Exception as e:
             log_error("텔레그램 채널 수집", e, channel=name, url=url)
