@@ -1015,7 +1015,7 @@ DOMESTIC_RSS_SOURCE_NAMES = {
 
 def _google_news_rss_url(query, korean=False):
     from urllib.parse import quote_plus
-    encoded = quote_plus(query)
+    encoded = quote_plus(query + " when:1h")
     if korean:
         return f"https://news.google.com/rss/search?q={encoded}&hl=ko&gl=KR&ceid=KR:ko"
     return f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
@@ -1031,7 +1031,10 @@ US_RSS_URLS = [
     _google_news_rss_url("테슬라 엔비디아 마이크론 애플 아마존 급등 급락", korean=True),
 ]
 
-NAVER_SEARCH_QUERIES = GLOBAL_AND_DOMESTIC_GIANTS + NAVER_EXTRA_THEME_QUERIES
+NAVER_SEARCH_QUERIES = list(dict.fromkeys(GLOBAL_AND_DOMESTIC_GIANTS + NAVER_EXTRA_THEME_QUERIES + [
+    "특징주", "속보 주식", "주식 속보", "급등 급락 주식", "상한가 주식", "단독 주식",
+    "수주 공급계약 임상 승인 실적", "삼성전자 SK하이닉스 특징주", "반도체 특징주", "바이오 특징주"
+]))
 
 US_MARKET_INDICES = [
     ("나스닥", "^IXIC"),
@@ -1937,12 +1940,18 @@ def _engine_classify(source, title, extra=""):
 
     # 주식시장 관련 속보/특징주/단독은 최대한 보존한다.
     # 제목에 강한 표지가 있거나 실제 국내 상장기업/종목코드/주가재료가 확인되면 통과.
+    feature_context_words = {
+        "주식", "증시", "코스피", "코스닥", "종목", "상장", "거래", "주가", "투자",
+        "급등", "급락", "상한가", "하한가", "신고가", "신저가", "수주", "계약",
+        "공급", "실적", "임상", "승인", "허가", "공시", "특징주"
+    }
     strong_stock_signal = bool(domestic or stock_linked or re.search(r"(?:\(|KRX:)\d{6}\)", text))
-    if is_breaking and (strong_stock_signal or global_relevant or market_relevant):
+    feature_context_signal = any(w.lower() in low for w in feature_context_words)
+    if is_breaking and (strong_stock_signal or global_relevant or market_relevant or feature_context_signal):
         return True, "🚀속보", domestic or global_companies, k1, k2, market_hits
-    if is_feature and (strong_stock_signal or global_relevant or market_relevant):
+    if is_feature and (strong_stock_signal or global_relevant or market_relevant or feature_context_signal):
         return True, "🚨특징주", domestic or global_companies, k1, k2, market_hits
-    if is_exclusive and (strong_stock_signal or global_relevant or market_relevant):
+    if is_exclusive and (strong_stock_signal or global_relevant or market_relevant or feature_context_signal):
         return True, "🚀단독", domestic or global_companies, k1, k2, market_hits
 
     if is_external:
@@ -2224,14 +2233,14 @@ def _engine_domestic_watchlist(item):
         rows.sort(key=lambda r: (r["score"], r["limitup"], r["leader"], r["surge"]), reverse=True)
         for i, r in enumerate(rows[:3]):
             if i == 0:
-                r["badge"] = "☑️ 대장주"
+                r["badge"] = "✔ 대장주"
                 r["reason"] = (
                     "직접 사업연관 + "
                     + r["reason"]
                     + " → 직접 관련 후보 중 과거 주도/급등 이력과 시장 탄력이 가장 높은 종목을 대장주로 우선 선정"
                 )
             else:
-                r["badge"] = "☑️ 관찰" if i == 1 else "☑️ 관찰"
+                r["badge"] = "✔ 관찰"
                 r["reason"] += " → 직접 관련 후보 중 후순위 관찰"
         return rows[:3]
 
@@ -2308,7 +2317,7 @@ def _engine_domestic_watchlist(item):
 
     for i, r in enumerate(picks):
         if i == 0:
-            badge = "☑️ 대장주"
+            badge = "✔ 대장주"
             reason = (
                 f"{r['theme']} 테마의 실제 사건 연결 + "
                 f"상한가 이력 {r['limitup']}건 + 테마 주도 이력 {r['leader']}건 + "
@@ -2318,7 +2327,7 @@ def _engine_domestic_watchlist(item):
                 reason += f" + 과거 확인 최고 상승폭 {r['max_pct']:g}%"
             reason += " → 과거 테마 주도력과 급등 탄력이 가장 높은 후보를 대장주로 선정"
         else:
-            badge = "☑️ 관찰" if i == 1 else "☑️ 관찰"
+            badge = "✔ 관찰"
             reason = (
                 f"{r['theme']} 테마 연결 + 상한가 {r['limitup']}건 + "
                 f"주도 이력 {r['leader']}건 + 급등 이력 {r['surge']}건"
@@ -2624,7 +2633,7 @@ def _engine_format_message(item):
                     us_flag = "🇰🇷 " if source_raw == "Google-US" else ""
                     strong_stock_flag = "🥇 " if title.lstrip().startswith("🎯") else ""
                     lines.append(
-                        f"{html.escape(badge)} — {strong_stock_flag}👍 <b>{us_flag}{html.escape(name)}</b>"
+                        f"{html.escape(badge)} — {strong_stock_flag}⚡️ <b>{us_flag}{html.escape(name)}</b>"
                         + (f" /// {html.escape(detail[:360])}" if detail else "")
                     )
             elif row:
@@ -2676,49 +2685,43 @@ def _engine_format_message(item):
 
 
 def _engine_flush_pending():
+    """대기 뉴스는 유사기사라도 묶거나 재탕 차단하지 않는다.
+    각 기사를 그대로 송출하되 _engine_freshness()가 [신규]/[업그레이드]/[재탕]을 표시한다.
+    동일 URL은 같은 폴링에서만 1회 처리하여 1분 주기 무한도배만 막는다.
+    """
     global _engine_pending
     if not _engine_pending:
         return 0
-    # 동일/유사 뉴스끼리 묶고 가장 점수가 높은 기사 하나만 선택
-    groups = []
-    for item in _engine_pending:
-        placed = False
-        for group in groups:
-            if _engine_similar(item["title"] + " " + item["extra"], group[0]["title"] + " " + group[0]["extra"]):
-                group.append(item); placed = True; break
-        if not placed:
-            groups.append([item])
-    candidates = [max(g, key=_engine_score) for g in groups]
+    candidates = list(_engine_pending)
     candidates.sort(key=_engine_score, reverse=True)
     sent = 0
+    cycle_keys = set()
     for item in candidates[:ENGINE_MAX_SEND_PER_CYCLE]:
         key = item["key"]
+        if key in cycle_keys:
+            continue
+        cycle_keys.add(key)
         if not _engine_telegram_spam_allowed(item):
             continue
+        # 기존 상태파일에 이미 저장된 URL은 같은 기사의 무한 반복만 방지한다.
+        # 서로 다른 보도 링크/재보도는 차단하지 않고 반드시 [재탕]으로 송출한다.
         if key in _engine_seen:
             continue
-        full_text = item["title"] + " " + item["extra"]
-        similar_prev = None
-        for prev in reversed(_engine_sent_fingerprints):
-            if _engine_similar(full_text, prev.get("text", "")):
-                similar_prev = prev
-                break
-        # 동일 사건이라도 확정/금액/추가 계약 등 새로운 정보가 붙으면 '업그레이드'로 살린다.
-        # 단순 재탕만 차단한다.
-        if similar_prev and item.get("market_state") not in ("시장 마감 후 뉴스", "시장 휴무로 미반영"):
-            freshness, _prev = _engine_freshness(item)
-            if freshness == "재탕":
-                _engine_log("info", "[제외] 중복뉴스 | 시장 반영 기회 있음")
-                continue
         if _engine_send_telegram(_engine_format_message(item)):
             _engine_mark_seen(key)
-            _engine_sent_fingerprints.append({"text": full_text, "source": item["source"], "time_text": item.get("time_text", ""), "published": item.get("published", ""), "title": item["title"], "market_state": item.get("market_state", "")})
+            full_text = item["title"] + " " + item["extra"]
+            _engine_sent_fingerprints.append({
+                "text": full_text, "source": item["source"],
+                "time_text": item.get("time_text", ""),
+                "published": item.get("published", ""),
+                "title": item["title"], "market_state": item.get("market_state", "")
+            })
             _engine_telegram_mark_sent(item)
             _engine_record_global_briefing(item)
             _engine_record_historical_case(item)
             sent += 1
             _engine_log("info", "[성공] %s | 송출", item["category"])
-    _engine_log("info", "[송출결과] 후보=%d | 중복제거=%d | 전송=%d", len(_engine_pending), len(groups), sent)
+    _engine_log("info", "[송출결과] 후보=%d | 묶음차단=0 | 재탕차단=0 | 전송=%d", len(_engine_pending), sent)
     _engine_pending = []
     return sent
 
@@ -2827,16 +2830,16 @@ def _engine_fetch_rss(url, source):
 
 
 def _engine_run_google_and_domestic():
-    if not ENABLE_DOMESTIC_NEWS:
-        _engine_log("warning", "[국내뉴스] ENABLE_DOMESTIC_NEWS=OFF")
-        return
     total = 0
-    for url in DOMESTIC_RSS_URLS:
-        source = DOMESTIC_RSS_SOURCE_NAMES.get(url, "국내RSS")
-        entries = _engine_fetch_rss(url, source)
-        for e in entries[:50]:
-            if _engine_process_item(source, e.get("title", ""), e.get("link", ""), e.get("published", "") or e.get("updated", ""), e.get("summary", "")):
-                total += 1
+    if ENABLE_DOMESTIC_NEWS:
+        for url in DOMESTIC_RSS_URLS:
+            source = DOMESTIC_RSS_SOURCE_NAMES.get(url, "국내RSS")
+            entries = _engine_fetch_rss(url, source)
+            for e in entries[:50]:
+                if _engine_process_item(source, e.get("title", ""), e.get("link", ""), e.get("published", "") or e.get("updated", ""), e.get("summary", "")):
+                    total += 1
+    else:
+        _engine_log("warning", "[국내뉴스] ENABLE_DOMESTIC_NEWS=OFF")
     if ENABLE_US_NEWS:
         for url in US_RSS_URLS:
             entries = _engine_fetch_rss(url, "Google-US")
@@ -2844,6 +2847,8 @@ def _engine_run_google_and_domestic():
                 if _engine_process_item("Google-US", e.get("title", ""), e.get("link", ""), e.get("published", "") or e.get("updated", ""), e.get("summary", "")):
                     total += 1
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
+    if ENABLE_US_NEWS and total == 0:
+        _engine_log("warning", "[Google 진단] RSS 수집은 되었지만 송출후보 0건이면 when:1h/최근60분/주가재료 조건을 확인")
 
 
 _NAVER_RUNTIME_MODE = None
@@ -2970,7 +2975,7 @@ def _engine_run_naver():
         last_status = None
         for mode, _, _ in candidates:
             try:
-                r, actual_mode = _naver_request(mode, q, 20)
+                r, actual_mode = _naver_request(mode, q, 50)
                 if r is None:
                     continue
                 if not r.ok:
@@ -2996,10 +3001,20 @@ def _engine_run_naver():
         if not item_success and last_status == 401:
             api_ok = False
 
-    _engine_log("info", "[네이버] 이번주기=%d개 검색 | 후보=%d | API=%s | runtime=%s", len(selected), total, "정상" if api_ok else "오류", _NAVER_RUNTIME_MODE or "없음")
+    _engine_log("info", "[네이버] 이번주기=%d개 검색 | 전송후보=%d | API=%s | runtime=%s", len(selected), total, "정상" if api_ok else "오류", _NAVER_RUNTIME_MODE or "없음")
+    if api_ok and total == 0:
+        _engine_log("warning", "[네이버 진단] API는 정상이나 송출후보 0건 | 최근60분/주가재료/중복 조건을 점검")
 
+
+_NAVER_COMBO_INTERVAL = 300
+_NAVER_COMBO_LAST_RUN = 0.0
 
 def _engine_run_keyword_combinations():
+    global _NAVER_COMBO_LAST_RUN
+    now_ts = time.time()
+    if now_ts - _NAVER_COMBO_LAST_RUN < _NAVER_COMBO_INTERVAL:
+        return
+    _NAVER_COMBO_LAST_RUN = now_ts
     candidates = _naver_credential_candidates()
     if not candidates:
         _engine_log("warning", "[키워드 조합] 네이버 API 인증정보가 없어 조합검색을 건너뜁니다.")
@@ -3222,6 +3237,108 @@ def _engine_run_test_fixture():
 
 
 # ============================================================
+# ============================================================
+# 🇰🇷 국내장 장중 브리핑 + 실행 자가진단
+# - 09:30 첫 브리핑, 이후 30분 슬롯
+# - 지수/원달러/핵심 대형주 변화가 기준을 넘으면 장중 변동 브리핑
+# - Yahoo 시세 실패 시 조용히 죽지 않고 다음 1분 주기에 재시도
+# ============================================================
+ENABLE_DOMESTIC_INTRADAY_BRIEFING = _env_flag("ENABLE_DOMESTIC_INTRADAY_BRIEFING", True)
+KRX_OPEN_BRIEF_DELAY_MIN = 30
+KRX_POLL_MIN = 5
+KRX_STOCK_MOVE_THRESHOLD = 2.5
+KRX_INDEX_MOVE_THRESHOLD = 0.7
+KRX_WATCHLIST = {
+    "^KS11": ("코스피", "지수"), "^KQ11": ("코스닥", "지수"),
+    "005930.KS": ("삼성전자", "반도체"), "000660.KS": ("SK하이닉스", "HBM"),
+    "373220.KS": ("LG에너지솔루션", "2차전지"), "207940.KS": ("삼성바이오로직스", "바이오"),
+    "005380.KS": ("현대차", "자동차"), "000270.KS": ("기아", "자동차"),
+    "012450.KS": ("한화에어로스페이스", "방산"), "042660.KS": ("한화오션", "조선"),
+    "035420.KS": ("NAVER", "인터넷"), "035720.KS": ("카카오", "인터넷"),
+    "USDKRW=X": ("원/달러", "환율"),
+}
+_KRX_BRIEFING_LAST_SNAPSHOT = {}
+_KRX_BRIEFING_LAST_POLL = None
+
+def _krx_briefing_fetch_all():
+    data = {}
+    for symbol, meta in KRX_WATCHLIST.items():
+        q = _yahoo_chart_quote(symbol)
+        if q:
+            q.update({"name": meta[0], "theme": meta[1]})
+            data[symbol] = q
+    return data
+
+def _krx_intraday_events(snapshot):
+    events=[]
+    for symbol,q in snapshot.items():
+        pct=q.get("change_pct")
+        old=_KRX_BRIEFING_LAST_SNAPSHOT.get(symbol)
+        if pct is None or not old or old.get("change_pct") is None:
+            continue
+        delta=pct-old["change_pct"]
+        threshold=KRX_INDEX_MOVE_THRESHOLD if symbol in {"^KS11","^KQ11"} else KRX_STOCK_MOVE_THRESHOLD
+        if symbol == "USDKRW=X": threshold=1.0
+        if abs(delta)>=threshold: events.append((abs(delta),symbol,q,delta))
+    return sorted(events, reverse=True, key=lambda x:x[0])
+
+def _krx_briefing_message(snapshot, et, events=None, opening=False):
+    events=events or []
+    lines=["<b>🇰🇷 [국내장 브리핑]</b>", f"🕐 {et.strftime('%H:%M KST')}", ""]
+    lines.append("<b>📊 주요 지수</b>")
+    for s in ("^KS11","^KQ11"):
+        q=snapshot.get(s)
+        if q: lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+    lines += ["", "<b>⚡️ 주요 종목 변화</b>"]
+    rows=[]
+    for s,q in snapshot.items():
+        if s in {"^KS11","^KQ11","USDKRW=X"}: continue
+        if q.get("change_pct") is not None: rows.append(q)
+    rows.sort(key=lambda x:abs(x.get("change_pct") or 0), reverse=True)
+    shown=0
+    for q in rows[:8]:
+        pct=q.get("change_pct")
+        if abs(pct or 0)<1.0: continue
+        lines.append(f"• ⚡️ {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}")
+        shown+=1
+    if not shown: lines.append("• 주요 종목 큰 변동 없음")
+    fx=snapshot.get("USDKRW=X")
+    if fx: lines += ["", f"<b>💱 원/달러</b> · {_us_format_pct(fx.get('change_pct'))}"]
+    if events:
+        lines += ["", "<b>🚨 장중 구조 변화</b>"]
+        for _,_,q,delta in events[:5]:
+            lines.append(f"• ⚡️ {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q.get('change_pct'))}")
+    return "\n".join(lines)
+
+def _engine_krx_market_monitor():
+    global _KRX_BRIEFING_LAST_SNAPSHOT, _KRX_BRIEFING_LAST_POLL
+    if not ENABLE_DOMESTIC_INTRADAY_BRIEFING: return
+    now=_now_kst()
+    if now.weekday()>=5 or now.strftime('%Y-%m-%d') in KRX_HOLIDAYS_2026: return
+    if not (datetime.time(9,0) <= now.time() < datetime.time(15,31)): return
+    if _KRX_BRIEFING_LAST_POLL is not None and (now-_KRX_BRIEFING_LAST_POLL).total_seconds()<KRX_POLL_MIN*60: return
+    _KRX_BRIEFING_LAST_POLL=now
+    snapshot=_krx_briefing_fetch_all()
+    if not snapshot:
+        _engine_log("warning","[국내장브리핑] 시세 조회 실패 | 다음 주기에 자동 재시도")
+        return
+    minutes=(now.hour*60+now.minute)-(9*60)
+    if minutes<KRX_OPEN_BRIEF_DELAY_MIN:
+        _KRX_BRIEFING_LAST_SNAPSHOT=snapshot; return
+    slot=minutes//30
+    key=f"{now.date().isoformat()}-{slot}"
+    if getattr(_engine_krx_market_monitor,"_last_slot_key",None)==key:
+        _KRX_BRIEFING_LAST_SNAPSHOT=snapshot; return
+    events=_krx_intraday_events(snapshot)
+    # 첫 30분은 정기 브리핑, 이후에는 변화가 있으면 즉시/슬롯 브리핑
+    if slot==1: msg=_krx_briefing_message(snapshot,now,opening=True)
+    elif events: msg=_krx_briefing_message(snapshot,now,events=events)
+    else: msg=_krx_briefing_message(snapshot,now) if slot%1==0 else ""
+    if msg and _engine_send_telegram(msg):
+        _engine_krx_market_monitor._last_slot_key=key
+        _engine_log("info","[국내장브리핑] 송출 완료 | slot=%s | 변동=%d",key,len(events))
+    _KRX_BRIEFING_LAST_SNAPSHOT=snapshot
+
 # 🇺🇸 미국장 30분 브리핑 + 장중 변동 감시
 # ------------------------------------------------------------
 # 원칙
@@ -3604,12 +3721,20 @@ def _engine_us_market_monitor():
         _US_BRIEFING_LAST_SNAPSHOT = snapshot
         return
 
-    msg = _us_open_briefing(snapshot, et)
+    # 첫 슬롯은 개장 브리핑, 그 이후는 직전 5분 스냅샷 대비 구조 변화가 있을 때만 장중 브리핑.
+    if slot_index == 1:
+        msg = _us_open_briefing(snapshot, et)
+    else:
+        events = _us_intraday_events(snapshot)
+        msg = _us_intraday_briefing(snapshot, events, et)
+        if not msg:
+            _US_BRIEFING_LAST_SNAPSHOT = snapshot
+            return
     if msg and _engine_send_telegram(msg):
         _engine_us_market_monitor._last_slot_key = slot_key
-        _US_BRIEFING_LAST_OPEN_SENT = et.date()
+        _US_BRIEFING_LAST_OPEN_SENT = et.date() if slot_index == 1 else _US_BRIEFING_LAST_OPEN_SENT
         _US_BRIEFING_LAST_INTRADAY_SENT = now
-        _engine_log("info", "[미장브리핑] 30분 정기 브리핑 송출 | slot=%s", slot_key)
+        _engine_log("info", "[미장브리핑] %s 송출 | slot=%s", "개장30분" if slot_index == 1 else "장중변동", slot_key)
     _US_BRIEFING_LAST_SNAPSHOT = snapshot
 
 
@@ -3733,7 +3858,7 @@ def _us_close_briefing(snapshot, et):
                 lines.append("  🇰🇷 한국 연결")
                 for n, (_, stock, hist, lead_hist, key) in enumerate(picks, 1):
                     if n == 1:
-                        badge = "☑️ 대장주"
+                        badge = "✔ 대장주"
                     elif n == 2:
                         badge = "☑️ 관찰"
                     else:
@@ -3746,7 +3871,7 @@ def _us_close_briefing(snapshot, et):
                         why.append("과거 테마 주도 이력")
                     if hist >= 2 or lead_hist >= 2:
                         why.append("끼·탄력 확인")
-                    lines.append(f"  {badge} {strong_stock_flag}👍 🇰🇷 {html.escape(stock)} — " + " + ".join(why))
+                    lines.append(f"  {badge} {strong_stock_flag}⚡️ 🇰🇷 {html.escape(stock)} — " + " + ".join(why))
             else:
                 lines.append("  🇰🇷 한국 연결: 확인되는 국내 관련주 없음")
 
@@ -3902,6 +4027,10 @@ def _engine_cycle():
     except Exception as e:
         log_error("테스트 파일 전체", e)
     try:
+        _engine_krx_market_monitor()
+    except Exception as e:
+        log_error("국내장 장중 브리핑", e)
+    try:
         _engine_us_market_monitor()
     except Exception as e:
         log_error("미장 장중 브리핑", e)
@@ -3995,7 +4124,7 @@ if __name__ == "__main__":
                     ENABLE_DOMESTIC_NEWS,
                     ENABLE_US_NEWS,
                     ENABLE_TELEGRAM_CHANNELS)
-        _engine_log("info", "[BOOT] 미장30분브리핑=%s | 장중감시=%s", ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING)
+        _engine_log("info", "[BOOT] 국내장브리핑=%s | 미장30분브리핑=%s | 장중감시=%s | Naver=%s | Google=%s", ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_NAVER_NEWS, ENABLE_US_NEWS)
 
         _engine_main_loop()
     except KeyboardInterrupt:
