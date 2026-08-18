@@ -2388,7 +2388,7 @@ def _engine_summary(title, extra, companies, market_hits):
         # 해외 뉴스는 원인/시장재료만 요약하고 국내 종목은 별도의 엄격한 알고리즘에서 선정한다.
         core = "·".join(market_hits[:4] or ["해외 시장 재료"])
     elif market_hits:
-        core = "시장 핵심 재료 → " + "·".join(market_hits[:4])
+        core = "🔎 " + "·".join(market_hits[:4])
     else:
         core = ""
     return core, _engine_schedule(text)
@@ -2481,6 +2481,12 @@ def _engine_telegram_title(raw_text, channel_name=""):
         if "view/" in part or "t.me/" in part:
             continue
         if part.startswith("[그로쓰리서치]") or "[그로쓰리서치]" in part:
+            continue
+        # 텔레그램 본문에 붙는 분류 라벨은 검색 키워드로는 허용하지만
+        # 실제 기사 제목/텔레그램 출력 제목에서는 제거한다.
+        part = re.sub(r"(?i)^\\s*\\[(?:속보|단독|특징주|리포트|특허)\\]\\s*", "", part)
+        part = re.sub(r"^\\s*(?:속보|단독|특징주|리포트|특허)\\s*[:：|\\-—]*\\s*", "", part)
+        if not part:
             continue
         candidates.append(part)
     # 가장 먼저 등장하는 충분히 긴 기사형 문장을 제목으로 사용.
@@ -2631,7 +2637,7 @@ def _engine_format_message(item):
                     # 제목이 🎯로 판정된 강한 뉴스는 해당 종목 앞에 🥇를 추가해 즉시 식별한다.
                     # 대장주/관찰 순위 표시는 이제 ☑️ 체크 이미지로 통일한다.
                     us_flag = "🇰🇷 " if source_raw == "Google-US" else ""
-                    strong_stock_flag = "🥇 " if title.lstrip().startswith("🎯") else ""
+                    strong_stock_flag = ""
                     lines.append(
                         f"{html.escape(badge)} — {strong_stock_flag}⚡️ <b>{us_flag}{html.escape(name)}</b>"
                         + (f" /// {html.escape(detail[:360])}" if detail else "")
@@ -3250,11 +3256,18 @@ KRX_STOCK_MOVE_THRESHOLD = 2.5
 KRX_INDEX_MOVE_THRESHOLD = 0.7
 KRX_WATCHLIST = {
     "^KS11": ("코스피", "지수"), "^KQ11": ("코스닥", "지수"),
+    "^KS200": ("KOSPI200", "지수"),
     "005930.KS": ("삼성전자", "반도체"), "000660.KS": ("SK하이닉스", "HBM"),
-    "373220.KS": ("LG에너지솔루션", "2차전지"), "207940.KS": ("삼성바이오로직스", "바이오"),
+    "042700.KS": ("한미반도체", "HBM"),
+    "267260.KS": ("HD현대일렉트릭", "전력기기"), "298040.KS": ("효성중공업", "전력기기"),
+    "010120.KS": ("LS ELECTRIC", "전력기기"),
+    "373220.KS": ("LG에너지솔루션", "2차전지"), "006400.KS": ("삼성SDI", "2차전지"),
+    "207940.KS": ("삼성바이오로직스", "바이오"), "196170.KS": ("알테오젠", "바이오"),
     "005380.KS": ("현대차", "자동차"), "000270.KS": ("기아", "자동차"),
-    "012450.KS": ("한화에어로스페이스", "방산"), "042660.KS": ("한화오션", "조선"),
+    "012450.KS": ("한화에어로스페이스", "방산"), "079550.KS": ("LIG넥스원", "방산"),
+    "042660.KS": ("한화오션", "조선"), "009540.KS": ("HD한국조선해양", "조선"),
     "035420.KS": ("NAVER", "인터넷"), "035720.KS": ("카카오", "인터넷"),
+    "105560.KS": ("KB금융", "금융"), "055550.KS": ("신한지주", "금융"),
     "USDKRW=X": ("원/달러", "환율"),
 }
 _KRX_BRIEFING_LAST_SNAPSHOT = {}
@@ -3282,31 +3295,135 @@ def _krx_intraday_events(snapshot):
         if abs(delta)>=threshold: events.append((abs(delta),symbol,q,delta))
     return sorted(events, reverse=True, key=lambda x:x[0])
 
+def _krx_theme_rotation(snapshot):
+    """장중 등락률을 테마별로 묶어 순환매 강도와 대표 대장주를 계산한다."""
+    groups = {}
+    for symbol, q in snapshot.items():
+        if symbol in {"^KS11", "^KQ11", "^KS200", "USDKRW=X"}:
+            continue
+        pct = q.get("change_pct")
+        if pct is None:
+            continue
+        theme = q.get("theme") or "기타"
+        groups.setdefault(theme, []).append(q)
+    ranked = []
+    for theme, rows in groups.items():
+        rows = sorted(rows, key=lambda x: x.get("change_pct") or -999, reverse=True)
+        avg = sum((x.get("change_pct") or 0) for x in rows) / len(rows)
+        leader = rows[0]
+        ranked.append((avg, leader.get("change_pct") or 0, theme, leader, rows))
+    return sorted(ranked, key=lambda x: (x[0], x[1]), reverse=True)
+
+
+def _krx_market_direction(snapshot):
+    kospi = snapshot.get("^KS11", {}).get("change_pct")
+    kosdaq = snapshot.get("^KQ11", {}).get("change_pct")
+    samsung = snapshot.get("005930.KS", {}).get("change_pct")
+    hynix = snapshot.get("000660.KS", {}).get("change_pct")
+    if kospi is None:
+        return "시장 방향 판단 보류", "지수 데이터 부족"
+    if samsung is not None and samsung <= -3:
+        if hynix is not None and hynix > 0:
+            return "반도체 내부 차별화", "삼성전자 약세 속 SK하이닉스 상대강세 여부 확인"
+        return "대형주 리스크 회피", "삼성전자 급락이 지수와 대형주 심리를 압박하는 구간"
+    if samsung is not None and samsung >= 2:
+        return "대형주 주도 상승", "삼성전자 강세가 유지되면 후속 수급의 확산 여부 확인"
+    if kospi < -1.0 and (kosdaq or 0) < -1.0:
+        return "시장 전반 위험회피", "지수 약세가 동반되는 만큼 신규 추격보다 상대강도 테마 선별"
+    if kospi > 1.0 or (kosdaq or 0) > 1.5:
+        return "순환매 확산", "지수 상승 속 주도 테마에서 2등·3등으로 수급이 이동하는지 확인"
+    return "혼조·순환매", "지수보다 테마별 상대강도와 대장주 유지 여부가 중요"
+
+
 def _krx_briefing_message(snapshot, et, events=None, opening=False):
-    events=events or []
-    lines=["<b>🇰🇷 [국내장 브리핑]</b>", f"🕐 {et.strftime('%H:%M KST')}", ""]
-    lines.append("<b>📊 주요 지수</b>")
-    for s in ("^KS11","^KQ11"):
-        q=snapshot.get(s)
-        if q: lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
-    lines += ["", "<b>⚡️ 주요 종목 변화</b>"]
-    rows=[]
-    for s,q in snapshot.items():
-        if s in {"^KS11","^KQ11","USDKRW=X"}: continue
-        if q.get("change_pct") is not None: rows.append(q)
-    rows.sort(key=lambda x:abs(x.get("change_pct") or 0), reverse=True)
-    shown=0
-    for q in rows[:8]:
-        pct=q.get("change_pct")
-        if abs(pct or 0)<1.0: continue
-        lines.append(f"• ⚡️ {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}")
-        shown+=1
-    if not shown: lines.append("• 주요 종목 큰 변동 없음")
-    fx=snapshot.get("USDKRW=X")
-    if fx: lines += ["", f"<b>💱 원/달러</b> · {_us_format_pct(fx.get('change_pct'))}"]
+    events = events or []
+    lines = ["<b>🇰🇷 [국내장 브리핑]</b>", f"🕐 {et.strftime('%H:%M KST')}", ""]
+
+    # 지수는 한눈에 비교할 수 있게 상승→하락 순으로 정렬
+    index_rows = []
+    for s in ("^KS11", "^KQ11"):
+        q = snapshot.get(s)
+        if q and q.get("change_pct") is not None:
+            index_rows.append(q)
+    index_rows.sort(key=lambda x: x.get("change_pct") or 0, reverse=True)
+    lines.append("<b>📊 지수 흐름</b>")
+    for q in index_rows:
+        lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+
+    k200 = snapshot.get("^KS200")
+    if k200 and k200.get("change_pct") is not None:
+        lines.append(f"• KOSPI200 {_us_direction(k200.get('change_pct'))} {_us_format_pct(k200.get('change_pct'))}")
+    lines.append("")
+
+    # 대장주: 절대등락률만이 아니라 시장 대표성과 테마 선도성을 함께 반영
+    rows = []
+    for s, q in snapshot.items():
+        if s in {"^KS11", "^KQ11", "^KS200", "USDKRW=X"}:
+            continue
+        if q.get("change_pct") is not None:
+            rows.append(q)
+    rows.sort(key=lambda x: x.get("change_pct") or 0, reverse=True)
+    gainers = [q for q in rows if (q.get("change_pct") or 0) > 0]
+    losers = [q for q in rows if (q.get("change_pct") or 0) < 0]
+
+    lines.append("<b>🚀 오늘의 주도 대장주</b>")
+    if gainers:
+        for rank, q in enumerate(gainers[:3], 1):
+            lines.append(f"{rank}등 ⚡️ {q['name']} {_us_format_pct(q.get('change_pct'))} · {q['theme']}")
+    else:
+        lines.append("• 상승 대장주 부재 — 하락 방어력이 높은 테마 확인")
+
+    themes = _krx_theme_rotation(snapshot)
+    if themes:
+        lines.append("")
+        lines.append("<b>🔄 테마 순환매</b>")
+        positive = [x for x in themes if x[0] > 0]
+        negative = [x for x in themes if x[0] < 0]
+        for rank, item in enumerate(positive[:3], 1):
+            avg, lead_pct, theme, leader, theme_rows = item
+            members = ", ".join(f"{r['name']} {_us_format_pct(r.get('change_pct'))}" for r in theme_rows[:3])
+            lines.append(f"{rank}등 {theme} · 평균 {avg:+.2f}% | 대장 ⚡️ {leader['name']} {_us_format_pct(lead_pct)}")
+            lines.append(f"   ↳ {members}")
+        if negative:
+            top_down = negative[:2]
+            lines.append("하락 테마")
+            for item in top_down:
+                avg, lead_pct, theme, leader, theme_rows = item
+                lines.append(f"• {theme} 평균 {avg:+.2f}% · ⚡️ {leader['name']} {_us_format_pct(lead_pct)}")
+
+    direction, reason = _krx_market_direction(snapshot)
+    lines += ["", "<b>🧭 시장 대응 방향</b>", f"• {direction} — {reason}"]
+
+    samsung = snapshot.get("005930.KS", {}).get("change_pct")
+    hynix = snapshot.get("000660.KS", {}).get("change_pct")
+    if samsung is not None:
+        if samsung <= -2.0:
+            lines.append("• 삼성전자 약세: 대형주 추격보다 상대강도 높은 전력기기·방산·바이오 등 후속 테마의 지지 여부를 우선 확인")
+        elif samsung >= 2.0:
+            lines.append("• 삼성전자 강세: 반도체 주도력이 유지되는지 확인하고 HBM·전력기기 등 공급망 후속주로 수급 확산 여부를 확인")
+        else:
+            lines.append("• 삼성전자 보합권: 지수보다 개별 테마 대장주의 거래·등락 지속 여부를 우선 확인")
+    if hynix is not None:
+        lines.append(f"• SK하이닉스 {_us_format_pct(hynix)}: HBM 주도력 유지 여부가 반도체·장비 순환매의 핵심")
+
+    fx = snapshot.get("USDKRW=X")
+    if fx:
+        lines += ["", f"<b>💱 원/달러</b> · {_us_format_pct(fx.get('change_pct'))}"]
+
+    # 실제 투자자별 수급 데이터가 연결될 경우 이 위치에 붙인다. 현재 파일의 무료 시세원에는 수급 필드가 없어 추정하지 않는다.
+    lines += ["", "<b>💰 시장 수급</b>", "• 현재 시세 데이터 기준: 투자자별 실시간 수급값은 미연결 — 등락률·테마 확산으로 상대수급을 판단"]
+
+    # 사용자가 요청한 상승→하락 한눈 비교: 모든 주요 종목을 한 블록으로 정렬
+    if rows:
+        lines += ["", "<b>📋 장중 등락 순서</b>"]
+        for q in gainers[:8]:
+            lines.append(f"• 🔺 ⚡️ {q['name']} {_us_format_pct(q.get('change_pct'))} · {q['theme']}")
+        for q in sorted(losers, key=lambda x: x.get('change_pct') or 0, reverse=True)[:8]:
+            lines.append(f"• ▼ ⚡️ {q['name']} {_us_format_pct(q.get('change_pct'))} · {q['theme']}")
+
     if events:
         lines += ["", "<b>🚨 장중 구조 변화</b>"]
-        for _,_,q,delta in events[:5]:
+        for _, _, q, delta in events[:5]:
             lines.append(f"• ⚡️ {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q.get('change_pct'))}")
     return "\n".join(lines)
 
@@ -3863,7 +3980,7 @@ def _us_close_briefing(snapshot, et):
                         badge = "☑️ 관찰"
                     else:
                         badge = "☑️ 관찰"
-                    strong_stock_flag = "🥇 " if title.lstrip().startswith("🎯") else ""
+                    strong_stock_flag = ""
                     why = ["동일 테마 연결"]
                     if hist:
                         why.append(f"과거 급등/상한가 사례 {hist}건")
