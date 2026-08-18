@@ -2502,32 +2502,49 @@ def _engine_is_english_title(text):
 
 def _engine_clean_foreign_title(title):
     t = _engine_clean(str(title or ""))
-    # Google News가 붙이는 매체명 접미사 제거
-    t = re.sub(r"\\s+[-–—|]\\s+(?:The Times of India|Coin Gabbar|Reuters|Bloomberg|CNBC|Yahoo Finance|MarketWatch|Investing\\.com|Business Insider)\\s*$", "", t, flags=re.I)
+    # 외신 제목 뒤에 붙는 매체명/사이트명은 번역 전에 제거한다.
+    t = re.sub(r"\s+[-–—|]\s+(?:The Times of India|Coin Gabbar|Reuters|Bloomberg|CNBC|Yahoo Finance|MarketWatch|Investing\.com|Business Insider|SimplyWall\.st|Simply Wall St)\s*$", "", t, flags=re.I)
+    t = re.sub(r"\s+(?:SimplyWall\.st|Simply Wall St)\s*$", "", t, flags=re.I)
     return t.strip(" -–—|")
 
 def _engine_translate_to_korean(text):
+    """외신 제목을 한국어로 변환한다. 특정 소스명에 의존하지 않고 영문 제목이면 공통 적용."""
     t = _engine_clean_foreign_title(text)
     if not t or not _engine_is_english_title(t):
         return t
     key = t.lower()
     if key in _TRANSLATE_CACHE:
         return _TRANSLATE_CACHE[key]
-    try:
-        r = requests.get(
-            "https://translate.googleapis.com/translate_a/single",
-            params={"client":"gtx", "sl":"auto", "tl":"ko", "dt":"t", "q":t},
-            headers={"User-Agent": USER_AGENT}, timeout=min(ENGINE_HTTP_TIMEOUT, 10)
-        )
-        r.raise_for_status()
-        data = r.json()
-        translated = "".join(str(x[0]) for x in (data[0] if data and isinstance(data[0], list) else []) if x and x[0]).strip()
-        if translated and not _engine_is_english_title(translated):
-            _TRANSLATE_CACHE[key] = translated
-            return translated
-    except Exception as e:
-        _engine_log("warning", "[외신 번역 실패] %s", str(e)[:120])
-    return t
+
+    # 하나의 번역 서버 장애가 전체 외신 번역 실패로 이어지지 않도록 복수 경로 사용.
+    attempts = [
+        ("https://translate.googleapis.com/translate_a/single",
+         {"client":"gtx", "sl":"auto", "tl":"ko", "dt":"t", "q":t}),
+        ("https://translate.google.com/translate_a/single",
+         {"client":"gtx", "sl":"auto", "tl":"ko", "dt":"t", "q":t}),
+        ("https://clients5.google.com/translate_a/t",
+         {"client":"dict-chrome-ex", "sl":"auto", "tl":"ko", "q":t}),
+    ]
+    last_error = ""
+    for url, params in attempts:
+        try:
+            r = requests.get(url, params=params, headers={"User-Agent": USER_AGENT}, timeout=min(ENGINE_HTTP_TIMEOUT, 8))
+            r.raise_for_status()
+            data = r.json()
+            translated = ""
+            if isinstance(data, list) and data and isinstance(data[0], list):
+                translated = "".join(str(x[0]) for x in data[0] if isinstance(x, list) and x and x[0]).strip()
+            elif isinstance(data, dict):
+                translated = str(data.get("text") or data.get("translation") or "").strip()
+            if translated and not _engine_is_english_title(translated):
+                _TRANSLATE_CACHE[key] = translated
+                return translated
+            last_error = "번역 결과가 영문으로 남음"
+        except Exception as e:
+            last_error = str(e)[:120]
+
+    _engine_log("warning", "[외신 번역 실패] %s", last_error or "알 수 없는 오류")
+    return ""
 
 def _engine_keypoint(text, title=""):
     """기자식 부제목. 단순 등락어만 남기지 않고 주제+구체적 사실을 짧게 만든다."""
@@ -2630,9 +2647,11 @@ def _engine_format_message(item):
     source_raw = str(item.get("source", ""))
     source_display = "🇺🇸" if source_raw == "Google-US" else source_raw
     time_text = str(item.get("time_text", "")).strip()
-    is_foreign = source_raw == "Google-US"
+    is_foreign = source_raw == "Google-US" or _engine_is_english_title(title)
     if is_foreign:
-        title = _engine_translate_to_korean(title)
+        translated_title = _engine_translate_to_korean(title)
+        if translated_title:
+            title = translated_title
     # 어떤 입력에서든 과거에 붙은 🥇는 제거하고 종목 앞 ⚡️만 유지
     title = title.replace("🥇", "").strip()
 
@@ -2649,6 +2668,11 @@ def _engine_format_message(item):
         title = "🎯 " + title
 
     # 제목은 절대 요약문보다 아래/위로 이동시키지 않는다.
+    # 영문 외신 제목이 남아 있으면 마지막 번역 재시도 후 그대로 노출하지 않는다.
+    if _engine_is_english_title(title):
+        translated_title = _engine_translate_to_korean(title)
+        if translated_title:
+            title = translated_title
     lines = [
         header,
         f"<b>📌 {html.escape(title)}</b>",
