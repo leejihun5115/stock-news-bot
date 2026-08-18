@@ -2459,6 +2459,78 @@ def _engine_is_commercial_value(item, title, keypoint=""):
     text = _engine_clean(f"{title} {keypoint} {item.get('extra','')}").lower()
     return any(str(w).lower() in text for w in COMMERCIAL_VALUE_WORDS)
 
+_TRANSLATE_CACHE = {}
+
+def _engine_is_english_title(text):
+    t = re.sub(r"[^A-Za-z가-힣]", "", str(text or ""))
+    if not t:
+        return False
+    en = len(re.findall(r"[A-Za-z]", t))
+    ko = len(re.findall(r"[가-힣]", t))
+    return en >= 12 and en > max(ko * 2, 8)
+
+def _engine_clean_foreign_title(title):
+    t = _engine_clean(str(title or ""))
+    # Google News가 붙이는 매체명 접미사 제거
+    t = re.sub(r"\\s+[-–—|]\\s+(?:The Times of India|Coin Gabbar|Reuters|Bloomberg|CNBC|Yahoo Finance|MarketWatch|Investing\\.com|Business Insider)\\s*$", "", t, flags=re.I)
+    return t.strip(" -–—|")
+
+def _engine_translate_to_korean(text):
+    t = _engine_clean_foreign_title(text)
+    if not t or not _engine_is_english_title(t):
+        return t
+    key = t.lower()
+    if key in _TRANSLATE_CACHE:
+        return _TRANSLATE_CACHE[key]
+    try:
+        r = requests.get(
+            "https://translate.googleapis.com/translate_a/single",
+            params={"client":"gtx", "sl":"auto", "tl":"ko", "dt":"t", "q":t},
+            headers={"User-Agent": USER_AGENT}, timeout=min(ENGINE_HTTP_TIMEOUT, 10)
+        )
+        r.raise_for_status()
+        data = r.json()
+        translated = "".join(str(x[0]) for x in (data[0] if data and isinstance(data[0], list) else []) if x and x[0]).strip()
+        if translated and not _engine_is_english_title(translated):
+            _TRANSLATE_CACHE[key] = translated
+            return translated
+    except Exception as e:
+        _engine_log("warning", "[외신 번역 실패] %s", str(e)[:120])
+    return t
+
+def _engine_keypoint(text, title=""):
+    """기자식 부제목. 단순 등락어만 남기지 않고 주제+구체적 사실을 짧게 만든다."""
+    text = _engine_clean(str(text or ""))
+    if not text:
+        return ""
+    text = re.sub(r"^\s*(?:📌|🎯|🔎)\s*", "", text)
+    text = re.sub(r"^\s*(?:\[)?(?:속보|단독|특징주|리포트|특허)(?:\])?\s*[:：|\-—]*\s*", "", text, flags=re.I)
+    parts = [p.strip(" -•|\t") for p in re.split(r"(?<=[.!?。])\s+|\n+", text) if p.strip()]
+    if not parts:
+        return ""
+    title_norm = re.sub(r"[^가-힣A-Za-z0-9]", "", str(title).lower())
+    scored=[]
+    for p in parts[:8]:
+        pn=re.sub(r"[^가-힣A-Za-z0-9]", "", p.lower())
+        if title_norm and pn and (pn==title_norm or (len(title_norm)>=25 and title_norm in pn)):
+            continue
+        score = 0
+        if re.search(r"\d|%|억|조|달러|원", p): score += 3
+        if re.search(r"계약|수주|공급|실적|영업이익|매출|FDA|허가|승인|임상|법안|정책|금리|인플레|배당|투자|출시|양산|특허|소송", p, re.I): score += 3
+        if re.search(r"급등|급락|상승|하락|강세|약세", p): score -= 2
+        score += max(0, 2-abs(len(p)-85)//60)
+        scored.append((score,p))
+    if not scored:
+        return ""
+    best=max(scored,key=lambda x:x[0])[1]
+    # 기자식 종결로 압축
+    best=re.sub(r"(?:하고 있습니다|하고있습니다|전망입니다|알려졌습니다|나타났습니다|기록했습니다|밝혔습니다|전했습니다)\.?$", "", best).strip()
+    # 단순 등락만 남으면 제거
+    bare=re.sub(r"[^가-힣A-Za-z]", "", best).lower()
+    if bare in {"급등","급락","상승","하락","강세","약세","호재","악재"}:
+        return ""
+    return best[:240]
+
 def _engine_telegram_title(raw_text, channel_name=""):
     """텔레그램 본문에서 실제 기사 제목만 추출한다. [그로쓰리서치] 속보/단독 특징주는 직접 중계하지 않는다."""
     raw = _engine_clean(raw_text)
@@ -2484,8 +2556,8 @@ def _engine_telegram_title(raw_text, channel_name=""):
             continue
         # 텔레그램 본문에 붙는 분류 라벨은 검색 키워드로는 허용하지만
         # 실제 기사 제목/텔레그램 출력 제목에서는 제거한다.
-        part = re.sub(r"(?i)^\\s*\\[(?:속보|단독|특징주|리포트|특허)\\]\\s*", "", part)
-        part = re.sub(r"^\\s*(?:속보|단독|특징주|리포트|특허)\\s*[:：|\\-—]*\\s*", "", part)
+        part = re.sub(r"(?i)^\s*\[(?:속보|단독|특징주|리포트|특허)\]\s*", "", part)
+        part = re.sub(r"^\s*(?:속보|단독|특징주|리포트|특허)\s*[:：|\-—]*\s*", "", part)
         if not part:
             continue
         candidates.append(part)
@@ -2514,12 +2586,19 @@ def _engine_format_message(item):
     source_raw = str(item.get("source", ""))
     source_display = "🇺🇸" if source_raw == "Google-US" else source_raw
     time_text = str(item.get("time_text", "")).strip()
+    is_foreign = source_raw == "Google-US"
+    if is_foreign:
+        title = _engine_translate_to_korean(title)
+    # 어떤 입력에서든 과거에 붙은 🥇는 제거하고 종목 앞 ⚡️만 유지
+    title = title.replace("🥇", "").strip()
 
     freshness, prev = _engine_freshness(item)
 
     header = f"<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>"
     if time_text:
         header += f"                                      🕐 {html.escape(time_text)}"
+    if is_foreign:
+        header = "<b>🌎 외신</b>\n" + header
 
     # 상용화 가치가 있는 뉴스는 제목 맨 앞에 🎯를 붙여 한눈에 식별한다.
     if _engine_is_commercial_value(item, title, "") and not title.startswith("🎯"):
@@ -2579,7 +2658,16 @@ def _engine_format_message(item):
 
         return text[:260]
 
-    keypoint = _compact_keypoint(core)
+    keypoint = _engine_keypoint(core, title) or _engine_keypoint(extra, title)
+    # 단순 등락어가 나오지 않도록 최소한의 주제 라벨+구체 사실을 확보한다.
+    if not keypoint:
+        low_text = _engine_clean(f"{title} {extra}")
+        topic = "실적" if re.search(r"매출|영업이익|순이익|실적", low_text, re.I) else (
+            "FDA·허가·특허" if re.search(r"FDA|허가|승인|특허|임상", low_text, re.I) else (
+            "수주·계약" if re.search(r"수주|계약|공급", low_text, re.I) else (
+            "정책·법안" if re.search(r"법안|정책|정부", low_text, re.I) else "주요 내용")))
+        fact = _engine_keypoint(_engine_clean(f"{title} {extra}"), "")
+        keypoint = f"{topic} → {fact}" if fact else ""
 
     # extra에 실제 수치/금액/확정·예정 정보가 있고 summary에 없으면 보강.
     if extra:
@@ -2633,13 +2721,10 @@ def _engine_format_message(item):
                 if name:
                     detail = " | ".join(x for x in (theme, reason) if x)
                     badge = str(row.get("badge") or "🔎 관심종목")
-                    # 국내 관심종목으로 최종 선정된 종목명 앞에는 항상 👍를 붙인다.
-                    # 제목이 🎯로 판정된 강한 뉴스는 해당 종목 앞에 🥇를 추가해 즉시 식별한다.
-                    # 대장주/관찰 순위 표시는 이제 ☑️ 체크 이미지로 통일한다.
-                    us_flag = "🇰🇷 " if source_raw == "Google-US" else ""
+                    # 국내 관심종목은 항상 ⚡️ 종목명 형식으로만 표시한다. 🥇는 사용하지 않는다.
                     strong_stock_flag = ""
                     lines.append(
-                        f"{html.escape(badge)} — {strong_stock_flag}⚡️ <b>{us_flag}{html.escape(name)}</b>"
+                        f"{html.escape(badge)} — {strong_stock_flag}⚡️ <b>{html.escape(name)}</b>"
                         + (f" /// {html.escape(detail[:360])}" if detail else "")
                     )
             elif row:
@@ -2680,14 +2765,25 @@ def _engine_format_message(item):
             schedule_text
         )
         if any(w in schedule_text for w in future_words) or date_like:
-            lines.extend(["📅 일정", html.escape(schedule_text[:260])])
+            # 일정은 날짜를 제목과 같은 줄에 두고 각 항목은 ✔로 정리한다.
+            mdate = re.search(r"(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)", schedule_text)
+            date_label = mdate.group(1).replace(".", ".") if mdate else ""
+            body = schedule_text
+            if mdate:
+                body = re.sub(re.escape(mdate.group(1)), "", body, count=1).strip(" -–—:|")
+            lines.append(f"📅 일정 {date_label}".strip())
+            for part in re.split(r"[\n;]+", body):
+                part = _engine_clean(part).strip(" -•|")
+                if part:
+                    lines.append(f"✔ {html.escape(part[:260])}")
 
     if item.get("link"):
         link = html.escape(str(item["link"]), quote=True)
         lines.append(f'<a href="{link}">🔗 원문 보기</a>')
 
     # 화면 줄간격은 카드 전체에서 동일하게 유지.
-    return "\n\n".join(x for x in lines if str(x).strip())
+    result = "\n\n".join(x for x in lines if str(x).strip())
+    return result.replace("🥇", "")
 
 
 def _engine_flush_pending():
