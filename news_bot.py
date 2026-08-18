@@ -1346,6 +1346,8 @@ ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
 
 # 외부채널(텔레그램/유튜브)은 60분을 기본으로 하며, 시장 마감 후/휴무의 강한 국내 상장기업 재료만 예외 허용한다.
 NEWS_TEST_FILE = os.environ.get("NEWS_TEST_FILE", "news_test_items.json")
+# 부팅할 때 테스트 파일을 실제 Telegram 송출까지 수행한다. 기본값 ON.
+BOOT_SEND_TEST_FIXTURE = _startup_env_flag("BOOT_SEND_TEST_FIXTURE", True)
 
 # --- 통합 확장 상태/보안 설정 ---
 HISTORICAL_SURGE_DB = os.environ.get("NEWS_BOT_HISTORICAL_DB", "news_bot_historical_surge.jsonl")
@@ -3208,19 +3210,36 @@ def _engine_run_youtube():
     _engine_log("info", "[유튜브 완료] 채널=%d/%d 성공 | 실패=%d | 신규후보=%d", ok_channels, len(YOUTUBE_CHANNELS), fail_channels, total)
 
 
-def _engine_run_test_fixture():
+def _engine_run_test_fixture(force_send=False):
     path = NEWS_TEST_FILE
-    if not path or not os.path.exists(path): return 0
+    if not path or not os.path.exists(path):
+        _engine_log("warning", "[테스트] 파일 없음 | %s", path)
+        return 0
     try:
-        with open(path, "r", encoding="utf-8") as f: data = json.load(f)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
         items = data if isinstance(data, list) else data.get("items", [])
         total = 0
         for item in items:
-            if _engine_process_item(item.get("source", "TEST"), item.get("title", ""), item.get("link", ""), item.get("published", ""), item.get("extra", "")): total += 1
-        _engine_log("info", "[테스트] 입력=%d | 송출대기=%d", len(items), total)
+            # 부팅 테스트는 매번 실제 송출을 확인할 수 있도록 seen 상태를 초기화한다.
+            if force_send:
+                test_link = str(item.get("link") or "").strip()
+                test_key = test_link or f'{item.get("source", "TEST")}|{item.get("title", "")}'
+                with _engine_lock:
+                    _engine_seen.discard(test_key)
+            if _engine_process_item(
+                item.get("source", "TEST"),
+                item.get("title", ""),
+                item.get("link", ""),
+                item.get("published", ""),
+                item.get("extra", "")
+            ):
+                total += 1
+        _engine_log("info", "[테스트] 입력=%d | 송출대기=%d | 강제송출=%s", len(items), total, force_send)
         return total
     except Exception as e:
-        _engine_log("error", "[실패] 테스트 파일 | 원인=%s", str(e)[:160]); return 0
+        _engine_log("error", "[실패] 테스트 파일 | 원인=%s", str(e)[:160])
+        return 0
 
 
 
@@ -4089,6 +4108,51 @@ def _engine_main_loop():
         _engine_watchdog_alert()
 
 
+
+# ============================================================
+# [BOOT TEST - EMBEDDED]
+# 외부 JSON 파일 없이 본 파일 하나만으로 부팅 테스트 수행.
+# TEST 데이터는 실제 일정DB/뉴스DB에 저장하지 않는다.
+# ============================================================
+BOOT_TEST_ITEMS = [
+    {
+        "source": "TEST/일정",
+        "title": "[테스트] 8월 20일 추가 락업 해제 예정",
+        "link": "https://example.invalid/boot-test-lockup",
+        "published": "",
+        "extra": "① 약 3억1,900만 주의 추가 락업이 8월 20일 해제될 예정 ② 미래 일정 표시와 1·2·3 핵심요약 출력 점검",
+    },
+    {
+        "source": "TEST/공시일정",
+        "title": "[테스트] 주요사항보고서 관련 미래 일정 점검",
+        "link": "https://example.invalid/boot-test-dart",
+        "published": "",
+        "extra": "① 미래 이벤트 날짜만 일정으로 관리 ② 오늘 접수일은 일정으로 표시하지 않음 ③ 공시 일정 통합 로직 점검",
+    },
+    {
+        "source": "TEST/외신",
+        "title": "[테스트] 외신 번역 및 핵심요약 점검",
+        "link": "https://example.invalid/boot-test-foreign",
+        "published": "",
+        "extra": "① 외신 제목은 한국어로 번역 ② 번역된 동일 원문으로 🔎 핵심요약 수행 ③ 테마·관련주 판단도 동일 분석 게이트 사용",
+    },
+]
+
+def _engine_run_embedded_boot_test():
+    total = 0
+    for item in BOOT_TEST_ITEMS:
+        key = str(item.get("link") or "")
+        with _engine_lock:
+            _engine_seen.discard(key)
+        if _engine_process_item(
+            item["source"], item["title"], item["link"],
+            item.get("published", ""), item.get("extra", "")
+        ):
+            total += 1
+    sent = _engine_flush_pending()
+    _engine_log("info", "[BOOT 테스트] 내장=%d | 실제송출=%d", total, sent)
+    return sent
+
 if __name__ == "__main__":
     try:
         # Render가 Web Service의 포트를 즉시 감지할 수 있도록 먼저 서버를 띄운다.
@@ -4115,6 +4179,14 @@ if __name__ == "__main__":
                     ENABLE_US_NEWS,
                     ENABLE_TELEGRAM_CHANNELS)
         _engine_log("info", "[BOOT] 국내장브리핑=%s | 미장30분브리핑=%s | 장중감시=%s | Naver=%s | Google=%s", ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_NAVER_NEWS, ENABLE_US_NEWS)
+
+        # 부팅 즉시 테스트 파일을 실제 Telegram으로 송출하여
+        # 🔎 요약·테마·관련주·일정 출력의 수정 결과를 바로 확인한다.
+        if BOOT_SEND_TEST_FIXTURE:
+            try:
+                _engine_run_embedded_boot_test()
+            except Exception as e:
+                log_error("부팅 내장 테스트 송출", e)
 
         _engine_main_loop()
     except KeyboardInterrupt:
