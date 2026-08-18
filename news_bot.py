@@ -2224,14 +2224,14 @@ def _engine_domestic_watchlist(item):
         rows.sort(key=lambda r: (r["score"], r["limitup"], r["leader"], r["surge"]), reverse=True)
         for i, r in enumerate(rows[:3]):
             if i == 0:
-                r["badge"] = "🥇 대장주"
+                r["badge"] = "☑️ 대장주"
                 r["reason"] = (
                     "직접 사업연관 + "
                     + r["reason"]
                     + " → 직접 관련 후보 중 과거 주도/급등 이력과 시장 탄력이 가장 높은 종목을 대장주로 우선 선정"
                 )
             else:
-                r["badge"] = "🥈 관찰" if i == 1 else "🥉 관찰"
+                r["badge"] = "☑️ 관찰" if i == 1 else "☑️ 관찰"
                 r["reason"] += " → 직접 관련 후보 중 후순위 관찰"
         return rows[:3]
 
@@ -2308,7 +2308,7 @@ def _engine_domestic_watchlist(item):
 
     for i, r in enumerate(picks):
         if i == 0:
-            badge = "🥇 대장주"
+            badge = "☑️ 대장주"
             reason = (
                 f"{r['theme']} 테마의 실제 사건 연결 + "
                 f"상한가 이력 {r['limitup']}건 + 테마 주도 이력 {r['leader']}건 + "
@@ -2318,7 +2318,7 @@ def _engine_domestic_watchlist(item):
                 reason += f" + 과거 확인 최고 상승폭 {r['max_pct']:g}%"
             reason += " → 과거 테마 주도력과 급등 탄력이 가장 높은 후보를 대장주로 선정"
         else:
-            badge = "🥈 관찰" if i == 1 else "🥉 관찰"
+            badge = "☑️ 관찰" if i == 1 else "☑️ 관찰"
             reason = (
                 f"{r['theme']} 테마 연결 + 상한가 {r['limitup']}건 + "
                 f"주도 이력 {r['leader']}건 + 급등 이력 {r['surge']}건"
@@ -2619,10 +2619,12 @@ def _engine_format_message(item):
                     detail = " | ".join(x for x in (theme, reason) if x)
                     badge = str(row.get("badge") or "🔎 관심종목")
                     # 국내 관심종목으로 최종 선정된 종목명 앞에는 항상 👍를 붙인다.
-                    # 대장주/관찰 순위 표시는 종목 선정 이유를 명확히 하기 위한 용도다.
+                    # 제목이 🎯로 판정된 강한 뉴스는 해당 종목 앞에 🥇를 추가해 즉시 식별한다.
+                    # 대장주/관찰 순위 표시는 이제 ☑️ 체크 이미지로 통일한다.
                     us_flag = "🇰🇷 " if source_raw == "Google-US" else ""
+                    strong_stock_flag = "🥇 " if title.lstrip().startswith("🎯") else ""
                     lines.append(
-                        f"{html.escape(badge)} — 👍 <b>{us_flag}{html.escape(name)}</b>"
+                        f"{html.escape(badge)} — {strong_stock_flag}👍 <b>{us_flag}{html.escape(name)}</b>"
                         + (f" /// {html.escape(detail[:360])}" if detail else "")
                     )
             elif row:
@@ -3731,11 +3733,12 @@ def _us_close_briefing(snapshot, et):
                 lines.append("  🇰🇷 한국 연결")
                 for n, (_, stock, hist, lead_hist, key) in enumerate(picks, 1):
                     if n == 1:
-                        badge = "🥇 대장주"
+                        badge = "☑️ 대장주"
                     elif n == 2:
-                        badge = "🥈 관찰"
+                        badge = "☑️ 관찰"
                     else:
-                        badge = "🥉 관찰"
+                        badge = "☑️ 관찰"
+                    strong_stock_flag = "🥇 " if title.lstrip().startswith("🎯") else ""
                     why = ["동일 테마 연결"]
                     if hist:
                         why.append(f"과거 급등/상한가 사례 {hist}건")
@@ -3743,7 +3746,7 @@ def _us_close_briefing(snapshot, et):
                         why.append("과거 테마 주도 이력")
                     if hist >= 2 or lead_hist >= 2:
                         why.append("끼·탄력 확인")
-                    lines.append(f"  {badge} 🇰🇷 {html.escape(stock)} — " + " + ".join(why))
+                    lines.append(f"  {badge} {strong_stock_flag}👍 🇰🇷 {html.escape(stock)} — " + " + ".join(why))
             else:
                 lines.append("  🇰🇷 한국 연결: 확인되는 국내 관련주 없음")
 
