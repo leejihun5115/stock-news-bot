@@ -3517,10 +3517,11 @@ def _engine_krx_market_monitor():
     if getattr(_engine_krx_market_monitor,"_last_slot_key",None)==key:
         _KRX_BRIEFING_LAST_SNAPSHOT=snapshot; return
     events=_krx_intraday_events(snapshot)
-    # 첫 30분은 정기 브리핑, 이후에는 변화가 있으면 즉시/슬롯 브리핑
+    # 국내장도 변화 유무와 관계없이 30분 슬롯마다 반드시 1회 정기 브리핑한다.
+    # 변화가 있으면 변화 내용을 포함하고, 변화가 없으면 현재 시황만 간결하게 표시한다.
     if slot==1: msg=_krx_briefing_message(snapshot,now,opening=True)
     elif events: msg=_krx_briefing_message(snapshot,now,events=events)
-    else: msg=_krx_briefing_message(snapshot,now) if slot%1==0 else ""
+    else: msg=_krx_briefing_message(snapshot,now)
     if msg and _engine_send_telegram(msg):
         _engine_krx_market_monitor._last_slot_key=key
         _engine_log("info","[국내장브리핑] 송출 완료 | slot=%s | 변동=%d",key,len(events))
@@ -3835,7 +3836,20 @@ def _us_intraday_briefing(snapshot, events, et):
             lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q['change_pct'])}")
         lines.append("")
     if not events:
-        return ""
+        # 변화가 없어도 30분 정기 브리핑은 반드시 송출한다.
+        # 현재 주요 지수/테마/환율·원자재 현황만 간결하게 표시한다.
+        lines.append("<b>📊 현재 시장 현황</b>")
+        current = []
+        for symbol in ("^IXIC", "^GSPC", "^DJI", "^SOX", "SOXX", "XLK", "XLE", "USDKRW=X", "CL=F", "GC=F"):
+            q = snapshot.get(symbol)
+            if q and q.get("change_pct") is not None:
+                current.append(q)
+        current.sort(key=lambda q: q.get("change_pct", 0), reverse=True)
+        for q in current[:8]:
+            lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+        if not current:
+            lines.append("• 현재 확인 가능한 주요 시세 없음")
+        lines.append("• 30분간 시장 구조의 유의미한 변화 없음")
     lines.append("※ 방향(급등/급락)과 재료 강도는 별도로 표기하며, 시세만으로 국내 관련주를 강제 연결하지 않습니다.")
     return "\n".join(lines)
 
@@ -3874,15 +3888,13 @@ def _engine_us_market_monitor():
         _US_BRIEFING_LAST_SNAPSHOT = snapshot
         return
 
-    # 첫 슬롯은 개장 브리핑, 그 이후는 직전 5분 스냅샷 대비 구조 변화가 있을 때만 장중 브리핑.
+    # 첫 슬롯은 개장 브리핑. 이후에도 변화 유무와 관계없이 30분마다 반드시 송출한다.
+    # 변화가 있으면 변화 중심, 변화가 없으면 현재 시장 현황 + "변화 없음"으로 간결하게 표시한다.
     if slot_index == 1:
         msg = _us_open_briefing(snapshot, et)
     else:
         events = _us_intraday_events(snapshot)
         msg = _us_intraday_briefing(snapshot, events, et)
-        if not msg:
-            _US_BRIEFING_LAST_SNAPSHOT = snapshot
-            return
     if msg and _engine_send_telegram(msg):
         _engine_us_market_monitor._last_slot_key = slot_key
         _US_BRIEFING_LAST_OPEN_SENT = et.date() if slot_index == 1 else _US_BRIEFING_LAST_OPEN_SENT
