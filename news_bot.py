@@ -2334,13 +2334,100 @@ def _engine_telegram_title(raw_text, channel_name=""):
             return part[:240], raw
     return (candidates[0][:240] if candidates else raw[:240]), raw
 
+
+# ============================================================
+# [CORE IMMUTABLE RULE] 외신 번역 게이트
+# Google-US 및 영문 비중이 높은 뉴스는 송출 전에 한국어로 변환.
+# 번역 실패 시 영문 제목을 Telegram으로 내보내지 않는다.
+# ============================================================
+_TRANSLATION_CACHE = {}
+
+def _engine_is_mostly_english(text: str) -> bool:
+    s = str(text or "")
+    letters = re.findall(r"[A-Za-z가-힣]", s)
+    if not letters:
+        return False
+    en = len(re.findall(r"[A-Za-z]", s))
+    ko = len(re.findall(r"[가-힣]", s))
+    return en >= 12 and en > ko * 1.25
+
+def _engine_strip_foreign_publisher_suffix(title: str) -> str:
+    t = re.sub(r"\s+", " ", str(title or "")).strip()
+    # RSS title에 붙는 매체명/도메인 꼬리표 제거.
+    t = re.sub(r"\s+[-–—|]\s*(?:AD HOC NEWS|Simplywall\.st|simplywall\.st)\s*$", "", t, flags=re.I)
+    return t.strip()
+
+def _engine_translate_to_korean(text: str) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not text:
+        return ""
+    cached = _TRANSLATION_CACHE.get(text)
+    if cached:
+        return cached
+
+    # 이미 충분한 한국어라면 번역하지 않는다.
+    if not _engine_is_mostly_english(text):
+        _TRANSLATION_CACHE[text] = text
+        return text
+
+    try:
+        from urllib.parse import quote
+        url = (
+            "https://translate.googleapis.com/translate_a/single"
+            "?client=gtx&sl=auto&tl=ko&dt=t&q=" + quote(text)
+        )
+        r = requests.get(
+            url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=min(ENGINE_HTTP_TIMEOUT, 8),
+        )
+        if r.ok:
+            data = r.json()
+            translated = "".join(
+                str(x[0]) for x in (data[0] or []) if isinstance(x, list) and x and x[0]
+            ).strip()
+            if translated and not _engine_is_mostly_english(translated):
+                _TRANSLATION_CACHE[text] = translated
+                return translated
+    except Exception as e:
+        _engine_log("warning", "[번역 실패] 외신 | %s", str(e)[:120])
+
+    # 영문 원문을 그대로 송출하지 않기 위해 실패는 빈 문자열로 처리한다.
+    return ""
+
+def _engine_translate_foreign_item(source: str, title: str, extra: str):
+    title = _engine_strip_foreign_publisher_suffix(title)
+    extra = str(extra or "").strip()
+
+    needs_translation = (
+        str(source) == "Google-US"
+        or _engine_is_mostly_english(title)
+        or _engine_is_mostly_english(extra)
+    )
+    if not needs_translation:
+        return title, extra, True
+
+    ko_title = _engine_translate_to_korean(title)
+    if not ko_title:
+        _engine_log("warning", "[외신 송출차단] 한국어 번역 실패 | %s", title[:100])
+        return title, extra, False
+
+    ko_extra = extra
+    if extra and _engine_is_mostly_english(extra):
+        translated_extra = _engine_translate_to_korean(extra)
+        if translated_extra:
+            ko_extra = translated_extra
+
+    return ko_title, ko_extra, True
+
+
 def _engine_format_message(item):
     """뉴스 카드 최종 출력.
     원문 수집/필터/DB/시장상태/스케줄 로직은 변경하지 않고,
     제목·핵심요약·국내 관련성 출력만 담당한다.
     """
     category = item["category"]
-    title = str(item["title"]).strip()
+    title = _engine_strip_foreign_publisher_suffix(str(item["title"]).strip())
     # Telegram/RSS 채널의 [속보]/[단독]/[특징주] 표기는 제목에서 제거한다.
     title = re.sub(r"^\s*(?:\[(?:속보|단독|특징주|종합|긴급)\]\s*)+", "", title).strip()
     companies = item.get("companies", [])
@@ -2604,6 +2691,12 @@ def _engine_is_within_recent_window(published, window_minutes=60):
 def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
     if not title:
+        return False
+
+    # 외신은 여기서 단 한 번만 번역한다.
+    # 이후 🔎/테마/관련주/출력은 동일한 한국어 분석 원문을 사용한다.
+    title, extra, translation_ok = _engine_translate_foreign_item(source, title, extra)
+    if not translation_ok:
         return False
 
     # 사용자가 원치 않는 [그로쓰리서치] 속보/단독/특징주 채널은 원천 제외.
