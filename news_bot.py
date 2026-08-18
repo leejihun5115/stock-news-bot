@@ -411,7 +411,13 @@ _logger.info("[정상] 국내뉴스=시장반영형 | 텔레그램/유튜브=최
 _logger.info("============================================================")
 
 # requests를 사용하는 기존 함수는 수정하지 않고, 모든 HTTP 요청을 자동 진단한다.
-# 정상 요청은 기록하지 않고 실패만 간략하게 기록한다.
+# 정상 요청은 기록하지 않고 실패만 짧게 기록한다.
+def _log_http_target(url):
+    try:
+        return urlparse(str(url)).netloc or str(url).split("/")[0]
+    except Exception:
+        return "외부서버"
+
 try:
     _original_session_request = requests.sessions.Session.request
 
@@ -425,20 +431,19 @@ try:
                 target = _redact_url(getattr(response, "url", url))
                 # 유튜브 404는 호출부의 채널ID 실패 로그와 중복되므로 생략한다.
                 if not ("youtube.com" in str(target).lower() and response.status_code == 404):
-                    _logger.error(
-                        "[HTTP 실패] %s %s | %s %s | %.2fs",
-                        str(method).upper(), target,
-                        response.status_code,
-                        getattr(response, "reason", "") or "HTTP 오류",
-                        elapsed
+                    status = int(response.status_code)
+                    level_fn = _logger.warning if status in (408, 425, 429) or status >= 500 else _logger.error
+                    level_fn(
+                        "[HTTP 일시실패] %s | %s",
+                        _log_http_target(target), status
                     )
             else:
                 pass  # 정상 요청은 로그에 남기지 않음
             return response
         except Exception as _e:
             _logger.error(
-                "[HTTP 오류] %s %s | %.2fs | %s: %s",
-                method, _redact_url(url), time.time() - started, type(_e).__name__, _e
+                "[HTTP 오류] %s | %s",
+                _log_http_target(url), type(_e).__name__
             )
             raise
 
@@ -504,7 +509,7 @@ ENABLE_DART = _env_flag("ENABLE_DART")                           # DART 공시
 ENABLE_NAVER_NEWS = _env_flag("ENABLE_NAVER_NEWS")               # 네이버 뉴스
 ENABLE_BLOG = _env_flag("ENABLE_BLOG")                           # 분석 블로그
 ENABLE_YOUTUBE = _env_flag("ENABLE_YOUTUBE")                     # 유튜브
-ENABLE_SCHEDULE_REMINDERS = _env_flag("ENABLE_SCHEDULE_REMINDERS")   # 일정 07:00/19:00 뉴스
+ENABLE_SCHEDULE_REMINDERS = _env_flag("ENABLE_SCHEDULE_REMINDERS")   # 일정 D-7/D-3 리마인더
 ENABLE_IPO_ALERTS = _env_flag("ENABLE_IPO_ALERTS")               # 신규상장(IPO) 알림
 
 _SOLO_MODE_ALIASES = {
@@ -1056,10 +1061,42 @@ US_MARKET_INDICES = [
 ENGINE_INTERVAL = 60
 
 # ============================================================
+# [필수 규칙 모음] 뉴스/로그/부팅 동작을 통제하는 단일 기준
+# ------------------------------------------------------------
+# 01. 부팅 즉시 최신 뉴스 1회 수집 후 일반 60분 모드로 전환
+# 02. 부팅 수집은 최대 6시간 범위에서 미송출 뉴스만 선별
+# 03. 기존 seen 상태는 유지하여 같은 링크를 무조건 재송출하지 않음
+# 04. 로그는 실제 뉴스 화면과 같은 분류명/아이콘을 우선 사용
+# 05. 정상 처리의 세부 원문/URL/HTTP 시간은 기본 로그에서 숨김
+# 06. [제외] 개별 뉴스는 기본 INFO 로그에 남기지 않음
+# 07. 오류/경고만 즉시 눈에 띄게 표시
+# 08. 일정은 실제 미래일정일 때만 '📅 일정'으로 표시
+# 09. 개발용 상세 로그는 debug로만 남기며 운영 화면을 오염시키지 않음
+# 10. 이 구역의 상수만 바꿔 부팅/로그 정책을 통제한다.
+# ============================================================
+MANDATORY_RULES = {
+    "BOOT_IMMEDIATE_NEWS": True,
+    "BOOT_NEWS_WINDOW_MINUTES": 360,
+    "BOOT_MAX_SEND_PER_CYCLE": 20,
+    "NORMAL_NEWS_WINDOW_MINUTES": 60,
+    "KEEP_SEEN_STATE": True,
+    "LOG_USE_NEWS_TERMS": True,
+    "LOG_HIDE_NORMAL_EXCLUSIONS": True,
+    "LOG_HIDE_VERBOSE_HTTP_DETAILS": True,
+    "SCHEDULE_FUTURE_ONLY": True,
+}
+
+_ENGINE_WARM_START_ACTIVE = bool(MANDATORY_RULES["BOOT_IMMEDIATE_NEWS"])
+ENGINE_BOOT_WINDOW_MINUTES = int(MANDATORY_RULES["BOOT_NEWS_WINDOW_MINUTES"])
+ENGINE_BOOT_MAX_SEND_PER_CYCLE = int(MANDATORY_RULES["BOOT_MAX_SEND_PER_CYCLE"])
+ENGINE_NORMAL_NEWS_WINDOW_MINUTES = int(MANDATORY_RULES["NORMAL_NEWS_WINDOW_MINUTES"])
+
+
+# ============================================================
 # [일정 DB / 1년 과거 특징주·급등뉴스 + 중요 공시 + 미국/기업 일정]
 # - 과거 약 1년의 특징주/급등/상한가/대형재료 뉴스에서 미래 일정만 추출
 # - 뉴스 속 일정은 큰 이벤트만 저장
-# - DART는 모든 공시를 일정 엔진에 먼저 검사하고, 뉴스 노출 필터는 별도로 적용
+# - DART는 급등 가능성이 있는 주요 공시만 일정화
 # - 미국 시장/기업 일정은 가까운 날짜순으로 병합
 # - 매일 KST 07:00 / 19:00에 한 번씩 자동 전송
 # ============================================================
@@ -1070,15 +1107,7 @@ SCHEDULE_LOOKBACK_DAYS = max(30, int(os.environ.get("NEWS_BOT_SCHEDULE_LOOKBACK_
 SCHEDULE_FORWARD_DAYS = max(7, int(os.environ.get("NEWS_BOT_SCHEDULE_FORWARD_DAYS", "120")))
 SCHEDULE_MAX_ITEMS = max(10, int(os.environ.get("NEWS_BOT_SCHEDULE_MAX_ITEMS", "80")))
 SCHEDULE_BOOTSTRAP_MAX_CHECKED = max(1000, int(os.environ.get("NEWS_BOT_SCHEDULE_BOOTSTRAP_MAX_CHECKED", "6000")))
-SCHEDULE_DAILY_FORWARD_DAYS = max(30, int(os.environ.get("NEWS_BOT_SCHEDULE_DAILY_FORWARD_DAYS", "365")))
-# 일정 수집은 단일 RSS에 의존하지 않는다.
-# 01 뉴스/네이버 02 DART 03 Telegram/YouTube 04 공식 거시일정 05 1년 초기검색을
-# 모두 중앙 일정DB로 보내고, 소스 실패는 다른 루트를 막지 않는다.
-SCHEDULE_OFFICIAL_TIMEOUT = max(8, int(os.environ.get("NEWS_BOT_SCHEDULE_OFFICIAL_TIMEOUT", "20")))
-SCHEDULE_OFFICIAL_ENABLED = _env_flag("ENABLE_OFFICIAL_SCHEDULES", True)
-SCHEDULE_FOMC_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
-SCHEDULE_BLS_CPI_ICS = "https://www.bls.gov/schedule/news_release/bls.ics"
-SCHEDULE_BEA_URL = "https://www.bea.gov/news/schedule/full"
+SCHEDULE_DAILY_FORWARD_DAYS = max(30, int(os.environ.get("NEWS_BOT_SCHEDULE_DAILY_FORWARD_DAYS", "180")))
 SCHEDULE_BOOTSTRAP_QUERIES = [
     '특징주 상한가 급등 일정 발표 예정',
     '상한가 종목 재료 일정 실적 발표 임상 승인',
@@ -1094,35 +1123,8 @@ SCHEDULE_MAJOR_WORDS = {
     '수주','공급계약','계약 체결','공급 개시','양산','출시','상용화','기술이전',
     '마일스톤','주주총회','합병','분할','공개매수','증자','신규시설투자','증설',
     'FOMC','CPI','PCE','고용지표','금리결정','잭슨홀','GDP','ISM','소비자물가',
-    '개최일','개최 예정','납입일','상장일','신주상장','배당기준일','배당지급일','지급일',
-    '전환청구기간','청약일','청약기간','예정일','결정일','시행일','공급개시일','양산일',
 }
 SCHEDULE_NOISE_WORDS = {'텔레그램','조회수','좋아요','구독','광고','이벤트','쿠폰','게시','업로드'}
-
-# ============================================================
-# [SCHEDULE_RULES] 일정 판정 규칙은 이 블록 하나에서만 관리한다.
-# 뉴스/DART/텔레그램/브리핑 쪽에 일정 조건을 중복 정의하지 않는다.
-# ============================================================
-SCHEDULE_RULES = {
-    'display_days': max(30, int(os.environ.get('NEWS_BOT_SCHEDULE_DISPLAY_DAYS', '62'))),
-    'new_window_hours': max(1, int(os.environ.get('NEWS_BOT_SCHEDULE_NEW_WINDOW_HOURS', '24'))),
-    'strong': {
-        'S1': ('주주총회','합병','분할','공개매수','유상증자','제3자배정','감자','신주상장','상장예정','CB','전환사채','BW','신주인수권부사채','보호예수','락업','배당기준일','배당지급일','대규모 수주','초대형 수주','공급계약','기술수출','기술이전','마일스톤','임상 결과','FDA','EMA','허가','승인','양산','상용화','대규모 투자','신규시설투자'),
-        'S2': ('실적발표','실적 발표','잠정실적','IR','기업설명회','컨퍼런스콜','임상시험','신제품 출시','서비스 출시','주요 재판','정부정책 시행'),
-        'S3': ('행사','전시회','세미나','컨퍼런스','포럼'),
-    },
-    'event_words': ('개최','예정','납입','상장','기준일','지급일','전환청구','청약','합병','분할','감자','신주','임상','허가','승인','공급','수주','양산','출시','마일스톤','기술이전','시행','해제','재판'),
-}
-SCHEDULE_DART_BOOTSTRAP_MAX_DOCS = max(50, int(os.environ.get('NEWS_BOT_SCHEDULE_DART_BOOTSTRAP_MAX_DOCS', '350')))
-SCHEDULE_DART_BOOTSTRAP_CHUNK_DAYS = max(7, int(os.environ.get('NEWS_BOT_SCHEDULE_DART_BOOTSTRAP_CHUNK_DAYS', '30')))
-SCHEDULE_DART_PAGE_LIMIT = max(1, int(os.environ.get('NEWS_BOT_SCHEDULE_DART_PAGE_LIMIT', '20')))
-SCHEDULE_DART_DOC_WORDS = (
-    '주주총회','합병','분할','유상증자','제3자배정','감자','주식교환','주식이전',
-    '신주인수권','전환사채','신주인수권부사채','자기주식','배당','공개매수',
-    '신규시설투자','타법인주식','영업양수','영업양도','주요사항보고서',
-    '증권신고서','신주상장','임상','기술이전','마일스톤','공급계약','수주',
-    '보호예수','락업','기업설명회','IR','잠정실적'
-)
 
 def _schedule_load_json(path, default):
     try:
@@ -1143,46 +1145,24 @@ def _schedule_save_json(path, obj):
         _engine_log('warning', '[일정] 상태 저장 실패 | %s | %s', path, str(e)[:120])
 
 def _schedule_append(row):
-    """중앙 일정DB upsert. 동일 event_id는 중복 저장하지 않고 변경 시 최신값으로 교체한다."""
     key = str(row.get('key') or '')
     if not key:
         key = '|'.join([str(row.get('date','')), str(row.get('title','')), str(row.get('source',''))])
         row['key'] = key
-    event_id = str(row.get('event_id') or key)
-    row['event_id'] = event_id
-    lock = globals().get('_SCHEDULE_DB_LOCK')
-    if lock is None:
-        lock = threading.RLock(); globals()['_SCHEDULE_DB_LOCK'] = lock
     try:
-        with lock:
-            rows=[]; found=False; changed=False
-            if os.path.exists(SCHEDULE_DB_FILE):
-                with open(SCHEDULE_DB_FILE, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        try:
-                            x=json.loads(line)
-                            if str(x.get('event_id') or x.get('key') or '') == event_id:
-                                found=True
-                                if x != row:
-                                    rows.append(row); changed=True
-                                else:
-                                    rows.append(x)
-                            else:
-                                rows.append(x)
-                        except Exception:
-                            continue
-            if found:
-                if not changed:
-                    return False
-                tmp=SCHEDULE_DB_FILE+'.tmp'
-                with open(tmp,'w',encoding='utf-8') as f:
-                    for x in rows: f.write(json.dumps(x,ensure_ascii=False)+'\n')
-                os.replace(tmp,SCHEDULE_DB_FILE)
-                _engine_log('info','[일정DB 업데이트] %s | %s',row.get('date',''),row.get('title','')[:90])
-                return True
-            with open(SCHEDULE_DB_FILE, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(row, ensure_ascii=False) + '\n')
-            return True
+        existing = set()
+        if os.path.exists(SCHEDULE_DB_FILE):
+            with open(SCHEDULE_DB_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        x=json.loads(line); existing.add(str(x.get('key','')))
+                    except Exception:
+                        pass
+        if key in existing:
+            return False
+        with open(SCHEDULE_DB_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(row, ensure_ascii=False) + '\n')
+        return True
     except Exception as e:
         _engine_log('warning', '[일정] DB 저장 실패 | %s', str(e)[:160])
         return False
@@ -1276,12 +1256,9 @@ def _schedule_extract_from_text(title, extra, source, published='', companies=No
     category='공시' if str(source).startswith('DART') else ('미국일정' if 'US' in str(source) or 'Google-US' in str(source) else '뉴스일정')
     tag='상한가연계' if limitup else '특징주연계' if any(x in text.lower() for x in ('특징주','급등')) else '주요뉴스'
     company_text='·'.join((companies or [])[:3])
-    event_basis_text=re.sub(r'20\d{2}[./-]\d{1,2}[./-]\d{1,2}|20\d{2}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일|\d{1,2}\s*월\s*\d{1,2}\s*일','',(str(title)+' '+snippet).lower())
-    event_basis=re.sub(r'[^0-9a-zA-Z가-힣]', '', event_basis_text)[:220]
-    event_id=f'{category}|{tag}|{company_text}|{event_basis}'
-    key=f'{dt.isoformat()}|{event_id}'
+    key=f'{dt.isoformat()}|{category}|{tag}|{company_text}|{re.sub(r"[^0-9a-zA-Z가-힣]", "", snippet.lower())[:120]}'
     return {
-        'key':key, 'event_id':event_id,
+        'key':key,
         'date':dt.isoformat(),'category':category,'source':str(source),
         'tag':tag,'companies':list((companies or [])[:5]),
         'title':str(title).strip()[:220],'detail':snippet[:300],
@@ -1296,155 +1273,16 @@ def _schedule_add_news_item(source, title, extra, link, published='', companies=
     if row:
         row['link']=str(link or '')
         if _schedule_append(row):
-            _engine_log('info','[일정DB 누적] %s | %s | %s', row['date'], row['tag'], row['title'][:90])
+            _engine_log('debug','[일정DB 누적] %s | %s | %s', row['date'], row['tag'], row['title'][:90])
             return True
     return False
-
-def _schedule_add_structured_row(dt, title, category, source, link='', detail=''):
-    """공식 일정처럼 날짜가 이미 확정된 자료를 중앙 일정DB에 직접 등록한다."""
-    try:
-        if isinstance(dt, datetime.datetime):
-            dt = dt.date()
-        if not isinstance(dt, datetime.date):
-            return False
-        today = _now_kst().date()
-        if dt < today or dt > today + datetime.timedelta(days=SCHEDULE_DAILY_FORWARD_DAYS):
-            return False
-        title = _engine_clean(str(title or '')).strip()
-        if not title:
-            return False
-        event_detail = re.sub(r'20\d{2}[./-]\d{1,2}[./-]\d{1,2}|20\d{2}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일|\d{1,2}\s*월\s*\d{1,2}\s*일','',str(detail or ''))
-        event_id = f"{category}|{re.sub(r'[^0-9a-zA-Z가-힣]', '', title.lower())[:140]}|{re.sub(r'[^0-9a-zA-Z가-힣]', '', event_detail.lower())[:120]}"
-        key = f"{dt.isoformat()}|{event_id}"
-        row = {
-            'key': key, 'event_id': event_id, 'date': dt.isoformat(), 'category': category,
-            'source': source, 'tag': '공식일정', 'companies': [],
-            'title': title[:220], 'detail': (detail or title)[:300],
-            'link': link or '', 'created_at': _now_kst().isoformat(),
-        }
-        return _schedule_append(row)
-    except Exception as e:
-        _engine_log('warning', '[일정] 공식 일정 등록 실패 | %s', str(e)[:160])
-        return False
-
-
-def _schedule_http_get(url, params=None, timeout=None, retries=2):
-    """일정 소스 전용 503/429 재시도. 한 소스 장애가 전체 엔진을 막지 않게 한다."""
-    timeout=timeout or SCHEDULE_OFFICIAL_TIMEOUT
-    last=None
-    for attempt in range(retries+1):
-        try:
-            r=requests.get(url, params=params, headers={'User-Agent':USER_AGENT}, timeout=timeout)
-            if r.ok: return r
-            last=r
-            if r.status_code not in (429,500,502,503,504): return r
-        except Exception as e:
-            last=e
-        if attempt < retries: time.sleep(1.5*(2**attempt))
-    return last if hasattr(last,'status_code') else None
-
-def _schedule_fetch_fomc_official():
-    """연준 공식 FOMC 달력에서 현재+다음 연도의 미래 회의일을 수집한다."""
-    try:
-        r=_schedule_http_get(SCHEDULE_FOMC_URL, timeout=SCHEDULE_OFFICIAL_TIMEOUT)
-        if not r.ok:
-            _engine_log('warning','[일정공식] FOMC HTTP=%s',r.status_code); return 0
-        soup=BeautifulSoup(r.text,'html.parser'); text=soup.get_text('\n',strip=True)
-        today=_now_kst().date(); added=0
-        months={m.lower():i for i,m in enumerate(['January','February','March','April','May','June','July','August','September','October','November','December'],1)}
-        years=[today.year, today.year+1]
-        for year in years:
-            section=text[text.find(str(year)):] if str(year) in text else ''
-            if not section: continue
-            for month,mo in months.items():
-                for m in re.finditer(rf'\b{month}\b\s*\n\s*(\d{{1,2}})(?:-(\d{{1,2}}))?',section,re.I):
-                    try: d1=datetime.date(year,mo,int(m.group(1)))
-                    except Exception: continue
-                    if d1 < today: continue
-                    title='FOMC 회의'+(f' ({d1.strftime("%m/%d")}-{m.group(2)})' if m.group(2) else '')
-                    if _schedule_add_structured_row(d1,title,'미국·거시','Federal Reserve',SCHEDULE_FOMC_URL): added += 1
-                    if m.group(2):
-                        try:
-                            d2=datetime.date(year,mo,int(m.group(2)))
-                            if d2 >= today and _schedule_add_structured_row(d2,title,'미국·거시','Federal Reserve',SCHEDULE_FOMC_URL): added += 1
-                        except Exception: pass
-                    break
-        _engine_log('info','[일정공식] FOMC 신규=%d',added); return added
-    except Exception as e:
-        _engine_log('warning','[일정공식] FOMC 실패 | %s',str(e)[:160]); return 0
-
-def _schedule_fetch_bls_ics():
-    """BLS 공식 ICS에서 CPI 등 공개 일정의 날짜/제목을 수집한다."""
-    try:
-        r=_schedule_http_get(SCHEDULE_BLS_CPI_ICS, timeout=SCHEDULE_OFFICIAL_TIMEOUT)
-        if not r.ok:
-            _engine_log('warning','[일정공식] BLS ICS HTTP=%s',r.status_code); return 0
-        text=r.text.replace('\\,', ',').replace('\\n',' ')
-        added=0; cur_date=None; summary=''
-        for line in text.splitlines()+['END:VEVENT']:
-            line=line.strip()
-            if line.startswith('DTSTART'):
-                val=line.split(':',1)[-1].strip()[:8]
-                try: cur_date=datetime.datetime.strptime(val,'%Y%m%d').date()
-                except Exception: cur_date=None
-            elif line.startswith('SUMMARY'):
-                summary=line.split(':',1)[-1].strip()
-            elif line=='END:VEVENT':
-                if cur_date and summary:
-                    su=summary.upper()
-                    if any(k in su for k in ('CPI','CONSUMER PRICE','EMPLOYMENT','UNEMPLOYMENT','PRODUCER PRICE','PPI','NONFARM','PAYROLL','JOB OPENINGS','IMPORT AND EXPORT PRICE','PRODUCTIVITY')):
-                        title='미국 BLS | '+summary[:120]
-                        if _schedule_add_structured_row(cur_date, title, '미국·거시', 'U.S. BLS', SCHEDULE_BLS_CPI_ICS, summary): added += 1
-                cur_date=None; summary=''
-        _engine_log('info','[일정공식] BLS CPI 신규=%d',added); return added
-    except Exception as e:
-        _engine_log('warning','[일정공식] BLS 실패 | %s',str(e)[:160]); return 0
-
-
-def _schedule_fetch_bea():
-    """BEA 공식 Release Schedule에서 GDP/PCE 등 미래 발표일을 수집한다."""
-    try:
-        r=_schedule_http_get(SCHEDULE_BEA_URL, timeout=SCHEDULE_OFFICIAL_TIMEOUT)
-        if not r.ok:
-            _engine_log('warning','[일정공식] BEA HTTP=%s',r.status_code); return 0
-        soup=BeautifulSoup(r.text,'html.parser')
-        year=_now_kst().year; added=0
-        for tr in soup.find_all('tr'):
-            cells=[_engine_clean(c.get_text(' ',strip=True)) for c in tr.find_all(['td','th'])]
-            if len(cells)<2: continue
-            blob=' | '.join(cells)
-            if not any(k in blob for k in ('GDP','Personal Income and Outlays','PCE')): continue
-            m=re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})\b',blob)
-            if not m: continue
-            mo=datetime.datetime.strptime(m.group(1),'%B').month
-            try: dt=datetime.date(year,mo,int(m.group(2)))
-            except Exception: continue
-            title='미국 '+('GDP 발표' if 'GDP' in blob else '개인소득·PCE 발표')
-            if _schedule_add_structured_row(dt,title,'미국·거시','U.S. BEA',SCHEDULE_BEA_URL,blob): added += 1
-        _engine_log('info','[일정공식] BEA 신규=%d',added); return added
-    except Exception as e:
-        _engine_log('warning','[일정공식] BEA 실패 | %s',str(e)[:160]); return 0
-
-
-def _schedule_refresh_official_sources():
-    if not SCHEDULE_OFFICIAL_ENABLED: return
-    total=0
-    for fn in (_schedule_fetch_fomc_official, _schedule_fetch_bls_ics, _schedule_fetch_bea):
-        try: total += int(fn() or 0)
-        except Exception as e: _engine_log('warning','[일정공식] 소스 실행 실패 | %s',str(e)[:160])
-    _engine_log('info','[일정공식] 전체 갱신 완료 | 신규=%d',total)
-
 
 def _schedule_bootstrap_one_year():
     state=_schedule_load_json(SCHEDULE_BOOTSTRAP_STATE,{})
     if state.get('done'):
         return
-    # 최초 1회는 최근 1년을 월/주 단위로 훑되 Google RSS 실패와 무관하게
-    # 공식 일정 소스와 실시간 수집원도 함께 초기화한다.
-    try: _schedule_refresh_official_sources()
-    except Exception as e: _engine_log('warning','[일정공식] 초기화 실패 | %s',str(e)[:160])
-    try: _schedule_bootstrap_dart_one_year()
-    except Exception as e: _engine_log('warning','[일정DART초기화] 실행 실패 | %s',str(e)[:160])
+    # 최초 1회는 최근 1년을 월/주 단위로 잘게 나눠 최대한 빠짐없이 훑는다.
+    # 특히 상한가·특징주·급등 재료를 별도 검색어로 넓게 수집한다.
     from urllib.parse import quote_plus
     today=_now_kst().date()
     start=today-datetime.timedelta(days=SCHEDULE_LOOKBACK_DAYS)
@@ -1473,102 +1311,20 @@ def _schedule_bootstrap_one_year():
         'done':True,'completed_at':_now_kst().isoformat(),
         'checked':checked,'added':added,'requests':requests_count,
         'lookback_days':SCHEDULE_LOOKBACK_DAYS,
-        'note':'최초 1년 일정 후보 검색 완료. Google RSS 실패와 무관하게 공식 일정/DART/실시간 뉴스에서 지속 누적.'
+        'note':'최초 1년 전수형 일정 후보 검색 완료. 이후 매일 뉴스/DART에서 지속 누적.'
     })
-    _engine_log('info','[일정DB] 최초 1년 전수형 초기화 완료 | 확인=%d | 신규=%d | RSS요청=%d',checked,added,requests_count)
+    _engine_log('info','📅 일정 | 신규 %d건', added)
 
-def _schedule_bootstrap_dart_one_year():
-    """최근 1년 DART 공시에서 강한 일정 후보를 직접 재검사한다. Google RSS와 독립된 필수 경로."""
-    if not DART_API_KEY:
-        _engine_log('warning','[일정DART초기화] DART_API_KEY 없음 | 건너뜀')
-        return 0
-    today=_now_kst().date(); start=today-datetime.timedelta(days=SCHEDULE_LOOKBACK_DAYS)
-    cursor=start; checked=0; docs=0; added=0; pages=0
-    try:
-        while cursor < today and docs < SCHEDULE_DART_BOOTSTRAP_MAX_DOCS:
-            end=min(today, cursor+datetime.timedelta(days=SCHEDULE_DART_BOOTSTRAP_CHUNK_DAYS-1))
-            for page in range(1,SCHEDULE_DART_PAGE_LIMIT+1):
-                if docs >= SCHEDULE_DART_BOOTSTRAP_MAX_DOCS: break
-                r=requests.get('https://opendart.fss.or.kr/api/list.json', params={
-                    'crtfc_key':DART_API_KEY,'bgn_de':cursor.strftime('%Y%m%d'),'end_de':end.strftime('%Y%m%d'),
-                    'page_no':page,'page_count':100
-                }, headers={'User-Agent':USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT)
-                pages += 1
-                if not r.ok:
-                    _engine_log('warning','[일정DART초기화] HTTP=%s | %s~%s',r.status_code,cursor,end); break
-                data=r.json()
-                if data.get('status') == '013': break
-                if data.get('status') not in ('000',None):
-                    _engine_log('warning','[일정DART초기화] status=%s | %s',data.get('status'),data.get('message')); break
-                rows=data.get('list',[]) or []
-                if not rows: break
-                for row in rows:
-                    checked += 1
-                    report=str(row.get('report_nm',''))
-                    if not any(k in report for k in SCHEDULE_DART_DOC_WORDS): continue
-                    docs += 1
-                    corp=str(row.get('corp_name','')); rno=str(row.get('rcept_no',''))
-                    link=f'https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rno}'
-                    added += _schedule_extract_dart_original(rno,corp,report,link)
-                    if docs >= SCHEDULE_DART_BOOTSTRAP_MAX_DOCS: break
-                if len(rows) < 100: break
-            cursor=end+datetime.timedelta(days=1)
-        _engine_log('info','[일정DART초기화] 최근 %d일 검사 완료 | 공시=%d | 원문검사=%d | 신규/변경=%d | API=%d',SCHEDULE_LOOKBACK_DAYS,checked,docs,added,pages)
-        return added
-    except Exception as e:
-        _engine_log('warning','[일정DART초기화] 실패 | %s',str(e)[:160]); return added
-
-def _schedule_extract_dart_original(rcept_no, corp, report, link):
-    """OpenDART 원문 ZIP을 필요한 공시만 대상으로 조회해 미래 이벤트 날짜를 추출한다."""
-    if not DART_API_KEY or not rcept_no:
-        return 0
-    if not any(k in report for k in SCHEDULE_DART_DOC_WORDS):
-        return 0
-    try:
-        import io, zipfile
-        url='https://opendart.fss.or.kr/api/document.xml'
-        r=requests.get(url, params={'crtfc_key':DART_API_KEY,'rcept_no':str(rcept_no)}, timeout=max(30, ENGINE_HTTP_TIMEOUT))
-        if not r.ok:
-            _engine_log('warning','[일정DART원문] HTTP=%s | %s',r.status_code,corp); return 0
-        z=zipfile.ZipFile(io.BytesIO(r.content))
-        raw='\n'.join(z.read(n).decode('utf-8','ignore') for n in z.namelist() if n.lower().endswith(('.xml','.html','.htm','.txt')))
-        text=BeautifulSoup(raw,'html.parser').get_text(' ',strip=True) if '<' in raw else raw
-        text=_engine_clean(text)
-        today=_now_kst().date(); added=0
-        # 날짜 주변에 실제 이벤트 표현이 있는 경우만 일정화한다.
-        pats=[
-            r'20\d{2}[./-]\d{1,2}[./-]\d{1,2}',
-            r'20\d{2}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일',
-            r'\d{1,2}\s*월\s*\d{1,2}\s*일'
-        ]
-        for pat in pats:
-            for m in list(re.finditer(pat,text))[:80]:
-                raw_date=m.group(0); dt=_schedule_parse_date(raw_date,today)
-                if not dt or dt < today or dt > today+datetime.timedelta(days=SCHEDULE_DAILY_FORWARD_DAYS): continue
-                snippet=text[max(0,m.start()-180):min(len(text),m.end()+220)]
-                event_words=('주주총회','개최','납입','상장','배당기준일','배당지급일','지급일','전환청구','청약','합병','분할','감자','신주','임상','허가','승인','공급','수주','양산','출시','마일스톤','기술이전','시행')
-                if not any(w in snippet for w in event_words): continue
-                title=f'{corp} | {report}'
-                if _schedule_add_structured_row(dt,title,'공시','DART',link,snippet): added += 1
-                if added >= 20: break
-            if added >= 20: break
-        if added:
-            _engine_log('info','[일정DART원문] %s | 미래일정=%d',corp,added)
-        return added
-    except Exception as e:
-        _engine_log('warning','[일정DART원문] 실패 | %s | %s',corp,str(e)[:140]); return 0
-
-def _schedule_add_dart_row(report, corp, link, rcept_dt, rcept_no=''):
-    # 접수일 자체는 일정이 아니다. 제목에 날짜가 있으면 먼저 가볍게 검사하고,
-    # 일정성 공시는 OpenDART 원문까지 확인해 미래 이벤트 날짜를 추가한다.
-    row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt)
+def _schedule_add_dart_row(report, corp, link, rcept_dt):
+    # 접수일 자체는 과거일이므로 일정으로 넣지 않는다. 다만 보고서명에 미래 이벤트 날짜가 포함된 경우에만 추출한다.
+    row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt, limitup=False)
     if row:
-        row['link']=link; _schedule_append(row)
-    _schedule_extract_dart_original(rcept_no,corp,report,link)
+        row['link']=link
+        _schedule_append(row)
 
 def _schedule_daily_message():
     today=_now_kst().date()
-    end=today+datetime.timedelta(days=SCHEDULE_RULES['display_days'])
+    end=today+datetime.timedelta(days=SCHEDULE_DAILY_FORWARD_DAYS)
     rows=[]
     seen=set()
     for r in _schedule_load_rows():
@@ -1594,14 +1350,7 @@ def _schedule_daily_message():
         tag=html.escape(str(r.get('tag','')))
         companies='·'.join([str(x) for x in (r.get('companies') or [])[:3]])
         suffix=(f' | {html.escape(companies)}' if companies else '')
-        marker=''
-        try:
-            created=datetime.datetime.fromisoformat(str(r.get('created_at','')).replace('Z','+00:00'))
-            if created.tzinfo is None: created=created.replace(tzinfo=_KST)
-            if (_now_kst()-created.astimezone(_KST)).total_seconds() <= SCHEDULE_RULES['new_window_hours']*3600:
-                marker='🆕 '
-        except Exception: pass
-        lines.append(f'• {marker}[{cat}] {detail}{suffix}')
+        lines.append(f'• [{cat}] {detail}{suffix}')
         if r.get('link'):
             lines.append(f'<a href="{html.escape(str(r["link"]),quote=True)}">🔗 원문</a>')
     lines += ['', '※ 특징주·급등 재료와 직접 연결되는 주요 일정 및 고영향 공시만 선별.']
@@ -1613,9 +1362,6 @@ def _engine_schedule_daily_monitor():
     if now.hour==7 and now.minute < 2: slot='07'
     elif now.hour==19 and now.minute < 2: slot='19'
     if not slot: return
-    # 07/19시마다 공식 일정 소스를 다시 확인해 신규/변경 일정을 DB에 반영한다.
-    try: _schedule_refresh_official_sources()
-    except Exception as e: _engine_log('warning','[일정공식] 정기 갱신 실패 | %s',str(e)[:160])
     state=_schedule_load_json(SCHEDULE_STATE_FILE,{})
     key=f'{now.date().isoformat()}-{slot}'
     if state.get('last_sent')==key: return
@@ -2673,7 +2419,7 @@ def _engine_summary(title, extra, companies, market_hits):
         # 해외 뉴스는 원인/시장재료만 요약하고 국내 종목은 별도의 엄격한 알고리즘에서 선정한다.
         core = "·".join(market_hits[:4] or ["해외 시장 재료"])
     elif market_hits:
-        core = "시장 핵심 재료 → " + "·".join(market_hits[:4])
+        core = "🔎 " + "·".join(market_hits[:4])
     else:
         core = ""
     return core, _engine_schedule(text)
@@ -2744,9 +2490,92 @@ def _engine_is_commercial_value(item, title, keypoint=""):
     text = _engine_clean(f"{title} {keypoint} {item.get('extra','')}").lower()
     return any(str(w).lower() in text for w in COMMERCIAL_VALUE_WORDS)
 
+_TRANSLATE_CACHE = {}
+
+def _engine_is_english_title(text):
+    t = re.sub(r"[^A-Za-z가-힣]", "", str(text or ""))
+    if not t:
+        return False
+    en = len(re.findall(r"[A-Za-z]", t))
+    ko = len(re.findall(r"[가-힣]", t))
+    return en >= 12 and en > max(ko * 2, 8)
+
+def _engine_clean_foreign_title(title):
+    t = _engine_clean(str(title or ""))
+    # Google News가 붙이는 매체명 접미사 제거
+    t = re.sub(r"\\s+[-–—|]\\s+(?:The Times of India|Coin Gabbar|Reuters|Bloomberg|CNBC|Yahoo Finance|MarketWatch|Investing\\.com|Business Insider)\\s*$", "", t, flags=re.I)
+    return t.strip(" -–—|")
+
+def _engine_translate_to_korean(text):
+    t = _engine_clean_foreign_title(text)
+    if not t or not _engine_is_english_title(t):
+        return t
+    key = t.lower()
+    if key in _TRANSLATE_CACHE:
+        return _TRANSLATE_CACHE[key]
+    try:
+        r = requests.get(
+            "https://translate.googleapis.com/translate_a/single",
+            params={"client":"gtx", "sl":"auto", "tl":"ko", "dt":"t", "q":t},
+            headers={"User-Agent": USER_AGENT}, timeout=min(ENGINE_HTTP_TIMEOUT, 10)
+        )
+        r.raise_for_status()
+        data = r.json()
+        translated = "".join(str(x[0]) for x in (data[0] if data and isinstance(data[0], list) else []) if x and x[0]).strip()
+        if translated and not _engine_is_english_title(translated):
+            _TRANSLATE_CACHE[key] = translated
+            return translated
+    except Exception as e:
+        _engine_log("warning", "[외신 번역 실패] %s", str(e)[:120])
+    return t
+
+def _engine_keypoint(text, title=""):
+    """기자식 부제목. 단순 등락어만 남기지 않고 주제+구체적 사실을 짧게 만든다."""
+    text = _engine_clean(str(text or ""))
+    if not text:
+        return ""
+    text = re.sub(r"^\s*(?:📌|🎯|🔎)\s*", "", text)
+    text = re.sub(r"^\s*(?:\[)?(?:속보|단독|특징주|리포트|특허)(?:\])?\s*[:：|\-—]*\s*", "", text, flags=re.I)
+    parts = [p.strip(" -•|\t") for p in re.split(r"(?<=[.!?。])\s+|\n+", text) if p.strip()]
+    if not parts:
+        return ""
+    title_norm = re.sub(r"[^가-힣A-Za-z0-9]", "", str(title).lower())
+    scored=[]
+    for p in parts[:8]:
+        pn=re.sub(r"[^가-힣A-Za-z0-9]", "", p.lower())
+        if title_norm and pn and (pn==title_norm or (len(title_norm)>=25 and title_norm in pn)):
+            continue
+        score = 0
+        if re.search(r"\d|%|억|조|달러|원", p): score += 3
+        if re.search(r"계약|수주|공급|실적|영업이익|매출|FDA|허가|승인|임상|법안|정책|금리|인플레|배당|투자|출시|양산|특허|소송", p, re.I): score += 3
+        if re.search(r"급등|급락|상승|하락|강세|약세", p): score -= 2
+        score += max(0, 2-abs(len(p)-85)//60)
+        scored.append((score,p))
+    if not scored:
+        return ""
+    best=max(scored,key=lambda x:x[0])[1]
+    # 기자식 종결로 압축
+    best=re.sub(r"(?:하고 있습니다|하고있습니다|전망입니다|알려졌습니다|나타났습니다|기록했습니다|밝혔습니다|전했습니다)\.?$", "", best).strip()
+    # 단순 등락만 남으면 제거
+    bare=re.sub(r"[^가-힣A-Za-z]", "", best).lower()
+    if bare in {"급등","급락","상승","하락","강세","약세","호재","악재"}:
+        return ""
+    return best[:240]
+
 def _engine_telegram_title(raw_text, channel_name=""):
     """텔레그램 본문에서 실제 기사 제목만 추출한다. [그로쓰리서치] 속보/단독 특징주는 직접 중계하지 않는다."""
     raw = _engine_clean(raw_text)
+    if not raw:
+        return "", ""
+    # 텔레그램 재전송 채널의 홍보 헤더는 기사 제목/요약에서 완전히 제거한다.
+    raw = re.sub(
+        r"(?is)세상의\s*모든\s*뉴스\s*-\s*좋은뉴스\s*,?\s*단독\s*,?\s*속보\s*,?\s*리포트\s*,?\s*특허\s*,?\s*타\s*채널\s*뉴스\s*-\s*세모뉴\s*",
+        " ",
+        raw,
+    )
+    # 분류 라벨이 문장 앞이 아니라 중간에 붙어도 출력에서는 제거한다.
+    raw = re.sub(r"(?i)(?:\[\s*(?:속보|단독|특징주|리포트|특허)\s*\]|(?:속보|단독|특징주|리포트|특허))\s*(?=[:：|\-—\s])", " ", raw)
+    raw = _engine_clean(raw)
     if not raw:
         return "", ""
     low = raw.lower()
@@ -2764,15 +2593,23 @@ def _engine_telegram_title(raw_text, channel_name=""):
         if any(x in part for x in ["구독", "받기", "실시간 특징주 받기", "채널", "텔레그램"]):
             continue
         if "view/" in part or "t.me/" in part:
-            continue
+            part = re.sub(r"https?://\S+", " ", part, flags=re.I)
+            part = _engine_clean(part)
         if part.startswith("[그로쓰리서치]") or "[그로쓰리서치]" in part:
+            continue
+        # 텔레그램 본문에 붙는 분류 라벨은 검색 키워드로는 허용하지만
+        # 실제 기사 제목/텔레그램 출력 제목에서는 제거한다.
+        part = re.sub(r"(?i)^\s*\[(?:속보|단독|특징주|리포트|특허)\]\s*", "", part)
+        part = re.sub(r"^\s*(?:속보|단독|특징주|리포트|특허)\s*[:：|\-—]*\s*", "", part)
+        if not part:
             continue
         candidates.append(part)
     # 가장 먼저 등장하는 충분히 긴 기사형 문장을 제목으로 사용.
     for part in candidates:
         if len(re.sub(r"[^가-힣A-Za-z0-9]", "", part)) >= 8:
-            return part[:240], raw
-    return (candidates[0][:240] if candidates else raw[:240]), raw
+            return part[:240], part[:1200]
+    fallback = candidates[0][:240] if candidates else raw[:240]
+    return fallback, fallback[:1200]
 
 def _engine_format_message(item):
     """뉴스 카드 최종 출력.
@@ -2793,12 +2630,19 @@ def _engine_format_message(item):
     source_raw = str(item.get("source", ""))
     source_display = "🇺🇸" if source_raw == "Google-US" else source_raw
     time_text = str(item.get("time_text", "")).strip()
+    is_foreign = source_raw == "Google-US"
+    if is_foreign:
+        title = _engine_translate_to_korean(title)
+    # 어떤 입력에서든 과거에 붙은 🥇는 제거하고 종목 앞 ⚡️만 유지
+    title = title.replace("🥇", "").strip()
 
     freshness, prev = _engine_freshness(item)
 
     header = f"<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>"
     if time_text:
         header += f"                                      🕐 {html.escape(time_text)}"
+    if is_foreign:
+        header = "<b>🌎 외신</b>\n" + header
 
     # 상용화 가치가 있는 뉴스는 제목 맨 앞에 🎯를 붙여 한눈에 식별한다.
     if _engine_is_commercial_value(item, title, "") and not title.startswith("🎯"):
@@ -2858,7 +2702,16 @@ def _engine_format_message(item):
 
         return text[:260]
 
-    keypoint = _compact_keypoint(core)
+    keypoint = _engine_keypoint(core, title) or _engine_keypoint(extra, title)
+    # 단순 등락어가 나오지 않도록 최소한의 주제 라벨+구체 사실을 확보한다.
+    if not keypoint:
+        low_text = _engine_clean(f"{title} {extra}")
+        topic = "실적" if re.search(r"매출|영업이익|순이익|실적", low_text, re.I) else (
+            "FDA·허가·특허" if re.search(r"FDA|허가|승인|특허|임상", low_text, re.I) else (
+            "수주·계약" if re.search(r"수주|계약|공급", low_text, re.I) else (
+            "정책·법안" if re.search(r"법안|정책|정부", low_text, re.I) else "주요 내용")))
+        fact = _engine_keypoint(_engine_clean(f"{title} {extra}"), "")
+        keypoint = f"{topic} → {fact}" if fact else ""
 
     # extra에 실제 수치/금액/확정·예정 정보가 있고 summary에 없으면 보강.
     if extra:
@@ -2912,13 +2765,10 @@ def _engine_format_message(item):
                 if name:
                     detail = " | ".join(x for x in (theme, reason) if x)
                     badge = str(row.get("badge") or "🔎 관심종목")
-                    # 국내 관심종목으로 최종 선정된 종목명 앞에는 항상 👍를 붙인다.
-                    # 제목이 🎯로 판정된 강한 뉴스는 해당 종목 앞에 🥇를 추가해 즉시 식별한다.
-                    # 대장주/관찰 순위 표시는 이제 ☑️ 체크 이미지로 통일한다.
-                    us_flag = "🇰🇷 " if source_raw == "Google-US" else ""
-                    strong_stock_flag = "🥇 " if title.lstrip().startswith("🎯") else ""
+                    # 국내 관심종목은 항상 ⚡️ 종목명 형식으로만 표시한다. 🥇는 사용하지 않는다.
+                    strong_stock_flag = ""
                     lines.append(
-                        f"{html.escape(badge)} — {strong_stock_flag}⚡️ <b>{us_flag}{html.escape(name)}</b>"
+                        f"{html.escape(badge)} — {strong_stock_flag}⚡️ <b>{html.escape(name)}</b>"
                         + (f" /// {html.escape(detail[:360])}" if detail else "")
                     )
             elif row:
@@ -2959,14 +2809,25 @@ def _engine_format_message(item):
             schedule_text
         )
         if any(w in schedule_text for w in future_words) or date_like:
-            lines.extend(["📅 일정", html.escape(schedule_text[:260])])
+            # 일정은 날짜를 제목과 같은 줄에 두고 각 항목은 ✔로 정리한다.
+            mdate = re.search(r"(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)", schedule_text)
+            date_label = mdate.group(1).replace(".", ".") if mdate else ""
+            body = schedule_text
+            if mdate:
+                body = re.sub(re.escape(mdate.group(1)), "", body, count=1).strip(" -–—:|")
+            lines.append(f"📅 일정 {date_label}".strip())
+            for part in re.split(r"[\n;]+", body):
+                part = _engine_clean(part).strip(" -•|")
+                if part:
+                    lines.append(f"✔ {html.escape(part[:260])}")
 
     if item.get("link"):
         link = html.escape(str(item["link"]), quote=True)
         lines.append(f'<a href="{link}">🔗 원문 보기</a>')
 
     # 화면 줄간격은 카드 전체에서 동일하게 유지.
-    return "\n\n".join(x for x in lines if str(x).strip())
+    result = "\n\n".join(x for x in lines if str(x).strip())
+    return result.replace("🥇", "")
 
 
 def _engine_flush_pending():
@@ -2979,9 +2840,11 @@ def _engine_flush_pending():
         return 0
     candidates = list(_engine_pending)
     candidates.sort(key=_engine_score, reverse=True)
+    candidate_count = len(candidates)
     sent = 0
     cycle_keys = set()
-    for item in candidates[:ENGINE_MAX_SEND_PER_CYCLE]:
+    send_limit = ENGINE_BOOT_MAX_SEND_PER_CYCLE if _ENGINE_WARM_START_ACTIVE else ENGINE_MAX_SEND_PER_CYCLE
+    for item in candidates[:send_limit]:
         key = item["key"]
         if key in cycle_keys:
             continue
@@ -3005,8 +2868,9 @@ def _engine_flush_pending():
             _engine_record_global_briefing(item)
             _engine_record_historical_case(item)
             sent += 1
-            _engine_log("info", "[성공] %s | 송출", item["category"])
-    _engine_log("info", "[송출결과] 후보=%d | 묶음차단=0 | 재탕차단=0 | 전송=%d", len(_engine_pending), sent)
+            _engine_log("info", "[신규] %s", item["title"][:90])
+    if candidate_count or sent:
+        _engine_log("info", "[송출] 신규 %d건", sent)
     _engine_pending = []
     return sent
 
@@ -3023,10 +2887,8 @@ def _engine_is_relevant(title):
     return list(kws)[:8]
 
 
-def _engine_is_within_recent_window(published, window_minutes=60):
-    """현재 KST 기준 최근 window_minutes분 이내 뉴스만 실시간 송출 대상으로 허용한다.
-    과거 뉴스는 분석/비교 DB에서 활용할 수 있지만 현재 뉴스 송출에서는 제외한다.
-    """
+def _engine_is_within_recent_window(published, window_minutes=None):
+    """부팅 1회는 넓게 확보하고 이후에는 정상 60분만 허용한다."""
     if not published:
         return False
     dt = _engine_parse_datetime(published)
@@ -3038,7 +2900,10 @@ def _engine_is_within_recent_window(published, window_minutes=60):
     else:
         dt = dt.astimezone(now.tzinfo)
     age_seconds = (now - dt).total_seconds()
-    return 0 <= age_seconds <= window_minutes * 60
+    if window_minutes is None:
+        window_minutes = (ENGINE_BOOT_WINDOW_MINUTES if _ENGINE_WARM_START_ACTIVE
+                          else ENGINE_NORMAL_NEWS_WINDOW_MINUTES)
+    return 0 <= age_seconds <= int(window_minutes) * 60
 
 
 def _engine_process_item(source, title, link, published="", extra=""):
@@ -3049,19 +2914,17 @@ def _engine_process_item(source, title, link, published="", extra=""):
     # 사용자가 원치 않는 [그로쓰리서치] 속보/단독/특징주 채널은 원천 제외.
     growth_block = ("그로쓰리서치" in str(source)) or ("rocket_news1" in link) or ("growth_semi" in link) or ("growthbio" in link) or ("growthresearch" in link)
     if growth_block:
-        _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
+        _engine_log("debug", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
         return False
 
-    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
-    # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
-    if not _engine_is_within_recent_window(published, 60):
-        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
+    # 부팅 1회는 최근 6시간, 이후는 최근 60분만 실시간 송출.
+    if not _engine_is_within_recent_window(published):
         return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
     if not gate_ok:
-        _engine_log("info", "[제외] ⏱️ %s | %s", gate_reason, title[:80])
+        _engine_log("debug", "[제외] ⏱️ %s | %s", gate_reason, title[:80])
         return False
     if market_state == "시장시간 확인불가":
         _engine_log("warning", "[로직] 시장시간 확인 필요 | source=%s | %s", source, title[:80])
@@ -3077,7 +2940,7 @@ def _engine_process_item(source, title, link, published="", extra=""):
             return False
     if not ok:
         reason = "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
-        _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80])
+        _engine_log("debug", "[제외] %s | %s | %s", source, reason, title[:80])
         return False
     time_text = ""
     dt = _engine_parse_datetime(published)
@@ -3092,31 +2955,27 @@ def _engine_process_item(source, title, link, published="", extra=""):
                 del _US_BRIEFING_NEWS_MEMORY[:-350]
     except Exception:
         pass
-    _engine_log("info", "[후보] %s | 기업=%s | 재료=%s | %s", category, ",".join(companies[:3]) or "없음", ",".join(market_hits[:3]) or "없음", market_state)
+    _engine_log("debug", "[후보] %s | 기업=%s | 재료=%s | %s", category, ",".join(companies[:3]) or "없음", ",".join(market_hits[:3]) or "없음", market_state)
     return True
 
 
 def _engine_fetch_rss(url, source):
     started = time.time()
-    last_reason = ''
-    for attempt in range(3):
-        try:
-            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
-            if r.ok:
-                result = feedparser.parse(r.content)
-                if getattr(result, "bozo", False):
-                    _engine_log("warning", "[RSS 경고] %s | 일부 파싱 문제", source)
-                entries = getattr(result, "entries", []) or []
-                _engine_log("info", "[RSS] %s | 수집=%d건 | 시도=%d", source, len(entries), attempt+1)
-                return entries
-            last_reason = f"HTTP={r.status_code} {r.reason}"
-            if r.status_code not in (429,500,502,503,504): break
-            if attempt < 2: time.sleep(1.5*(2**attempt))
-        except Exception as e:
-            last_reason = str(e)[:160]
-            if attempt < 2: time.sleep(1.0*(2**attempt))
-    _engine_log("warning", "[RSS 일시실패] %s | %s | 다른 수집원 계속 실행", source, last_reason)
-    return []
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
+        if not r.ok:
+            _engine_log("error", "[실패] RSS | %s | 원인=%s", source, r.reason)
+            return []
+        result = feedparser.parse(r.content)
+        if getattr(result, "bozo", False):
+            _engine_log("warning", "[RSS 경고] %s | 일부 파싱 문제", source)
+        entries = getattr(result, "entries", []) or []
+        _engine_log("info", "[RSS] %s | 수집=%d건", source, len(entries))
+        return entries
+    except Exception as e:
+        log_error("RSS 수집", e, source=source, url=url)
+        return []
+
 
 def _engine_run_google_and_domestic():
     total = 0
@@ -3365,31 +3224,16 @@ def _engine_run_dart():
                 _engine_log("error", "[DART 오류] status=%s | message=%s", data.get("status"), data.get("message"))
             return
         rows = data.get("list", []) or []
-        # 하루 100건 제한을 넘는 날도 놓치지 않도록 페이지를 이어서 조회한다.
-        page=1
-        while len(rows) < 1000:
-            if len(data.get("list", []) or []) < 100: break
-            page += 1
-            if page > 10: break
-            rp=requests.get(url, params={"crtfc_key":DART_API_KEY,"bgn_de":today,"end_de":today,"page_no":page,"page_count":100}, timeout=ENGINE_HTTP_TIMEOUT)
-            if not rp.ok: break
-            dp=rp.json()
-            if dp.get("status") not in ("000",None): break
-            more=dp.get("list",[]) or []
-            if not more: break
-            rows.extend(more)
-        _engine_log("info", "[DART] 오늘 공시=%d건 | 페이지=%d", len(rows), page)
+        _engine_log("info", "[DART] 오늘 공시=%d건", len(rows))
         sent = 0
         for row in rows:
             report = row.get("report_nm", "")
-            corp = row.get("corp_name", "")
-            # 공시 뉴스 노출 필터와 일정 수집 필터를 분리한다.
-            # 어떤 공시든 미래 이벤트 날짜가 들어 있으면 일정 엔진이 먼저 검사한다.
-            title = f"{corp} | {report}"
-            link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
-            _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""), row.get("rcept_no", ""))
             if not any(k in report for k in DART_STRONG_REPORT_KEYWORDS):
                 continue
+            corp = row.get("corp_name", "")
+            title = f"{corp} | {report}"
+            link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
+            _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""))
             if _engine_process_item("DART", title, link, row.get("rcept_dt", "")):
                 sent += 1
         _engine_log("info", "[DART] 후보=%d건", sent)
@@ -3554,11 +3398,18 @@ KRX_STOCK_MOVE_THRESHOLD = 2.5
 KRX_INDEX_MOVE_THRESHOLD = 0.7
 KRX_WATCHLIST = {
     "^KS11": ("코스피", "지수"), "^KQ11": ("코스닥", "지수"),
+    "^KS200": ("KOSPI200", "지수"),
     "005930.KS": ("삼성전자", "반도체"), "000660.KS": ("SK하이닉스", "HBM"),
-    "373220.KS": ("LG에너지솔루션", "2차전지"), "207940.KS": ("삼성바이오로직스", "바이오"),
+    "042700.KS": ("한미반도체", "HBM"),
+    "267260.KS": ("HD현대일렉트릭", "전력기기"), "298040.KS": ("효성중공업", "전력기기"),
+    "010120.KS": ("LS ELECTRIC", "전력기기"),
+    "373220.KS": ("LG에너지솔루션", "2차전지"), "006400.KS": ("삼성SDI", "2차전지"),
+    "207940.KS": ("삼성바이오로직스", "바이오"), "196170.KS": ("알테오젠", "바이오"),
     "005380.KS": ("현대차", "자동차"), "000270.KS": ("기아", "자동차"),
-    "012450.KS": ("한화에어로스페이스", "방산"), "042660.KS": ("한화오션", "조선"),
+    "012450.KS": ("한화에어로스페이스", "방산"), "079550.KS": ("LIG넥스원", "방산"),
+    "042660.KS": ("한화오션", "조선"), "009540.KS": ("HD한국조선해양", "조선"),
     "035420.KS": ("NAVER", "인터넷"), "035720.KS": ("카카오", "인터넷"),
+    "105560.KS": ("KB금융", "금융"), "055550.KS": ("신한지주", "금융"),
     "USDKRW=X": ("원/달러", "환율"),
 }
 _KRX_BRIEFING_LAST_SNAPSHOT = {}
@@ -3586,31 +3437,135 @@ def _krx_intraday_events(snapshot):
         if abs(delta)>=threshold: events.append((abs(delta),symbol,q,delta))
     return sorted(events, reverse=True, key=lambda x:x[0])
 
+def _krx_theme_rotation(snapshot):
+    """장중 등락률을 테마별로 묶어 순환매 강도와 대표 대장주를 계산한다."""
+    groups = {}
+    for symbol, q in snapshot.items():
+        if symbol in {"^KS11", "^KQ11", "^KS200", "USDKRW=X"}:
+            continue
+        pct = q.get("change_pct")
+        if pct is None:
+            continue
+        theme = q.get("theme") or "기타"
+        groups.setdefault(theme, []).append(q)
+    ranked = []
+    for theme, rows in groups.items():
+        rows = sorted(rows, key=lambda x: x.get("change_pct") or -999, reverse=True)
+        avg = sum((x.get("change_pct") or 0) for x in rows) / len(rows)
+        leader = rows[0]
+        ranked.append((avg, leader.get("change_pct") or 0, theme, leader, rows))
+    return sorted(ranked, key=lambda x: (x[0], x[1]), reverse=True)
+
+
+def _krx_market_direction(snapshot):
+    kospi = snapshot.get("^KS11", {}).get("change_pct")
+    kosdaq = snapshot.get("^KQ11", {}).get("change_pct")
+    samsung = snapshot.get("005930.KS", {}).get("change_pct")
+    hynix = snapshot.get("000660.KS", {}).get("change_pct")
+    if kospi is None:
+        return "시장 방향 판단 보류", "지수 데이터 부족"
+    if samsung is not None and samsung <= -3:
+        if hynix is not None and hynix > 0:
+            return "반도체 내부 차별화", "삼성전자 약세 속 SK하이닉스 상대강세 여부 확인"
+        return "대형주 리스크 회피", "삼성전자 급락이 지수와 대형주 심리를 압박하는 구간"
+    if samsung is not None and samsung >= 2:
+        return "대형주 주도 상승", "삼성전자 강세가 유지되면 후속 수급의 확산 여부 확인"
+    if kospi < -1.0 and (kosdaq or 0) < -1.0:
+        return "시장 전반 위험회피", "지수 약세가 동반되는 만큼 신규 추격보다 상대강도 테마 선별"
+    if kospi > 1.0 or (kosdaq or 0) > 1.5:
+        return "순환매 확산", "지수 상승 속 주도 테마에서 2등·3등으로 수급이 이동하는지 확인"
+    return "혼조·순환매", "지수보다 테마별 상대강도와 대장주 유지 여부가 중요"
+
+
 def _krx_briefing_message(snapshot, et, events=None, opening=False):
-    events=events or []
-    lines=["<b>🇰🇷 [국내장 브리핑]</b>", f"🕐 {et.strftime('%H:%M KST')}", ""]
-    lines.append("<b>📊 주요 지수</b>")
-    for s in ("^KS11","^KQ11"):
-        q=snapshot.get(s)
-        if q: lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
-    lines += ["", "<b>⚡️ 주요 종목 변화</b>"]
-    rows=[]
-    for s,q in snapshot.items():
-        if s in {"^KS11","^KQ11","USDKRW=X"}: continue
-        if q.get("change_pct") is not None: rows.append(q)
-    rows.sort(key=lambda x:abs(x.get("change_pct") or 0), reverse=True)
-    shown=0
-    for q in rows[:8]:
-        pct=q.get("change_pct")
-        if abs(pct or 0)<1.0: continue
-        lines.append(f"• ⚡️ {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}")
-        shown+=1
-    if not shown: lines.append("• 주요 종목 큰 변동 없음")
-    fx=snapshot.get("USDKRW=X")
-    if fx: lines += ["", f"<b>💱 원/달러</b> · {_us_format_pct(fx.get('change_pct'))}"]
+    events = events or []
+    lines = ["<b>🇰🇷 [국내장 브리핑]</b>", f"🕐 {et.strftime('%H:%M KST')}", ""]
+
+    # 지수는 한눈에 비교할 수 있게 상승→하락 순으로 정렬
+    index_rows = []
+    for s in ("^KS11", "^KQ11"):
+        q = snapshot.get(s)
+        if q and q.get("change_pct") is not None:
+            index_rows.append(q)
+    index_rows.sort(key=lambda x: x.get("change_pct") or 0, reverse=True)
+    lines.append("<b>📊 지수 흐름</b>")
+    for q in index_rows:
+        lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+
+    k200 = snapshot.get("^KS200")
+    if k200 and k200.get("change_pct") is not None:
+        lines.append(f"• KOSPI200 {_us_direction(k200.get('change_pct'))} {_us_format_pct(k200.get('change_pct'))}")
+    lines.append("")
+
+    # 대장주: 절대등락률만이 아니라 시장 대표성과 테마 선도성을 함께 반영
+    rows = []
+    for s, q in snapshot.items():
+        if s in {"^KS11", "^KQ11", "^KS200", "USDKRW=X"}:
+            continue
+        if q.get("change_pct") is not None:
+            rows.append(q)
+    rows.sort(key=lambda x: x.get("change_pct") or 0, reverse=True)
+    gainers = [q for q in rows if (q.get("change_pct") or 0) > 0]
+    losers = [q for q in rows if (q.get("change_pct") or 0) < 0]
+
+    lines.append("<b>🚀 오늘의 주도 대장주</b>")
+    if gainers:
+        for rank, q in enumerate(gainers[:3], 1):
+            lines.append(f"{rank}등 ⚡️ {q['name']} {_us_format_pct(q.get('change_pct'))} · {q['theme']}")
+    else:
+        lines.append("• 상승 대장주 부재 — 하락 방어력이 높은 테마 확인")
+
+    themes = _krx_theme_rotation(snapshot)
+    if themes:
+        lines.append("")
+        lines.append("<b>🔄 테마 순환매</b>")
+        positive = [x for x in themes if x[0] > 0]
+        negative = [x for x in themes if x[0] < 0]
+        for rank, item in enumerate(positive[:3], 1):
+            avg, lead_pct, theme, leader, theme_rows = item
+            members = ", ".join(f"{r['name']} {_us_format_pct(r.get('change_pct'))}" for r in theme_rows[:3])
+            lines.append(f"{rank}등 {theme} · 평균 {avg:+.2f}% | 대장 ⚡️ {leader['name']} {_us_format_pct(lead_pct)}")
+            lines.append(f"   ↳ {members}")
+        if negative:
+            top_down = negative[:2]
+            lines.append("하락 테마")
+            for item in top_down:
+                avg, lead_pct, theme, leader, theme_rows = item
+                lines.append(f"• {theme} 평균 {avg:+.2f}% · ⚡️ {leader['name']} {_us_format_pct(lead_pct)}")
+
+    direction, reason = _krx_market_direction(snapshot)
+    lines += ["", "<b>🧭 시장 대응 방향</b>", f"• {direction} — {reason}"]
+
+    samsung = snapshot.get("005930.KS", {}).get("change_pct")
+    hynix = snapshot.get("000660.KS", {}).get("change_pct")
+    if samsung is not None:
+        if samsung <= -2.0:
+            lines.append("• 삼성전자 약세: 대형주 추격보다 상대강도 높은 전력기기·방산·바이오 등 후속 테마의 지지 여부를 우선 확인")
+        elif samsung >= 2.0:
+            lines.append("• 삼성전자 강세: 반도체 주도력이 유지되는지 확인하고 HBM·전력기기 등 공급망 후속주로 수급 확산 여부를 확인")
+        else:
+            lines.append("• 삼성전자 보합권: 지수보다 개별 테마 대장주의 거래·등락 지속 여부를 우선 확인")
+    if hynix is not None:
+        lines.append(f"• SK하이닉스 {_us_format_pct(hynix)}: HBM 주도력 유지 여부가 반도체·장비 순환매의 핵심")
+
+    fx = snapshot.get("USDKRW=X")
+    if fx:
+        lines += ["", f"<b>💱 원/달러</b> · {_us_format_pct(fx.get('change_pct'))}"]
+
+    # 실제 투자자별 수급 데이터가 연결될 경우 이 위치에 붙인다. 현재 파일의 무료 시세원에는 수급 필드가 없어 추정하지 않는다.
+    lines += ["", "<b>💰 시장 수급</b>", "• 현재 시세 데이터 기준: 투자자별 실시간 수급값은 미연결 — 등락률·테마 확산으로 상대수급을 판단"]
+
+    # 사용자가 요청한 상승→하락 한눈 비교: 모든 주요 종목을 한 블록으로 정렬
+    if rows:
+        lines += ["", "<b>📋 장중 등락 순서</b>"]
+        for q in gainers[:8]:
+            lines.append(f"• 🔺 ⚡️ {q['name']} {_us_format_pct(q.get('change_pct'))} · {q['theme']}")
+        for q in sorted(losers, key=lambda x: x.get('change_pct') or 0, reverse=True)[:8]:
+            lines.append(f"• ▼ ⚡️ {q['name']} {_us_format_pct(q.get('change_pct'))} · {q['theme']}")
+
     if events:
         lines += ["", "<b>🚨 장중 구조 변화</b>"]
-        for _,_,q,delta in events[:5]:
+        for _, _, q, delta in events[:5]:
             lines.append(f"• ⚡️ {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q.get('change_pct'))}")
     return "\n".join(lines)
 
@@ -4167,7 +4122,7 @@ def _us_close_briefing(snapshot, et):
                         badge = "☑️ 관찰"
                     else:
                         badge = "☑️ 관찰"
-                    strong_stock_flag = "🥇 " if title.lstrip().startswith("🎯") else ""
+                    strong_stock_flag = ""
                     why = ["동일 테마 연결"]
                     if hist:
                         why.append(f"과거 급등/상한가 사례 {hist}건")
@@ -4301,19 +4256,24 @@ def _engine_cycle():
     global _engine_last_cycle_started, _engine_last_cycle_finished
     started = time.time()
     _engine_last_cycle_started = started
-    _engine_log("info", "[주기 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
+
+    # [필수] 뉴스 먼저 → 즉시 송출 → 느린 일정/공시 수집은 후순위
+    try:
+        _engine_run_naver()
+    except Exception as e:
+        log_error("네이버 전체", e)
+    _engine_flush_pending()
+
     try:
         _engine_run_google_and_domestic()
     except Exception as e:
         log_error("국내/Google RSS 전체", e)
     try:
-        _engine_run_naver()
-    except Exception as e:
-        log_error("네이버 전체", e)
-    try:
         _engine_run_keyword_combinations()
     except Exception as e:
         log_error("키워드 조합 전체", e)
+    _engine_flush_pending()
+
     try:
         _engine_run_dart()
     except Exception as e:
@@ -4326,6 +4286,8 @@ def _engine_cycle():
         _engine_run_youtube()
     except Exception as e:
         log_error("유튜브 전체", e)
+    _engine_flush_pending()
+
     try:
         _engine_run_test_fixture()
     except Exception as e:
@@ -4346,9 +4308,9 @@ def _engine_cycle():
         _engine_schedule_daily_monitor()
     except Exception as e:
         log_error("일정 일일 브리핑", e)
-    _engine_flush_pending()
+
     _engine_last_cycle_finished = time.time()
-    _engine_log("info", "[주기 완료] %.2f초", time.time()-started)
+    _engine_log("debug", "[주기 완료] %.2f초", time.time()-started)
 
 
 
@@ -4387,9 +4349,31 @@ def _start_render_health_server():
         log_error("Render 헬스서버 시작", e, port=os.environ.get("PORT", "10000"))
 
 def _engine_main_loop():
+    global _ENGINE_WARM_START_ACTIVE
     _engine_load_seen()
     _engine_load_extended_state()
-    _engine_log("info", "[엔진] 60초 주기 시작")
+    _engine_log("info", "🚀 [신규] 부팅 즉시 뉴스 수집")
+
+    # 첫 사이클은 일정 1년 초기화보다 먼저 실행해 수정 결과를 즉시 확인한다.
+    cycle_start = time.time()
+    try:
+        _engine_cycle()
+    except Exception as e:
+        log_error("메인 사이클 치명적 오류", e)
+    finally:
+        _ENGINE_WARM_START_ACTIVE = False
+        _engine_log("info", "🟢 [정상] 최근 60분 뉴스 모드 전환")
+
+    # 뉴스 첫 송출 이후 일정 1년 초기화를 시작한다. 뉴스 부팅을 막지 않는다.
+    try:
+        schedule_bootstrap_thread = threading.Thread(
+            target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True
+        )
+        schedule_bootstrap_thread.start()
+        _engine_log("info", "📅 일정 | 1년 초기화 시작")
+    except Exception as e:
+        log_error("일정 초기화 시작", e)
+
     while True:
         cycle_start = time.time()
         try:
@@ -4414,12 +4398,6 @@ if __name__ == "__main__":
         health_thread.start()
         time.sleep(0.3)
 
-        # 1년치 특징주/급등 뉴스에서 미래 일정 DB를 최초 1회 구축한다.
-        schedule_bootstrap_thread = threading.Thread(
-            target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True
-        )
-        schedule_bootstrap_thread.start()
-
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
         _engine_log("info", "[BOOT] NAVER_HUB=%s | NAVER_LEGACY=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
                     bool(NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET),
@@ -4429,7 +4407,6 @@ if __name__ == "__main__":
                     ENABLE_US_NEWS,
                     ENABLE_TELEGRAM_CHANNELS)
         _engine_log("info", "[BOOT] 국내장브리핑=%s | 미장30분브리핑=%s | 장중감시=%s | Naver=%s | Google=%s", ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_NAVER_NEWS, ENABLE_US_NEWS)
-        _engine_log("info", "[BOOT] 중앙일정=SCHEDULE_RULES | 표시=%d일 | DART강한일정=원문검사 | 공식=FOMC/BLS/BEA", SCHEDULE_RULES['display_days'])
 
         _engine_main_loop()
     except KeyboardInterrupt:
