@@ -1273,18 +1273,19 @@ def _schedule_add_news_item(source, title, extra, link, published='', companies=
     return False
 
 def _schedule_bootstrap_one_year():
+    """최초 1회: 최근 1년을 14일 단위로 나눠 일정 후보를 구축한다.
+    이 함수는 메인 부팅 프로세스에서 호출하지 않고 schedule_updater.py에서만 실행한다.
+    """
     state=_schedule_load_json(SCHEDULE_BOOTSTRAP_STATE,{})
-    if state.get('done'):
-        return
-    # 최초 1회는 최근 1년을 월/주 단위로 잘게 나눠 최대한 빠짐없이 훑는다.
-    # 특히 상한가·특징주·급등 재료를 별도 검색어로 넓게 수집한다.
+    if state.get('initial_completed_at'):
+        return 0
     from urllib.parse import quote_plus
     today=_now_kst().date()
     start=today-datetime.timedelta(days=SCHEDULE_LOOKBACK_DAYS)
     added=0; checked=0; requests_count=0
     cursor=start
     while cursor < today and checked < SCHEDULE_BOOTSTRAP_MAX_CHECKED:
-        end=min(today,cursor+datetime.timedelta(days=14))
+        end=min(today, cursor+datetime.timedelta(days=14))
         for q in SCHEDULE_BOOTSTRAP_QUERIES:
             if checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED: break
             url=f'https://news.google.com/rss/search?q={quote_plus(q)}%20after%3A{cursor.isoformat()}%20before%3A{end.isoformat()}&hl=ko&gl=KR&ceid=KR:ko'
@@ -1300,25 +1301,56 @@ def _schedule_bootstrap_one_year():
                 row=_schedule_extract_from_text(title, extra, '일정DB/1년초기검색', e.get('published',''), limitup=('상한가' in low))
                 if row:
                     row['link']=e.get('link','') or ''
-                    if _schedule_append(row): added+=1
-        cursor=end+datetime.timedelta(days=1)
-    _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE,{
-        'done':True,'completed_at':_now_kst().isoformat(),
+                    if _schedule_append(row): added += 1
+        cursor=end + datetime.timedelta(days=1)
+    _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE, {
+        'initial_completed_at':_now_kst().isoformat(),
         'checked':checked,'added':added,'requests':requests_count,
-        'lookback_days':SCHEDULE_LOOKBACK_DAYS,
-        'note':'최초 1년 전수형 일정 후보 검색 완료. 이후 매일 뉴스/DART에서 지속 누적.'
+        'lookback_days':SCHEDULE_LOOKBACK_DAYS, 'batch_days':14,
+        'note':'최초 1년 일정 후보 구축 완료. 이후 schedule_updater.py가 매일 03:00 KST에 증분 갱신.'
     })
-    _engine_log('info','[일정DB] 최초 1년 전수형 초기화 완료 | 확인=%d | 신규=%d | RSS요청=%d',checked,added,requests_count)
+    _engine_log('info','[일정DB] 최초 1년 구축 완료 | 14일 배치 | 확인=%d | 신규=%d | RSS요청=%d',checked,added,requests_count)
+    return added
+
+def _schedule_incremental_update():
+    """최초 구축 이후 마지막 갱신일 다음날부터 오늘까지를 14일 단위로 검색한다."""
+    from urllib.parse import quote_plus
+    state=_schedule_load_json(SCHEDULE_BOOTSTRAP_STATE,{})
+    today=_now_kst().date()
+    last_raw=state.get('last_incremental_date') or state.get('initial_completed_at','')[:10]
+    try:
+        start=datetime.date.fromisoformat(last_raw) + datetime.timedelta(days=1)
+    except Exception:
+        start=today-datetime.timedelta(days=1)
+    if start >= today:
+        _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE,{**state,'last_incremental_date':today.isoformat(),'last_incremental_at':_now_kst().isoformat(),'batch_days':14})
+        _engine_log('info','[일정DB] 증분 갱신 없음 | 기준일=%s',today.isoformat())
+        return 0
+    added=0; checked=0; requests_count=0; cursor=start
+    while cursor < today:
+        end=min(today, cursor+datetime.timedelta(days=14))
+        for q in SCHEDULE_BOOTSTRAP_QUERIES:
+            url=f'https://news.google.com/rss/search?q={quote_plus(q)}%20after%3A{cursor.isoformat()}%20before%3A{end.isoformat()}&hl=ko&gl=KR&ceid=KR:ko'
+            entries=_engine_fetch_rss(url,'일정DB/03시증분')
+            requests_count += 1
+            for e in entries:
+                checked += 1
+                title=e.get('title',''); extra=e.get('summary','') or e.get('description','')
+                low=_engine_clean(f'{title} {extra}').lower()
+                if not any(x in low for x in ('특징주','급등','상한가','수주','공급계약','임상','승인','허가','실적','양산','상용화','기술이전','마일스톤','fomc','cpi','pce','고용','gdp')):
+                    continue
+                row=_schedule_extract_from_text(title, extra, '일정DB/03시증분', e.get('published',''), limitup=('상한가' in low))
+                if row:
+                    row['link']=e.get('link','') or ''
+                    if _schedule_append(row): added += 1
+        cursor=end + datetime.timedelta(days=1)
+    state.update({'last_incremental_date':today.isoformat(),'last_incremental_at':_now_kst().isoformat(),'last_incremental_checked':checked,'last_incremental_added':added,'last_incremental_requests':requests_count,'batch_days':14})
+    _schedule_save_json(SCHEDULE_BOOTSTRAP_STATE,state)
+    _engine_log('info','[일정DB] 03시 증분 완료 | 기간=%s~%s | 14일 배치 | 확인=%d | 신규=%d | RSS요청=%d',start.isoformat(),today.isoformat(),checked,added,requests_count)
+    return added
 
 def _schedule_add_dart_row(report, corp, link, rcept_dt):
-    # 접수일 자체는 과거일이므로 일정으로 넣지 않는다. 다만 보고서명에 미래 이벤트 날짜가 포함된 경우에만 추출한다.
     row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt, limitup=False)
-    if row:
-        row['link']=link
-        _schedule_append(row)
-
-def _schedule_add_dart_row(report, corp, link, rcept_dt):
-    row=_schedule_extract_from_text(f'{corp} | {report}', '', 'DART', rcept_dt)
     if row:
         row['link']=link
         _schedule_append(row)
@@ -4218,12 +4250,6 @@ if __name__ == "__main__":
         )
         health_thread.start()
         time.sleep(0.3)
-
-        # 1년치 특징주/급등 뉴스에서 미래 일정 DB를 최초 1회 구축한다.
-        schedule_bootstrap_thread = threading.Thread(
-            target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True
-        )
-        schedule_bootstrap_thread.start()
 
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
         _engine_log("info", "[BOOT] NAVER_HUB=%s | NAVER_LEGACY=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
