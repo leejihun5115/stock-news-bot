@@ -25,12 +25,10 @@ STATE_FILE = Path("content_seen.txt")
 TIMEOUT = 20
 
 # ============================================================
-# 수집 대상 소스 (텔레그램, 유튜브, 블로그 등)
+# 수집 대상 소스
 # ============================================================
 TARGET_SOURCES = [
-    # 텔레그램 예시
     ("텔레그램", "https://t.me/s/notRealDonaldTrump_kr"),
-    # 필요한 유튜브/블로그 RSS 또는 웹 주소 추가 가능
 ]
 
 SESSION = requests.Session()
@@ -92,14 +90,16 @@ def build_message(source_name, title, summary_points, url, published_time=None):
 def run():
     """순수 수집 및 전송 메인 루프"""
     logging.info("🤖 콘텐츠 수집 봇 시작")
-    send_telegram_message("🤖 <b>콘텐츠 수집 봇이 가동을 시작했습니다.</b>")
+    
+    # 수정된 안내 메시지
+    send_telegram_message("🤖 <b>텔레그램/유튜브/블로그 콘텐츠 수집 봇이 가동을 시작했습니다.</b>")
     
     seen = load_seen()
     
     while True:
         try:
-            # 여기에 각 플랫폼(텔레그램/유튜브/블로그) 크롤링 로직 수행
-            # 신규 콘텐츠 감지 시 build_message() 생성 후 send_telegram_message() 전송
+            # 여기에 각 플랫폼 크롤링 로직 연동
+            logging.info("채널 모니터링 중...")
             
             time.sleep(60)
         except Exception as e:
