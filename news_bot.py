@@ -223,6 +223,7 @@ import difflib
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
+from PIL import Image, ImageDraw, ImageFont
 # === MASTER 65-CONDITION ENGINE ===
 # 모든 최종 뉴스 판단은 이 엔진을 통과하도록 연결할 수 있다.
 _MASTER_MANAGER = MasterConditionManager(max_related=3, min_score=40.0)
@@ -2700,6 +2701,128 @@ def _engine_future_schedule(text: str) -> str:
     return ''
 
 
+MASTER_CONFIRMATION_IMAGE = os.environ.get("MASTER_CONFIRMATION_IMAGE", "master_confirmation.png")
+
+
+def _engine_master_result(item):
+    """뉴스 1건을 MASTER -> Validator -> FINAL LOCK으로 확정한다."""
+    try:
+        rows = _engine_domestic_watchlist(item)
+        candidates = []
+        for row in rows or []:
+            candidates.append({
+                "name": str(row.get("name", "")).strip(),
+                "reason": str(row.get("reason", "")).strip(),
+                "score": float(row.get("score", 0) or 0),
+                "direct": bool(row.get("direct")),
+                "theme_link": not bool(row.get("direct")),
+                "domestic_listed": True,
+            })
+        insight = _engine_news_insight(
+            str(item.get("title", "")),
+            str(item.get("extra", "")),
+            str(item.get("source", "")),
+        )
+        result = master_finalize_news(
+            title=insight.get("title") or str(item.get("title", "")),
+            body=str(item.get("extra", "")),
+            source=str(item.get("source", "")),
+            link=str(item.get("link", "")),
+            candidates=candidates,
+            schedule=_engine_future_schedule(str(item.get("extra", ""))),
+            evidence=insight.get("key_points", [])[:3],
+        )
+        _engine_log(
+            "info",
+            "[MASTER] 완료 | source=%s | 관련주=%d | 대장주=%s | stage=%s | FINAL_LOCK=%s",
+            item.get("source", ""),
+            len(result.get("related") or []),
+            (result.get("leader") or {}).get("name", "無"),
+            result.get("stage") or "없음",
+            bool(result.get("locked")),
+        )
+        return result
+    except Exception as e:
+        _engine_log("error", "[MASTER] 실패 | source=%s | 원인=%s", item.get("source", ""), str(e)[:180])
+        return None
+
+
+def _engine_master_badge(result):
+    if not result or not result.get("locked"):
+        return ""
+    related = result.get("related") or []
+    leader = result.get("leader") or {}
+    if not related or not leader.get("name"):
+        return ""
+    return (
+        f"🎯🟢 [MASTER 확정] 관련주={len(related)} | "
+        f"대장주={html.escape(str(leader.get('name')))} | "
+        f"stage={html.escape(str(result.get('stage') or '없음'))}"
+    )
+
+
+def _engine_master_image_path(result):
+    """MASTER 확정 배지 PNG를 동적으로 생성한다. 확정 뉴스에만 사용."""
+    if not result or not result.get("locked"):
+        return ""
+    related = result.get("related") or []
+    leader = result.get("leader") or {}
+    if not related or not leader.get("name"):
+        return ""
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+        out = MASTER_CONFIRMATION_IMAGE
+        if not os.path.isabs(out):
+            out = os.path.join(base, out)
+        os.makedirs(os.path.dirname(out) or base, exist_ok=True)
+        img = Image.new("RGB", (1500, 260), (5, 17, 25))
+        draw = ImageDraw.Draw(img)
+        font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+        font_big = ImageFont.truetype(font_path, 54)
+        font_small = ImageFont.truetype(font_path, 42)
+        # Green confirmation frame
+        draw.rounded_rectangle((18, 18, 1482, 242), radius=28, outline=(65, 235, 45), width=5, fill=(7, 25, 18))
+        # Target + green indicator
+        draw.ellipse((45, 75, 125, 155), fill=(55, 210, 45), outline=(180, 255, 150), width=4)
+        draw.ellipse((66, 96, 104, 134), fill=(5, 17, 25))
+        text = f"[MASTER 확정] 관련주={len(related)} | 대장주={leader.get('name')} | stage={result.get('stage') or '없음'}"
+        # Fit text to width.
+        font = font_big
+        while draw.textbbox((0,0), text, font=font)[2] > 1310 and font.size > 28:
+            font = ImageFont.truetype(font_path, font.size - 2)
+        draw.text((145, 82), text, font=font, fill=(85, 255, 45))
+        img.save(out, format="PNG", optimize=True)
+        return out
+    except Exception as e:
+        _engine_log("warning", "[MASTER] 이미지 생성 실패 | 원인=%s", str(e)[:160])
+        return ""
+
+
+def _engine_send_telegram_photo(photo_path, caption=""):
+    if not BOT_TOKEN or not CHAT_ID:
+        _engine_log("error", "[실패] Telegram 사진전송 | BOT_TOKEN/CHAT_ID 없음")
+        return False
+    if not photo_path or not os.path.exists(photo_path):
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    try:
+        with open(photo_path, "rb") as photo:
+            r = requests.post(
+                url,
+                data={"chat_id": CHAT_ID, "caption": caption[:1024], "parse_mode": "HTML"},
+                files={"photo": photo},
+                timeout=ENGINE_HTTP_TIMEOUT,
+            )
+        api_result = r.json() if r.headers.get("content-type", "").lower().startswith("application/json") else {}
+        if r.ok and api_result.get("ok", True):
+            _engine_log("info", "[성공] Telegram MASTER 이미지 전송")
+            return True
+        _engine_log("error", "[실패] Telegram MASTER 이미지 전송 | 원인=%s", api_result.get("description") or r.reason)
+    except Exception as e:
+        _engine_log("error", "[실패] Telegram MASTER 이미지 전송 | 원인=%s", str(e)[:160])
+    return False
+
+
 def _engine_format_message(item):
     """최종 뉴스 카드. AI 없이 단일 규칙 기반 분석 결과만 사용한다."""
     source_raw=str(item.get('source',''))
@@ -2718,6 +2841,10 @@ def _engine_format_message(item):
     header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
     if time_text: header += f'                                      🕐 {html.escape(time_text)}'
     lines=[header,f'<b>📌 {html.escape(title)}</b>']
+    master_result=item.get('_master_result')
+    master_badge=_engine_master_badge(master_result)
+    if master_badge:
+        lines.append('<b>'+master_badge+'</b>')
     if freshness in ('재탕','업그레이드') and prev:
         lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
     lines.append('🔎 요약')
@@ -2777,7 +2904,17 @@ def _engine_flush_pending():
         # 서로 다른 보도 링크/재보도는 차단하지 않고 반드시 [재탕]으로 송출한다.
         if key in _engine_seen:
             continue
-        if _engine_send_telegram(_engine_format_message(item)):
+        master_result = _engine_master_result(item)
+        item["_master_result"] = master_result
+        message = _engine_format_message(item)
+        master_badge = _engine_master_badge(master_result)
+        image_sent = False
+        if master_badge:
+            image_path = _engine_master_image_path(master_result)
+            if image_path:
+                image_sent = _engine_send_telegram_photo(image_path, caption=master_badge)
+        text_sent = _engine_send_telegram(message)
+        if text_sent:
             _engine_mark_seen(key)
             full_text = item["title"] + " " + item["extra"]
             _engine_sent_fingerprints.append({
@@ -2790,6 +2927,8 @@ def _engine_flush_pending():
             _engine_record_global_briefing(item)
             _engine_record_historical_case(item)
             sent += 1
+            if master_badge and not image_sent:
+                _engine_log("warning", "[MASTER] 텍스트 송출 성공 / 이미지 송출 실패")
             _engine_log("info", "[성공] %s | 송출", item["category"])
     _engine_log("info", "[송출결과] 후보=%d | 묶음차단=0 | 재탕차단=0 | 전송=%d", len(_engine_pending), sent)
     _engine_pending = []
