@@ -43,6 +43,7 @@ def run():
         logging.error("가동 알림 메시지 전송 실패")
     
     while True:
+        # 이곳에 실제 수집 및 요약 로직을 구현하시면 됩니다.
         time.sleep(60)
 
 if __name__ == "__main__":
