@@ -2536,6 +2536,8 @@ def _engine_fetch_subtitle(link: str) -> str:
 _KEYPOINT_MARKER_RE = re.compile(r"([①②③④⑤⑥⑦⑧⑨⑩]|(?<!\d)\d+[.)])\s*")
 
 def _engine_format_keypoint_lines(keypoint: str, subtitle: str = "") -> list:
+    """규칙기반(비-AI) 핵심요약을 '🔎 요약' 헤더 + '     ✔ ...' 체크마크 형식으로 조립.
+    AI 분석이 꺼져있을 때도 동일한 보기 형식을 쓰기 위함."""
     text = str(keypoint or "").strip()
     if not text:
         return []
@@ -2545,30 +2547,28 @@ def _engine_format_keypoint_lines(keypoint: str, subtitle: str = "") -> list:
     for i, m in enumerate(markers):
         start = m.end()
         end = markers[i + 1].start() if i + 1 < len(markers) else len(text)
-        marker = m.group(1)
         body = re.sub(r"🔎\s*", "", text[start:end]).strip(" .,-")
         if body:
-            segments.append((marker, body))
+            segments.append(body)
+
+    if not segments:
+        # 번호 마커가 없으면 원문 전체를 한 항목으로 취급.
+        whole = re.sub(r"🔎\s*", "", text).strip(" .,-")
+        if whole:
+            segments = [whole]
+
+    if not segments:
+        return []
 
     subtitle = str(subtitle or "").strip()
 
-    if len(segments) >= 2:
-        out_lines = []
-        for i, (marker, body) in enumerate(segments):
-            escaped = f"{marker} {html.escape(body)}"
-            if i == 0:
-                out_lines.append(f"🔎 {escaped}")
-            elif i == len(segments) - 1 and subtitle:
-                out_lines.append(f"        {escaped}   /  {html.escape(subtitle)}")
-            else:
-                out_lines.append(f"        {escaped}")
-        return out_lines
-
-    # 항목이 1개(또는 번호 없음)인 경우: 기존처럼 한 줄로 출력.
-    line = f"🔎 {html.escape(text)}"
-    if subtitle:
-        line += f"   /  {html.escape(subtitle)}"
-    return [line]
+    out_lines = ["🔎 요약"]
+    for i, body in enumerate(segments):
+        line = f"     ✔ {html.escape(body)}"
+        if i == len(segments) - 1 and subtitle:
+            line += f"   /  {html.escape(subtitle)}"
+        out_lines.append(line)
+    return out_lines
 
 
 # ============================================================
@@ -2662,13 +2662,11 @@ def _ai_format_main_lines(ai: dict) -> list:
 
     key_points = ai.get("key_points") or []
     if isinstance(key_points, list) and key_points:
-        lines.append("🔎 핵심 요약")
-        n = 0
+        lines.append("🔎 요약")
         for kp in key_points[:5]:
             kp = _engine_clean(str(kp))[:150]
             if kp:
-                n += 1
-                lines.append(f"{n}. {html.escape(kp)}")
+                lines.append(f"     ✔ {html.escape(kp)}")
 
     comparison = ai.get("comparison")
     if isinstance(comparison, dict) and isinstance(comparison.get("rows"), list) and comparison["rows"]:
@@ -2702,20 +2700,9 @@ def _ai_format_main_lines(ai: dict) -> list:
 
 
 def _ai_format_tail_lines(ai: dict) -> list:
-    """테마/종목 연결 + 최종 AI 총평 - 메시지 맨 마지막(원문 링크 바로 위)에 배치."""
+    """최종 AI 총평 - 메시지 맨 마지막(원문 링크 바로 위)에 배치.
+    테마/관련종목은 3번 관련주 섹션에서 이미 통합 표시되므로 여기서는 중복 표시하지 않는다."""
     lines = []
-
-    theme = ai.get("theme")
-    stocks = ai.get("stocks") or []
-    tag_parts = []
-    if theme and str(theme).strip().lower() not in ("null", "none", ""):
-        tag_parts.append(f"테마: {html.escape(str(theme).strip())}")
-    if isinstance(stocks, list) and stocks:
-        stock_text = ", ".join(f"⚡️{html.escape(str(s).strip())}" for s in stocks[:5] if str(s).strip())
-        if stock_text:
-            tag_parts.append(f"종목: {stock_text}")
-    if tag_parts:
-        lines.append("🏷 AI 연결 " + " · ".join(tag_parts))
 
     analysis = ai.get("ai_analysis")
     if analysis:
@@ -2863,32 +2850,42 @@ def _engine_format_message(item):
     # ------------------------------------------------------------
     # 단순 글로벌 기업명 → 국내 종목 연결 금지.
     # 실제 국내 기업/테마 연관성이 있을 때만 이유를 함께 출력한다.
+    # 형식: ✔️👀관련주 : (종목명만) / 다음 줄에 👀관련주 근거 : (이유만) 로 분리.
     domestic_rows = []
     try:
         domestic_rows = _engine_domestic_watchlist(item)
     except (NameError, AttributeError):
         domestic_rows = []
 
+    related_entries = []  # [(name, reason), ...]
     if domestic_rows:
-        related=[]
         for row in domestic_rows[:3]:
             if isinstance(row, dict):
-                name=str(row.get("name") or row.get("company") or "").strip()
-                reason=str(row.get("reason") or row.get("why") or row.get("relation") or row.get("theme") or "").strip()
+                name = str(row.get("name") or row.get("company") or "").strip()
+                reason = str(row.get("reason") or row.get("why") or row.get("relation") or row.get("theme") or "").strip()
                 if name:
-                    reason=re.sub(r"\s+"," ",reason)[:110]
-                    related.append(f"⚡️{html.escape(name)}({html.escape(reason)})" if reason else f"⚡️{html.escape(name)}")
+                    related_entries.append((name, re.sub(r"\s+", " ", reason)[:110]))
             elif row:
-                related.append(f"⚡️{html.escape(str(row)[:100])}")
-        if related:
-            lines.append("✔👀관련주 : " + " · ".join(related))
+                related_entries.append((str(row)[:100], ""))
+    elif ai_result:
+        # 검증된 국내 관심종목이 없으면, AI가 근거 있게 연결한 종목/테마로 대체 표시.
+        ai_theme = str(ai_result.get("theme") or "").strip()
+        if ai_theme.lower() in ("null", "none"):
+            ai_theme = ""
+        for s in (ai_result.get("stocks") or [])[:3]:
+            s = str(s).strip()
+            if s:
+                related_entries.append((s, ai_theme))
 
-    # 기존 로직이 companies를 통해 국내 기업을 명시적으로 확인한 경우에도
-    # 이유 없는 단순 "글로벌 기업 → 종목" 문구는 출력하지 않는다.
-    # 국내 관심종목은 _engine_domestic_watchlist()의 엄격 검증을 통과한 경우에만 출력한다.
-
-    if not domestic_rows:
-        lines.append("✔👀관련주 : 無")
+    if related_entries:
+        names_line = "✔️👀관련주 : " + " · ".join(f"⚡️{html.escape(n)}" for n, _ in related_entries)
+        lines.append(names_line)
+        reasons = [r for _, r in related_entries if r]
+        if reasons:
+            reason_line = "    👀관련주 근거 : " + " · ".join(html.escape(r) for r in reasons)
+            lines.append(reason_line)
+    else:
+        lines.append("✔️👀관련주 : 無")
 
     # ------------------------------------------------------------
     # 4) 과거 유사 급등/상한가 사례
