@@ -296,18 +296,6 @@ ENABLE_US_NEWS = _startup_env_flag("ENABLE_US_NEWS")
 ENABLE_TELEGRAM_CHANNELS = _startup_env_flag("ENABLE_TELEGRAM_CHANNELS")
 ENABLE_YOUTUBE = _startup_env_flag("ENABLE_YOUTUBE")
 
-# ------------------------------------------------------------
-# 🤖 AI 분석 단계 (Claude API) - 제목 자동생성/핵심요약 분리/
-#    공시 수치 비교(%)/원인→결과/테마·종목 연결/최종 AI 총평
-# 반드시 Render 환경변수에 ANTHROPIC_API_KEY를 넣어야 동작한다.
-# 기본값은 꺼짐(false) - 켜려면 ENABLE_AI_ANALYSIS=true 로 설정.
-# ------------------------------------------------------------
-ANTHROPIC_API_KEY = _clean_secret_env("ANTHROPIC_API_KEY")
-ENABLE_AI_ANALYSIS = _startup_env_flag("ENABLE_AI_ANALYSIS", default=False)
-AI_MODEL = os.environ.get("AI_MODEL", "claude-sonnet-4-5").strip() or "claude-sonnet-4-5"
-AI_TIMEOUT = max(5, int(os.environ.get("AI_TIMEOUT_SEC", "25")))
-AI_MIN_TEXT_LEN = max(0, int(os.environ.get("AI_MIN_TEXT_LEN", "15")))
-
 # 🔎 상세 로그 기록 강화
 # ------------------------------------------------------------
 # Render 콘솔 + news_bot.log에 동시에 기록
@@ -1351,9 +1339,6 @@ ENGINE_MAX_SEND_PER_CYCLE = 20
 ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
 
 # 외부채널(텔레그램/유튜브)은 60분을 기본으로 하며, 시장 마감 후/휴무의 강한 국내 상장기업 재료만 예외 허용한다.
-NEWS_TEST_FILE = os.environ.get("NEWS_TEST_FILE", "news_test_items.json")
-# 부팅할 때 테스트 파일을 실제 Telegram 송출까지 수행한다. 기본값 ON.
-BOOT_SEND_TEST_FIXTURE = _startup_env_flag("BOOT_SEND_TEST_FIXTURE", True)
 
 # --- 통합 확장 상태/보안 설정 ---
 HISTORICAL_SURGE_DB = os.environ.get("NEWS_BOT_HISTORICAL_DB", "news_bot_historical_surge.jsonl")
@@ -2571,376 +2556,172 @@ def _engine_format_keypoint_lines(keypoint: str, subtitle: str = "") -> list:
     return out_lines
 
 
-# ============================================================
-# 🤖 AI 분석 단계 (Claude API)
-# ============================================================
-def _ai_analyze_item(title: str, body_text: str, source: str, companies: list) -> dict:
-    """뉴스/공시 원문을 Claude에 보내 구조화된 분석을 받아온다.
-    실패/비활성/텍스트부족 시 None을 반환하고, 호출부는 기존 규칙기반 로직으로 그대로 진행한다.
-    (즉, 이 함수가 죽어도 봇 자체는 절대 죽지 않는다.)
-    """
-    if not (ENABLE_AI_ANALYSIS and ANTHROPIC_API_KEY):
-        return None
-
-    raw = _engine_clean(f"{title}\n{body_text}")
-    if len(raw) < AI_MIN_TEXT_LEN:
-        return None
-
-    company_text = ", ".join([str(c) for c in (companies or [])][:8]) or "없음"
-
-    user_prompt = f"""너는 한국 주식시장 전문 애널리스트다. 아래 뉴스/공시 원문을 분석해서
-지정된 JSON 스키마로만 답하라. 설명, 인사말, 코드블록 기호(```) 등 JSON 외의 어떤 텍스트도 포함하지 마라.
-
-[원문]
-출처: {source}
-제목: {title}
-본문/내용: {body_text[:3500]}
-언급된 기업: {company_text}
-
-[JSON 스키마 - 이 형태로만 답할 것]
-{{
-  "title": "기자가 쓴 것처럼 핵심을 압축한 한국어 제목 (25~40자, 사실만)",
-  "key_points": ["핵심 요점 1 (간결, 한 문장)", "핵심 요점 2", "..."],
-  "comparison": {{
-    "label": "예: 전년동기 대비 / 직전분기 대비 / 컨센서스 대비",
-    "rows": [
-      {{"항목": "매출", "이전": "100억", "현재": "130억", "증감률": "+30.0%"}}
-    ]
-  }},
-  "cause_effect": {{"cause": "원인 한 줄", "effect": "예상되는 결과/영향 한 줄"}},
-  "theme": "관련 테마명 또는 null",
-  "stocks": ["관련 종목명1", "관련 종목명2"],
-  "ai_analysis": "이 뉴스가 시장/종목에 어떤 의미인지 2~3문장으로 담백하게 총평"
-}}
-
-규칙:
-- 원문에 실제로 있는 사실/수치만 사용한다. 없는 숫자를 지어내지 않는다.
-- comparison은 원문에 비교 가능한 수치(이전 vs 현재, 증감률 등)가 있을 때만 rows를 채우고, 없으면 "comparison": null 로 답한다.
-- cause_effect도 원문에서 근거가 명확할 때만 채우고, 불명확하면 null로 답한다.
-- stocks/theme도 원문 근거가 없으면 빈 배열([])이나 null로 답한다. 추측성 연결 금지.
-- key_points는 최소 1개, 최대 5개. 핵심이 하나면 1개만 써도 된다.
-"""
-
-    try:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": AI_MODEL,
-                "max_tokens": 1200,
-                "system": "너는 정확성을 최우선으로 하는 한국 주식시장 애널리스트다. 반드시 순수 JSON 객체 하나만 출력한다.",
-                "messages": [{"role": "user", "content": user_prompt}],
-            },
-            timeout=AI_TIMEOUT,
-        )
-        if resp.status_code != 200:
-            _engine_log("warning", "[AI분석] HTTP실패 | status=%s | %s", resp.status_code, str(resp.text)[:200])
-            return None
-        data = resp.json()
-        text_parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
-        raw_text = "".join(text_parts).strip()
-        raw_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text, flags=re.IGNORECASE).strip()
-        m = re.search(r"\{.*\}", raw_text, flags=re.DOTALL)
-        if m:
-            raw_text = m.group(0)
-        result = json.loads(raw_text)
-        if not isinstance(result, dict):
-            return None
-        return result
-    except Exception as e:
-        _engine_log("warning", "[AI분석] 예외 | %s", str(e)[:200])
-        return None
-
-
-def _ai_format_main_lines(ai: dict) -> list:
-    """핵심요약 / 수치비교표 / 원인→결과 - 메시지 앞쪽(제목 바로 아래)에 배치."""
-    lines = []
-
-    key_points = ai.get("key_points") or []
-    if isinstance(key_points, list) and key_points:
-        lines.append("🔎 요약")
-        for kp in key_points[:5]:
-            kp = _engine_clean(str(kp))[:150]
-            if kp:
-                lines.append(f"     ✔ {html.escape(kp)}")
-
-    comparison = ai.get("comparison")
-    if isinstance(comparison, dict) and isinstance(comparison.get("rows"), list) and comparison["rows"]:
-        rows = [r for r in comparison["rows"] if isinstance(r, dict)][:6]
-        if rows:
-            label = html.escape(str(comparison.get("label") or "비교"))
-            lines.append(f"📊 수치 비교 ({label})")
-            headers = list(rows[0].keys())[:5]
-            col_w = {}
-            for h in headers:
-                col_w[h] = max(len(str(h)), max(len(str(r.get(h, ""))) for r in rows))
-            header_line = " | ".join(str(h).ljust(col_w[h]) for h in headers)
-            sep_line = "-+-".join("-" * col_w[h] for h in headers)
-            table_lines = [header_line, sep_line]
-            for r in rows:
-                table_lines.append(" | ".join(str(r.get(h, "")).ljust(col_w[h]) for h in headers))
-            table_text = "\n".join(table_lines)
-            lines.append(f"<pre>{html.escape(table_text)}</pre>")
-
-    ce = ai.get("cause_effect")
-    if isinstance(ce, dict) and (ce.get("cause") or ce.get("effect")):
-        lines.append("🧩 원인 → 결과")
-        cause = _engine_clean(str(ce.get("cause") or ""))[:150]
-        effect = _engine_clean(str(ce.get("effect") or ""))[:150]
-        if cause:
-            lines.append(f"원인: {html.escape(cause)}")
-        if effect:
-            lines.append(f"결과: {html.escape(effect)}")
-
-    return lines
-
-
-def _ai_format_tail_lines(ai: dict) -> list:
-    """최종 AI 총평 - 메시지 맨 마지막(원문 링크 바로 위)에 배치.
-    테마/관련종목은 3번 관련주 섹션에서 이미 통합 표시되므로 여기서는 중복 표시하지 않는다."""
-    lines = []
-
-    analysis = ai.get("ai_analysis")
-    if analysis:
-        analysis_text = _engine_clean(str(analysis))[:400]
-        if analysis_text:
-            lines.append("🤖 AI 분석")
-            lines.append(html.escape(analysis_text))
-
-    return lines
-
-
 def _apply_domestic_highlight(text: str, domestic_list: list) -> str:
     for c in domestic_list:
         text = re.sub(rf"(?<!⚡️)({re.escape(c)})", r"⚡️\1", text)
     return text
 
 
-def _engine_format_message(item):
-    """뉴스 카드 최종 출력.
-    원문 수집/필터/DB/시장상태/스케줄 로직은 변경하지 않고,
-    제목·핵심요약·국내 관련성 출력만 담당한다.
+def _engine_clean_telegram_meta(text: str) -> str:
+    """Telegram 전달 메타정보를 제거하고 기사 본문만 남긴다."""
+    t = _engine_clean(text or "")
+    # Forwarded from [채널] / [작성자] 같은 전달 헤더 제거
+    t = re.sub(r'Forwarded from\s*\[[^\]]+\]\s*', ' ', t, flags=re.I)
+    t = re.sub(r'^(?:루팡|전달|공유)\s*', '', t, flags=re.I)
+    t = re.sub(r'\s*\[메리츠[^\]]*\]\s*', ' ', t, flags=re.I)
+    t = re.sub(r'\s*\[[^\]]*(?:증권|리서치|전략|애널리스트|Tech|반도체|디스플레이)[^\]]*\]\s*', ' ', t, flags=re.I)
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+
+def _engine_extract_title(title: str, extra: str) -> str:
+    """전달문/채널명이 섞인 제목에서 실제 기사 제목을 추출한다."""
+    raw = _engine_clean_telegram_meta(title)
+    raw = re.sub(r'^\s*(?:\[[^\]]+\]\s*)+', '', raw).strip()
+    # 제목 뒤에 붙은 동일한 출처/본문 반복 제거
+    m = re.search(r'(?P<t>.+?\s+\(\d{6}\)\s+[^-\n]{2,120})(?:\s+-\s+|\s+[-–—]\s+)', raw)
+    if m:
+        raw = m.group('t').strip()
+    if re.search(r'Forwarded from|루팡', raw, re.I) or len(re.sub(r'[^0-9A-Za-z가-힣]', '', raw)) < 8:
+        body = _engine_clean_telegram_meta(extra)
+        # 첫 기사형 문장을 제목 후보로 사용
+        for part in re.split(r'\s{2,}|\n+', body):
+            part = part.strip(' -—|')
+            if len(re.sub(r'[^0-9A-Za-z가-힣]', '', part)) >= 10:
+                raw = part[:180]
+                break
+    return raw[:180].strip()
+
+
+def _engine_news_insight(title: str, body: str, source: str = "") -> dict:
+    """AI 없이 원문 전체를 규칙 기반으로 구조화한다.
+    사실→변화→행간→상용화/실행→시장영향을 한 번에 계산한다.
     """
-    category = item["category"]
-    title = _engine_strip_foreign_publisher_suffix(str(item["title"]).strip())
-    # Telegram/RSS 채널의 [속보]/[단독]/[특징주] 표기는 제목에서 제거한다.
-    title = re.sub(r"^\s*(?:\[(?:속보|단독|특징주|종합|긴급)\]\s*)+", "", title).strip()
-    companies = item.get("companies", [])
-    extra = _engine_clean(str(item.get("extra", "")).strip())
-    market_hits = item.get("market_hits", [])
+    t = _engine_clean_telegram_meta(body)
+    title = _engine_extract_title(title, t)
+    # 제목 반복/출처 반복 제거
+    t = re.sub(re.escape(title), ' ', t, count=1, flags=re.I) if title else t
+    t = re.sub(r'\s+', ' ', t).strip()
+    sentences = [x.strip(' -•') for x in re.split(r'(?<=[.!?。！？])\s+|\s+•\s+|\s+▶️\s+', t) if x.strip()]
+    sentences = [x for x in sentences if len(re.sub(r'[^0-9A-Za-z가-힣]', '', x)) >= 12]
+    event_terms = ['수주','계약','공급','투자','증설','양산','출시','상용화','승인','허가','임상','기술이전','기술수출','실적','매출','영업이익','배당','자사주','주주환원','정책','관세','금리','수요','가격','생산','판매','구매','도입','발표','FCF']
+    change_terms = ['확대','증가','감소','강화','약화','전환','개선','악화','본격','가속','확정','신설','도입','재개','중단','상승','하락']
+    scored=[]
+    for i,x in enumerate(sentences):
+        score=sum(5 for k in event_terms if k in x)+sum(3 for k in change_terms if k in x)+(4 if re.search(r'\d|%|억|조|원|달러',x) else 0)+min(len(x),180)/100
+        scored.append((score,i,x))
+    scored.sort(reverse=True)
+    picked=[]
+    for _,_,x in scored:
+        if any(_engine_similar(x,y) for y in picked): continue
+        picked.append(x)
+        if len(picked)>=3: break
+    # 원문이 짧으면 제목이 아닌 실제 본문 한 줄을 사용
+    if not picked and sentences: picked=sentences[:1]
 
-    # 국내 상장기업이 실제로 제목/본문에서 확인되는 경우에만 표시.
-    domestic = _engine_domestic_companies(companies)
-    title = _apply_domestic_highlight(title, domestic)
-
-    # ------------------------------------------------------------
-    # 🤖 AI 분석 (Claude) - 활성화 + 텍스트 충분할 때만 호출.
-    # 실패하거나 꺼져있으면 ai_result=None이 되어 기존 규칙기반 로직 그대로 사용.
-    # ------------------------------------------------------------
-    ai_result = _ai_analyze_item(title, extra, str(item.get("source", "")), companies)
-    if ai_result and ai_result.get("title"):
-        ai_title = _engine_clean(str(ai_result["title"]))[:80]
-        if ai_title:
-            title = _apply_domestic_highlight(ai_title, domestic)
-
-    source_raw = str(item.get("source", ""))
-    source_display = "🇺🇸" if source_raw == "Google-US" else source_raw
-    time_text = str(item.get("time_text", "")).strip()
-
-    freshness, prev = _engine_freshness(item)
-
-    header = f"<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>"
-    if time_text:
-        header += f"                                      🕐 {html.escape(time_text)}"
-
-    # 상용화 가치가 있는 뉴스는 제목 맨 앞에 🎯를 붙여 한눈에 식별한다.
-    if _engine_is_commercial_value(item, title, "") and not title.startswith("🎯"):
-        title = "🎯 " + title
-
-    # 제목은 절대 요약문보다 아래/위로 이동시키지 않는다.
-    lines = [
-        header,
-        f"<b>📌 {html.escape(title)}</b>",
+    low=(title+' '+t).lower()
+    commercial=[]
+    stage_map=[
+        ('양산·판매/공급','양산|대량생산|판매개시|판매 개시|공급 확대'),
+        ('수주·계약','수주|공급계약|계약 체결|본계약|판매계약'),
+        ('상용화·구매','상용화|상업화|구매|실제 도입|현장 도입'),
+        ('검증·승인','승인|허가|인증|테스트 완료|검증'),
+        ('개발·투자','개발|연구|투자|증설|시설투자'),
     ]
+    for label,pat in stage_map:
+        if re.search(pat, low, re.I): commercial.append(label)
+    stage=commercial[0] if commercial else ''
 
-    if freshness in ("재탕", "업그레이드") and prev:
-        prev_source = html.escape(str(prev.get("source", "")))
-        prev_time = html.escape(str(prev.get("time_text", "")))
-        lines.append(f"↳ 선행 보도: <b>{prev_time} / {prev_source}</b>")
-
-    # ------------------------------------------------------------
-    # 1) 원문 기반 한 줄 핵심요약
-    # ------------------------------------------------------------
-    # 제목 반복을 피하고 extra/본문 요약 결과에서 핵심정보만 사용한다.
-    core, schedule = _engine_summary(
-        title, extra, companies, market_hits
-    )
-
-    # 기존 summary가 제목을 그대로 반복하는 경우 제거.
-    def _compact_keypoint(text):
-        text = _engine_clean(str(text or ""))
-        text = re.sub(r"^🔎\s*", "", text).strip()
-        if not text:
-            return ""
-
-        # 제목과 동일/거의 동일한 문장을 핵심요약으로 사용하지 않는다.
-        title_norm = re.sub(r"[^가-힣A-Za-z0-9]+", "", title.lower())
-        text_norm = re.sub(r"[^가-힣A-Za-z0-9]+", "", text.lower())
-        if title_norm and (
-            text_norm == title_norm
-            or (len(title_norm) >= 25 and title_norm in text_norm)
-        ):
-            return ""
-
-        # 원문이 긴 경우 첫 문장 전체가 아니라 핵심 1문장만.
-        parts = re.split(r"(?<=[.!?。])\s+|\n+", text)
-        parts = [p.strip(" -•") for p in parts if p.strip()]
-        if len(parts) > 1:
-            # 수치/원인/변화가 포함된 문장을 우선
-            ranked = sorted(
-                parts,
-                key=lambda p: (
-                    bool(re.search(r"\d|%|억|조|만|배|계약|수주|증설|투자|생산|판매|출시|승인|인수|합병|정책|금리|유가", p)),
-                    -abs(len(p) - 80)
-                ),
-                reverse=True
-            )
-            text = ranked[0]
-        else:
-            text = parts[0] if parts else text
-
-        return text[:260]
-
-    keypoint = _compact_keypoint(core)
-
-    # extra에 실제 수치/금액/확정·예정 정보가 있고 summary에 없으면 보강.
-    if extra:
-        extra_key = _compact_keypoint(extra)
-        if extra_key and extra_key != keypoint:
-            important = re.search(
-                r"(\d[\d,.]*\s*(?:억|조|만원|억원|조원|%|달러|USD|만대|대|개|명|배))"
-                r"|(\b(?:확정|체결|계약|수주|승인|출시|착공|가동|예정)\b)",
-                extra_key
-            )
-            if important and not re.search(r"\d|확정|체결|계약|수주|승인|출시|예정", keypoint):
-                keypoint = extra_key
-
-    # 상용화 가치가 요약에서 확인되는 경우에도 제목에 🎯를 보장한다.
-    if _engine_is_commercial_value(item, title, keypoint) and not title.startswith("🎯"):
-        title = "🎯 " + title
-        lines[1] = f"<b>📌 {html.escape(title)}</b>"
-
-    # ------------------------------------------------------------
-    # 2) 핵심요약 (①②③ 여러 항목이면 줄바꿈/들여쓰기 + 원문 실제 부제목 병기)
-    #    AI 분석이 성공했으면 AI의 핵심요약/비교표/원인결과를 우선 사용하고,
-    #    AI가 꺼져있거나 실패했으면 기존 규칙기반 keypoint를 그대로 사용한다.
-    # ------------------------------------------------------------
-    if ai_result and (ai_result.get("key_points") or ai_result.get("comparison") or ai_result.get("cause_effect")):
-        lines.extend(_ai_format_main_lines(ai_result))
-    elif keypoint:
-        subtitle = _engine_fetch_subtitle(item.get("link", ""))
-        lines.extend(_engine_format_keypoint_lines(keypoint, subtitle))
-
-    # ------------------------------------------------------------
-    # 3) 국내 관련 테마/관심종목
-    # ------------------------------------------------------------
-    # 단순 글로벌 기업명 → 국내 종목 연결 금지.
-    # 실제 국내 기업/테마 연관성이 있을 때만 이유를 함께 출력한다.
-    # 형식: ✔️👀관련주 : (종목명만) / 다음 줄에 👀관련주 근거 : (이유만) 로 분리.
-    domestic_rows = []
-    try:
-        domestic_rows = _engine_domestic_watchlist(item)
-    except (NameError, AttributeError):
-        domestic_rows = []
-
-    related_entries = []  # [(name, reason), ...]
-    if domestic_rows:
-        for row in domestic_rows[:3]:
-            if isinstance(row, dict):
-                name = str(row.get("name") or row.get("company") or "").strip()
-                reason = str(row.get("reason") or row.get("why") or row.get("relation") or row.get("theme") or "").strip()
-                if name:
-                    related_entries.append((name, re.sub(r"\s+", " ", reason)[:110]))
-            elif row:
-                related_entries.append((str(row)[:100], ""))
-    elif ai_result:
-        # 검증된 국내 관심종목이 없으면, AI가 근거 있게 연결한 종목/테마로 대체 표시.
-        ai_theme = str(ai_result.get("theme") or "").strip()
-        if ai_theme.lower() in ("null", "none"):
-            ai_theme = ""
-        for s in (ai_result.get("stocks") or [])[:3]:
-            s = str(s).strip()
-            if s:
-                related_entries.append((s, ai_theme))
-
-    if related_entries:
-        names_line = "✔️👀관련주 : " + " · ".join(f"⚡️{html.escape(n)}" for n, _ in related_entries)
-        lines.append(names_line)
-        reasons = [r for _, r in related_entries if r]
-        if reasons:
-            reason_line = "    👀관련주 근거 : " + " · ".join(html.escape(r) for r in reasons)
-            lines.append(reason_line)
+    outlook=[]
+    if any(k in low for k in ['자사주','주주환원','배당','fcf']):
+        outlook.append('주주환원 강화가 주가의 실적 외 지지 요인으로 작용할 가능성')
+    elif any(k in low for k in ['수주','공급계약','계약 체결','판매계약']):
+        outlook.append('계약·수주가 실제 매출과 수주잔고로 이어지는지 확인하는 구간')
+    elif any(k in low for k in ['양산','상용화','실제 도입','구매']):
+        outlook.append('기술·테마 단계에서 실제 매출과 생산으로 넘어가는지 여부가 핵심')
+    elif any(k in low for k in ['증설','투자','생산']):
+        outlook.append('투자·생산 확대가 공급능력과 관련 밸류체인 수요 증가로 이어질 가능성')
+    elif any(k in low for k in ['승인','허가','임상']):
+        outlook.append('규제·임상 진전 이후 실제 상업화와 매출 전환 여부가 핵심')
     else:
-        lines.append("✔️👀관련주 : 無")
+        outlook.append('후속 발표와 실제 실적 반영 여부가 시장 영향의 핵심 확인 포인트')
+    if stage:
+        outlook.append(f'현재 뉴스는 {stage} 신호가 확인돼 단순 기대보다 실행 단계의 진전 여부가 중요')
+    if re.search(r'\d+\s*(?:억|조|원|%)', low):
+        outlook.append('제시된 수치의 실제 집행 규모와 지속성이 주가 반응을 좌우할 가능성')
+    return {'title':title,'key_points':picked,'stage':stage,'outlook':outlook[:3]}
 
-    # ------------------------------------------------------------
-    # 4) 과거 유사 급등/상한가 사례
-    # ------------------------------------------------------------
-    historical = _engine_historical_match(item)
-    if historical:
-        ratio, hrow = historical
-        htitle = html.escape(str(hrow.get("title", "과거 유사 사례"))[:180])
-        hlink = html.escape(str(hrow.get("link", "")), quote=True)
-        lines.append(f"📚 과거 유사 사례 ({ratio:.0%})")
-        if hlink:
-            lines.append(f'<a href="{hlink}">🔗 {htitle}</a>')
-        else:
-            lines.append(htitle)
 
-    # ------------------------------------------------------------
-    # 5) 일정: 미래 주가에 영향을 줄 일정만 허용
-    # ------------------------------------------------------------
-    # 과거 실적/기록/수출량 등은 일정으로 출력하지 않는다.
+def _engine_future_schedule(text: str) -> str:
+    """오늘 이전/당일 발생 사실은 일정으로 내보내지 않고 미래 이벤트만 반환."""
+    s=_engine_schedule(text)
+    if not s: return ''
+    now=_now_kst().date()
+    m=re.search(r'(20\d{2})[./-](\d{1,2})[./-](\d{1,2})|(\d{1,2})월\s*(\d{1,2})일',s)
+    if m:
+        try:
+            if m.group(1): d=datetime(int(m.group(1)),int(m.group(2)),int(m.group(3))).date()
+            else: d=datetime(now.year,int(m.group(4)),int(m.group(5))).date()
+            if d <= now: return ''
+        except Exception: return ''
+    # '다음주/다음달/예정/계획'만 있는 경우는 미래 표현으로 인정
+    if re.search(r'다음주|다음달|내달|하반기|예정|계획',s): return s
+    return ''
+
+
+def _engine_format_message(item):
+    """최종 뉴스 카드. AI 없이 단일 규칙 기반 분석 결과만 사용한다."""
+    source_raw=str(item.get('source',''))
+    source_display='🇺🇸' if source_raw=='Google-US' else source_raw
+    time_text=str(item.get('time_text','')).strip()
+    raw_title=str(item.get('title','')).strip()
+    raw_extra=str(item.get('extra','')).strip()
+    insight=_engine_news_insight(raw_title, raw_extra, source_raw)
+    title=insight['title'] or _engine_strip_foreign_publisher_suffix(raw_title)
+    companies=item.get('companies',[]) or []
+    domestic=_engine_domestic_companies(companies)
+    title=_apply_domestic_highlight(title,domestic)
+    if _engine_is_commercial_value(item,title,' '.join(insight['key_points'])) and not title.startswith('🎯'):
+        title='🎯 '+title
+    freshness,prev=_engine_freshness(item)
+    header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
+    if time_text: header += f'                                      🕐 {html.escape(time_text)}'
+    lines=[header,f'<b>📌 {html.escape(title)}</b>']
+    if freshness in ('재탕','업그레이드') and prev:
+        lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
+    lines.append('🔎 요약')
+    for kp in insight['key_points'][:3]: lines.append('     ✔ '+html.escape(kp[:220]))
+    # 관련주는 반드시 뉴스 원문 촉매와 연결되는 경우만 출력. 테마 자동 채우기는 금지.
+    related=[]
+    try:
+        rows=_engine_domestic_watchlist(item)
+        for row in rows:
+            if row.get('direct'):
+                related.append((row['name'],row.get('reason','')))
+            elif row.get('score',0)>=360:
+                related.append((row['name'],row.get('reason','')))
+    except Exception: related=[]
+    if related:
+        related=related[:3]
+        lines.append('✔️👀관련주 : '+' · '.join('⚡️'+html.escape(n) for n,_ in related))
+        lines.append('    👀관련주 근거 : '+' · '.join(html.escape(r[:120]) for _,r in related if r))
+    else:
+        lines.append('✔️👀관련주 : 無')
+    if insight['stage']:
+        lines.append('🧭 상용화/실행 단계')
+        lines.append('     ✔ '+html.escape(insight['stage']))
+    lines.append('📈 시장 전망')
+    for o in insight['outlook'][:3]: lines.append('     ✔ '+html.escape(o))
+    schedule=_engine_future_schedule(raw_extra)
     if schedule:
-        schedule_text = str(schedule).strip()
-        future_words = (
-            "예정", "계획", "발표", "출시", "가동", "착공", "완료 예정",
-            "시행", "회의", "실적 발표", "계약 예정", "수주 예정"
-        )
-        date_like = re.search(
-            r"(202[6-9][./-]\d{1,2}[./-]\d{1,2}"
-            r"|\d{1,2}월\s*\d{1,2}일"
-            r"|\d{1,2}일\s*(?:예정|발표|출시|가동))",
-            schedule_text
-        )
-        if any(w in schedule_text for w in future_words) or date_like:
-            dm = re.search(r"(202[6-9][./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)", schedule_text)
-            if dm:
-                date_part=dm.group(1).replace("/",".").replace("-",".")
-                event_part=(schedule_text[:dm.start()] + schedule_text[dm.end():]).strip(" -—:·")
-            else:
-                date_part=""; event_part=schedule_text
-            lines.append("📅 일정")
-            if date_part: lines.append(html.escape(date_part))
-            if event_part: lines.append("✔ " + html.escape(event_part[:220]))
-
-    # ------------------------------------------------------------
-    # 6) 🤖 AI 분석 (테마/종목 연결 + 최종 총평) - 항상 맨 마지막 단계로 배치
-    # ------------------------------------------------------------
-    if ai_result:
-        lines.extend(_ai_format_tail_lines(ai_result))
-
-    if item.get("link"):
-        link = html.escape(str(item["link"]), quote=True)
-        lines.append(f'<a href="{link}">🔗 원문 보기</a>')
-
-    # 화면 줄간격은 카드 전체에서 동일하게 유지.
-    return "\n\n".join(x for x in lines if str(x).strip())
-
+        dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
+        lines.append('📅 일정')
+        if dm: lines.append(html.escape(dm.group(1).replace('/','.').replace('-','.')))
+        rest=schedule.replace(dm.group(1),'').strip(' -—:·') if dm else schedule
+        if rest: lines.append('✔ '+html.escape(rest[:220]))
+    if item.get('link'):
+        lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문 보기</a>')
+    return '\n\n'.join(x for x in lines if str(x).strip())
 
 def _engine_flush_pending():
     """대기 뉴스는 유사기사라도 묶거나 재탕 차단하지 않는다.
@@ -3025,10 +2806,7 @@ def _engine_process_item(source, title, link, published="", extra=""):
     if not translation_ok:
         return False
 
-    # Domestic and foreign news share exactly the same numbered keypoint rule.
-    shared_keypoint = _engine_force_numbered_keypoint(title, extra)
-    if shared_keypoint:
-        extra = shared_keypoint
+    # 원문 전체를 보존한다. 요약문으로 extra를 덮어쓰지 않는다.
 
     # 사용자가 원치 않는 [그로쓰리서치] 속보/단독/특징주 채널은 원천 제외.
     growth_block = ("그로쓰리서치" in str(source)) or ("rocket_news1" in link) or ("growth_semi" in link) or ("growthbio" in link) or ("growthresearch" in link)
@@ -3503,44 +3281,10 @@ def _engine_run_youtube():
     _engine_log("info", "[유튜브 완료] 채널=%d/%d 성공 | 실패=%d | 신규후보=%d", ok_channels, len(YOUTUBE_CHANNELS), fail_channels, total)
 
 
-def _engine_run_test_fixture(force_send=False):
-    path = NEWS_TEST_FILE
-    if not path or not os.path.exists(path):
-        _engine_log("warning", "[테스트] 파일 없음 | %s", path)
-        return 0
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        items = data if isinstance(data, list) else data.get("items", [])
-        total = 0
-        for item in items:
-            # 부팅 테스트는 매번 실제 송출을 확인할 수 있도록 seen 상태를 초기화한다.
-            if force_send:
-                test_link = str(item.get("link") or "").strip()
-                test_key = test_link or f'{item.get("source", "TEST")}|{item.get("title", "")}'
-                with _engine_lock:
-                    _engine_seen.discard(test_key)
-            if _engine_process_item(
-                item.get("source", "TEST"),
-                item.get("title", ""),
-                item.get("link", ""),
-                item.get("published", ""),
-                item.get("extra", "")
-            ):
-                total += 1
-        _engine_log("info", "[테스트] 입력=%d | 송출대기=%d | 강제송출=%s", len(items), total, force_send)
-        return total
-    except Exception as e:
-        _engine_log("error", "[실패] 테스트 파일 | 원인=%s", str(e)[:160])
-        return 0
-
-
-
-
 # ============================================================
 # ============================================================
 # 🇰🇷 국내장 장중 브리핑 + 실행 자가진단
-# - 09:30 첫 브리핑, 이후 30분마다 정기 브리핑
+# - 09:30 첫 브리핑, 이후 30분 슬롯
 # - 지수/원달러/핵심 대형주 변화가 기준을 넘으면 장중 변동 브리핑
 # - Yahoo 시세 실패 시 조용히 죽지 않고 다음 1분 주기에 재시도
 # ============================================================
@@ -3631,7 +3375,7 @@ def _engine_krx_market_monitor():
     if getattr(_engine_krx_market_monitor,"_last_slot_key",None)==key:
         _KRX_BRIEFING_LAST_SNAPSHOT=snapshot; return
     events=_krx_intraday_events(snapshot)
-    # 09:30부터 30분마다 정기 브리핑. 구조 변화가 있으면 별도 변화 섹션을 함께 표시.
+    # 첫 30분은 정기 브리핑, 이후에는 변화가 있으면 즉시/슬롯 브리핑
     if slot==1: msg=_krx_briefing_message(snapshot,now,opening=True)
     elif events: msg=_krx_briefing_message(snapshot,now,events=events)
     else: msg=_krx_briefing_message(snapshot,now) if slot%1==0 else ""
@@ -3982,27 +3726,14 @@ def _us_intraday_briefing(snapshot, events, et):
         for _, q, delta in macro_moves:
             lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q['change_pct'])}")
         lines.append("")
-    # 이벤트가 없어도 30분 슬롯마다 정기 브리핑을 송출한다.
-    # 장중 구조 변화가 있을 때만 추가 내용을 붙이고, 변화가 없으면 현재 시장 상태를 표시한다.
     if not events:
-        lines.append("<b>📊 현재 시장 상태</b>")
-        for symbol in ("^IXIC", "^GSPC", "^DJI", "^SOX", "^VIX"):
-            q = snapshot.get(symbol)
-            if q and q.get("change_pct") is not None:
-                lines.append(
-                    f"• {q['name']} {_us_direction(q.get('change_pct'))} "
-                    f"{_us_format_pct(q.get('change_pct'))}"
-                )
-        fx = snapshot.get("USDKRW=X")
-        if fx and fx.get("change_pct") is not None:
-            lines.append(f"• 원/달러 {_us_direction(fx.get('change_pct'))} {_us_format_pct(fx.get('change_pct'))}")
-        lines.append("• 직전 5분 대비 기준을 넘는 구조적 변화 없음")
+        return ""
     lines.append("※ 방향(급등/급락)과 재료 강도는 별도로 표기하며, 시세만으로 국내 관련주를 강제 연결하지 않습니다.")
     return "\n".join(lines)
 
 
 def _engine_us_market_monitor():
-    """미국 정규장 동안 30분 슬롯마다 정기 브리핑. 첫 슬롯은 10:00 ET."""
+    """미국 정규장 동안 30분 슬롯마다 브리핑. 첫 슬롯은 10:00 ET."""
     global _US_BRIEFING_LAST_RUN_DATE, _US_BRIEFING_LAST_OPEN_SENT
     global _US_BRIEFING_LAST_INTRADAY_SENT, _US_BRIEFING_LAST_SNAPSHOT, _US_BRIEFING_LAST_POLL
     if not ENABLE_US_INTRADAY_BRIEFING or ZoneInfo is None:
@@ -4035,14 +3766,15 @@ def _engine_us_market_monitor():
         _US_BRIEFING_LAST_SNAPSHOT = snapshot
         return
 
-    # 첫 슬롯은 개장 30분 브리핑.
-    # 이후에도 구조 변화 유무와 관계없이 30분 슬롯마다 정기 브리핑을 송출한다.
-    # 구조 변화가 있으면 변화 내용을 추가하고, 없으면 현재 시장 상태를 표시한다.
+    # 첫 슬롯은 개장 브리핑, 그 이후는 직전 5분 스냅샷 대비 구조 변화가 있을 때만 장중 브리핑.
     if slot_index == 1:
         msg = _us_open_briefing(snapshot, et)
     else:
         events = _us_intraday_events(snapshot)
         msg = _us_intraday_briefing(snapshot, events, et)
+        if not msg:
+            _US_BRIEFING_LAST_SNAPSHOT = snapshot
+            return
     if msg and _engine_send_telegram(msg):
         _engine_us_market_monitor._last_slot_key = slot_key
         _US_BRIEFING_LAST_OPEN_SENT = et.date() if slot_index == 1 else _US_BRIEFING_LAST_OPEN_SENT
@@ -4411,75 +4143,6 @@ def _engine_main_loop():
 
 
 
-# ============================================================
-# [BOOT TEST - EMBEDDED]
-# 외부 JSON 파일 없이 본 파일 하나만으로 부팅 테스트 수행.
-# TEST 데이터는 실제 일정DB/뉴스DB에 저장하지 않는다.
-# ============================================================
-BOOT_TEST_ITEMS = [
-    {
-        "source": "TEST/일정",
-        "title": "[테스트] 8월 20일 추가 락업 해제 예정",
-        "link": "https://example.invalid/boot-test-lockup",
-        "published": "",
-        "extra": "① 약 3억1,900만 주의 추가 락업이 8월 20일 해제될 예정 ② 미래 일정 표시와 1·2·3 핵심요약 출력 점검",
-    },
-    {
-        "source": "TEST/공시일정",
-        "title": "[테스트] 주요사항보고서 관련 미래 일정 점검",
-        "link": "https://example.invalid/boot-test-dart",
-        "published": "",
-        "extra": "① 미래 이벤트 날짜만 일정으로 관리 ② 오늘 접수일은 일정으로 표시하지 않음 ③ 공시 일정 통합 로직 점검",
-    },
-    {
-        "source": "TEST/외신",
-        "title": "[테스트] 외신 번역 및 핵심요약 점검",
-        "link": "https://example.invalid/boot-test-foreign",
-        "published": "",
-        "extra": "① 외신 제목은 한국어로 번역 ② 번역된 동일 원문으로 🔎 핵심요약 수행 ③ 테마·관련주 판단도 동일 분석 게이트 사용",
-    },
-]
-
-_BOOT_TEST_ALREADY_RAN = False
-
-def _engine_run_embedded_boot_test():
-    global _BOOT_TEST_ALREADY_RAN
-    if _BOOT_TEST_ALREADY_RAN:
-        _engine_log("debug", "[BOOT 테스트] 이미 실행됨 → 재송출하지 않음")
-        return 0
-    _BOOT_TEST_ALREADY_RAN = True
-    # 테스트는 일반 뉴스의 최근 60분/주가재료 게이트를 타지 않도록 별도 pending 경로를 사용한다.
-    items = []
-    if NEWS_TEST_FILE and os.path.exists(NEWS_TEST_FILE):
-        try:
-            with open(NEWS_TEST_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            items = data if isinstance(data, list) else data.get("items", [])
-            _engine_log("info", "[BOOT 테스트] 외부 테스트 파일 사용 | %d건", len(items))
-        except Exception as e:
-            _engine_log("warning", "[BOOT 테스트] 외부 파일 읽기 실패 → 내장 테스트 사용 | %s", str(e)[:120])
-    if not items:
-        items = BOOT_TEST_ITEMS
-    sent=0
-    for item in items:
-        key=str(item.get("link") or "") or f"TEST|{item.get('title','')}"
-        with _engine_lock:
-            if key in _engine_seen:
-                continue
-        title=_engine_clean(item.get("title", "")); extra=_engine_clean(item.get("extra", ""))
-        if not title:
-            continue
-        # 테스트 카드는 실제 뉴스와 동일한 포맷터를 사용하되 필터만 우회한다.
-        _engine_pending.append({
-            "source": item.get("source", "TEST"), "title": title, "link": key,
-            "published": item.get("published", ""), "extra": extra, "key": key,
-            "category": "🧪테스트", "companies": [], "k1": False, "k2": False,
-            "market_hits": [], "time_text": _now_kst().strftime("%H:%M"),
-            "market_state": "테스트"
-        })
-    sent=_engine_flush_pending()
-    _engine_log("info", "[BOOT 테스트] 입력=%d | 실제송출=%d | 1회 실행 완료", len(items), sent)
-    return sent
 
 if __name__ == "__main__":
     try:
@@ -4508,14 +4171,6 @@ if __name__ == "__main__":
                     ENABLE_TELEGRAM_CHANNELS)
         _engine_log("info", "[BOOT] 국내장브리핑=%s | 미장30분브리핑=%s | 장중감시=%s | Naver=%s | Google=%s", ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_NAVER_NEWS, ENABLE_US_NEWS)
 
-        # 부팅 즉시 테스트 파일을 실제 Telegram으로 송출하여
-        # 🔎 요약·테마·관련주·일정 출력의 수정 결과를 바로 확인한다.
-        if BOOT_SEND_TEST_FIXTURE:
-            try:
-                _engine_run_embedded_boot_test()
-            except Exception as e:
-                log_error("부팅 내장 테스트 송출", e)
-
         _engine_main_loop()
     except KeyboardInterrupt:
         _engine_log("warning", "[종료] KeyboardInterrupt")
@@ -4524,62 +4179,3 @@ if __name__ == "__main__":
         raise
 
 
-# ============================================================
-# [CORE IMMUTABLE RULE] 뉴스 통합 분석 게이트
-# 모든 뉴스: 🔎 핵심 → 테마 → 관련주를 동일 증거로 1회 분석.
-# 출력부에서는 재판단하지 않는다. 뉴스 카드의 대장주/관찰 생성 금지.
-# ============================================================
-ANALYSIS_RULE_VERSION = "NEWS_CORE_V1"
-
-def _core_news_analysis(title: str, body: str, source: str = "") -> dict:
-    """
-    단일 분석 게이트.
-    - 제목 반복/본문 첫 문장 복사 방지
-    - 핵심이 여러 개면 번호형
-    - 테마/관련주는 동일 핵심을 입력으로 사용
-    - 대장주/관찰은 뉴스 카드 분석에서 생성하지 않음
-    """
-    title = (title or "").strip()
-    body = (body or "").strip()
-
-    # Remove common wire/article lead-ins before summarization.
-    clean = re.sub(r"^\s*\([^)]{1,80}\)\s*[^:]{1,40}기자\s*[:：]\s*", "", body)
-    clean = re.sub(r"\b(?:https?://|www\.)\S+", " ", clean)
-    clean = re.sub(r"\s+", " ", clean).strip()
-
-    # Never use title as the summary fallback.
-    if not clean:
-        keypoint = ""
-    else:
-        # Prefer existing numbered/structured source points.
-        pts = re.findall(r"(?:^|\s)(?:[①②③④⑤⑥⑦⑧⑨⑩]|\d+[.)])\s*([^①②③④⑤⑥⑦⑧⑨⑩]+?)(?=\s*(?:[①②③④⑤⑥⑦⑧⑨⑩]|\d+[.)])|$)", clean)
-        pts = [re.sub(r"\s+", " ", p).strip(" .,-") for p in pts if p.strip()]
-        if pts:
-            pts = pts[:3]
-            keypoint = "\n".join(f"{i}. {p}" for i, p in enumerate(pts, 1))
-        else:
-            # Compact first factual sentence only; do not copy a headline.
-            sentences = re.split(r"(?<=[.!?。！？])\s+", clean)
-            factual = [s.strip() for s in sentences if s.strip() and s.strip() != title]
-            if factual:
-                s = factual[0]
-                keypoint = re.sub(r"\s+", " ", s)
-            else:
-                keypoint = ""
-
-    # Hard guard: title-equivalent or generic keyword-only summaries are invalid.
-    norm_title = re.sub(r"[^0-9A-Za-z가-힣]", "", title).lower()
-    norm_key = re.sub(r"[^0-9A-Za-z가-힣]", "", keypoint).lower()
-    generic = {"급등상승", "상승하락", "주요내용", "성장", "하락상승"}
-    if not keypoint or norm_key == norm_title or norm_key in generic:
-        keypoint = ""
-
-    return {
-        "rule_version": ANALYSIS_RULE_VERSION,
-        "title": title,
-        "keypoint": keypoint,
-        "theme": None,
-        "related_stocks": [],
-        "is_leader": False,
-        "is_observe": False,
-    }
