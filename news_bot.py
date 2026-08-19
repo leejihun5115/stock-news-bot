@@ -205,6 +205,7 @@
 
 
 
+from master_condition_manager import MasterConditionManager
 import sys
 import time
 import datetime
@@ -222,6 +223,36 @@ import difflib
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
+# === MASTER 65-CONDITION ENGINE ===
+# 모든 최종 뉴스 판단은 이 엔진을 통과하도록 연결할 수 있다.
+_MASTER_MANAGER = MasterConditionManager(max_related=3, min_score=40.0)
+
+def master_finalize_news(
+    title,
+    body,
+    source="",
+    link="",
+    candidates=None,
+    schedule="",
+    evidence=None,
+):
+    """뉴스 1건을 MASTER -> Validator -> FINAL LOCK 순으로 확정."""
+    result = _MASTER_MANAGER.analyze(
+        title=title,
+        body=body,
+        source=source,
+        link=link,
+        candidates=candidates or [],
+        schedule=schedule,
+        evidence=evidence or [],
+    )
+    result = _MASTER_MANAGER.validate(result)
+    if result.get("validation_errors"):
+        raise ValueError(
+            "MASTER VALIDATOR 실패: "
+            + " / ".join(result["validation_errors"])
+        )
+    return _MASTER_MANAGER.lock(result)
 
 # ============================================================
 # 🕐 서버 시간대와 무관한 정확한 한국시간(KST)
@@ -4179,3 +4210,9 @@ if __name__ == "__main__":
         raise
 
 
+
+
+# === MASTER INTEGRATION ENTRY POINT ===
+# 기존 뉴스 처리 함수가 확보한 title/body/candidates/schedule/evidence를
+# Telegram 송출 직전에 master_finalize_news(...)에 전달한다.
+# 이 지점은 기존 송출 코드를 자동으로 덮어쓰지 않도록 별도 함수로 둔다.
