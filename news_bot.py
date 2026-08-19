@@ -2625,111 +2625,13 @@ def _engine_extract_title(title: str, extra: str) -> str:
     return raw[:180].strip()
 
 
-def _engine_us_news_insight(title: str, body: str) -> dict:
-    """미국장 전용 분석.
-    클릭형 제목을 그대로 재사용하지 않고 본문 사실을 기준으로
-    제목/요약/전망을 재구성한다. 공통 전망 문구를 사용하지 않는다.
-    """
-    raw_title = _engine_extract_title(title, body)
-    t = _engine_clean_telegram_meta(body)
-    # 유튜브/콘텐츠의 클릭형 제목은 사실 판단에 사용하지 않는다.
-    clickbait = re.compile(r'(진짜|당신|집이다|노리는 건|충격|소름|미쳤|대체|비밀|이것이|알고 보니|결국|왜|ㄷㄷ|#)', re.I)
-    title_is_clickbait = bool(clickbait.search(raw_title)) or len(raw_title) > 85
-    sentences = [x.strip(' -•') for x in re.split(r'(?<=[.!?。！？])\s+|\s+•\s+|\s+▶️\s+', t) if x.strip()]
-    sentences = [x for x in sentences if len(re.sub(r'[^0-9A-Za-z가-힣]', '', x)) >= 16]
-
-    event_terms = ['실적','매출','영업이익','순이익','마진','매출총이익률','수주','계약','공급','투자','증설','양산','출시','상용화','승인','허가','자율주행','로봇','데이터센터','반도체','생산','판매','가격','수요','금리','관세','유가','인플레이션','고용','경기','가이던스','전망','자금조달','현금흐름','FCF']
-    change_terms = ['사상 최고','최고치','증가','감소','상승','하락','확대','축소','악화','개선','둔화','급증','급감','기록','계획','추진','예정','전환']
-    scored=[]
-    for i,x in enumerate(sentences):
-        score=sum(6 for k in event_terms if k in x)+sum(4 for k in change_terms if k in x)
-        score += 5 if re.search(r'\d|%|억|조|달러', x) else 0
-        score += min(len(x), 220)/100
-        scored.append((score,i,x))
-    scored.sort(reverse=True)
-    picked=[]
-    for _,_,x in scored:
-        if any(_engine_similar(x,y) for y in picked):
-            continue
-        picked.append(x)
-        if len(picked) >= 3:
-            break
-    if not picked:
-        picked = sentences[:3]
-
-    # 회사/시장 주체 추출: 알려진 기업명이 제목 또는 본문에 있으면 우선 사용.
-    known = list(UNIQUE_TARGET | UNIQUE_GIANTS)
-    known.sort(key=len, reverse=True)
-    company=''
-    low_all=(raw_title+' '+t).lower()
-    for name in known:
-        if name and name.lower() in low_all:
-            company=name
-            break
-    if not company:
-        for cand in ['테슬라','엔비디아','애플','마이크로소프트','아마존','알파벳','메타','AMD','인텔','브로드컴','퀄컴','넷플릭스','팔란티어']:
-            if cand.lower() in low_all:
-                company=cand
-                break
-
-    # 제목은 본문의 가장 강한 사실을 우선 사용한다.
-    headline_source = picked[0] if picked else t
-    headline_source = re.sub(r'\[[^\]]+\]|#[\w가-힣]+', ' ', headline_source)
-    headline_source = re.sub(r'\s+', ' ', headline_source).strip(' .-—')
-    # 너무 긴 문장은 핵심 절 두 개만 남긴다.
-    clauses = [c.strip(' ,;:') for c in re.split(r'[,，;:·]|\s+-\s+', headline_source) if c.strip()]
-    meaningful = [c for c in clauses if len(re.sub(r'[^0-9A-Za-z가-힣]', '', c)) >= 8]
-    if company and (title_is_clickbait or not raw_title or len(raw_title) < 8):
-        if len(meaningful) >= 2:
-            generated = f'{company}, {meaningful[0]}…{meaningful[1]}'
-        else:
-            generated = f'{company}, {headline_source}'
-    elif title_is_clickbait:
-        generated = headline_source
-    else:
-        generated = raw_title
-        # 영문 번역투/매체 꼬리표가 남은 경우 본문 사실 제목으로 교체
-        if _engine_is_mostly_english(generated) or generated.lower().endswith((' - reuters',' - cnbc')):
-            generated = headline_source
-    generated = re.sub(r'\s+', ' ', generated).strip(' .-—')[:150]
-
-    stage=''
-    for label,pat in [
-        ('실적·가이던스','실적|매출|영업이익|순이익|가이던스|전망'),
-        ('수주·계약','수주|공급계약|계약 체결|본계약|판매계약'),
-        ('양산·판매','양산|대량생산|판매개시|판매 개시|생산 확대'),
-        ('상용화·도입','상용화|상업화|실제 도입|구매|현장 도입'),
-        ('개발·투자','개발|연구|투자|증설|시설투자|공장|자금조달'),
-        ('정책·금리','금리|연준|Fed|관세|정책|인플레이션|고용'),
-    ]:
-        if re.search(pat, low_all, re.I):
-            stage=label
-            break
-
-    outlook=[]
-    if any(k in low_all for k in ['마진','매출총이익률','영업이익','순이익']):
-        outlook.append('매출 성장과 별개로 수익성 지표가 개선되는지가 향후 주가의 핵심 확인 포인트')
-    if any(k in low_all for k in ['투자','자금조달','공장','증설']):
-        outlook.append('대규모 투자 계획은 성장 기대를 높일 수 있지만 투자 규모와 자금 부담, 실제 집행 여부를 함께 확인할 필요')
-    if any(k in low_all for k in ['로봇','자율주행','데이터센터','반도체']):
-        outlook.append('신규 성장사업의 기술 진전이 실제 매출·생산 확대와 밸류체인 수요로 연결되는지가 중장기 변수')
-    if any(k in low_all for k in ['금리','연준','fed','관세','인플레이션','고용']):
-        outlook.append('금리·정책 변수의 변화가 해당 기업과 성장주의 밸류에이션에 미치는 영향이 핵심 변수')
-    if any(k in low_all for k in ['수주','계약','공급']):
-        outlook.append('계약이나 공급 계획이 실제 매출과 수주잔고 증가로 전환되는지 확인이 필요')
-    if not outlook:
-        outlook.append('후속 발표에서 현재 뉴스의 핵심 내용이 실제 실적·판매·생산으로 이어지는지 확인하는 것이 중요')
-
-    return {'title':generated,'key_points':picked[:3],'stage':stage,'outlook':outlook[:3]}
-
-
 def _engine_news_insight(title: str, body: str, source: str = "") -> dict:
-    """뉴스 유형별 규칙 기반 분석. 미국장/Google-US는 전용 분석을 사용한다."""
-    if str(source or '') == 'Google-US':
-        return _engine_us_news_insight(title, body)
-
+    """AI 없이 원문 전체를 규칙 기반으로 구조화한다.
+    사실→변화→행간→상용화/실행→시장영향을 한 번에 계산한다.
+    """
     t = _engine_clean_telegram_meta(body)
     title = _engine_extract_title(title, t)
+    # 제목 반복/출처 반복 제거
     t = re.sub(re.escape(title), ' ', t, count=1, flags=re.I) if title else t
     t = re.sub(r'\s+', ' ', t).strip()
     sentences = [x.strip(' -•') for x in re.split(r'(?<=[.!?。！？])\s+|\s+•\s+|\s+▶️\s+', t) if x.strip()]
@@ -2746,7 +2648,9 @@ def _engine_news_insight(title: str, body: str, source: str = "") -> dict:
         if any(_engine_similar(x,y) for y in picked): continue
         picked.append(x)
         if len(picked)>=3: break
+    # 원문이 짧으면 제목이 아닌 실제 본문 한 줄을 사용
     if not picked and sentences: picked=sentences[:1]
+
     low=(title+' '+t).lower()
     commercial=[]
     stage_map=[
@@ -2759,6 +2663,7 @@ def _engine_news_insight(title: str, body: str, source: str = "") -> dict:
     for label,pat in stage_map:
         if re.search(pat, low, re.I): commercial.append(label)
     stage=commercial[0] if commercial else ''
+
     outlook=[]
     if any(k in low for k in ['자사주','주주환원','배당','fcf']):
         outlook.append('주주환원 강화가 주가의 실적 외 지지 요인으로 작용할 가능성')
@@ -2771,8 +2676,11 @@ def _engine_news_insight(title: str, body: str, source: str = "") -> dict:
     elif any(k in low for k in ['승인','허가','임상']):
         outlook.append('규제·임상 진전 이후 실제 상업화와 매출 전환 여부가 핵심')
     else:
-        outlook.append('뉴스에서 확인된 핵심 변화가 실제 실적과 수요에 반영되는지 확인이 중요')
-    if stage: outlook.append(f'현재 뉴스는 {stage} 신호가 확인돼 실행 단계의 진전 여부가 중요')
+        outlook.append('후속 발표와 실제 실적 반영 여부가 시장 영향의 핵심 확인 포인트')
+    if stage:
+        outlook.append(f'현재 뉴스는 {stage} 신호가 확인돼 단순 기대보다 실행 단계의 진전 여부가 중요')
+    if re.search(r'\d+\s*(?:억|조|원|%)', low):
+        outlook.append('제시된 수치의 실제 집행 규모와 지속성이 주가 반응을 좌우할 가능성')
     return {'title':title,'key_points':picked,'stage':stage,'outlook':outlook[:3]}
 
 
@@ -2931,7 +2839,7 @@ def _engine_format_message(item):
         title='🎯 '+title
     freshness,prev=_engine_freshness(item)
     header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
-    if time_text: header += f' 🕐 {html.escape(time_text)}'
+    if time_text: header += f'                                      🕐 {html.escape(time_text)}'
     lines=[header,f'<b>📌 {html.escape(title)}</b>']
     master_result=item.get('_master_result')
     master_badge=_engine_master_badge(master_result)
@@ -2957,7 +2865,6 @@ def _engine_format_message(item):
         lines.append('    👀관련주 근거 : '+' · '.join(html.escape(r[:120]) for _,r in related if r))
     else:
         lines.append('✔️👀관련주 : 無')
-        lines.append('    └ 없음 사유 : 국내 상장기업과 직접 연결되는 수주·계약·공급·실적 등 명확한 근거가 확인되지 않음')
     if insight['stage']:
         lines.append('🧭 상용화/실행 단계')
         lines.append('     ✔ '+html.escape(insight['stage']))
@@ -2997,8 +2904,6 @@ def _engine_flush_pending():
         # 서로 다른 보도 링크/재보도는 차단하지 않고 반드시 [재탕]으로 송출한다.
         if key in _engine_seen:
             continue
-        master_result = _engine_master_result(item)
-        item["_master_result"] = master_result
         message = _engine_format_message(item)
         master_badge = _engine_master_badge(master_result)
         image_sent = False
