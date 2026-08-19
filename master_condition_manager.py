@@ -93,6 +93,7 @@ CONDITION_RULES = [
 ]
 
 
+
 @dataclass
 class MasterResult:
     rule_version: str
@@ -110,42 +111,82 @@ class MasterResult:
     link: str = ""
     locked: bool = False
     validation_errors: List[str] = field(default_factory=list)
+    # 실행 엔진 상태
+    priority_trace: List[Dict[str, Any]] = field(default_factory=list)
+    executed_orders: List[int] = field(default_factory=list)
+    related_none_reason: str = ""
+    news_value: str = ""
+    master_confirmed: bool = False
+    commercial_stage: str = ""
+    commercial_evidence: str = ""
 
     def as_dict(self):
         return self.__dict__.copy()
 
 
 class MasterConditionManager:
-    """다른 프로그램에 import해서 사용하는 중앙 판단 관리자."""
+    """
+    65개 조건을 '설명표'가 아니라 실제 실행 순서로 사용하는 중앙 엔진.
 
+    원칙:
+      1) 모든 조건은 order 순으로 실행된다.
+      2) 뒤의 조건이 앞의 결과와 충돌하면 뒤의 결과가 override 한다.
+      3) Validator/Lock 이후에는 결과를 변경할 수 없다.
+      4) Formatter가 판단할 수 있도록 근거/이유를 결과 객체에 포함한다.
+      5) 시장전망은 본문에서 추출한 사건에만 연결하며 generic fallback을 금지한다.
+    """
+
+    # 실행 진척도는 '먼저 발견된 단계'가 아니라 실제 진행도가 높은 단계가 승리한다.
     STAGES = [
-        ("양산·판매/공급", r"양산|대량생산|판매개시|판매 개시|공급 확대"),
-        ("수주·계약", r"수주|공급계약|계약 체결|본계약|판매계약"),
-        ("상용화·구매", r"상용화|상업화|구매|실제 도입|현장 도입"),
-        ("검증·승인", r"승인|허가|인증|테스트 완료|검증"),
-        ("개발·투자", r"개발|연구|투자|증설|시설투자"),
+        ("개발·투자", r"개발|연구|R&D|투자|증설|시설투자|개발비"),
+        ("검증·승인", r"검증|테스트|시험|승인|허가|인증|임상\s*(?:1|2|3|1상|2상|3상|결과|성공)"),
+        ("상용화 준비", r"사업화|상용화 준비|상업화 준비|출시 준비|양산 준비|도입 준비"),
+        ("상용화·구매", r"상용화|상업화|출시|판매 개시|실제 도입|현장 도입|구매|채택"),
+        ("수주·계약", r"수주|공급계약|공급 계약|계약 체결|본계약|판매계약|구매계약|장기공급"),
+        ("양산·판매/공급", r"양산|대량생산|양산 돌입|생산 돌입|판매 증가|공급 확대|출하|납품"),
     ]
+    STAGE_RANK = {label: i for i, (label, _) in enumerate(STAGES, 1)}
 
-    OUTLOOK_RULES = [
-        (r"자사주|주주환원|배당|fcf", "주주환원 강화가 주가의 실적 외 지지 요인으로 작용할 가능성"),
-        (r"수주|공급계약|계약 체결|판매계약", "계약·수주가 실제 매출과 수주잔고로 이어지는지 확인하는 구간"),
-        (r"양산|상용화|실제 도입|구매", "기술·테마 단계에서 실제 매출과 생산으로 넘어가는지 여부가 핵심"),
-        (r"증설|투자|생산", "투자·생산 확대가 공급능력과 관련 밸류체인 수요 증가로 이어질 가능성"),
-        (r"승인|허가|임상", "규제·임상 진전 이후 실제 상업화와 매출 전환 여부가 핵심"),
+    # 사건별 전망은 고정문구가 아니라 '사실 + 다음 확인할 경제적 연결'로 만든다.
+    OUTLOOK_PATTERNS = [
+        (r"수주|공급계약|계약 체결|본계약|판매계약|장기공급",
+         "계약 규모가 실제 매출·수주잔고로 인식되는 시점과 추가 공급 확대 여부가 핵심이다."),
+        (r"양산|대량생산|출하|납품|공급 확대",
+         "실제 출하량과 생산능력 확대가 매출·마진 개선으로 이어지는지가 핵심이다."),
+        (r"상용화|상업화|출시|구매|실제 도입|채택",
+         "초기 도입이 반복 구매와 매출 증가로 이어지는지가 핵심이다."),
+        (r"임상|허가|승인|인증",
+         "이번 진전이 다음 규제·판매 단계로 이어지는지와 실제 매출화 시점이 핵심이다."),
+        (r"증설|시설투자|투자",
+         "투자 규모가 실제 생산능력과 고객 수요 증가로 연결되는지가 핵심이다."),
+        (r"실적|영업이익|매출|순이익|최대 실적",
+         "실적 개선이 일회성이 아닌지와 다음 분기에도 이익 증가가 이어지는지가 핵심이다."),
+        (r"금리|국채|채권|연준|FOMC|CPI|인플레이션",
+         "금리 변화가 할인율과 위험자산 선호를 얼마나 지속적으로 바꾸는지가 핵심이다."),
+        (r"비트코인|이더리움|가상자산|암호화폐",
+         "가격 상승이 거래량·관련 기업 실적 또는 위험선호 확대로 이어지는지가 핵심이다."),
+        (r"파업|노조|준법투쟁|임금|성과보상|노사",
+         "갈등의 장기화 여부와 생산·영업 차질 또는 비용 증가로 이어지는지가 핵심이다."),
+        (r"소송|규제|제재|조사",
+         "규제·법적 결과의 범위와 실제 비용·사업 제한으로 이어지는지가 핵심이다."),
+        (r"자사주|배당|주주환원",
+         "환원 규모와 실제 현금흐름 대비 지속 가능성이 주주가치에 미치는 영향이 핵심이다."),
     ]
 
     SELECTION_METHOD = [
-        "직접 관련",
-        "실제 사건·수주·계약·공급 연결",
-        "테마·공급망 연결",
-        "과거 이력 보조점수",
-        "실행단계·시장재료 점수",
+        "65조건 순차 실행",
+        "후행 조건 override",
+        "직접 사건 연결",
+        "공급망·밸류체인 연결",
+        "테마 연결은 보조",
+        "근거 없는 후보 제거",
         "최종 최대 3종목",
     ]
 
     def __init__(self, max_related=3, min_score=40.0):
         self.max_related = max_related
         self.min_score = min_score
+        self._rules = sorted(CONDITION_RULES, key=lambda x: int(x["order"]))
 
     @staticmethod
     def _clean(x):
@@ -155,101 +196,333 @@ class MasterConditionManager:
     def _norm(x):
         return re.sub(r"[^0-9A-Za-z가-힣]", "", str(x or "")).lower()
 
-    def _key_points(self, title, body):
-        body = self._clean(body)
-        if not body:
+    def _record(self, state, order, name, action, field="", before=None, after=None):
+        state["priority_trace"].append({
+            "order": order, "name": name, "action": action, "field": field,
+            "before": before, "after": after
+        })
+
+    def _sentences(self, text):
+        text = self._clean(text)
+        if not text:
             return []
-        points = re.findall(
-            r"(?:^|\s)(?:[①②③④⑤⑥⑦⑧⑨⑩]|\d+[.)])\s*"
-            r"([^①②③④⑤⑥⑦⑧⑨⑩]+?)(?=\s*(?:[①②③④⑤⑥⑦⑧⑨⑩]|\d+[.)])|$)",
-            body,
+        # 유튜브/HTML/RSS 찌꺼기 제거
+        text = re.sub(r"https?://\S+", " ", text)
+        text = re.sub(r"\[[^\]]{0,30}\]", " ", text)
+        parts = re.split(r"(?<=[.!?。！？])\s+|[\r\n]+|(?<=다)\s{2,}", text)
+        out = []
+        seen = set()
+        for s in parts:
+            s = self._clean(s).strip(" -•")
+            if len(s) < 12:
+                continue
+            n = self._norm(s)
+            if n and n not in seen:
+                seen.add(n); out.append(s)
+        return out
+
+    def _event_sentences(self, title, body):
+        text = self._clean(f"{title} {body}")
+        sentences = self._sentences(body)
+        if not sentences:
+            sentences = [self._clean(title)]
+        # 사건성 점수: 변화/수치/행동/결과가 있는 문장을 우선
+        action = re.compile(
+            r"급등|급락|상승|하락|돌파|최대|최초|성공|실패|체결|수주|공급|계약|"
+            r"승인|허가|임상|출시|상용화|양산|증설|투자|매출|영업이익|배당|"
+            r"파업|제재|소송|인수|합병|국채|금리|비트코인|가격|"
+            r"\d+(?:\.\d+)?\s*(?:%|억|조|만|원|달러)"
         )
-        points = [self._clean(p).strip(" .,-") for p in points if self._clean(p)]
-        if not points:
-            sentences = re.split(r"(?<=[.!?。！？])\s+", body)
-            points = [self._clean(s) for s in sentences if self._clean(s) and self._clean(s) != title]
+        scored = []
+        for i, s in enumerate(sentences):
+            score = len(action.findall(s)) * 4 + min(len(s), 140) / 100
+            if i == 0 and self._norm(s) != self._norm(title):
+                score += 1
+            scored.append((score, s))
+        return [s for _, s in sorted(scored, reverse=True)]
+
+    def _key_points(self, title, body):
         title_n = self._norm(title)
-        return [p for p in points if self._norm(p) != title_n][:3]
+        points = []
+        for s in self._event_sentences(title, body):
+            if self._norm(s) == title_n:
+                continue
+            if any(self._norm(s) == self._norm(x) for x in points):
+                continue
+            points.append(s)
+            if len(points) >= 3:
+                break
+        return points
+
+    def _synthesize_title(self, title, body):
+        title = self._clean(title)
+        pts = self._key_points(title, body)
+        # 원 제목이 충분히 구체적이면 그대로 보존한다.
+        # 단순 브리핑 제목/유튜브 제목/클릭베이트면 핵심 사건을 재구성한다.
+        generic = re.search(r"모닝|브리핑|뉴스모음|오늘의|종합|프리뷰|시황|경제브리핑", title, re.I)
+        if not generic and len(title) >= 18:
+            return title
+        if pts:
+            p = pts[0]
+            p = re.sub(r"\s*(?:-|\|)\s*(?:[^-_|]{2,20})$", "", p).strip()
+            return p[:110]
+        return title[:110]
 
     def _stage(self, text):
+        found = []
         for label, pattern in self.STAGES:
-            if re.search(pattern, text or "", re.I):
-                return label
-        return ""
+            m = re.search(pattern, text or "", re.I)
+            if m:
+                found.append((self.STAGE_RANK[label], label, m.group(0)))
+        if not found:
+            return "", ""
+        rank, label, evidence = max(found, key=lambda x: x[0])
+        return label, evidence
 
-    def _outlook(self, text, stage):
-        result = []
-        for pattern, sentence in self.OUTLOOK_RULES:
-            if re.search(pattern, text or "", re.I):
-                result.append(sentence)
-                break
-        if not result:
-            result.append("후속 발표와 실제 실적 반영 여부가 시장 영향의 핵심 확인 포인트")
-        if stage:
-            result.append(f"현재 뉴스는 {stage} 신호가 확인돼 단순 기대보다 실행 단계의 진전 여부가 중요")
-        if re.search(r"\d+\s*(?:억|조|원|%)", text or "", re.I):
-            result.append("제시된 수치의 실제 집행 규모와 지속성이 주가 반응을 좌우할 가능성")
-        return result[:3]
+    def _future_schedule(self, schedule, body=""):
+        text = self._clean(f"{schedule} {body}")
+        if not text:
+            return ""
+        today = date.today()
+        dates = re.findall(r"(20\d{2})[./-](\d{1,2})[./-](\d{1,2})|(\d{1,2})월\s*(\d{1,2})일", text)
+        for y, m, d, mm, dd in dates:
+            try:
+                dt = date(int(y), int(m), int(d)) if y else date(today.year, int(mm), int(dd))
+                if dt > today:
+                    return f"{dt.isoformat()} 예정"
+            except ValueError:
+                continue
+        if re.search(r"다음주|다음 달|다음달|내달|향후|예정|계획|출시 예정|양산 예정|임상 예정", text, re.I):
+            return self._clean(schedule) or "향후 일정 예정"
+        return ""
 
     def _score(self, c):
         score = float(c.get("score", 0) or 0)
-        if c.get("direct"): score += 30
-        if c.get("event_link"): score += 20
-        if c.get("supply_chain"): score += 12
-        if c.get("theme_link"): score += 8
-        score += min(float(c.get("history_score", 0) or 0), 10)
-        if not self._clean(c.get("reason")): score -= 50
+        if c.get("direct"): score += 60
+        if c.get("event_link"): score += 25
+        if c.get("supply_chain"): score += 15
+        if c.get("commercial_link"): score += 12
+        if c.get("theme_link"): score += 5
+        score += min(float(c.get("history_score", 0) or 0), 8)
+        if not self._clean(c.get("reason")): score -= 80
+        if c.get("domestic_listed") is False: score = 0
         return max(0, min(score, 100))
 
-    def _select_related(self, candidates):
+    def _select_related(self, candidates, text):
         scored = []
         for raw in candidates or []:
             c = dict(raw)
-            if not self._clean(c.get("name")) or not self._clean(c.get("reason")):
+            name = self._clean(c.get("name"))
+            reason = self._clean(c.get("reason"))
+            if not name or not reason or c.get("domestic_listed") is False:
                 continue
-            if c.get("domestic_listed") is False:
-                continue
+            # 후보 이유가 기사와 실제 연결되는지 최소한의 텍스트 교차검증
+            anchors = [self._clean(c.get(k)) for k in ("event", "event_link", "supply_chain", "commercial_link") if self._clean(c.get(k))]
+            anchor_blob = " ".join(anchors + [reason])
+            if not any(a and (self._norm(a) in self._norm(text) or c.get("direct") or c.get("event_link") or c.get("supply_chain") or c.get("commercial_link")) for a in anchors + [reason]):
+                # 기존 후보 생성기가 이미 근거를 계산한 경우만 보조 허용
+                if not (c.get("direct") or c.get("event_link") or c.get("supply_chain") or c.get("commercial_link")):
+                    continue
             c["score"] = round(self._score(c), 2)
             if c["score"] >= self.min_score:
                 scored.append(c)
-        scored.sort(key=lambda x: x["score"], reverse=True)
+        scored.sort(key=lambda x: (-x["score"], -int(bool(x.get("direct"))), -int(bool(x.get("event_link")))))
         related = scored[:self.max_related]
         return related, (related[0] if related else None), related[1:]
 
-    @staticmethod
-    def _future_schedule(schedule, today=None):
-        schedule = str(schedule or "").strip()
-        if not schedule:
+    def _related_none_reason(self, related, text, candidates):
+        if related:
             return ""
-        today = today or date.today()
-        m = re.search(r"(20\d{2})[./-](\d{1,2})[./-](\d{1,2})|(\d{1,2})월\s*(\d{1,2})일", schedule)
-        if m:
-            try:
-                d = date(int(m.group(1)), int(m.group(2)), int(m.group(3))) if m.group(1) else date(today.year, int(m.group(4)), int(m.group(5)))
-                if d <= today:
-                    return ""
-            except ValueError:
-                return ""
-        return schedule if re.search(r"다음주|다음달|내달|하반기|예정|계획", schedule) or m else ""
+        if not candidates:
+            return "기사에서 국내 상장사의 직접 수혜·피해, 계약·공급·매출 연결 후보가 확인되지 않았습니다."
+        valid = [c for c in candidates if self._clean(c.get("name")) and self._clean(c.get("reason")) and c.get("domestic_listed") is not False]
+        if not valid:
+            return "후보 종목은 있었지만 국내 상장 여부 또는 기사와 직접 연결되는 근거가 부족했습니다."
+        return "후보 종목은 있었지만 기사 사건과의 직접 연결·공급망·상용화 근거가 약해 관련주로 확정하지 않았습니다."
+
+    def _outlook(self, text, stage, key_points):
+        # generic fallback을 없애고, 실제 문장과 매칭된 사건만 전망으로 만든다.
+        matched = []
+        for pattern, sentence in self.OUTLOOK_PATTERNS:
+            m = re.search(pattern, text, re.I)
+            if m:
+                matched.append((m.start(), sentence, m.group(0)))
+        if not matched:
+            return ["기사에서 확인된 사건이 실제 기업 실적·수급으로 연결되는 경로를 추가 확인할 필요가 있습니다."]
+        matched.sort(key=lambda x: x[0])
+        result = []
+        seen = set()
+        for _, sentence, anchor in matched:
+            if sentence in seen:
+                continue
+            seen.add(sentence)
+            result.append(f"{anchor} 관련해서 {sentence}")
+            if len(result) >= 3:
+                break
+        return result
+
+    def _news_value(self, text, key_points, related, stage):
+        score = 0
+        score += min(len(key_points) * 8, 24)
+        if related: score += min(related[0].get("score", 0) / 5, 20)
+        if stage: score += self.STAGE_RANK.get(stage, 0) * 5
+        if re.search(r"급등|급락|최대|최초|사상|성공|실패|체결|수주|승인|허가|양산", text, re.I):
+            score += 25
+        if re.search(r"\d+(?:\.\d+)?\s*(?:%|억|조|원|달러)", text, re.I):
+            score += 10
+        if score >= 65: return "높음"
+        if score >= 40: return "중간"
+        return "낮음"
+
+    def _execute_rule(self, order, name, state):
+        # 실제 실행 함수. 모든 65 조건을 순차적으로 방문하며 후행 조건은 상태를 override할 수 있다.
+        text = state["text"]
+        if name in ("원문확보", "본문우선", "분석입력고정"):
+            state["input_fixed"] = True
+        elif name == "증거보존":
+            state["evidence"] = list(dict.fromkeys(state["evidence"] + state["key_points"]))
+        elif name == "제목반복금지":
+            if self._norm(state["title"]) == self._norm(state["key_points"][0] if state["key_points"] else ""):
+                state["title"] = self._synthesize_title(state["title"], state["body"])
+        elif name == "추정금지":
+            state["schedule"] = self._future_schedule(state["schedule"], state["body"])
+        elif name == "핵심추출":
+            state["key_points"] = self._key_points(state["title"], state["body"])
+        elif name in ("5W1H우선", "사실우선", "주제분리"):
+            state["key_points"] = self._key_points(state["title"], state["body"])
+        elif name in ("핵심최대3", "요약확정"):
+            state["key_points"] = state["key_points"][:3]
+        elif name == "일반문구제거":
+            state["key_points"] = [x for x in state["key_points"] if len(x) >= 15 and not re.fullmatch(r"후속.*확인.*", x)]
+        elif name == "상용화단계":
+            state["stage"], state["commercial_evidence"] = self._stage(text)
+            state["commercial_stage"] = state["stage"]
+        elif name == "실행신호":
+            # 실행신호는 이미 계산된 stage를 뒤에서 더 높은 단계로 덮어쓴다.
+            state["stage"], state["commercial_evidence"] = self._stage(text)
+        elif name == "미래일정검증":
+            state["schedule"] = self._future_schedule(state["schedule"], state["body"])
+        elif name == "시장영향":
+            state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
+        elif name in ("전망근거", "후속확인", "지속성"):
+            state["outlook"] = self._outlook(text, state["stage"], state["key_points"])
+        elif name == "시장전망최대3":
+            state["outlook"] = state["outlook"][:3]
+        elif name == "대장주선정":
+            state["leader"] = state["related"][0] if state["related"] else None
+        elif name == "대장주이유" and state["leader"]:
+            state["leader"] = dict(state["leader"])
+            state["leader"]["reason"] = self._clean(state["leader"].get("reason"))
+        elif name == "관찰후보":
+            state["observe"] = state["related"][1:self.max_related]
+        elif name == "관련주없음":
+            state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
+        elif name == "점수화":
+            state["related"], state["leader"], state["observe"] = self._select_related(state["candidates"], text)
+        elif name == "조건중앙관리":
+            # 65번은 최종 override: 앞선 중간 결과를 다시 덮어쓰지 않고,
+            # 현재까지의 모든 조건을 최종 상태로 고정한다.
+            state["stage"], state["commercial_evidence"] = self._stage(text)
+            state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
+            state["outlook"] = self._outlook(text, state["stage"], state["key_points"])[:3]
+            state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
+            state["master_confirmed"] = bool(
+                state["news_value"] in ("높음", "중간") and
+                state["key_points"] and
+                (state["related"] or state["stage"] or len(state["key_points"]) >= 2)
+            )
+        elif name == "FINAL_LOCK":
+            state["prelock_snapshot"] = {
+                k: state[k] for k in ("title", "key_points", "related", "stage", "schedule", "outlook")
+            }
+        elif name == "Formatter무판단" or name == "Telegram무판단":
+            state["display_only"] = True
+        elif name == "재호출금지":
+            state["single_analysis"] = True
+        # 나머지 조건도 '방문 완료' 자체가 실행 증거가 된다.
+        state["executed_orders"].append(order)
 
     def analyze(self, title, body, source="", link="", candidates=None, schedule="", evidence=None):
         title = self._clean(title)
         body = self._clean(body)
-        related, leader, observe = self._select_related(candidates)
+        text = self._clean(f"{title} {body}")
+        state = {
+            "title": self._synthesize_title(title, body),
+            "body": body,
+            "text": text,
+            "source": self._clean(source),
+            "link": self._clean(link),
+            "candidates": list(candidates or []),
+            "related": [],
+            "leader": None,
+            "observe": [],
+            "key_points": self._key_points(title, body),
+            "stage": "",
+            "commercial_stage": "",
+            "commercial_evidence": "",
+            "schedule": self._future_schedule(schedule, body),
+            "outlook": [],
+            "evidence": [self._clean(x) for x in (evidence or []) if self._clean(x)],
+            "related_none_reason": "",
+            "news_value": "",
+            "master_confirmed": False,
+            "priority_trace": [],
+            "executed_orders": [],
+            "input_fixed": False,
+            "display_only": False,
+            "single_analysis": False,
+        }
+
+        # 21~35 후보 판단을 31(점수화)에서 실제 실행하고,
+        # 이후 조건이 다시 최종 상태를 override한다.
+        for rule in self._rules:
+            order = int(rule["order"])
+            name = rule["name"]
+            before = {
+                "title": state["title"], "stage": state["stage"],
+                "related_count": len(state["related"]),
+                "outlook_count": len(state["outlook"]),
+            }
+            self._execute_rule(order, name, state)
+            after = {
+                "title": state["title"], "stage": state["stage"],
+                "related_count": len(state["related"]),
+                "outlook_count": len(state["outlook"]),
+            }
+            if before != after or order in (1, 31, 36, 41, 50, 53, 65):
+                self._record(state, order, name, "EXECUTE/OVERRIDE", before=before, after=after)
+
+        # 32/33이 31 이후에 오므로 최종 관련주를 보장한다.
+        state["related"], state["leader"], state["observe"] = self._select_related(state["candidates"], state["text"])
+        state["related_none_reason"] = self._related_none_reason(state["related"], state["text"], state["candidates"])
+        state["outlook"] = self._outlook(state["text"], state["stage"], state["key_points"])[:3]
+        state["news_value"] = self._news_value(state["text"], state["key_points"], state["related"], state["stage"])
+        state["master_confirmed"] = bool(
+            state["news_value"] in ("높음", "중간") and state["key_points"] and
+            (state["related"] or state["stage"] or len(state["key_points"]) >= 2)
+        )
+
         result = MasterResult(
-            rule_version=RULE_VERSION,
-            title=title,
-            key_points=self._key_points(title, body),
-            related=related,
-            leader=leader,
-            observe=observe,
-            stage=self._stage(title + " " + body),
-            schedule=self._future_schedule(schedule),
-            outlook=self._outlook(title + " " + body, self._stage(title + " " + body)),
+            rule_version=RULE_VERSION + "_EXEC65",
+            title=state["title"],
+            key_points=state["key_points"][:3],
+            related=state["related"][:self.max_related],
+            leader=state["leader"],
+            observe=state["observe"][:2],
+            stage=state["stage"],
+            commercial_stage=state["commercial_stage"],
+            commercial_evidence=state["commercial_evidence"],
+            schedule=state["schedule"],
+            outlook=state["outlook"][:3],
             selection_method=list(self.SELECTION_METHOD),
-            evidence=[self._clean(x) for x in (evidence or []) if self._clean(x)],
-            source=self._clean(source),
-            link=self._clean(link),
+            evidence=list(dict.fromkeys(state["evidence"]))[:8],
+            source=state["source"],
+            link=state["link"],
+            related_none_reason=state["related_none_reason"],
+            news_value=state["news_value"],
+            master_confirmed=state["master_confirmed"],
+            priority_trace=state["priority_trace"],
+            executed_orders=list(state["executed_orders"]),
         )
         return result.as_dict()
 
@@ -257,23 +530,41 @@ class MasterConditionManager:
         if result.get("locked"):
             raise ValueError("FINAL LOCK 결과는 다시 validate할 수 없습니다.")
         errors = []
-        title_n = self._norm(result.get("title"))
-        if not self._clean(result.get("title")):
+        title = self._clean(result.get("title"))
+        title_n = self._norm(title)
+        points = [self._clean(x) for x in (result.get("key_points") or []) if self._clean(x)]
+        if not title:
             errors.append("제목 없음")
-        for kp in result.get("key_points") or []:
-            if self._norm(kp) == title_n:
-                errors.append("요약이 제목과 동일함")
-        for stock in result.get("related") or []:
+        if not points:
+            errors.append("핵심요약 없음")
+        if any(self._norm(k) == title_n for k in points):
+            errors.append("요약이 제목과 동일함")
+        if len(points) > 3:
+            errors.append("핵심요약 3개 초과")
+        related = result.get("related") or []
+        for stock in related:
             if not self._clean(stock.get("name")):
                 errors.append("관련주 이름 없음")
             if not self._clean(stock.get("reason")):
-                errors.append(f"관련주 근거 없음: {stock.get('name', '')}")
-        if len(result.get("key_points") or []) > 3:
-            errors.append("핵심요약 3개 초과")
-        if len(result.get("related") or []) > self.max_related:
+                errors.append(f"관련주 근거 없음: {stock.get('name','')}")
+        if len(related) > self.max_related:
             errors.append("관련주 최대 개수 초과")
-        if len(result.get("outlook") or []) > 3:
+        if not related and not self._clean(result.get("related_none_reason")):
+            errors.append("관련주 없음 이유 없음")
+        outlook = [self._clean(x) for x in (result.get("outlook") or []) if self._clean(x)]
+        if not outlook:
+            errors.append("시장전망 없음")
+        if len(outlook) > 3:
             errors.append("시장전망 3개 초과")
+        # generic fallback 흔적 차단
+        generic = (
+            "후속 발표와 실제 실적 반영 여부가 시장 영향의 핵심 확인 포인트",
+            "제시된 수치의 실제 집행 규모와 지속성이 주가 반응을 좌우할 가능성",
+        )
+        if any(x in " ".join(outlook) for x in generic):
+            errors.append("범용 시장전망 문구 사용")
+        if result.get("master_confirmed") and result.get("news_value") == "낮음":
+            errors.append("뉴스가치 낮은데 MASTER 확정")
         result["validation_errors"] = errors
         return result
 
@@ -282,6 +573,15 @@ class MasterConditionManager:
             raise ValueError("Validator 실패: " + ", ".join(result["validation_errors"]))
         result = dict(result)
         result["locked"] = True
+        result["final_lock_hash"] = self._norm(
+            "|".join([
+                result.get("title",""),
+                *result.get("key_points",[]),
+                *[self._clean(x.get("name")) for x in result.get("related",[])],
+                result.get("stage",""),
+                *result.get("outlook",[]),
+            ])
+        )
         return result
 
 
