@@ -2701,19 +2701,17 @@ def _engine_future_schedule(text: str) -> str:
 
 
 def _engine_format_message(item):
-    """최종 뉴스 카드. AI 없이 단일 규칙 기반 분석 결과만 사용한다."""
+    """MASTER FINAL LOCK 결과를 표시만 한다. Formatter는 재판단하지 않는다."""
     source_raw=str(item.get('source',''))
     source_display='🇺🇸' if source_raw=='Google-US' else source_raw
     time_text=str(item.get('time_text','')).strip()
-    raw_title=str(item.get('title','')).strip()
-    raw_extra=str(item.get('extra','')).strip()
-    insight=_engine_news_insight(raw_title, raw_extra, source_raw)
-    title=insight['title'] or _engine_strip_foreign_publisher_suffix(raw_title)
-    companies=item.get('companies',[]) or []
-    domestic=_engine_domestic_companies(companies)
-    title=_apply_domestic_highlight(title,domestic)
-    if _engine_is_commercial_value(item,title,' '.join(insight['key_points'])) and not title.startswith('🎯'):
-        title='🎯 '+title
+    master=item.get('master_result') or {}
+    title=str(master.get('title') or item.get('title') or '').strip()
+    key_points=list(master.get('key_points') or [])[:3]
+    related=list(master.get('related') or [])[:3]
+    stage=str(master.get('stage') or '').strip()
+    outlook=list(master.get('outlook') or [])[:3]
+    schedule=str(master.get('schedule') or '').strip()
     freshness,prev=_engine_freshness(item)
     header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
     if time_text: header += f'                                      🕐 {html.escape(time_text)}'
@@ -2721,29 +2719,21 @@ def _engine_format_message(item):
     if freshness in ('재탕','업그레이드') and prev:
         lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
     lines.append('🔎 요약')
-    for kp in insight['key_points'][:3]: lines.append('     ✔ '+html.escape(kp[:220]))
-    # 관련주는 반드시 뉴스 원문 촉매와 연결되는 경우만 출력. 테마 자동 채우기는 금지.
-    related=[]
-    try:
-        rows=_engine_domestic_watchlist(item)
-        for row in rows:
-            if row.get('direct'):
-                related.append((row['name'],row.get('reason','')))
-            elif row.get('score',0)>=360:
-                related.append((row['name'],row.get('reason','')))
-    except Exception: related=[]
+    for kp in key_points:
+        lines.append('     ✔ '+html.escape(str(kp)[:220]))
     if related:
-        related=related[:3]
-        lines.append('✔️👀관련주 : '+' · '.join('⚡️'+html.escape(n) for n,_ in related))
-        lines.append('    👀관련주 근거 : '+' · '.join(html.escape(r[:120]) for _,r in related if r))
+        lines.append('✔️👀관련주 : '+' · '.join('⚡️'+html.escape(str(r.get('name',''))) for r in related))
+        reasons=[str(r.get('reason','')).strip() for r in related if str(r.get('reason','')).strip()]
+        if reasons:
+            lines.append('    👀관련주 근거 : '+' · '.join(html.escape(r[:120]) for r in reasons))
     else:
         lines.append('✔️👀관련주 : 無')
-    if insight['stage']:
+    if stage:
         lines.append('🧭 상용화/실행 단계')
-        lines.append('     ✔ '+html.escape(insight['stage']))
+        lines.append('     ✔ '+html.escape(stage))
     lines.append('📈 시장 전망')
-    for o in insight['outlook'][:3]: lines.append('     ✔ '+html.escape(o))
-    schedule=_engine_future_schedule(raw_extra)
+    for o in outlook:
+        lines.append('     ✔ '+html.escape(str(o)[:220]))
     if schedule:
         dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
         lines.append('📅 일정')
@@ -2753,6 +2743,7 @@ def _engine_format_message(item):
     if item.get('link'):
         lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문 보기</a>')
     return '\n\n'.join(x for x in lines if str(x).strip())
+
 
 def _engine_flush_pending():
     """대기 뉴스는 유사기사라도 묶거나 재탕 차단하지 않는다.
@@ -2872,11 +2863,53 @@ def _engine_process_item(source, title, link, published="", extra=""):
         reason = "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
         _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80])
         return False
+
+    # ========================================================
+    # MASTER 65-CONDITION 실제 송출 진입점
+    # 수집/기본필터 이후 Telegram 대기열에 넣기 전에
+    # 반드시 MASTER -> Validator -> FINAL LOCK을 수행한다.
+    # MASTER 결과를 이후 Formatter가 그대로 사용하므로
+    # 출력 직전 재판단/재생성을 하지 않는다.
+    # ========================================================
+    try:
+        provisional = {
+            "title": title,
+            "extra": extra,
+            "companies": companies,
+            "market_hits": market_hits,
+        }
+        master_candidates = _engine_domestic_watchlist(provisional)
+        master_schedule = _engine_future_schedule(f"{title} {extra}")
+        master_evidence = [x for x in (k1, k2) if str(x).strip()] + [str(x) for x in (market_hits or []) if str(x).strip()]
+        master_result = master_finalize_news(
+            title=title,
+            body=extra,
+            source=source,
+            link=link,
+            candidates=master_candidates,
+            schedule=master_schedule,
+            evidence=master_evidence,
+        )
+        if not master_result.get("locked"):
+            raise ValueError("MASTER FINAL LOCK 실패")
+        _engine_log(
+            "info",
+            "[MASTER] 완료 | source=%s | 관련주=%d | 대장주=%s | stage=%s | FINAL_LOCK=%s",
+            source,
+            len(master_result.get("related") or []),
+            (master_result.get("leader") or {}).get("name", "無"),
+            master_result.get("stage") or "없음",
+            master_result.get("locked"),
+        )
+    except Exception as e:
+        _engine_log("error", "[MASTER 제외] Validator/FINAL LOCK 실패 | source=%s | %s | 원인=%s", source, title[:100], str(e)[:180])
+        return False
+
     time_text = ""
     dt = _engine_parse_datetime(published)
     if dt:
         time_text = dt.strftime("%H:%M")
-    _engine_pending.append({"source":source,"title":title,"link":link,"published":published,"extra":extra,"key":key,"category":category,"companies":companies,"k1":k1,"k2":k2,"market_hits":market_hits,"time_text":time_text,"market_state":market_state})
+    _engine_pending.append({"source":source,"title":title,"link":link,"published":published,"extra":extra,"key":key,"category":category,"companies":companies,"k1":k1,"k2":k2,"market_hits":market_hits,"time_text":time_text,"market_state":market_state,"master_result":master_result})
     try:
         dt_mem = _engine_parse_datetime(published) or _now_kst()
         with _US_BRIEFING_LOCK:
