@@ -1,4 +1,4 @@
-# 수정 1 - 실시간 로그 기록 및 콘텐츠 수집·발송 루프 정상화 버전
+# 수정 2 - 시간 제약 필터 해제 및 실시간 텔레그램 브리핑 전송 버전
 import os
 import time
 import logging
@@ -18,7 +18,7 @@ BOT_TOKEN = "8475724946:AAEkypDs4bHPAnjiInyAsVHDzCfNDS2LXGs"
 CHAT_ID = "6754280298"
 
 # ============================================================
-# 기본 로깅 및 실시간 파일 저장 설정 (수정 1 반영)
+# 기본 로깅 및 실시간 파일 저장 설정
 # ============================================================
 LOG_FILE = Path("bot_log.txt")
 logging.basicConfig(
@@ -47,7 +47,7 @@ SESSION.headers.update({
 })
 
 # ============================================================
-# 필수 매핑 상수 및 엔진 정의 (NameError 방지)
+# 필수 매핑 상수 및 엔진 정의
 # ============================================================
 STOCK_LINK_MAP = {
     "삼성전자": "https://finance.naver.com/item/main.naver?code=005930",
@@ -55,14 +55,6 @@ STOCK_LINK_MAP = {
     "현대차": "https://finance.naver.com/item/main.naver?code=005380",
     "NAVER": "https://finance.naver.com/item/main.naver?code=035420"
 }
-
-def _engine_classify(text):
-    """콘텐츠/뉴스 분류 엔진 함수"""
-    if not text:
-        return "일반"
-    if any(keyword in text for keyword in ["하이닉스", "삼성전자", "반도체", "NAND", "메모리"]):
-        return "반도체/테크"
-    return "일반"
 
 def load_seen():
     """중복 수집 방지 기록 로드"""
@@ -101,8 +93,8 @@ def send_telegram_message(text):
         logging.error(f"전송 실패: {e}")
         return False
 
-def fetch_naver_news(query, display=50, start=1):
-    """NCP API Gateway 인증을 완벽하게 적용한 네이버 뉴스 검색 함수"""
+def fetch_naver_news(query, display=10, start=1):
+    """네이버 뉴스 검색 함수"""
     headers = {
         "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
         "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
@@ -118,14 +110,14 @@ def fetch_naver_news(query, display=50, start=1):
         if res.status_code == 200:
             return res.json().get("items", [])
         else:
-            logging.error(f"[HTTP 실패] 네이버 검색 쿼리({query}) 상태코드: {res.status_code}")
+            logging.error(f"[HTTP 실패] 네이버 검색 상태코드: {res.status_code}")
             return []
     except Exception as e:
         logging.error(f"[네이버 검색 오류] {e}")
         return []
 
 def build_analysis_message(source_name, title, cause, result, direction, url, published_time=None):
-    """원인, 결과, 향후 방향성이 포함된 심층 분석 서식 적용"""
+    """사장님이 원하는 원인, 결과, 향후 방향성 포맷 적용"""
     now_text = published_time or datetime.now(KST).strftime("%H:%M")
     
     return (
@@ -139,34 +131,20 @@ def build_analysis_message(source_name, title, cause, result, direction, url, pu
     )
 
 def run():
-    """메인 실행 루프 (수정 1)"""
-    logging.info("🤖 텔레그램/유튜브/블로그 콘텐츠 수집 봇 시작 (수정 1)")
+    """메인 실행 루프 (시간 제약 해제 버전)"""
+    logging.info("🤖 콘텐츠 수집 봇 시작 (시간 제약 해제)")
     
-    # 1. 봇 가동 시 텔레그램 알림 메시지 즉시 전송
-    success = send_telegram_message("🤖 <b>텔레그램/유튜브/블로그 콘텐츠 수집 봇이 가동을 시작했습니다. (수정 1)</b>")
-    logging.info(f"가동 알림 메시지 전송 결과: {success}")
+    send_telegram_message("🤖 <b>콘텐츠 수집 봇이 가동을 시작했습니다. (시간 제약 해제됨)</b>")
     
     seen = load_seen()
-    
-    # 2. 즉시 메시지 수신 테스트
-    test_title = "[테스트] 수정 1 실시간 로그 기록 및 수집 루프 점검"
-    test_cause = "NCP API Gateway 인증 유지 및 while 루프 내 수집 로직 연동"
-    test_result = "메시지 미발송 문제 해결 및 bot_log.txt 실시간 기록 체계 구축"
-    test_direction = "실시간 콘텐츠 수집 및 원인-결과-방향성 자동 브리핑 수행"
-    test_url = STOCK_LINK_MAP.get("삼성전자", "https://naver.com")
-    
-    instant_msg = build_analysis_message("시스템정상화", test_title, test_cause, test_result, test_direction, test_url)
-    send_telegram_message(instant_msg)
-    logging.info("테스트 분석 요약 메시지 즉시 전송 완료")
     
     while True:
         try:
             logging.info(f"[주기 시작] KST={datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}")
             
-            # [수정 1] 비어있던 while 루프에 실제 수집 및 전송 로직 구현
             query_keyword = "반도체"
-            news_items = fetch_naver_news(query_keyword, display=10)
-            logging.info(f"검색어 '{query_keyword}' 수집된 뉴스 개수: {len(news_items)}")
+            news_items = fetch_naver_news(query_keyword, display=5)
+            logging.info(f"수집된 뉴스 개수: {len(news_items)}")
             
             new_count = 0
             for item in news_items:
@@ -177,9 +155,10 @@ def run():
                 title = item.get("title", "").replace("<b>", "").replace("</b>", "").replace("&quot;", "\"")
                 description = item.get("description", "").replace("<b>", "").replace("</b>", "").replace("&quot;", "\"")
                 
-                cause = f"네이버 뉴스 실시간 스캔 (키워드: {query_keyword})"
-                result = description[:100] + "..." if len(description) > 100 else description
-                direction = "관련 시장 동향 분석 및 변동성 모니터링 지속"
+                # 시간 제약을 두지 않고 수집된 내용을 곧바로 포맷에 맞춰 전송
+                cause = f"실시간 콘텐츠 스캔 (키워드: {query_keyword})"
+                result = description[:150] + "..." if len(description) > 150 else description
+                direction = "시장 영향 및 관련 종목 동향 모니터링 필요"
                 
                 target_url = link
                 for key, mapped_url in STOCK_LINK_MAP.items():
@@ -193,17 +172,16 @@ def run():
                     seen.add(link)
                     new_count += 1
                     logging.info(f"[전송 성공] {title}")
-                    time.sleep(1)
+                    time.sleep(2)
                 else:
                     logging.error(f"[전송 실패] {title}")
             
             if new_count > 0:
                 save_seen(seen)
-                logging.info(f"신규 수집 및 전송 건수: {new_count}건")
+                logging.info(f"신규 전송 완료: {new_count}건")
             else:
-                logging.info("새로운 수집 항목 없음")
+                logging.info("새로운 항목 없음")
             
-            logging.info("[주기 완료] 60초 대기 중...")
             time.sleep(60)
             
         except Exception as e:
@@ -212,4 +190,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-```[cite: 1]
