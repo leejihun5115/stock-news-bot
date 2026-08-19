@@ -2904,6 +2904,8 @@ def _engine_flush_pending():
         # 서로 다른 보도 링크/재보도는 차단하지 않고 반드시 [재탕]으로 송출한다.
         if key in _engine_seen:
             continue
+        master_result = _engine_master_result(item)
+        item["_master_result"] = master_result
         message = _engine_format_message(item)
         master_badge = _engine_master_badge(master_result)
         image_sent = False
