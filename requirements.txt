@@ -5,3 +5,4 @@ beautifulsoup4==4.15.0
 feedparser==6.0.14
 schedule==1.2.2
 google-cloud-firestore
+Pillow==11.3.0
