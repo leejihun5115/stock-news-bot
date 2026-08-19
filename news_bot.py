@@ -296,6 +296,18 @@ ENABLE_US_NEWS = _startup_env_flag("ENABLE_US_NEWS")
 ENABLE_TELEGRAM_CHANNELS = _startup_env_flag("ENABLE_TELEGRAM_CHANNELS")
 ENABLE_YOUTUBE = _startup_env_flag("ENABLE_YOUTUBE")
 
+# ------------------------------------------------------------
+# 🤖 AI 분석 단계 (Claude API) - 제목 자동생성/핵심요약 분리/
+#    공시 수치 비교(%)/원인→결과/테마·종목 연결/최종 AI 총평
+# 반드시 Render 환경변수에 ANTHROPIC_API_KEY를 넣어야 동작한다.
+# 기본값은 꺼짐(false) - 켜려면 ENABLE_AI_ANALYSIS=true 로 설정.
+# ------------------------------------------------------------
+ANTHROPIC_API_KEY = _clean_secret_env("ANTHROPIC_API_KEY")
+ENABLE_AI_ANALYSIS = _startup_env_flag("ENABLE_AI_ANALYSIS", default=False)
+AI_MODEL = os.environ.get("AI_MODEL", "claude-sonnet-4-5").strip() or "claude-sonnet-4-5"
+AI_TIMEOUT = max(5, int(os.environ.get("AI_TIMEOUT_SEC", "25")))
+AI_MIN_TEXT_LEN = max(0, int(os.environ.get("AI_MIN_TEXT_LEN", "15")))
+
 # 🔎 상세 로그 기록 강화
 # ------------------------------------------------------------
 # Render 콘솔 + news_bot.log에 동시에 기록
@@ -2559,6 +2571,168 @@ def _engine_format_keypoint_lines(keypoint: str, subtitle: str = "") -> list:
     return [line]
 
 
+# ============================================================
+# 🤖 AI 분석 단계 (Claude API)
+# ============================================================
+def _ai_analyze_item(title: str, body_text: str, source: str, companies: list) -> dict:
+    """뉴스/공시 원문을 Claude에 보내 구조화된 분석을 받아온다.
+    실패/비활성/텍스트부족 시 None을 반환하고, 호출부는 기존 규칙기반 로직으로 그대로 진행한다.
+    (즉, 이 함수가 죽어도 봇 자체는 절대 죽지 않는다.)
+    """
+    if not (ENABLE_AI_ANALYSIS and ANTHROPIC_API_KEY):
+        return None
+
+    raw = _engine_clean(f"{title}\n{body_text}")
+    if len(raw) < AI_MIN_TEXT_LEN:
+        return None
+
+    company_text = ", ".join([str(c) for c in (companies or [])][:8]) or "없음"
+
+    user_prompt = f"""너는 한국 주식시장 전문 애널리스트다. 아래 뉴스/공시 원문을 분석해서
+지정된 JSON 스키마로만 답하라. 설명, 인사말, 코드블록 기호(```) 등 JSON 외의 어떤 텍스트도 포함하지 마라.
+
+[원문]
+출처: {source}
+제목: {title}
+본문/내용: {body_text[:3500]}
+언급된 기업: {company_text}
+
+[JSON 스키마 - 이 형태로만 답할 것]
+{{
+  "title": "기자가 쓴 것처럼 핵심을 압축한 한국어 제목 (25~40자, 사실만)",
+  "key_points": ["핵심 요점 1 (간결, 한 문장)", "핵심 요점 2", "..."],
+  "comparison": {{
+    "label": "예: 전년동기 대비 / 직전분기 대비 / 컨센서스 대비",
+    "rows": [
+      {{"항목": "매출", "이전": "100억", "현재": "130억", "증감률": "+30.0%"}}
+    ]
+  }},
+  "cause_effect": {{"cause": "원인 한 줄", "effect": "예상되는 결과/영향 한 줄"}},
+  "theme": "관련 테마명 또는 null",
+  "stocks": ["관련 종목명1", "관련 종목명2"],
+  "ai_analysis": "이 뉴스가 시장/종목에 어떤 의미인지 2~3문장으로 담백하게 총평"
+}}
+
+규칙:
+- 원문에 실제로 있는 사실/수치만 사용한다. 없는 숫자를 지어내지 않는다.
+- comparison은 원문에 비교 가능한 수치(이전 vs 현재, 증감률 등)가 있을 때만 rows를 채우고, 없으면 "comparison": null 로 답한다.
+- cause_effect도 원문에서 근거가 명확할 때만 채우고, 불명확하면 null로 답한다.
+- stocks/theme도 원문 근거가 없으면 빈 배열([])이나 null로 답한다. 추측성 연결 금지.
+- key_points는 최소 1개, 최대 5개. 핵심이 하나면 1개만 써도 된다.
+"""
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": AI_MODEL,
+                "max_tokens": 1200,
+                "system": "너는 정확성을 최우선으로 하는 한국 주식시장 애널리스트다. 반드시 순수 JSON 객체 하나만 출력한다.",
+                "messages": [{"role": "user", "content": user_prompt}],
+            },
+            timeout=AI_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            _engine_log("warning", "[AI분석] HTTP실패 | status=%s | %s", resp.status_code, str(resp.text)[:200])
+            return None
+        data = resp.json()
+        text_parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
+        raw_text = "".join(text_parts).strip()
+        raw_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text, flags=re.IGNORECASE).strip()
+        m = re.search(r"\{.*\}", raw_text, flags=re.DOTALL)
+        if m:
+            raw_text = m.group(0)
+        result = json.loads(raw_text)
+        if not isinstance(result, dict):
+            return None
+        return result
+    except Exception as e:
+        _engine_log("warning", "[AI분석] 예외 | %s", str(e)[:200])
+        return None
+
+
+def _ai_format_main_lines(ai: dict) -> list:
+    """핵심요약 / 수치비교표 / 원인→결과 - 메시지 앞쪽(제목 바로 아래)에 배치."""
+    lines = []
+
+    key_points = ai.get("key_points") or []
+    if isinstance(key_points, list) and key_points:
+        lines.append("🔎 핵심 요약")
+        n = 0
+        for kp in key_points[:5]:
+            kp = _engine_clean(str(kp))[:150]
+            if kp:
+                n += 1
+                lines.append(f"{n}. {html.escape(kp)}")
+
+    comparison = ai.get("comparison")
+    if isinstance(comparison, dict) and isinstance(comparison.get("rows"), list) and comparison["rows"]:
+        rows = [r for r in comparison["rows"] if isinstance(r, dict)][:6]
+        if rows:
+            label = html.escape(str(comparison.get("label") or "비교"))
+            lines.append(f"📊 수치 비교 ({label})")
+            headers = list(rows[0].keys())[:5]
+            col_w = {}
+            for h in headers:
+                col_w[h] = max(len(str(h)), max(len(str(r.get(h, ""))) for r in rows))
+            header_line = " | ".join(str(h).ljust(col_w[h]) for h in headers)
+            sep_line = "-+-".join("-" * col_w[h] for h in headers)
+            table_lines = [header_line, sep_line]
+            for r in rows:
+                table_lines.append(" | ".join(str(r.get(h, "")).ljust(col_w[h]) for h in headers))
+            table_text = "\n".join(table_lines)
+            lines.append(f"<pre>{html.escape(table_text)}</pre>")
+
+    ce = ai.get("cause_effect")
+    if isinstance(ce, dict) and (ce.get("cause") or ce.get("effect")):
+        lines.append("🧩 원인 → 결과")
+        cause = _engine_clean(str(ce.get("cause") or ""))[:150]
+        effect = _engine_clean(str(ce.get("effect") or ""))[:150]
+        if cause:
+            lines.append(f"원인: {html.escape(cause)}")
+        if effect:
+            lines.append(f"결과: {html.escape(effect)}")
+
+    return lines
+
+
+def _ai_format_tail_lines(ai: dict) -> list:
+    """테마/종목 연결 + 최종 AI 총평 - 메시지 맨 마지막(원문 링크 바로 위)에 배치."""
+    lines = []
+
+    theme = ai.get("theme")
+    stocks = ai.get("stocks") or []
+    tag_parts = []
+    if theme and str(theme).strip().lower() not in ("null", "none", ""):
+        tag_parts.append(f"테마: {html.escape(str(theme).strip())}")
+    if isinstance(stocks, list) and stocks:
+        stock_text = ", ".join(f"⚡️{html.escape(str(s).strip())}" for s in stocks[:5] if str(s).strip())
+        if stock_text:
+            tag_parts.append(f"종목: {stock_text}")
+    if tag_parts:
+        lines.append("🏷 AI 연결 " + " · ".join(tag_parts))
+
+    analysis = ai.get("ai_analysis")
+    if analysis:
+        analysis_text = _engine_clean(str(analysis))[:400]
+        if analysis_text:
+            lines.append("🤖 AI 분석")
+            lines.append(html.escape(analysis_text))
+
+    return lines
+
+
+def _apply_domestic_highlight(text: str, domestic_list: list) -> str:
+    for c in domestic_list:
+        text = re.sub(rf"(?<!⚡️)({re.escape(c)})", r"⚡️\1", text)
+    return text
+
+
 def _engine_format_message(item):
     """뉴스 카드 최종 출력.
     원문 수집/필터/DB/시장상태/스케줄 로직은 변경하지 않고,
@@ -2574,8 +2748,17 @@ def _engine_format_message(item):
 
     # 국내 상장기업이 실제로 제목/본문에서 확인되는 경우에만 표시.
     domestic = _engine_domestic_companies(companies)
-    for c in domestic:
-        title = re.sub(rf"(?<!⚡️)({re.escape(c)})", r"⚡️\1", title)
+    title = _apply_domestic_highlight(title, domestic)
+
+    # ------------------------------------------------------------
+    # 🤖 AI 분석 (Claude) - 활성화 + 텍스트 충분할 때만 호출.
+    # 실패하거나 꺼져있으면 ai_result=None이 되어 기존 규칙기반 로직 그대로 사용.
+    # ------------------------------------------------------------
+    ai_result = _ai_analyze_item(title, extra, str(item.get("source", "")), companies)
+    if ai_result and ai_result.get("title"):
+        ai_title = _engine_clean(str(ai_result["title"]))[:80]
+        if ai_title:
+            title = _apply_domestic_highlight(ai_title, domestic)
 
     source_raw = str(item.get("source", ""))
     source_display = "🇺🇸" if source_raw == "Google-US" else source_raw
@@ -2666,8 +2849,12 @@ def _engine_format_message(item):
 
     # ------------------------------------------------------------
     # 2) 핵심요약 (①②③ 여러 항목이면 줄바꿈/들여쓰기 + 원문 실제 부제목 병기)
+    #    AI 분석이 성공했으면 AI의 핵심요약/비교표/원인결과를 우선 사용하고,
+    #    AI가 꺼져있거나 실패했으면 기존 규칙기반 keypoint를 그대로 사용한다.
     # ------------------------------------------------------------
-    if keypoint:
+    if ai_result and (ai_result.get("key_points") or ai_result.get("comparison") or ai_result.get("cause_effect")):
+        lines.extend(_ai_format_main_lines(ai_result))
+    elif keypoint:
         subtitle = _engine_fetch_subtitle(item.get("link", ""))
         lines.extend(_engine_format_keypoint_lines(keypoint, subtitle))
 
@@ -2743,6 +2930,12 @@ def _engine_format_message(item):
             lines.append("📅 일정")
             if date_part: lines.append(html.escape(date_part))
             if event_part: lines.append("✔ " + html.escape(event_part[:220]))
+
+    # ------------------------------------------------------------
+    # 6) 🤖 AI 분석 (테마/종목 연결 + 최종 총평) - 항상 맨 마지막 단계로 배치
+    # ------------------------------------------------------------
+    if ai_result:
+        lines.extend(_ai_format_tail_lines(ai_result))
 
     if item.get("link"):
         link = html.escape(str(item["link"]), quote=True)
