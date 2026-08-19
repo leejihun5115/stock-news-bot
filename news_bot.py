@@ -1,4 +1,4 @@
-# 수정본5 최종 완성본 - 네이버 API URL 및 헤더 완벽 수정, 시간 제한 완화 적용
+# 수정 1 - 실시간 로그 기록 및 콘텐츠 수집·발송 루프 정상화 버전
 import os
 import time
 import logging
@@ -12,18 +12,22 @@ from bs4 import BeautifulSoup
 # ============================================================
 NAVER_CLIENT_ID = "awreai1r3c"
 NAVER_CLIENT_SECRET = "221Y4jln7CVXNCFwzBhxtptiCZSx0qBI5s45rr6x"
-# [수정 완료] 401 에러 원인인 구형 URL을 NCP API Gateway 전용 URL로 완전 교체
 NAVER_NEWS_URL = "https://openapi.apigw.ntruss.com/search/v1/news.json"
 
 BOT_TOKEN = "8475724946:AAEkypDs4bHPAnjiInyAsVHDzCfNDS2LXGs"
 CHAT_ID = "6754280298"
 
 # ============================================================
-# 기본 로깅 및 시간 설정
+# 기본 로깅 및 실시간 파일 저장 설정 (수정 1 반영)
 # ============================================================
+LOG_FILE = Path("bot_log.txt")
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler()
+    ]
 )
 
 KST = timezone(timedelta(hours=9))
@@ -99,7 +103,6 @@ def send_telegram_message(text):
 
 def fetch_naver_news(query, display=50, start=1):
     """NCP API Gateway 인증을 완벽하게 적용한 네이버 뉴스 검색 함수"""
-    # [수정 완료] 레거시 인증 헤더를 제거하고 NCP Gateway 전용 키 헤더로 고정
     headers = {
         "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
         "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
@@ -136,24 +139,20 @@ def build_analysis_message(source_name, title, cause, result, direction, url, pu
     )
 
 def run():
-    """메인 실행 루프"""
-    logging.info("🤖 텔레그램/유튜브/블로그 콘텐츠 수집 봇 시작")
+    """메인 실행 루프 (수정 1)"""
+    logging.info("🤖 텔레그램/유튜브/블로그 콘텐츠 수집 봇 시작 (수정 1)")
     
     # 1. 봇 가동 시 텔레그램 알림 메시지 즉시 전송
-    success = send_telegram_message("🤖 <b>텔레그램/유튜브/블로그 콘텐츠 수집 봇이 가동을 시작했습니다.</b>")
-    
-    if success:
-        logging.info("가동 알림 메시지 전송 성공")
-    else:
-        logging.error("가동 알림 메시지 전송 실패")
+    success = send_telegram_message("🤖 <b>텔레그램/유튜브/블로그 콘텐츠 수집 봇이 가동을 시작했습니다. (수정 1)</b>")
+    logging.info(f"가동 알림 메시지 전송 결과: {success}")
     
     seen = load_seen()
     
-    # 2. 즉시 메시지 수신 테스트 (시간 제한 무관하게 정상 작동 확인용)
-    test_title = "[테스트] 네이버 API 연동 정상화 및 실시간 분석 점검"
-    test_cause = "NCP API Gateway 인증 체계 및 엔드포인트 경로 수정 완료"
-    test_result = "401 에러 해소 및 정상적인 검색 데이터 수집 파이프라인 구축"
-    test_direction = "실시간 수집 콘텐츠의 원인·결과·방향성 분석 자동화 본격 가동"
+    # 2. 즉시 메시지 수신 테스트
+    test_title = "[테스트] 수정 1 실시간 로그 기록 및 수집 루프 점검"
+    test_cause = "NCP API Gateway 인증 유지 및 while 루프 내 수집 로직 연동"
+    test_result = "메시지 미발송 문제 해결 및 bot_log.txt 실시간 기록 체계 구축"
+    test_direction = "실시간 콘텐츠 수집 및 원인-결과-방향성 자동 브리핑 수행"
     test_url = STOCK_LINK_MAP.get("삼성전자", "https://naver.com")
     
     instant_msg = build_analysis_message("시스템정상화", test_title, test_cause, test_result, test_direction, test_url)
@@ -164,12 +163,53 @@ def run():
         try:
             logging.info(f"[주기 시작] KST={datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}")
             
-            # [참고] 수집 로직 내 시간 제한 필터 조건은 현재 완화된 상태로 동작합니다.
+            # [수정 1] 비어있던 while 루프에 실제 수집 및 전송 로직 구현
+            query_keyword = "반도체"
+            news_items = fetch_naver_news(query_keyword, display=10)
+            logging.info(f"검색어 '{query_keyword}' 수집된 뉴스 개수: {len(news_items)}")
             
+            new_count = 0
+            for item in news_items:
+                link = item.get("link", "")
+                if not link or link in seen:
+                    continue
+                
+                title = item.get("title", "").replace("<b>", "").replace("</b>", "").replace("&quot;", "\"")
+                description = item.get("description", "").replace("<b>", "").replace("</b>", "").replace("&quot;", "\"")
+                
+                cause = f"네이버 뉴스 실시간 스캔 (키워드: {query_keyword})"
+                result = description[:100] + "..." if len(description) > 100 else description
+                direction = "관련 시장 동향 분석 및 변동성 모니터링 지속"
+                
+                target_url = link
+                for key, mapped_url in STOCK_LINK_MAP.items():
+                    if key in title:
+                        target_url = mapped_url
+                        break
+                
+                msg = build_analysis_message("네이버뉴스", title, cause, result, direction, target_url)
+                
+                if send_telegram_message(msg):
+                    seen.add(link)
+                    new_count += 1
+                    logging.info(f"[전송 성공] {title}")
+                    time.sleep(1)
+                else:
+                    logging.error(f"[전송 실패] {title}")
+            
+            if new_count > 0:
+                save_seen(seen)
+                logging.info(f"신규 수집 및 전송 건수: {new_count}건")
+            else:
+                logging.info("새로운 수집 항목 없음")
+            
+            logging.info("[주기 완료] 60초 대기 중...")
             time.sleep(60)
+            
         except Exception as e:
-            logging.error(f"루프 오류 발생: {e}")
+            logging.error(f"루프 오류 발생: {e}", exc_info=True)
             time.sleep(10)
 
 if __name__ == "__main__":
     run()
+```[cite: 1]
