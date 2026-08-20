@@ -2911,8 +2911,9 @@ def _engine_format_message(item):
         lines.append('<b>'+master_badge+'</b>')
     if freshness in ('재탕','업그레이드') and prev:
         lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
-    lines.append('🔎 요약')
-    for kp in key_points[:3]: lines.append('     ✔ '+html.escape(str(kp)[:220]))
+    if key_points:
+        lines.append('🔎 요약')
+        for kp in key_points[:3]: lines.append('     ✔ '+html.escape(str(kp)[:220]))
     # 관련주는 MASTER FINAL LOCK 결과만 사용한다. Formatter 자체 재계산/테마 자동 채우기는 금지.
     if related:
         related=related[:3]
@@ -2928,8 +2929,9 @@ def _engine_format_message(item):
     if stage:
         lines.append('🧭 상용화/실행 단계')
         lines.append('     ✔ '+html.escape(stage))
-    lines.append('📈 시장 전망')
-    for o in outlook[:3]: lines.append('     ✔ '+html.escape(str(o)))
+    if outlook:
+        lines.append('📈 시장 전망')
+        for o in outlook[:3]: lines.append('     ✔ '+html.escape(str(o)))
     if schedule:
         dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
         lines.append('📅 일정')

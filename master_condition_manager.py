@@ -414,7 +414,11 @@ class MasterConditionManager:
             if m:
                 matched.append((m.start(), sentence, m.group(0)))
         if not matched:
-            return ["기사에서 확인된 사건이 실제 기업 실적·수급으로 연결되는 경로를 추가 확인할 필요가 있습니다."]
+            # [조건19 빈요약허용 원칙과 동일 적용] 매칭되는 패턴이 없으면 억지 전망 문구를
+            # 만들지 않고 빈 리스트를 반환한다. 관련주가 없을 때 '無'로 정상 처리하는 것과 같다.
+            # (예전엔 여기서 fallback 문구를 만들었는데, validate()가 바로 그 문구를 범용
+            # 문구라며 거부해서 FINAL LOCK이 무조건 실패하는 자기모순이 있었다.)
+            return []
         matched.sort(key=lambda x: x[0])
         result = []
         seen = set()
@@ -645,15 +649,12 @@ class MasterConditionManager:
         if not related and not self._clean(result.get("related_none_reason")):
             errors.append("관련주 없음 이유 없음")
         outlook = [self._clean(x) for x in (result.get("outlook") or []) if self._clean(x)]
-        if not outlook:
-            errors.append("시장전망 없음")
+        # [조건19 빈요약허용] 시장전망은 패턴이 실제로 매칭됐을 때만 채워진다.
+        # 매칭되는 사건이 없으면 억지로 만들지 않고 빈 상태를 정상으로 허용한다.
+        # (관련주가 없을 때 '無'로 정상 처리하는 것과 동일한 원칙.)
         if len(outlook) > 3:
             errors.append("시장전망 3개 초과")
-        # generic fallback 흔적 차단
-        # [조건41 전망근거 강화] 이 목록은 반드시 _outlook()이 실제로 반환할 수 있는
-        # fallback 문구와 일치해야 한다. 예전엔 이미 폐기된 news_bot._engine_news_insight()의
-        # 문구가 남아 있어서, 지금 실제로 쓰이는 _outlook()의 fallback 문구가 나와도
-        # Validator가 걸러내지 못하는 문제가 있었다.
+        # generic fallback 흔적 차단 (안전장치로 유지 — 다른 경로로 범용 문구가 섞여도 차단)
         generic = (
             "기사에서 확인된 사건이 실제 기업 실적·수급으로 연결되는 경로를 추가 확인할 필요가 있습니다.",
         )
