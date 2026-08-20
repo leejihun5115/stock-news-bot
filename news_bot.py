@@ -3130,19 +3130,48 @@ def _engine_entry_published(entry):
                 continue
     return ""
 
+GOOGLE_NEWS_REQUEST_DELAY_SEC = 2.0  # Google 뉴스만 요청 간 최소 간격을 둔다(연속 요청시 503 차단 방지).
+_LAST_GOOGLE_NEWS_REQUEST_AT = [0.0]
+
+
+def _is_google_news_url(url):
+    return "news.google.com" in str(url or "")
+
+
 def _engine_fetch_rss(url, source):
     started = time.time()
+    is_google = _is_google_news_url(url)
     try:
-        # [개선시도] 일부 언론사(예: 한국경제)가 단순 User-Agent만으로는 403을 반환한다.
-        # 브라우저에 가까운 헤더를 추가로 보내되, WAF/Cloudflare의 IP 기반 차단이면
-        # 헤더만으로는 해결되지 않을 수 있다는 점은 감안해야 한다.
+        # [버그수정] Google 뉴스는 요청이 짧은 시간에 몰리면 503(rate-limit)을 반환한다.
+        # 일정DB 1년 초기검색(약 200회+)과 매 사이클 US_RSS_URLS 조회가 겹치면 실제로
+        # 연쇄 503이 발생하던 걸 확인해서, Google 뉴스 요청 사이에는 최소 간격을 둔다.
+        if is_google:
+            elapsed = time.time() - _LAST_GOOGLE_NEWS_REQUEST_AT[0]
+            if elapsed < GOOGLE_NEWS_REQUEST_DELAY_SEC:
+                time.sleep(GOOGLE_NEWS_REQUEST_DELAY_SEC - elapsed)
+
         headers = {
             "User-Agent": USER_AGENT,
             "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
             "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
             "Referer": "https://www.google.com/",
         }
-        r = requests.get(url, headers=headers, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
+
+        attempts = 3 if is_google else 1
+        r = None
+        for attempt in range(attempts):
+            if is_google:
+                _LAST_GOOGLE_NEWS_REQUEST_AT[0] = time.time()
+            r = requests.get(url, headers=headers, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
+            if r.ok:
+                break
+            if is_google and r.status_code == 503 and attempt < attempts - 1:
+                backoff = GOOGLE_NEWS_REQUEST_DELAY_SEC * (attempt + 2)
+                _engine_log("warning", "[RSS 재시도] %s | 503 rate-limit 추정 | %.1f초 후 재시도(%d/%d)", source, backoff, attempt + 1, attempts)
+                time.sleep(backoff)
+                continue
+            break
+
         if not r.ok:
             _engine_log("error", "[실패] RSS | %s | 원인=%s", source, r.reason)
             return []
