@@ -220,6 +220,8 @@ class MasterConditionManager:
          "갈등의 장기화 여부와 생산·영업 차질 또는 비용 증가로 이어지는지가 핵심이다."),
         (r"소송|규제|제재|조사",
          "규제·법적 결과의 범위와 실제 비용·사업 제한으로 이어지는지가 핵심이다."),
+        (r"위탁\s*중개|주관사|주선사|자문사|중개 계약",
+         "위탁·중개 역할에 따른 수수료·자문 수익이 얼마나 반복적으로 발생하는지가 핵심이다."),
         (r"자사주|배당|주주환원",
          "환원 규모와 실제 현금흐름 대비 지속 가능성이 주주가치에 미치는 영향이 핵심이다."),
     ]
@@ -297,6 +299,31 @@ class MasterConditionManager:
             scored.append((score, s))
         return [s for _, s in sorted(scored, reverse=True)]
 
+    def _is_title_near_dup(self, sentence, title_n):
+        """제목과 '정확히 똑같지는 않지만 사실상 같은' 문장을 잡아낸다.
+        RSS 본문이 제목을 언론사 접미사·문장부호만 다르게 그대로 반복하는 경우
+        (특히 영문 기사에서 흔함) 정확 일치 비교로는 못 걸러서 요약/전망에
+        제목이 다시 등장하는 문제가 있었다.
+        """
+        n = self._norm(sentence)
+        if not n or not title_n:
+            return False
+        if n == title_n:
+            return True
+        shorter, longer = (n, title_n) if len(n) <= len(title_n) else (title_n, n)
+        if len(shorter) < 10:
+            return False
+        # 한쪽이 다른 쪽을 통째로 포함하면(접미사/절단 차이) 사실상 같은 문장으로 본다.
+        if shorter in longer:
+            return True
+        # 앞부분이 상당히(짧은 쪽 기준 75% 이상) 겹치면 근접 중복으로 본다.
+        common = 0
+        for a, b in zip(n, title_n):
+            if a != b:
+                break
+            common += 1
+        return common >= max(10, int(len(shorter) * 0.75))
+
     def _key_points(self, title, body):
         title_n = self._norm(title)
         points = []
@@ -304,8 +331,8 @@ class MasterConditionManager:
             trimmed = self._trim_for_readability(s)
             # [제목-요약 중복 방지] 자르기 전 원문뿐 아니라, 자른 뒤(trim) 결과도 제목과
             # 비교한다. 제목이 본문 핵심문장을 그대로 재사용해 만들어질 수 있으므로,
-            # trim 전/후 어느 쪽이든 제목과 같으면 요약에서 제외한다.
-            if self._norm(s) == title_n or self._norm(trimmed) == title_n:
+            # trim 전/후 어느 쪽이든 제목과 같으면(근접 중복 포함) 요약에서 제외한다.
+            if self._is_title_near_dup(s, title_n) or self._is_title_near_dup(trimmed, title_n):
                 continue
             if any(self._norm(trimmed) == self._norm(x) for x in points):
                 continue
@@ -469,16 +496,27 @@ class MasterConditionManager:
             return "후보 종목은 있었지만 국내 상장 여부 또는 기사와 직접 연결되는 근거가 부족했습니다."
         return "후보 종목은 있었지만 기사 사건과의 직접 연결·공급망·상용화 근거가 약해 관련주로 확정하지 않았습니다."
 
-    def _outlook(self, text, stage, key_points):
+    def _outlook(self, text, stage, key_points, body=None):
         # generic fallback을 없애고, 실제 문장과 매칭된 사건만 전망으로 만든다.
         # [조건41 전망근거 강화] 같은 카테고리(예: 자사주/배당)라도 기사마다 실제 수치·사건이
         # 다르므로, 정형 문구만 반복하지 않고 기사에서 실제로 뽑힌 핵심문장(key_points)을
         # 근거로 함께 연결해 기사 내용을 반영한 전망 문장을 만든다.
+        # [제목 반복 방지] anchor 주변 문맥을 못 찾을 때의 안전장치는 title+body 전체가
+        # 아니라 body만 뒤진다. text(title+body 합본)를 쓰면 anchor가 제목 쪽에서
+        # 매칭됐을 때 창(window)이 제목 구간을 그대로 퍼오게 되어 "요약/전망에 제목이
+        # 그대로 다시 등장"하는 결과가 나온다.
+        body_text = self._clean(body) if body is not None else text
         matched = []
         for pattern, sentence in self.OUTLOOK_PATTERNS:
             m = re.search(pattern, text, re.I)
             if m:
                 matched.append((m.start(), sentence, m.group(0)))
+        # [위탁·중개 우선] "OO증권이 XX의 자사주 매입을 위탁 중개해 상한가"처럼 자기 자신이
+        # 아니라 대리·중개 역할을 한 기사에서, "자사주/배당" 패턴(발행사 본인의 환원 관점)이
+        # 위탁·중개 패턴과 함께 잡히면 실제 그림과 다른 전망이 섞여 나간다.
+        # 이런 경우 더 구체적이고 사실에 맞는 위탁·중개 관점만 남긴다.
+        if any("위탁" in a or "중개" in a or "주관" in a or "주선" in a for _, _, a in matched):
+            matched = [m for m in matched if not ("자사주" in m[2] or "배당" in m[2] or "주주환원" in m[2])]
         if not matched:
             # [조건19 빈요약허용 원칙과 동일 적용] 매칭되는 패턴이 없으면 억지 전망 문구를
             # 만들지 않고 빈 리스트를 반환한다. 관련주가 없을 때 '無'로 정상 처리하는 것과 같다.
@@ -497,9 +535,9 @@ class MasterConditionManager:
             # 똑같아지지 않고 그 기사의 구체적 수치·주체가 그대로 드러난다.
             concrete = next((kp for kp in key_points if anchor in kp), None)
             if not concrete:
-                idx = text.find(anchor)
+                idx = body_text.find(anchor)
                 if idx >= 0:
-                    concrete = text[max(0, idx - 40): idx + 70].strip(" .,")
+                    concrete = body_text[max(0, idx - 40): idx + 70].strip(" .,")
             if concrete:
                 result.append(f"{concrete.rstrip('.')} → {sentence}")
             else:
@@ -559,7 +597,7 @@ class MasterConditionManager:
         elif name == "시장영향":
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
         elif name in ("전망근거", "후속확인", "지속성"):
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"])
+            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"])
         elif name == "시장전망최대3":
             state["outlook"] = state["outlook"][:3]
         elif name == "대장주선정":
@@ -700,7 +738,7 @@ class MasterConditionManager:
             errors.append("제목 없음")
         if not points:
             errors.append("핵심요약 없음")
-        if any(self._norm(k) == title_n for k in points):
+        if any(self._is_title_near_dup(k, title_n) for k in points):
             errors.append("요약이 제목과 동일함")
         if len(points) > 3:
             errors.append("핵심요약 3개 초과")

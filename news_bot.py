@@ -1013,6 +1013,10 @@ DART_STRONG_REPORT_KEYWORDS = {
     "주식등의대량보유상황보고서",
     "양수결정", "양도결정",
     "추가상장",
+    # [재무카드 신규] 정기보고서/잠정실적은 별도 재무카드 포맷으로 처리하되,
+    # 감지 자체는 이 목록으로 하므로 함께 추가한다.
+    "반기보고서", "분기보고서", "사업보고서",
+    "영업(잠정)실적", "잠정실적",
 }
 
 DART_ALWAYS_EXPOSE_KEYWORDS = DART_STRONG_REPORT_KEYWORDS - {
@@ -2782,6 +2786,60 @@ def _engine_future_schedule(text: str) -> str:
 MASTER_CONFIRMATION_IMAGE = os.environ.get("MASTER_CONFIRMATION_IMAGE", "master_confirmation.png")
 
 
+_PHARMA_KEYWORDS_RE = re.compile(
+    r"제약|바이오|신약|임상\s*[1-31-3]?상|FDA|식약처|백신|항체|치료제|의약품|바이오시밀러|파이프라인",
+    re.I,
+)
+
+
+def _engine_is_pharma_news(title, extra_text=""):
+    """제약/바이오 뉴스인지 판단해 제목 앞에 💊 마커를 붙일지 결정한다."""
+    return bool(_PHARMA_KEYWORDS_RE.search(f"{title} {extra_text}"))
+
+
+_FEATURED_STOCK_HEADLINE_RE = re.compile(
+    r"^\s*(?:\[?특징주\]?[:\s]*|코스피\s*특징주[:\s]*|코스닥\s*특징주[:\s]*)?"
+    r"(?P<company>[가-힣A-Za-z0-9&]{2,20})\s*,\s*"
+    r"(?P<reason>.+?)\s*['\"“]?(?P<reaction>상한가|하한가|급등|급락|강세|약세|신고가|신저가)['\"”]?\s*$"
+)
+
+
+def _engine_has_jongsung(ch: str) -> bool:
+    """한글 음절의 받침 유무. 조사(이/가, 을/를)를 문법에 맞게 고르기 위해 사용."""
+    if not ch:
+        return False
+    code = ord(ch) - 0xAC00
+    if 0 <= code <= 11171:
+        return code % 28 != 0
+    return False
+
+
+def _engine_josa(word: str, with_batchim: str, without_batchim: str) -> str:
+    word = str(word or "").strip()
+    if not word:
+        return without_batchim
+    return with_batchim if _engine_has_jongsung(word[-1]) else without_batchim
+
+
+def _engine_parse_featured_stock_headline(title):
+    """'[특징주] 회사, 사유 상한가' 형태의 제목에서 종목명·사유·반응을 뽑아낸다.
+    이런 헤드라인은 뉴스 본문이 사실상 제목뿐이라, 파싱 없이는
+    (1) 제목 자체가 다루는 종목이 관련주 목록에서 빠지고
+    (2) 요약이 제목을 그대로 복사한 의미없는 한 줄로 끝나는 문제가 생긴다.
+    """
+    m = _FEATURED_STOCK_HEADLINE_RE.search(str(title or "").strip())
+    if not m:
+        return None
+    company = m.group("company").strip(" '\"“”")
+    reason = m.group("reason").strip(" ,'\"“”")
+    # 사유 끝에 붙은 조사(에/으로/로)는 문장 합성 시 중복되므로 미리 떼어낸다.
+    reason = re.sub(r"(에|으로|로)$", "", reason).strip()
+    reaction = m.group("reaction").strip()
+    if len(company) < 2 or len(reason) < 4:
+        return None
+    return {"company": company, "reason": reason, "reaction": reaction}
+
+
 def _engine_master_result(item):
     """뉴스 1건을 MASTER -> Validator -> FINAL LOCK으로 확정한다.
     [조건1/조건10 강제] MASTER는 반드시 원 제목 + 원문 본문을 직접 입력받는다.
@@ -2802,6 +2860,28 @@ def _engine_master_result(item):
             })
         raw_title = str(item.get("title", "")).strip()
         raw_body = str(item.get("extra", "")).strip()
+
+        # [특징주 자기종목 보정] "[특징주] 회사, 사유 '반응'" 헤드라인이고, 본문이 제목과
+        # 사실상 동일해 추가 정보가 없는 경우: 제목 안의 사유를 실제 문장으로 풀어서
+        # 본문에 채워 넣고, 헤드라인의 주인공 종목을 관련주 후보 1순위로 강제 등록한다.
+        featured = _engine_parse_featured_stock_headline(raw_title)
+        if featured:
+            body_is_thin = (not raw_body) or (_engine_clean(raw_body) == _engine_clean(raw_title)) \
+                or (len(raw_body) < len(raw_title) + 8)
+            if body_is_thin:
+                comp_josa = _engine_josa(featured['company'], '이', '가')
+                react_josa = _engine_josa(featured['reaction'], '을', '를')
+                synth = f"{featured['company']}{comp_josa} {featured['reason']}에 {featured['reaction']}{react_josa} 기록했다."
+                raw_body = synth
+            candidates.insert(0, {
+                "name": featured["company"],
+                "reason": f"헤드라인상 특징주 본인 종목({featured['reaction']} 사유: {featured['reason']})",
+                "score": 500.0,
+                "direct": True,
+                "theme_link": False,
+                "domestic_listed": True,
+            })
+
         result = master_finalize_news(
             title=raw_title,
             body=raw_body,
@@ -2933,32 +3013,53 @@ def _engine_format_message(item):
     title=_apply_domestic_highlight(title,domestic)
     if _engine_is_commercial_value(item,title,' '.join(key_points)) and not title.startswith('🎯'):
         title='🎯 '+title
+    # [제약/바이오 마커] 제목 맨 앞에 💊를 붙인다.
+    if _engine_is_pharma_news(title, ' '.join(key_points)) and not title.startswith('💊'):
+        title='💊 '+title
     freshness,prev=_engine_freshness(item)
     header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
-    if time_text: header += f'                                      🕐 {html.escape(time_text)}'
+    if time_text: header += f'   🕐 {html.escape(time_text)}'
     lines=[header,f'<b>📌 {html.escape(title)}</b>']
     master_badge=_engine_master_badge(master_result)
     if master_badge:
         lines.append('<b>'+master_badge+'</b>')
     if freshness in ('재탕','업그레이드') and prev:
         lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
+
     if key_points:
-        lines.append('🔎 요약')
+        lines.append('🔎 [요약]')
         for kp in key_points[:3]: lines.append('     ✔ '+html.escape(str(kp)[:220]))
+
+    if stage:
+        lines.append('🧭 [진행 과정] ===> '+html.escape(stage))
+
+    if outlook:
+        lines.append('📢 [시장 전망]')
+        for o in outlook[:3]: lines.append('     ✔ '+html.escape(str(o)))
+
     # 관련주는 MASTER FINAL LOCK 결과만 사용한다. Formatter 자체 재계산/테마 자동 채우기는 금지.
-    # [카테고리 숨김] 관련주가 없으면 '無' 문구조차 띄우지 않고 섹션 자체를 생략한다.
     if related:
         related=related[:3]
-        lines.append('👀관련주 : '+' · '.join('⚡️'+html.escape(str(r.get('name',''))) for r in related))
+        names=' · '.join('⚡️'+html.escape(str(r.get('name',''))) for r in related)
+        lines.append('👀[관련주] : '+names)
         reasons=[str(r.get('reason','')) for r in related if r.get('reason')]
         if reasons:
-            lines.append('👀관련주 근거 : '+' · '.join(html.escape(x[:120]) for x in reasons))
-    if stage:
-        lines.append('🧭 상용화/실행 단계')
-        lines.append('     ✔ '+html.escape(stage))
-    if outlook:
-        lines.append('📈 시장 전망')
-        for o in outlook[:3]: lines.append('     ✔ '+html.escape(str(o)))
+            # 같은 테마 키워드로 여러 종목이 묶이면 근거 문장이 통째로 반복될 수 있어
+            # 중복 문구는 한 번만 남긴다(내용은 그대로, 줄만 안 길어지게).
+            seen_reason=set()
+            uniq_reasons=[]
+            for x in reasons:
+                if x not in seen_reason:
+                    seen_reason.add(x); uniq_reasons.append(x)
+            lines.append('    ㄴ연결 이유 : '+' · '.join(html.escape(x[:120]) for x in uniq_reasons))
+    else:
+        related_none_reason = (master_result or {}).get('related_none_reason') or ''
+        if related_none_reason:
+            lines.append('👀[관련주] : 無')
+            lines.append('    ㄴ비연결 이유 : '+html.escape(str(related_none_reason)[:200]))
+        else:
+            lines.append('👀[관련주] : 無')
+
     if schedule:
         dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
         lines.append('📅 일정')
@@ -3440,6 +3541,337 @@ def _engine_run_keyword_combinations():
         if not success:
             _engine_log("error", "[실패] 키워드조합 | %s | 모든 NAVER 인증경로 실패", q)
 
+DART_FINANCIAL_REPORT_RE = re.compile(r"반기보고서|분기보고서|사업보고서|영업\(잠정\)실적|잠정실적")
+
+DART_REPRT_CODE_BY_Q = {1: "11013", 2: "11012", 3: "11014", 4: "11011"}
+DART_QUARTER_LABEL = {1: "1분기보고서", 2: "반기보고서", 3: "3분기보고서", 4: "사업보고서"}
+
+
+def _engine_dart_is_financial_report(report_nm: str) -> bool:
+    """반기/분기/사업보고서·영업(잠정)실적 공시인지 판단한다.
+    이런 공시는 '뉴스 판단'이 아니라 '숫자 그대로 표시'가 맞으므로
+    MASTER(65조건 뉴스 판단) 파이프라인을 타지 않고 별도 재무카드로 만든다.
+    """
+    return bool(DART_FINANCIAL_REPORT_RE.search(str(report_nm or "")))
+
+
+def _engine_dart_amount_to_won(amount_str):
+    """DART 금액 문자열(콤마 포함 원단위)을 정수 원 단위로 변환. 실패하면 None."""
+    try:
+        s = str(amount_str).replace(",", "").strip()
+        if not s or s in ("-", "N/A"):
+            return None
+        return int(float(s))
+    except Exception:
+        return None
+
+
+def _engine_format_eok(won, with_sign=False):
+    """원 단위 정수를 '351억' 같은 억 단위 표기로 변환한다."""
+    if won is None:
+        return "N/A"
+    eok = won / 1e8
+    sign = ""
+    if with_sign and eok > 0:
+        sign = "+"
+    elif eok < 0:
+        sign = "-"
+    eok_abs = abs(eok)
+    if eok_abs >= 1:
+        return f"{sign}{eok_abs:,.0f}억"
+    return f"{sign}{abs(won)/1e4:,.0f}만"
+
+
+def _engine_dart_fetch_financials(corp_code, year, reprt_code):
+    """DART 단일회사 전체 재무제표 API로 매출액/영업이익/당기순이익을 조회한다.
+    연결(CFS) 우선, 실패하면 별도(OFS)로 재시도한다. 실패하면 None.
+    """
+    if not DART_API_KEY or not corp_code:
+        return None
+    url = "https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json"
+    for fs_div in ("CFS", "OFS"):
+        try:
+            r = requests.get(url, params={
+                "crtfc_key": DART_API_KEY, "corp_code": corp_code,
+                "bsns_year": str(year), "reprt_code": reprt_code, "fs_div": fs_div,
+            }, timeout=ENGINE_HTTP_TIMEOUT)
+            if not r.ok:
+                continue
+            data = r.json()
+            if data.get("status") != "000":
+                continue
+            rows = data.get("list") or []
+            out = {}
+            for row in rows:
+                nm = str(row.get("account_nm", "")).replace(" ", "")
+                amt = row.get("thstrm_amount", "")
+                if row.get("sj_div") not in ("IS", "CIS", None):
+                    continue
+                if nm in ("매출액", "수익(매출액)", "영업수익") and "매출액" not in out:
+                    out["매출액"] = _engine_dart_amount_to_won(amt)
+                elif nm in ("영업이익", "영업이익(손실)") and "영업이익" not in out:
+                    out["영업이익"] = _engine_dart_amount_to_won(amt)
+                elif nm in ("당기순이익", "당기순이익(손실)", "분기순이익", "분기순이익(손실)") and "당기순이익" not in out:
+                    out["당기순이익"] = _engine_dart_amount_to_won(amt)
+            if out.get("매출액") is not None or out.get("영업이익") is not None:
+                return out
+        except Exception:
+            continue
+    return None
+
+
+def _engine_dart_recent_quarters(corp_code, end_year, end_q, n=5):
+    """최근 n개 분기의 '단독 분기' 매출/영업이익/순이익을 계산한다.
+    DART 정기보고서는 연초부터의 누적치이므로, 단독 분기값은
+    (이번 누적치 - 직전 누적치)로 계산해야 한다(1분기는 누적=단독).
+    최신순으로 반환한다. 값을 못 구하면 None으로 채운다.
+    """
+    raw_cache = {}
+
+    def get_raw(y, q):
+        key = (y, q)
+        if key not in raw_cache:
+            raw_cache[key] = _engine_dart_fetch_financials(corp_code, y, DART_REPRT_CODE_BY_Q[q])
+        return raw_cache[key]
+
+    result = []
+    y, q = end_year, end_q
+    for _ in range(n):
+        cur = get_raw(y, q)
+        vals = {"매출액": None, "영업이익": None, "당기순이익": None}
+        if cur is not None:
+            if q == 1:
+                vals = dict(cur)
+            else:
+                prev = get_raw(y, q - 1)
+                if prev is not None:
+                    for k in vals:
+                        a, b = cur.get(k), prev.get(k)
+                        vals[k] = (a - b) if (a is not None and b is not None) else None
+        result.append({"label": f"{y}.{q}Q", **vals})
+        y, q = (y - 1, 4) if q == 1 else (y, q - 1)
+    return result
+
+
+def _engine_dart_parse_report_period(report_nm, rcept_dt=""):
+    """report_nm에서 '(YYYY.MM)' 기준period를 뽑는다. 잠정실적처럼 괄호가 없으면
+    접수일자(rcept_dt)로 '방금 마감된 분기'를 추정한다(잠정실적은 마감 후 1~2개월 내 발표됨).
+    """
+    m = re.search(r"\((\d{4})\.(\d{1,2})\)", str(report_nm or ""))
+    if m:
+        year, month = int(m.group(1)), int(m.group(2))
+        q = {3: 1, 6: 2, 9: 3, 12: 4}.get(month)
+        if q:
+            return year, q
+    try:
+        d = datetime.datetime.strptime(str(rcept_dt)[:8], "%Y%m%d")
+    except Exception:
+        return None
+    m2 = d.month
+    if m2 in (1, 2, 3):
+        return d.year - 1, 4
+    if m2 in (4, 5, 6):
+        return d.year, 1
+    if m2 in (7, 8, 9):
+        return d.year, 2
+    return d.year, 3
+
+
+def _engine_naver_parse_cap(raw: str):
+    """'3조 4,567' 같은 네이버 시가총액 표기를 억원 단위 정수로 변환한다."""
+    raw = _engine_clean(raw or "")
+    if not raw:
+        return None
+    try:
+        jo_m = re.search(r"([\d,]+)\s*조", raw)
+        jo = int(jo_m.group(1).replace(",", "")) if jo_m else 0
+        rest_part = raw.split("조")[-1] if "조" in raw else raw
+        rest_digits = re.sub(r"[^\d]", "", rest_part)
+        eok = int(rest_digits) if rest_digits else 0
+        total = jo * 10000 + eok
+        return total if total > 0 else None
+    except Exception:
+        return None
+
+
+def _engine_naver_finance_snapshot(stock_code):
+    """네이버금융에서 시가총액/목표주가를 가져온다. 실패해도 예외를 던지지 않고
+    구할 수 있는 값만 채운다 (없는 값을 지어내지 않는다).
+    """
+    out = {"market_cap_eok": None, "target_price": None}
+    if not stock_code:
+        return out
+    try:
+        r = requests.get(
+            f"https://finance.naver.com/item/main.naver?code={stock_code}",
+            headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT,
+        )
+        if not r.ok:
+            return out
+        soup = BeautifulSoup(r.text, "html.parser")
+        cap_el = soup.select_one("#_market_sum")
+        if cap_el:
+            out["market_cap_eok"] = _engine_naver_parse_cap(cap_el.get_text(" "))
+        page_text = soup.get_text(" ")
+        target_m = re.search(r"목표주가[^\d]{0,20}([\d,]{3,})", page_text)
+        if target_m:
+            try:
+                tp = int(target_m.group(1).replace(",", ""))
+                if tp > 0:
+                    out["target_price"] = tp
+            except Exception:
+                pass
+    except Exception as e:
+        _engine_log("warning", "[재무카드] 네이버금융 조회 실패 | code=%s | 원인=%s", stock_code, str(e)[:160])
+    return out
+
+
+def _engine_naver_consensus(stock_code):
+    """네이버금융 '컨센서스' 탭에서 매출액/영업이익 추정치를 가져온다(억원 단위).
+    무료 소스라 구조가 자주 바뀌고 종목별로 컨센서스가 없을 수도 있다.
+    실패/부재 시 빈 dict를 반환하고, 절대 숫자를 지어내지 않는다.
+    """
+    out = {}
+    if not stock_code:
+        return out
+    try:
+        r = requests.get(
+            f"https://finance.naver.com/item/coinfo.naver?code={stock_code}&target=finsum",
+            headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT,
+        )
+        if not r.ok:
+            return out
+        soup = BeautifulSoup(r.text, "html.parser")
+        table = soup.select_one("table.gHead02")
+        if not table:
+            return out
+        for tr in table.select("tr"):
+            th = tr.select_one("th")
+            if not th:
+                continue
+            label = _engine_clean(th.get_text(" "))
+            tds = [_engine_clean(td.get_text(" ")) for td in tr.select("td")]
+            if not tds:
+                continue
+            first_val = next((t for t in tds if re.match(r"^-?[\d,]+(\.\d+)?$", t)), None)
+            if not first_val:
+                continue
+            try:
+                val_eok = float(first_val.replace(",", ""))
+            except Exception:
+                continue
+            if "매출액" in label and "매출액" not in out:
+                out["매출액"] = val_eok
+            elif "영업이익" in label and "영업이익" not in out:
+                out["영업이익"] = val_eok
+    except Exception as e:
+        _engine_log("warning", "[재무카드] 컨센서스 조회 실패 | code=%s | 원인=%s", stock_code, str(e)[:160])
+    return out
+
+
+def _engine_dart_render_quarter_table(quarters):
+    """[최근 실적]을 <pre> 고정폭 표로 렌더링한다."""
+    header = f"{'기간':<8}{'매출':>8}{'영업익':>8}{'순익':>8}"
+    rows = [header, "-" * len(header)]
+    for q in quarters:
+        rows.append(
+            f"{q['label']:<8}"
+            f"{_engine_format_eok(q['매출액']):>8}"
+            f"{_engine_format_eok(q['영업이익']):>8}"
+            f"{_engine_format_eok(q['당기순이익']):>8}"
+        )
+    return "<pre>" + html.escape("\n".join(rows)) + "</pre>"
+
+
+def _engine_dart_build_financial_card(row):
+    """DART 정기보고서/잠정실적 공시 1건을 재무카드 메시지로 조립한다.
+    [설계 원칙] 이 함수는 뉴스 '판단'을 하지 않는다 - MASTER 65조건과 무관하게
+    공시 원문 수치를 그대로 계산·표시만 한다 (조건51 Formatter무판단과 동일한 철학).
+    """
+    corp_name = str(row.get("corp_name", "")).strip()
+    corp_code = str(row.get("corp_code", "")).strip()
+    stock_code = str(row.get("stock_code", "")).strip()
+    report_nm = str(row.get("report_nm", "")).strip()
+    rcept_no = str(row.get("rcept_no", "")).strip()
+    rcept_dt = str(row.get("rcept_dt", "")).strip()
+
+    period = _engine_dart_parse_report_period(report_nm, rcept_dt)
+    if not period or not corp_code:
+        return None
+    year, q = period
+    is_preliminary = "잠정" in report_nm
+
+    quarters = _engine_dart_recent_quarters(corp_code, year, q, n=5)
+    if not quarters or (quarters[0].get("영업이익") is None and quarters[0].get("매출액") is None):
+        # 이번 분기 실제 수치를 못 구하면 재무카드 자체를 만들 근거가 없다.
+        return None
+    cur = quarters[0]
+
+    naver = _engine_naver_finance_snapshot(stock_code)
+    cap_str = f"{naver['market_cap_eok']:,}억" if naver.get("market_cap_eok") else "N/A"
+    target_str = f"{naver['target_price']:,}원" if naver.get("target_price") else ""
+
+    consensus = _engine_naver_consensus(stock_code)
+
+    def _line_with_consensus(label, actual_won, cons_key):
+        base = f"{label} : {_engine_format_eok(actual_won)}"
+        cons_eok = consensus.get(cons_key)
+        if cons_eok is None or actual_won is None:
+            return base, None
+        cons_won = cons_eok * 1e8
+        if cons_won == 0:
+            return base, None
+        diff_pct = (actual_won - cons_won) / abs(cons_won) * 100
+        return f"{base} (예상치 : {cons_eok:,.0f}억/ {diff_pct:+.1f}%)", diff_pct
+
+    try:
+        dt_disp = datetime.datetime.strptime(rcept_dt[:8], "%Y%m%d").strftime("%Y.%m.%d")
+    except Exception:
+        dt_disp = rcept_dt
+
+    lines = []
+    lines.append(f"<b>✅ {html.escape(corp_name)} (시총 : {html.escape(cap_str)})</b>   🕐 {html.escape(dt_disp)}")
+    lines.append(f"📁 {html.escape(DART_QUARTER_LABEL.get(q, report_nm))} ({year}.{q*3:02d})")
+    lines.append(f"✔️ 잠정실적 : {'Y' if is_preliminary else 'N'}")
+    sales_line, _ = _line_with_consensus("매출액", cur['매출액'], "매출액")
+    op_line, op_diff_pct = _line_with_consensus("영업익", cur['영업이익'], "영업이익")
+    lines.append(sales_line)
+    lines.append(op_line)
+    lines.append(f"순이익 : {_engine_format_eok(cur['당기순이익'])}")
+    lines.append(f"목표가 : {target_str}")
+    lines.append("")
+    lines.append("✔️ [최근 실적]")
+    lines.append(_engine_dart_render_quarter_table(quarters))
+
+    # [특이사항 강조] 어닝서프라이즈/어닝쇼크/흑자전환/최근 5개분기 최대 영업익
+    highlights = []
+    if op_diff_pct is not None:
+        if op_diff_pct >= 10:
+            highlights.append(f"🔥어닝 서프라이즈({op_diff_pct:+.1f}%)")
+        elif op_diff_pct <= -10:
+            highlights.append(f"🔥어닝 쇼크({op_diff_pct:+.1f}%)")
+    prev_op = quarters[1].get("영업이익") if len(quarters) > 1 else None
+    prev_net = quarters[1].get("당기순이익") if len(quarters) > 1 else None
+    if prev_op is not None and prev_op <= 0 and (cur.get("영업이익") or 0) > 0:
+        highlights.append("🔥흑자전환(영업이익)")
+    if prev_net is not None and prev_net <= 0 and (cur.get("당기순이익") or 0) > 0:
+        highlights.append("🔥흑자전환(순이익)")
+    past_ops = [x.get("영업이익") for x in quarters[1:] if x.get("영업이익") is not None]
+    if cur.get("영업이익") is not None and past_ops and cur["영업이익"] > max(past_ops):
+        highlights.append("✔️ 최근 5개분기 최대 영업이익")
+    if highlights:
+        lines.append("")
+        lines.extend(highlights)
+
+    lines.append("")
+    dart_link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
+    naver_link = f"https://finance.naver.com/item/main.naver?code={stock_code}" if stock_code else ""
+    lines.append(f'공시링크 : <a href="{html.escape(dart_link, quote=True)}">🔗 원문 보기</a>')
+    if naver_link:
+        lines.append(f'회사정보 : <a href="{html.escape(naver_link, quote=True)}">🔗 원문 보기</a>')
+    return "\n".join(lines)
+
+
 def _engine_run_dart():
     if not ENABLE_DART:
         _engine_log("warning", "[DART] ENABLE_DART=OFF")
@@ -3469,9 +3901,21 @@ def _engine_run_dart():
             if not any(k in report for k in DART_STRONG_REPORT_KEYWORDS):
                 continue
             corp = row.get("corp_name", "")
-            title = f"{corp} | {report}"
             link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
             _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""))
+            # [재무카드 분기] 반기/분기/사업보고서·잠정실적은 MASTER 뉴스판단을 타지 않고
+            # 재무카드로 직접 전송한다. 실패하면(수치를 못 구하면) 기존 뉴스 경로로 폴백한다.
+            if _engine_dart_is_financial_report(report):
+                try:
+                    card = _engine_dart_build_financial_card(row)
+                except Exception as e:
+                    card = None
+                    _engine_log("warning", "[재무카드] 생성 실패 | corp=%s | 원인=%s", corp, str(e)[:160])
+                if card:
+                    if _engine_send_telegram(card):
+                        sent += 1
+                    continue
+            title = f"{corp} | {report}"
             if _engine_process_item("DART", title, link, row.get("rcept_dt", "")):
                 sent += 1
         _engine_log("info", "[DART] 후보=%d건", sent)
