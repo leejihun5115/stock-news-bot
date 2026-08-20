@@ -2138,6 +2138,30 @@ def _engine_relation_reason(text, companies, market_hits):
     return ""
 
 
+def _engine_theme_context(text, keyword):
+    """[관련테마 이유 강화] 테마 키워드가 본문 어느 문장/구절에서 나왔는지
+    실제 근거 텍스트를 찾아 반환한다. 정형 문구만 붙이지 않고 본문 내용을
+    직접 인용해 왜 이 테마·종목이 연결됐는지 사람이 바로 이해할 수 있게 한다.
+    """
+    t = _engine_clean(text)
+    m = re.search(re.escape(keyword), t, re.I)
+    if not m:
+        return ""
+    start, end = max(0, m.start() - 45), min(len(t), m.end() + 65)
+    # 단어 중간에서 시작/끝나지 않도록 앞뒤 공백 경계로 맞춘다.
+    if start > 0:
+        sp = t.find(" ", start)
+        if 0 <= sp < m.start():
+            start = sp + 1
+    if end < len(t):
+        sp = t.rfind(" ", m.end(), end)
+        if sp > m.end():
+            end = sp
+    ctx = t[start:end].strip(" .,-")
+    ctx = re.sub(r"^[^가-힣A-Za-z0-9]+", "", ctx)
+    return ctx
+
+
 def _engine_domestic_watchlist(item):
     """[50] 국내 관련주 단일 판정기.
     출력용 서열(대장주/관찰/관심)을 절대 생성하지 않는다.
@@ -2211,13 +2235,20 @@ def _engine_domestic_watchlist(item):
     scored=[]
     for key in theme_keys[:5]:
         if not any(k.lower() in low for k in event_words): continue
+        # [관련테마 이유 강화] 매칭된 이벤트 키워드 중 본문에 실제로 등장하는 것을 찾아
+        # 그 주변 문맥을 근거 문장으로 함께 붙인다. 정형 문구만 반복하지 않는다.
+        matched_event = next((w for w in event_words if w.lower() in low), "")
+        ctx = _engine_theme_context(text, matched_event) if matched_event else ""
+        base_reason = f"{THEME_MAP.get(key,key)} 테마의 실제 사업·수요 변화와 연결"
+        reason = f"{ctx} → {base_reason}" if ctx else base_reason
         for stock in STOCK_LINK_MAP.get(key,[]):
             hist,leader,limitup,surge=history(stock)
-            scored.append({"name":stock,"theme":key,"reason":f"{THEME_MAP.get(key,key)} 테마의 실제 사업·수요 변화와 연결","score":300+limitup*30+leader*20+surge*8+hist*2,"direct":False})
+            scored.append({"name":stock,"theme":key,"reason":reason[:180],"score":300+limitup*30+leader*20+surge*8+hist*2,"direct":False})
     best={}
     for r in scored:
         if r["name"] not in best or r["score"]>best[r["name"]]["score"]: best[r["name"]]=r
     return sorted(best.values(),key=lambda x:x["score"],reverse=True)[:3]
+
 
 def _engine_schedule(text):
     """실제 투자 일정만 추출한다.
@@ -2915,17 +2946,13 @@ def _engine_format_message(item):
         lines.append('🔎 요약')
         for kp in key_points[:3]: lines.append('     ✔ '+html.escape(str(kp)[:220]))
     # 관련주는 MASTER FINAL LOCK 결과만 사용한다. Formatter 자체 재계산/테마 자동 채우기는 금지.
+    # [카테고리 숨김] 관련주가 없으면 '無' 문구조차 띄우지 않고 섹션 자체를 생략한다.
     if related:
         related=related[:3]
         lines.append('👀관련주 : '+' · '.join('⚡️'+html.escape(str(r.get('name',''))) for r in related))
         reasons=[str(r.get('reason','')) for r in related if r.get('reason')]
         if reasons:
             lines.append('👀관련주 근거 : '+' · '.join(html.escape(x[:120]) for x in reasons))
-    else:
-        lines.append('👀관련주 : 無')
-        related_none_reason = (master_result or {}).get('related_none_reason') or ''
-        if related_none_reason:
-            lines.append('👀無 이유 : '+html.escape(str(related_none_reason)[:200]))
     if stage:
         lines.append('🧭 상용화/실행 단계')
         lines.append('     ✔ '+html.escape(stage))
@@ -4344,8 +4371,7 @@ def _us_close_briefing(snapshot, et):
                     why_text = "·".join(why)[:90]
                     related_text.append(f"⚡️{html.escape(stock)}({html.escape(why_text)})")
                 lines.append("  ✔👀관련주 : " + " · ".join(related_text))
-            else:
-                lines.append("  ✔👀관련주 : 無")
+            # [카테고리 숨김] 관련주가 없으면 '無' 문구 없이 섹션 자체를 생략한다.
 
             # 유사 과거 사례: 실제 수익률과 링크가 DB에 있을 때만 표시.
             if reason:

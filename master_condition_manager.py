@@ -301,27 +301,93 @@ class MasterConditionManager:
         title_n = self._norm(title)
         points = []
         for s in self._event_sentences(title, body):
-            if self._norm(s) == title_n:
+            trimmed = self._trim_for_readability(s)
+            # [제목-요약 중복 방지] 자르기 전 원문뿐 아니라, 자른 뒤(trim) 결과도 제목과
+            # 비교한다. 제목이 본문 핵심문장을 그대로 재사용해 만들어질 수 있으므로,
+            # trim 전/후 어느 쪽이든 제목과 같으면 요약에서 제외한다.
+            if self._norm(s) == title_n or self._norm(trimmed) == title_n:
                 continue
-            if any(self._norm(s) == self._norm(x) for x in points):
+            if any(self._norm(trimmed) == self._norm(x) for x in points):
                 continue
-            points.append(s)
+            points.append(trimmed)
             if len(points) >= 3:
                 break
         return points
 
+    def _clause_cut(self, s):
+        """접속어(면서/라며/는데/이에 따라/이로 인해) 앞에서 문장을 자연스럽게 끊는다.
+        접속어 자체는 남겨 문장이 어색하게 끊기지 않게 하고, 뒤는 생략 부호로 처리한다."""
+        m = re.search(r"(면서|라며|는데|이에\s*따라|이로\s*인해)[,，]?\s+", s)
+        if m and m.end(1) < len(s) - 2:
+            return s[:m.end(1)].strip()
+        return ""
+
+    def _trim_for_readability(self, sentence):
+        """[본문이해 요약] 90자를 넘는 늘어진 문장(번역체·유튜브 서술)은
+        자연스러운 절 경계(면서/라며/는데/이에 따라 등)에서 앞부분 핵심만 남긴다.
+        핵심 수치·주체가 담긴 첫 절만 남기면 뒤 문장을 안 봐도 사건이 이해된다.
+        """
+        s = sentence.strip()
+        if len(s) <= 90:
+            return s
+        cut = self._clause_cut(s)
+        if cut:
+            return cut + "…"
+        # 접속어로도 못 자르면 문장부호(., 마침표) 기준으로 앞 90자 내 마지막 구두점까지만.
+        head = s[:100]
+        last_punct = max(head.rfind("."), head.rfind(","), head.rfind(" "))
+        if last_punct > 40:
+            return head[:last_punct].rstrip(",，") + "…"
+        return head.rstrip() + "…"
+
+    def _is_narrative_title(self, title):
+        """제목이 '헤드라인'이 아니라 '서술형 문장'인지 판정한다.
+        [제목축출 강화] 유튜브 제목, 텔레그램 중계문, 번역된 외신 제목은
+        길이는 길어도 완결된 서술형 문장(~다/~밝혔다/~전했다로 끝나거나,
+        접속어로 절이 여러 개 이어지는 문장)인 경우가 많다. 이런 제목은
+        길다는 이유만으로 그대로 통과시키지 않고 핵심 사건 문장으로 재구성한다.
+        """
+        t = title.strip()
+        if not t:
+            return False
+        # 문장종결어미로 끝나는 완결문(뉴스 헤드라인은 보통 명사형으로 끝난다)
+        if re.search(r"(?:다|다\.|습니다|했다고?\s*밝혔다|라고\s*전했다|것으로\s*나타났다)\s*[.!]?$", t):
+            return True
+        # 절 접속어가 2개 이상 → 여러 사건/설명이 한 문장에 뒤섞인 서술형
+        clause_links = len(re.findall(r"(?:면서|라며|는데|하지만|그러나|이에\s*따라|이로\s*인해)", t))
+        if clause_links >= 2:
+            return True
+        # 쉼표가 과도하게 많은 나열형 제목(유튜브식 클릭베이트 나열)
+        if t.count(",") >= 3 or t.count("，") >= 3:
+            return True
+        return False
+
     def _synthesize_title(self, title, body):
         title = self._clean(title)
         pts = self._key_points(title, body)
-        # 원 제목이 충분히 구체적이면 그대로 보존한다.
-        # 단순 브리핑 제목/유튜브 제목/클릭베이트면 핵심 사건을 재구성한다.
+        # 원 제목이 충분히 구체적인 '헤드라인'이면 그대로 보존한다.
+        # 단순 브리핑 제목/유튜브 제목/서술형 클릭베이트/장황한 번역 제목이면 재구성한다.
         generic = re.search(r"모닝|브리핑|뉴스모음|오늘의|종합|프리뷰|시황|경제브리핑", title, re.I)
-        if not generic and len(title) >= 18:
+        too_long = len(title) > 60
+        narrative = self._is_narrative_title(title)
+        if not generic and not too_long and not narrative and len(title) >= 18:
             return title
-        if pts:
+        # [요약칸 보존] 본문에 핵심문장이 2개 이상 있을 때만 그중 하나를 제목으로 쓴다.
+        # 문장이 1개뿐이면 그걸 제목으로 써버리는 순간 요약(key_points)이 통째로
+        # 비게 되므로, 이 경우엔 원제목을 절 단위로만 다듬어 남겨 요약칸을 살린다.
+        if len(pts) >= 2:
             p = pts[0]
             p = re.sub(r"\s*(?:-|\|)\s*(?:[^-_|]{2,20})$", "", p).strip()
-            return p[:110]
+            # 핵심 문장이 이미 _key_points()에서 절 단위로 정리됐지만, 제목 용도로는
+            # 80자 제한이 더 짧으므로 필요하면 한 번 더 절 경계에서 자른다.
+            if len(p) > 80:
+                cut = self._clause_cut(p)
+                p = (cut + "…") if cut else p
+            return p[:80]
+        # 핵심문장을 못 뽑았고 원제목만 서술형인 경우, 원제목이라도 앞 절만 잘라 간결화
+        if narrative:
+            cut = self._clause_cut(title)
+            return (cut + "…" if cut else title)[:80]
         return title[:110]
 
     def _stage(self, text):
