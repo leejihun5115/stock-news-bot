@@ -205,42 +205,13 @@
 
 
 
-from master_condition_manager_final import MasterConditionManager
+from master_condition_manager import MasterConditionManager
 import sys
 import time
 import datetime
 import threading
 import traceback
-try:
-    import feedparser
-except ImportError:
-    # 외부 feedparser 패키지가 없어도 부팅되도록 RSS/Atom 최소 파서를 사용한다.
-    import types as _types
-    import xml.etree.ElementTree as _ET
-    from email.utils import parsedate_to_datetime as _parsedate_to_datetime
-    class _FeedFallback:
-        @staticmethod
-        def parse(data):
-            root=_ET.fromstring(data)
-            entries=[]
-            for item in root.findall('.//item'):
-                entries.append({
-                    'title': ''.join(item.findtext('title') or ''),
-                    'link': ''.join(item.findtext('link') or ''),
-                    'summary': ''.join(item.findtext('description') or ''),
-                    'published': ''.join(item.findtext('pubDate') or ''),
-                })
-            ns={'a':'http://www.w3.org/2005/Atom'}
-            for item in root.findall('.//a:entry', ns):
-                link_el=item.find('a:link', ns)
-                entries.append({
-                    'title': ''.join(item.findtext('a:title', default='', namespaces=ns) or ''),
-                    'link': link_el.attrib.get('href','') if link_el is not None else '',
-                    'summary': ''.join(item.findtext('a:summary', default='', namespaces=ns) or ''),
-                    'published': ''.join(item.findtext('a:published', default='', namespaces=ns) or item.findtext('a:updated', default='', namespaces=ns) or ''),
-                })
-            return _types.SimpleNamespace(bozo=False, entries=entries)
-    feedparser=_FeedFallback()
+import feedparser
 import requests
 import html
 import json
@@ -2503,7 +2474,8 @@ def _engine_translate_foreign_item(source: str, title: str, extra: str):
     extra = str(extra or "").strip()
 
     needs_translation = (
-        _engine_is_mostly_english(title)
+        str(source) == "Google-US"
+        or _engine_is_mostly_english(title)
         or _engine_is_mostly_english(extra)
     )
     if not needs_translation:
@@ -2511,10 +2483,8 @@ def _engine_translate_foreign_item(source: str, title: str, extra: str):
 
     ko_title = _engine_translate_to_korean(title)
     if not ko_title:
-        # 번역 실패는 분석/MASTER 진입을 막지 않는다.
-        # 원문을 보존하고 MASTER가 자체 규칙으로 판단한다.
-        _engine_log("warning", "[외신 번역 실패→원문 유지] %s", title[:100])
-        ko_title = title
+        _engine_log("warning", "[외신 송출차단] 한국어 번역 실패 | %s", title[:100])
+        return title, extra, False
 
     ko_extra = extra
     if extra and _engine_is_mostly_english(extra):
@@ -2774,7 +2744,7 @@ def _engine_master_result(item):
             link=str(item.get("link", "")),
             candidates=candidates,
             schedule=_engine_future_schedule(raw_body),
-            subtitle=subtitle,
+            subtitle=str(item.get("subtitle", "")),
             companies=item.get("companies", []),
         )
         _engine_log(
@@ -2937,6 +2907,11 @@ def _engine_format_message(item):
         elif none_reason:
             lines.append('     ✔ 관련주 없음 — ' + html.escape(none_reason[:200]))
 
+    schedule = str(master_result.get("schedule") or "").strip()
+    if categories.get("schedule") and schedule:
+        lines.append('📅 [일정]')
+        lines.append('     ✔ ' + html.escape(schedule[:220]))
+
     link = str(master_result.get("link") or item.get("link") or "").strip()
     if link:
         lines.append(f'<a href="{html.escape(link, quote=True)}">🔗 원문 보기</a>')
@@ -2966,7 +2941,7 @@ def _engine_flush_pending():
         if key in _engine_seen:
             continue
         master_result = _engine_master_result(item)
-        item["master_result"] = master_result
+        item["_master_result"] = master_result
         message = _engine_format_message(item)
         master_badge = _engine_master_badge(master_result)
         image_sent = False
@@ -3035,8 +3010,7 @@ def _engine_process_item(source, title, link, published="", extra=""):
     # 이후 🔎/테마/관련주/출력은 동일한 한국어 분석 원문을 사용한다.
     title, extra, translation_ok = _engine_translate_foreign_item(source, title, extra)
     if not translation_ok:
-        # 번역 실패가 뉴스 전체 송출을 차단하지 않도록 원문을 유지하고 MASTER로 넘긴다.
-        _engine_log("warning", "[번역 fallback] %s | %s", source, title[:80])
+        return False
 
     # 원문 전체를 보존한다. 요약문으로 extra를 덮어쓰지 않는다.
 
@@ -3069,9 +3043,10 @@ def _engine_process_item(source, title, link, published="", extra=""):
     with _engine_lock:
         if key in _engine_seen:
             return False
-    # [중앙통제] 기존 news_bot의 기업·주가재료 사전 게이트는 제거한다.
-    # 모든 후보는 MASTER 65조건으로 넘기고, 최종 포함/제외는 MASTER만 결정한다.
-    # 분류 결과(ok/category/companies/market_hits)는 분석 입력용 메타데이터로만 보존한다.
+    if not ok:
+        reason = "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
+        _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80])
+        return False
     time_text = ""
     dt = _engine_parse_datetime(published)
     if dt:
@@ -3088,10 +3063,8 @@ def _engine_process_item(source, title, link, published="", extra=""):
                 del _US_BRIEFING_NEWS_MEMORY[:-350]
     except Exception:
         pass
-    _engine_log("info", "[MASTER 입력] %s | %s", source, title[:100])
-    # 대기열에 쌓아두고 다른 수집 작업이 끝날 때까지 기다리지 않는다.
-    sent_now = _engine_flush_pending()
-    return sent_now > 0
+    _engine_log("info", "[후보] %s | 기업=%s | 재료=%s | %s", category, ",".join(companies[:3]) or "없음", ",".join(market_hits[:3]) or "없음", market_state)
+    return True
 
 
 def _engine_entry_published(entry):
@@ -4321,8 +4294,23 @@ def _engine_cycle():
         _engine_run_youtube()
     except Exception as e:
         log_error("유튜브 전체", e)
-    # 최신 사용자 명령 외의 장중/장마감/일정 자동 브리핑은 실행하지 않는다.
-    # 뉴스별 MASTER 처리에서 즉시 송출하므로 일반 주기 flush는 남은 항목만 안전하게 처리한다.
+    # 테스트는 부팅 시 1회만 송출한다. 일반 주기에서는 실행하지 않는다.
+    try:
+        _engine_krx_market_monitor()
+    except Exception as e:
+        log_error("국내장 장중 브리핑", e)
+    try:
+        _engine_us_market_monitor()
+    except Exception as e:
+        log_error("미장 장중 브리핑", e)
+    try:
+        _engine_us_market_close_monitor()
+    except Exception as e:
+        log_error("미장 장마감 브리핑", e)
+    try:
+        _engine_schedule_daily_monitor()
+    except Exception as e:
+        log_error("일정 일일 브리핑", e)
     sent = _engine_flush_pending()
     _engine_last_cycle_finished = time.time()
     _engine_log("info", "[주기 완료] %.2f초 | Telegram 신규송출=%d | pending=%d", time.time()-started, sent, len(_engine_pending))
@@ -4392,6 +4380,12 @@ if __name__ == "__main__":
         )
         health_thread.start()
         time.sleep(0.3)
+
+        # 1년치 특징주/급등 뉴스에서 미래 일정 DB를 최초 1회 구축한다.
+        schedule_bootstrap_thread = threading.Thread(
+            target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True
+        )
+        schedule_bootstrap_thread.start()
 
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
         _engine_log("info", "[BOOT] NAVER_HUB=%s | NAVER_LEGACY=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
