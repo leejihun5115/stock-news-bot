@@ -2916,15 +2916,15 @@ def _engine_format_message(item):
     # 관련주는 MASTER FINAL LOCK 결과만 사용한다. Formatter 자체 재계산/테마 자동 채우기는 금지.
     if related:
         related=related[:3]
-        lines.append('✔️👀관련주 : '+' · '.join('⚡️'+html.escape(str(r.get('name',''))) for r in related))
+        lines.append('👀관련주 : '+' · '.join('⚡️'+html.escape(str(r.get('name',''))) for r in related))
         reasons=[str(r.get('reason','')) for r in related if r.get('reason')]
         if reasons:
-            lines.append('    👀관련주 근거 : '+' · '.join(html.escape(x[:120]) for x in reasons))
+            lines.append('👀관련주 근거 : '+' · '.join(html.escape(x[:120]) for x in reasons))
     else:
-        lines.append('✔️👀관련주 : 無')
+        lines.append('👀관련주 : 無')
         related_none_reason = (master_result or {}).get('related_none_reason') or ''
         if related_none_reason:
-            lines.append('    👀無 이유 : '+html.escape(str(related_none_reason)[:200]))
+            lines.append('👀無 이유 : '+html.escape(str(related_none_reason)[:200]))
     if stage:
         lines.append('🧭 상용화/실행 단계')
         lines.append('     ✔ '+html.escape(stage))
