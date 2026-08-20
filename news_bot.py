@@ -3024,6 +3024,29 @@ def _engine_is_within_recent_window(published, window_minutes=60):
     return 0 <= age_seconds <= window_minutes * 60
 
 
+# [버그수정] "(종합)" 류 기사는 내용이 계속 갱신돼도 RSS pubDate가 최초 게재 시각에 머무는
+# 경우가 흔하다. 60분 창을 그대로 적용하면 하이닉스 +12.7%/삼성전자 +9% 같은 대형
+# 시황뉴스가 순수히 "오래됐다"는 이유만으로 통째로 컷된다. 실제 큰 시세 변동을 담은
+# 기사만 예외적으로 더 넓은 창을 허용한다(무분별한 과거뉴스 유입은 막기 위해 조건을 좁게 유지).
+HIGH_IMPACT_FRESH_WINDOW_MINUTES = 180
+_PCT_MOVE_RE = re.compile(r"([0-9]{1,3}(?:\.[0-9]+)?)\s*%")
+_STRONG_MOVE_WORDS = ("급등", "폭등", "상한가", "급락", "폭락", "신고가", "사상 최대", "서킷브레이커")
+HIGH_IMPACT_PCT_THRESHOLD = 5.0  # 이 수치 이상의 등락률이 헤드라인에 보이면 키워드 없이도 고임팩트로 본다.
+
+
+def _engine_is_high_impact_move(text):
+    text = str(text or "")
+    if any(w in text for w in _STRONG_MOVE_WORDS):
+        return True
+    for m in _PCT_MOVE_RE.findall(text):
+        try:
+            if float(m) >= HIGH_IMPACT_PCT_THRESHOLD:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
     if not title:
@@ -3045,9 +3068,14 @@ def _engine_process_item(source, title, link, published="", extra=""):
 
     # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
     # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
+    # [버그수정] 단, %급등락처럼 시장 임팩트가 큰 시황 뉴스는 "(종합)" 재게재로 pubDate가
+    # 오래돼 보여도 놓치면 안 되므로 더 넓은 창(HIGH_IMPACT_FRESH_WINDOW_MINUTES)을 허용한다.
     if not _engine_is_within_recent_window(published, 60):
-        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
-        return False
+        if _engine_is_high_impact_move(f"{title} {extra}") and _engine_is_within_recent_window(published, HIGH_IMPACT_FRESH_WINDOW_MINUTES):
+            _engine_log("info", "[예외허용] ⏱️ 고임팩트 시황(%%급등락) - 신선도창 %d분으로 확장 통과 | source=%s | %s", HIGH_IMPACT_FRESH_WINDOW_MINUTES, source, title[:80])
+        else:
+            _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
+            return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
@@ -3105,7 +3133,16 @@ def _engine_entry_published(entry):
 def _engine_fetch_rss(url, source):
     started = time.time()
     try:
-        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
+        # [개선시도] 일부 언론사(예: 한국경제)가 단순 User-Agent만으로는 403을 반환한다.
+        # 브라우저에 가까운 헤더를 추가로 보내되, WAF/Cloudflare의 IP 기반 차단이면
+        # 헤더만으로는 해결되지 않을 수 있다는 점은 감안해야 한다.
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
+            "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+            "Referer": "https://www.google.com/",
+        }
+        r = requests.get(url, headers=headers, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
         if not r.ok:
             _engine_log("error", "[실패] RSS | %s | 원인=%s", source, r.reason)
             return []
