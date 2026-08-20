@@ -47,7 +47,7 @@
 # 📰 수집기 = 정보원
 # 🎯 _engine_domestic_watchlist = 후보 탐색기
 # 📺 _engine_format_message = 방송실
-# 📡 _engine_send_telegram = 송출기
+# 📡 Telegram = 최종 송출 단말 (MASTER 65 FINAL_LOCK 소비 전용)
 # 🗄️ JSONL/상태 DB = 기록실
 #
 # 권한 규칙: 자기 역할 밖에서 최종 판단/수정 금지.
@@ -221,7 +221,7 @@
 
 
 
-from master_condition_manager import MasterConditionManager, issue_execution_command, verify_execution_command
+from master_condition_manager import MasterConditionManager
 import sys
 import time
 import datetime
@@ -250,15 +250,21 @@ from PIL import Image, ImageDraw, ImageFont
 # ============================================================
 _MASTER_MANAGER = MasterConditionManager(max_related=3, min_score=40.0)
 
-# 🔐 실행 잠금: MASTER_65 FINAL_LOCK 명령서가 없는 송출은 전부 차단한다.
+# 🔐 HIGHEST-LEVEL EXECUTION GATE
+# 오직 MASTER 65의 FINAL_LOCK 결과만 실행권한을 가질 수 있다.
+# 하위 모듈은 실행명령을 생성·변경·승격할 수 없다. 실패 시 항상 차단한다.
 _MASTER_EXECUTION_AUTH = False
 _MASTER_EXECUTION_COMMAND = ""
 
 def _master_open_execution(result):
     global _MASTER_EXECUTION_AUTH, _MASTER_EXECUTION_COMMAND
-    ok = bool(result and result.get("locked") and result.get("decision_owner") == "MASTER_65"
-              and result.get("execution_authorized") is True
-              and result.get("execution_command") == "MASTER_65_FINAL_LOCK")
+    ok = bool(
+        isinstance(result, dict)
+        and result.get("locked") is True
+        and result.get("decision_owner") == "MASTER_65"
+        and result.get("execution_authorized") is True
+        and result.get("execution_command") == "MASTER_65_FINAL_LOCK"
+    )
     _MASTER_EXECUTION_AUTH = ok
     _MASTER_EXECUTION_COMMAND = "MASTER_65_FINAL_LOCK" if ok else ""
     return ok
@@ -445,12 +451,8 @@ if not _logger.handlers:
         )
 
 
-def log_info(message, *args):
-    _logger.info(message, *args)
 
 
-def log_debug(message, *args):
-    return
 
 
 def log_error(context, exc=None, **details):
@@ -921,10 +923,6 @@ for _category, _words in BLOCKED_KEYWORDS_BY_CATEGORY.items():
     BLOCKED_KEYWORDS |= set(_words)
 
 
-def is_blocked_title(title):
-    if not title:
-        return False
-    return any(word in title for word in BLOCKED_KEYWORDS)
 
 
 GLOBAL_AND_DOMESTIC_GIANTS = [
@@ -994,31 +992,6 @@ US_EARNINGS_BEAT_WORDS = {"beats", "beat", "tops", "exceeds", "surpasses"}
 US_EARNINGS_MISS_WORDS = {"misses", "miss", "falls short", "below estimates"}
 
 
-def _extract_earnings_info(title):
-    title_lower = title.lower()
-    is_earnings = any(w in title_lower for w in US_EARNINGS_WORDS) or "실적" in title
-
-    if not is_earnings:
-        return False, None, None, None
-
-    beat_or_miss = None
-    if any(w in title_lower for w in US_EARNINGS_BEAT_WORDS) or "어닝서프라이즈" in title:
-        beat_or_miss = "beat"
-    elif any(w in title_lower for w in US_EARNINGS_MISS_WORDS) or "어닝쇼크" in title:
-        beat_or_miss = "miss"
-
-    revenue = None
-    rev_match = re.search(r"revenue[^\d]{0,10}\$?([\d,.]+)\s*(billion|million|B|M)", title, re.I)
-    if rev_match:
-        unit = "billion" if rev_match.group(2).lower().startswith("b") else "million"
-        revenue = f"${rev_match.group(1)} {unit}"
-
-    eps = None
-    eps_match = re.search(r"EPS[^\d]{0,10}\$?([\d.]+)", title, re.I)
-    if eps_match:
-        eps = f"${eps_match.group(1)}"
-
-    return True, beat_or_miss, revenue, eps
 
 MONEY_STRONG_WORDS = {
     "흑자", "적자", "어닝서프라이즈", "어닝쇼크", "영업이익", "매출",
@@ -1405,9 +1378,8 @@ def _engine_schedule_daily_monitor():
     key=f'{now.date().isoformat()}-{slot}'
     if state.get('last_sent')==key: return
     msg=_schedule_daily_message()
-    if msg and _engine_master_system_notice(msg, "SCHEDULE_SEND"):
-        state['last_sent']=key; state['last_sent_at']=now.isoformat(); _schedule_save_json(SCHEDULE_STATE_FILE,state)
-        _engine_log('info','[일정] %s시 일일 일정 브리핑 송출 완료',slot)
+    # 🔒 최고명령 전용: 일정 모니터는 자료만 준비한다. 송출 명령은 MASTER 65에서만 발급한다.
+    return
 
 ENGINE_HTTP_TIMEOUT = 20
 ENGINE_MAX_SEND_PER_CYCLE = 20
@@ -1519,15 +1491,6 @@ def _engine_is_global_market_news(text):
     return any(k in low for k in macro) and any(k in low for k in movement + ["발표", "결정", "회의", "인상", "인하", "확산", "충돌", "협상"])
 
 
-def _engine_confidence_state(item):
-    """미확인/확인/업그레이드 구분. 소문·전망은 확인 전 상태로 표시한다."""
-    text = _engine_clean(item.get("title", "") + " " + item.get("extra", "")).lower()
-    rumor = ["가능성", "전망", "관측", "추정", "검토", "추진설", "인수설", "협상중", "논의중", "rumor", "reportedly", "could", "may"]
-    confirmed = ["확정", "공식", "체결", "발표", "승인", "허가", "수주", "공급계약", "실적", "공시", "confirmed", "official", "approved"]
-    rumor_hit = any(k in text for k in rumor) or bool(re.search(r"(?:^|\s)(?:설|루머)(?:$|\s)", text))
-    if rumor_hit and not any(k in text for k in confirmed):
-        return "미확인"
-    return "확인"
 
 
 def _engine_strong_material(item):
@@ -1539,21 +1502,6 @@ def _engine_strong_material(item):
     return bool(hits or amount or len(item.get("market_hits", [])) >= 2), hits[:5]
 
 
-def _engine_historical_match(item):
-    if not ENABLE_HISTORICAL_SURGE_DB or not _engine_historical_cache:
-        return None
-    current = item.get("title", "") + " " + item.get("extra", "")
-    best = None
-    for row in _engine_historical_cache[-3000:]:
-        old = str(row.get("text", ""))
-        if not old:
-            continue
-        ratio = difflib.SequenceMatcher(None,
-            re.sub(r"[^0-9a-zA-Z가-힣]", "", current.lower())[:260],
-            re.sub(r"[^0-9a-zA-Z가-힣]", "", old.lower())[:260]).ratio()
-        if ratio >= HISTORICAL_MATCH_THRESHOLD and (best is None or ratio > best[0]):
-            best = (ratio, row)
-    return best
 
 
 def _engine_load_extended_state():
@@ -1650,10 +1598,8 @@ def _engine_watchdog_alert(force=False):
     _engine_last_watchdog_alert = time.time()
     msg = f"🚨 뉴스봇 WATCHDOG\n마지막 주기 응답 지연: {int(stale)}초\nKST: {_now_kst().strftime('%Y-%m-%d %H:%M:%S')}"
     _engine_log("error", "[WATCHDOG] %s", msg.replace("\n", " | "))
-    try:
-        _engine_master_system_notice(msg, "WATCHDOG_ALERT")
-    except Exception as e:
-        log_error("WATCHDOG Telegram 알림", e)
+    # 🔒 WATCHDOG는 기록만 한다. Telegram 실행명령은 MASTER 65 외에서는 금지한다.
+    return
 
 
 def _engine_load_seen():
@@ -1690,8 +1636,6 @@ def _engine_clean(text):
     return re.sub(r"\s+", " ", BeautifulSoup(str(text or ""), "html.parser").get_text(" ")).strip()
 
 
-def _engine_item_key(title, link):
-    return difflib.SequenceMatcher(None, title[:200].lower(), link[:200].lower()).ratio() and (link or title[:200])
 
 
 def _engine_record_decision_audit(item, result, status="LOCKED"):
@@ -1719,10 +1663,30 @@ def _engine_record_decision_audit(item, result, status="LOCKED"):
         return False
 
 
+# 🔒 HIGHEST COMMAND ONLY:
+# 아래 송출 함수는 MASTER_65_FINAL_LOCK을 소비하는 최종 단말일 뿐이며,
+# 하위 함수/스케줄러/브리핑은 실행명령을 발급할 수 없다.
+
+# 🔒 ROOT EXECUTION INVARIANT
+# 이 파일에서 Telegram 실행은 오직 MASTER_65_FINAL_LOCK을 소비하는 최종 단말에서만 가능하다.
+# 하위 모듈은 송출 함수/실행명령을 호출하거나 생성할 수 없다.
 def _engine_send_telegram(text, *, command=None, action="NEWS_SEND", master_result=None):
-    """🔒 실행단말. MASTER 65가 발급한 실행명령 없이는 절대 전송하지 않는다."""
-    if not verify_execution_command(command, action, master_result):
-        _engine_log("error", "[차단] Telegram 실행명령 없음/무효 | action=%s", action)
+    """최종 송출기.
+    실행명령을 생성하지 않는다. 오직 MASTER 65의 MASTER_65_FINAL_LOCK만 소비한다.
+    master_result가 없거나 명령이 정확히 일치하지 않으면 즉시 차단한다.
+    """
+    approved = bool(
+        _MASTER_EXECUTION_AUTH
+        and _MASTER_EXECUTION_COMMAND == "MASTER_65_FINAL_LOCK"
+        and isinstance(master_result, dict)
+        and master_result.get("locked") is True
+        and master_result.get("decision_owner") == "MASTER_65"
+        and master_result.get("execution_authorized") is True
+        and master_result.get("execution_command") == "MASTER_65_FINAL_LOCK"
+        and command == "MASTER_65_FINAL_LOCK"
+    )
+    if not approved:
+        _engine_log("error", "[차단] MASTER 65 FINAL_LOCK 실행명령 없는 하위 송출")
         return False
     if not BOT_TOKEN or not CHAT_ID:
         _engine_log("error", "[실패] Telegram | BOT_TOKEN/CHAT_ID 없음")
@@ -1732,48 +1696,12 @@ def _engine_send_telegram(text, *, command=None, action="NEWS_SEND", master_resu
         r = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False}, timeout=ENGINE_HTTP_TIMEOUT)
         api_result = r.json() if r.headers.get("content-type", "").lower().startswith("application/json") else {}
         if r.ok and api_result.get("ok", True):
-            _engine_log("info", "[성공] Telegram 전송 | MASTER 명령 승인")
+            _engine_log("info", "[성공] Telegram 전송 | MASTER 65 FINAL_LOCK 승인")
             return True
         _engine_log("error", "[실패] Telegram 전송 | 원인=%s", api_result.get("description") or r.reason)
     except Exception as e:
         _engine_log("error", "[실패] Telegram 전송 | 원인=%s", str(e)[:160])
     return False
-
-
-
-def _engine_master_system_notice(text, action):
-    """시스템 알림도 MASTER 65의 유일한 실행 통제실을 통과시킨다."""
-    try:
-        result = master_finalize_news(
-            title=str(text).split("\n",1)[0][:120],
-            body=str(text),
-            source="SYSTEM",
-            link="",
-            candidates=[],
-            schedule="",
-            evidence=[str(text)[:300]],
-            history=[],
-        )
-    except Exception as e:
-        _engine_log("error", "[MASTER] 시스템 알림 분석 실패 | action=%s | %s", action, str(e)[:180])
-        return False
-    if not result or not result.get("locked"):
-        return False
-    return _engine_master_controlled_send(text, action=action, master_result=result)
-
-def _engine_master_controlled_send(text, action="SYSTEM_NOTICE", master_result=None):
-    """🔒 모든 시스템 송출도 MASTER 65 FINAL_LOCK 결과가 있어야 한다.
-    master_result가 없으면 이 함수 자체가 MASTER 분석을 대신하지 않고 송출을 차단한다.
-    """
-    if not isinstance(master_result, dict) or not master_result.get("locked"):
-        _engine_log("error", "[차단] MASTER FINAL_LOCK 없는 시스템 송출 | action=%s", action)
-        return False
-    try:
-        command = issue_execution_command(action, master_result)
-    except Exception as e:
-        _engine_log("error", "[차단] MASTER 실행명령 발급 실패 | action=%s | %s", action, str(e)[:160])
-        return False
-    return _engine_send_telegram(text, command=command, action=action, master_result=master_result)
 
 
 def _engine_parse_datetime(value):
@@ -1832,20 +1760,6 @@ def _engine_market_state(source, published):
     return "시장 마감 후 뉴스"
 
 
-def _engine_recent_enough(published, source=""):
-    """외부 콘텐츠(텔레그램/유튜브)는 최근 60분을 기본으로 한다.
-    단, 국내 장 마감 후/휴무에 발생한 강한 주가 재료는 다음 거래일 반영을 위해 예외 허용한다.
-    국내 RSS/NAVER/DART/미국뉴스는 이 함수로 노출을 제한하지 않는다.
-    """
-    dt = _engine_parse_datetime(published)
-    if dt is None:
-        return False
-    if not (str(source).startswith("텔레그램/") or str(source).startswith("유튜브/")):
-        return True
-    age = (_now_kst() - dt).total_seconds()
-    if age <= 3600:
-        return True
-    return False
 
 
 def _engine_external_time_gate(source, published, title, extra, market_state, market_hits):
@@ -2211,41 +2125,6 @@ def _engine_theme(text):
             return theme
     return ""
 
-def _engine_relation_reason(text, companies, market_hits):
-    low = _engine_clean(text).lower()
-    domestic = [c for c in companies if c not in GLOBAL_COMPANY_KEYWORDS and _engine_company_is_directly_related(text, c)]
-
-    if domestic:
-        # 뉴스에서 실제로 확인되는 사건을 우선해 이유를 만든다.
-        if any(x in low for x in ["기술이전", "기술수출", "라이선스", "로열티", "마일스톤"]):
-            return "기술이전·기술수출 및 로열티/마일스톤의 실제 현금창출 가능성과 직접 연결"
-        if any(x in low for x in ["임상", "fda", "승인", "허가", "상업화"]):
-            return "임상·허가·상업화 단계가 실제 매출과 기업가치 변화로 이어질 가능성이 확인됨"
-        if any(x in low for x in ["지분", "매수", "투자", "유치", "3자배정", "제3자배정"]):
-            return "실제 자금 유입·지분 확대가 확인된 기업으로 이번 뉴스의 투자 이벤트와 직접 연결"
-        if any(x in low for x in ["수주", "공급계약", "계약", "납품", "공급"]):
-            return "실제 수주·계약·공급이 확인돼 향후 매출과 실적에 직접 연결"
-        if any(x in low for x in ["실적", "매출", "영업이익", "흑자전환"]):
-            return "실적·매출 변화가 직접 확인돼 사업가치와 주가 재평가 가능성 연결"
-        if any(x in low for x in ["증설", "양산", "생산", "출시"]):
-            return "생산능력 확대·제품 출시가 실제 사업 확대로 이어지는 구간"
-        return "뉴스의 핵심 사건 당사자로 직접 확인되며 사업·실적과 연결"
-
-    if any(x in low for x in ["기술이전", "기술수출", "로열티", "마일스톤"]):
-        return "기술이전·상업화 가능성이 확인된 바이오 사업가치 변화 테마"
-    if any(x in low for x in ["임상", "fda", "승인", "허가", "상업화"]):
-        return "임상·허가·상업화 진척이 실제 기업가치에 영향을 주는 바이오 테마"
-    if any(x in low for x in ["수주", "공급계약", "계약", "납품"]):
-        if "lng" in low or "조선" in low:
-            return "조선 수주 확대가 국내 조선업체의 수주잔고·실적에 연결되는 테마"
-        if "hbm" in low or "반도체" in low or "ai" in low:
-            return "AI·반도체 수요 변화가 국내 HBM·메모리 공급망에 전이되는 테마"
-        return "계약·수주·공급 변화가 국내 관련 산업의 실적에 전이되는 테마"
-    if any(x in low for x in ["투자", "증설", "양산", "수요"]):
-        return "투자·증설·수요 변화가 국내 공급망과 관련 종목의 실적 기대에 연결되는 테마"
-    if market_hits:
-        return "뉴스에서 확인된 시장 재료가 국내 관련 산업의 수급과 실적 기대에 연결되는 테마"
-    return ""
 
 
 # 🎯 후보수집기 = 사실/근거 후보만 수집. 최종 관련주 확정은 MASTER 65만 담당
@@ -2354,17 +2233,6 @@ _engine_sent_fingerprints = []  # {text, source, time_text, published, title}
 
 
 
-def _engine_similar(a, b):
-    ta = re.sub(r"[^0-9a-zA-Z가-힣]", "", a.lower())
-    tb = re.sub(r"[^0-9a-zA-Z가-힣]", "", b.lower())
-    ratio = difflib.SequenceMatcher(None, ta[:240], tb[:240]).ratio()
-    if ratio >= 0.78:
-        return True
-    ca = set(_engine_find_companies(a))
-    cb = set(_engine_find_companies(b))
-    ma = set(_engine_market_hit(a))
-    mb = set(_engine_market_hit(b))
-    return bool(ca & cb) and bool(ma & mb) and difflib.SequenceMatcher(None, ta[:180], tb[:180]).ratio() >= 0.52
 
 
 COMMERCIAL_VALUE_WORDS = {
@@ -2376,9 +2244,6 @@ COMMERCIAL_VALUE_WORDS = {
     "세계최초", "국내 최초", "국내최초", "수출계약", "판매계약", "공급 확대", "수요 급증",
 }
 
-def _engine_is_commercial_value(item, title, keypoint=""):
-    text = _engine_clean(f"{title} {keypoint} {item.get('extra','')}").lower()
-    return any(str(w).lower() in text for w in COMMERCIAL_VALUE_WORDS)
 
 _BYLINE_SPLIT_RE = re.compile(
     r'[가-힣]{2,4}\s*(?:기자|특파원|앵커)\s*=\s*|\([가-힣]{1,10}\s*=\s*[가-힣A-Za-z0-9]{1,20}\)\s*'
@@ -2535,40 +2400,6 @@ def _engine_translate_foreign_item(source: str, title: str, extra: str):
 _SUBTITLE_CACHE = {}
 SUBTITLE_FETCH_TIMEOUT = min(ENGINE_HTTP_TIMEOUT, 5)
 
-def _engine_fetch_subtitle(link: str) -> str:
-    link = str(link or "").strip()
-    if not link.startswith("http"):
-        return ""
-    if link in _SUBTITLE_CACHE:
-        return _SUBTITLE_CACHE[link]
-    subtitle = ""
-    try:
-        r = requests.get(
-            link,
-            headers={"User-Agent": USER_AGENT},
-            timeout=SUBTITLE_FETCH_TIMEOUT,
-            allow_redirects=True,
-        )
-        if r.ok:
-            soup = BeautifulSoup(r.text, "html.parser")
-            for attrs in (
-                {"property": "og:description"},
-                {"name": "twitter:description"},
-                {"name": "description"},
-            ):
-                tag = soup.find("meta", attrs=attrs)
-                content = tag.get("content") if tag else ""
-                content = _engine_clean(content)
-                # 제목과 동일하거나 너무 짧으면 실제 부제목으로 보지 않는다.
-                if content and len(content) >= 8:
-                    subtitle = content
-                    break
-    except Exception as e:
-        _engine_log("debug", "[부제목 조회 실패] %s | %s", link[:80], str(e)[:100])
-        subtitle = ""
-    subtitle = subtitle[:120]
-    _SUBTITLE_CACHE[link] = subtitle
-    return subtitle
 
 
 # ============================================================
@@ -2579,40 +2410,6 @@ def _engine_fetch_subtitle(link: str) -> str:
 # ============================================================
 _KEYPOINT_MARKER_RE = re.compile(r"([①②③④⑤⑥⑦⑧⑨⑩]|(?<!\d)\d+[.)])\s*")
 
-def _engine_format_keypoint_lines(keypoint: str, subtitle: str = "") -> list:
-    """규칙기반(비-AI) 핵심요약을 '🔎 요약' 헤더 + '     ✔ ...' 체크마크 형식으로 조립.
-    AI 분석이 꺼져있을 때도 동일한 보기 형식을 쓰기 위함."""
-    text = str(keypoint or "").strip()
-    if not text:
-        return []
-
-    markers = list(_KEYPOINT_MARKER_RE.finditer(text))
-    segments = []
-    for i, m in enumerate(markers):
-        start = m.end()
-        end = markers[i + 1].start() if i + 1 < len(markers) else len(text)
-        body = re.sub(r"🔎\s*", "", text[start:end]).strip(" .,-")
-        if body:
-            segments.append(body)
-
-    if not segments:
-        # 번호 마커가 없으면 원문 전체를 한 항목으로 취급.
-        whole = re.sub(r"🔎\s*", "", text).strip(" .,-")
-        if whole:
-            segments = [whole]
-
-    if not segments:
-        return []
-
-    subtitle = str(subtitle or "").strip()
-
-    out_lines = ["🔎 요약"]
-    for i, body in enumerate(segments):
-        line = f"✔ {html.escape(body)}"
-        if i == len(segments) - 1 and subtitle:
-            line += f"   /  {html.escape(subtitle)}"
-        out_lines.append(line)
-    return out_lines
 
 
 # 📺 Formatter = 방송실 / FINAL_LOCK 결과를 표시 형식으로만 변환
@@ -2637,9 +2434,11 @@ def _engine_format_message(item):
         related=list(master_result.get('related') or [])
         schedule=master_result.get('schedule') or ''
     else:
-        # 🔒 Fail-closed: MASTER FINAL_LOCK이 없으면 하위 표시/송출도 금지한다.
-        _engine_log("warning", "[MASTER] 결과 없음/미확정 | source=%s | Formatter/송출 금지", source_raw)
-        return ""
+        # MASTER가 실패/미확정인 경우에도 Formatter가 재분석하지 않는다.
+        # 원문 최소 표시만 하고, 판단이 필요한 항목은 비워둔다.
+        _engine_log("warning", "[MASTER] 결과 없음/미확정 | source=%s | Formatter는 재분석하지 않음", source_raw)
+        title=_engine_strip_foreign_publisher_suffix(raw_title)
+        key_points, stage, outlook, related, schedule = [], '', [], [], ''
 
     # Formatter는 제목에 어떤 마커도 추가/삭제하지 않는다.
     # 제목은 MASTER 65가 FINAL LOCK 전에 최종 확정한다.
@@ -2657,9 +2456,8 @@ def _engine_format_message(item):
     if freshness in ('재탕','업그레이드') and prev:
         lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
 
-    if key_points:
-        lines.append('🔎 [요약]')
-        for kp in key_points[:3]: lines.append('✔ '+html.escape(str(kp)[:220]))
+    lines.append('🔎 [요약]')
+    for kp in key_points[:3]: lines.append('✔ '+html.escape(str(kp)[:220]))
 
     if stage:
         lines.append('🧭 [진행 과정] ===> '+html.escape(stage))
@@ -2695,11 +2493,12 @@ def _engine_format_message(item):
     return '\n\n'.join(x for x in lines if str(x).strip())
 
 
+
 # 📋 상무 = 전체 처리 흐름 관리자 / 각 부서 결과를 순서대로 연결만 함
 def _engine_flush_pending():
     """대기 뉴스는 유사기사라도 묶거나 재탕 차단하지 않는다.
-    각 기사는 MASTER 65가 확정한 [신규]/[업그레이드]/[재탕] 결과만 사용한다.
-    동일 URL은 같은 폴링에서만 1회 처리한다.
+    각 기사의 신규/업그레이드/재탕 상태는 MASTER 65가 확정한 결과만 사용한다.
+    동일 URL은 같은 폴링에서만 1회 처리하여 1분 주기 무한도배만 막는다.
     """
     global _engine_pending
     if not _engine_pending:
@@ -2739,7 +2538,7 @@ def _engine_flush_pending():
             continue
         if key in _engine_seen:
             continue
-        # 🔒 중복/신규성 판단은 MASTER 65 결과만 사용한다.
+        # 🔒 중복/신규성 판단도 MASTER 명령 외에는 실행하지 않는다.
         freshness = str(master_result.get("freshness", "신규"))
         if master_result.get("duplicate_blocked"):
             _engine_log('info', '[제외] MASTER 중복명령 | 상태=%s | source=%s | 제목=%s', freshness, item.get('source',''), str(item.get('title',''))[:100])
@@ -2752,7 +2551,7 @@ def _engine_flush_pending():
         message = _engine_format_message(item)
         master_badge = _engine_master_badge(master_result)
         image_sent = False
-        news_command = issue_execution_command("NEWS_SEND", master_result)
+        news_command = master_result.get("execution_command")
         text_sent = _engine_send_telegram(message, command=news_command, action="NEWS_SEND", master_result=master_result)
         _master_close_execution()
         if text_sent:
@@ -2776,16 +2575,6 @@ def _engine_flush_pending():
     return sent
 
 
-def _engine_is_relevant(title):
-    t = title.lower()
-    kws = set()
-    for x in UNIQUE_TARGET | UNIQUE_GIANTS | UNIQUE_CELEBS:
-        if x and x.lower() in t:
-            kws.add(x)
-    for x in MONEY_STRONG_WORDS:
-        if x.lower() in t:
-            kws.add(x)
-    return list(kws)[:8]
 
 
 def _engine_is_within_recent_window(published, window_minutes=60):
@@ -2965,15 +2754,6 @@ def _naver_credential_candidates():
     return candidates
 
 
-def _naver_credentials():
-    """하위 호환용: 실제 사용 가능한 첫 인증쌍을 반환하되 서로 다른 쌍을 섞지 않는다."""
-    candidates = _naver_credential_candidates()
-    if not candidates:
-        return "", ""
-    mode, headers, _ = candidates[0]
-    if mode == "hub":
-        return NAVER_APIHUB_CLIENT_ID, NAVER_APIHUB_CLIENT_SECRET
-    return NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
 
 
 def _naver_request_headers(mode=None):
@@ -3409,9 +3189,8 @@ def _engine_krx_market_monitor():
     if slot==1: msg=_krx_briefing_message(snapshot,now,opening=True)
     elif events: msg=_krx_briefing_message(snapshot,now,events=events)
     else: msg=_krx_briefing_message(snapshot,now) if slot%1==0 else ""
-    if msg and _engine_master_system_notice(msg, "KRX_BRIEFING_SEND"):
-        _engine_krx_market_monitor._last_slot_key=key
-        _engine_log("info","[국내장브리핑] 송출 완료 | slot=%s | 변동=%d",key,len(events))
+    # 🔒 국내장 브리핑은 자료 수집만 한다. 직접 송출하지 않는다.
+    _engine_krx_market_monitor._last_slot_key=key
     _KRX_BRIEFING_LAST_SNAPSHOT=snapshot
 
 # 🇺🇸 미국장 30분 브리핑 + 장중 변동 감시
@@ -3805,11 +3584,10 @@ def _engine_us_market_monitor():
         if not msg:
             _US_BRIEFING_LAST_SNAPSHOT = snapshot
             return
-    if msg and _engine_master_system_notice(msg, "US_BRIEFING_SEND"):
-        _engine_us_market_monitor._last_slot_key = slot_key
-        _US_BRIEFING_LAST_OPEN_SENT = et.date() if slot_index == 1 else _US_BRIEFING_LAST_OPEN_SENT
-        _US_BRIEFING_LAST_INTRADAY_SENT = now
-        _engine_log("info", "[미장브리핑] %s 송출 | slot=%s", "개장30분" if slot_index == 1 else "장중변동", slot_key)
+    # 🔒 미국장 브리핑은 자료 수집만 한다. 직접 송출하지 않는다.
+    _engine_us_market_monitor._last_slot_key = slot_key
+    _US_BRIEFING_LAST_OPEN_SENT = et.date() if slot_index == 1 else _US_BRIEFING_LAST_OPEN_SENT
+    _US_BRIEFING_LAST_INTRADAY_SENT = now
     _US_BRIEFING_LAST_SNAPSHOT = snapshot
 
 
@@ -4064,9 +3842,8 @@ def _engine_us_market_close_monitor():
     if not snapshot:
         return
     msg = _us_close_briefing(snapshot, et)
-    if msg and _engine_master_system_notice(msg, "US_CLOSE_BRIEFING_SEND"):
-        _US_CLOSE_BRIEF_LAST_SENT = et.date()
-        _engine_log("info", "[미장마감] 장마감 브리핑 송출 완료")
+    # 🔒 미국장 마감 브리핑도 직접 송출하지 않는다.
+    _US_CLOSE_BRIEF_LAST_SENT = et.date()
 
 
 def _engine_cycle():
@@ -4212,5 +3989,6 @@ if __name__ == "__main__":
 
 
 # === MASTER INTEGRATION ENTRY POINT ===
-# 🔒 모든 송출은 MASTER 65 FINAL_LOCK 결과 없이는 실행되지 않는다.
-# 하위 함수는 판단·재작성·재승인하지 않는다.
+# 기존 뉴스 처리 함수가 확보한 title/body/candidates/schedule/evidence를
+# Telegram 송출 직전에 master_finalize_news(...)에 전달한다.
+# 이 지점은 기존 송출 코드를 자동으로 덮어쓰지 않도록 별도 함수로 둔다.
