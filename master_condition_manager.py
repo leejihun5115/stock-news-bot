@@ -9,6 +9,35 @@ Reusable central decision-logic module for news / stock analysis programs.
 - 본문 → 핵심요약 → 종목선정 → 실행단계 → 일정 → 시장전망
 - Validator → FINAL LOCK
 - Formatter / Telegram은 판단하지 않고 결과만 사용
+
+==============================================================================
+[중요] 65개 조건 중 실제로 "동작"하는 건 아래 19개뿐입니다.
+==============================================================================
+CONDITION_RULES 안의 "rule" 문구(설명 텍스트)는 실행 코드가 읽지 않습니다.
+실제 동작은 아래 _execute_rule()의 elif 분기에 이름이 걸려 있는 조건만 실행되고,
+나머지는 "방문 완료" 기록만 남고 아무 로직도 돌지 않습니다(의도된 설계).
+
+▶ 실제로 동작하는 19개 (이름 = _execute_rule의 elif 분기와 1:1 대응):
+  원문확보/본문우선/분석입력고정, 증거보존, 제목반복금지, 추정금지, 핵심추출,
+  5W1H우선/사실우선/주제분리, 핵심최대3/요약확정, 일반문구제거, 상용화단계,
+  실행신호, 미래일정검증, 시장영향, 전망근거/후속확인/지속성, 시장전망최대3,
+  대장주선정, 대장주이유, 관찰후보, 관련주없음, 점수화, 조건중앙관리,
+  FINAL_LOCK, Formatter무판단/Telegram무판단, 재호출금지
+
+▶ 결과를 확실히 바꾸고 싶다면 CONDITION_RULES의 문구를 고치지 말고,
+  아래 실제 함수를 직접 수정하세요:
+    - 제목 자동 생성        → _synthesize_title(title, body)
+    - 서브제목/요약(핵심포인트) → _key_points(title, body)
+    - 관련종목 선정/필터     → _select_related(candidates, text)
+      (관련종목 후보 자체는 news_bot.py의 STOCK_LINK_MAP / _engine_domestic_watchlist)
+    - 시장전망 문구          → _outlook(text, stage, key_points) / OUTLOOK_PATTERNS
+    - 상용화 단계 판정       → _stage(text) / STAGES
+
+나머지 46개(예: 직접사업연관/실제사건연결/과거급등이력/글로벌오인방지 등)는
+"이 원칙을 지킨다"는 설명일 뿐 별도 코드가 없습니다. 이 조건들의 실질 효과가
+필요하면 CONDITION_RULES를 고치는 게 아니라 _execute_rule()에 새 elif 분기를
+추가해야 합니다.
+==============================================================================
 """
 
 from __future__ import annotations
@@ -17,9 +46,24 @@ from datetime import date
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
-RULE_VERSION = "MASTER_CONDITION_MANAGER_V4_CENTRAL"
+RULE_VERSION = "MASTER_CONDITION_MANAGER_V1"
+
+# _execute_rule()에서 실제로 elif 분기를 갖고 있어 "진짜 실행"되는 조건 이름 목록.
+# 이 집합에 없는 이름은 CONDITION_RULES에 몇 줄을 써도 실행 시점에 아무 효과가 없다.
+IMPLEMENTED_CONDITION_NAMES = frozenset({
+    "원문확보", "본문우선", "분석입력고정",
+    "증거보존", "제목반복금지", "추정금지", "핵심추출",
+    "5W1H우선", "사실우선", "주제분리",
+    "핵심최대3", "요약확정", "일반문구제거",
+    "상용화단계", "실행신호", "미래일정검증", "시장영향",
+    "전망근거", "후속확인", "지속성", "시장전망최대3",
+    "대장주선정", "대장주이유", "관찰후보", "관련주없음", "점수화",
+    "조건중앙관리", "FINAL_LOCK",
+    "Formatter무판단", "Telegram무판단", "재호출금지",
+})
 
 CONDITION_RULES = [
+
     {"order": 1, "name": "원문확보", "rule": "가능한 경우 실제 기사 본문을 우선한다."},
     {"order": 2, "name": "본문우선", "rule": "RSS summary보다 실제 본문을 우선한다."},
     {"order": 3, "name": "증거보존", "rule": "판단 근거 문장을 보존한다."},
@@ -92,17 +136,14 @@ CONDITION_RULES = [
     {"order": 65, "name": "조건중앙관리", "rule": "모든 핵심 조건값과 판단 순서를 이 모듈 한 곳에서 관리한다."},
 ]
 
+# 각 조건에 "실제로 코드가 도는지" 여부를 부여한다. 65줄을 일일이 손으로 고치지 않고
+# IMPLEMENTED_CONDITION_NAMES 기준으로 자동 태깅해서, 목록/문구를 직접 편집해도 이 표시가
+# 항상 실제 코드 상태와 어긋나지 않게 한다.
+for _rule in CONDITION_RULES:
+    _rule["implemented"] = _rule["name"] in IMPLEMENTED_CONDITION_NAMES
+del _rule
 
 
-# 최종 명령 우선순위: 이 표 외의 뉴스 표시/분석 규칙은 독립 실행하지 않는다.
-MASTER_PRIORITY_POLICY = (
-    "사용자 최신 요구사항",
-    "MASTER 65조건",
-    "Validator",
-    "FINAL_LOCK",
-    "Formatter(표시만)",
-    "Telegram(전송만)",
-)
 
 @dataclass
 class MasterResult:
@@ -129,18 +170,6 @@ class MasterResult:
     master_confirmed: bool = False
     commercial_stage: str = ""
     commercial_evidence: str = ""
-    commercial_signals: List[str] = field(default_factory=list)
-    commercial_confidence: str = ""
-    news_context: Dict[str, Any] = field(default_factory=dict)
-    facts: List[str] = field(default_factory=list)
-    changes: List[str] = field(default_factory=list)
-    implications: List[str] = field(default_factory=list)
-    value_chain: List[str] = field(default_factory=list)
-    relation_analysis: List[Dict[str, Any]] = field(default_factory=list)
-    market_outlook: List[Dict[str, str]] = field(default_factory=list)
-    summary: List[str] = field(default_factory=list)
-    industry_market: List[str] = field(default_factory=list)
-    display_categories: Dict[str, bool] = field(default_factory=dict)
 
     def as_dict(self):
         return self.__dict__.copy()
@@ -191,8 +220,6 @@ class MasterConditionManager:
          "갈등의 장기화 여부와 생산·영업 차질 또는 비용 증가로 이어지는지가 핵심이다."),
         (r"소송|규제|제재|조사",
          "규제·법적 결과의 범위와 실제 비용·사업 제한으로 이어지는지가 핵심이다."),
-        (r"위탁\s*중개|주관사|주선사|자문사|중개 계약",
-         "위탁·중개 역할에 따른 수수료·자문 수익이 얼마나 반복적으로 발생하는지가 핵심이다."),
         (r"자사주|배당|주주환원",
          "환원 규모와 실제 현금흐름 대비 지속 가능성이 주주가치에 미치는 영향이 핵심이다."),
     ]
@@ -289,161 +316,13 @@ class MasterConditionManager:
         # 원 제목이 충분히 구체적이면 그대로 보존한다.
         # 단순 브리핑 제목/유튜브 제목/클릭베이트면 핵심 사건을 재구성한다.
         generic = re.search(r"모닝|브리핑|뉴스모음|오늘의|종합|프리뷰|시황|경제브리핑", title, re.I)
-        # 제목이 없거나 너무 길거나 일반적인 제목이면 반드시 본문에서 재생성한다.
-        if not generic and 18 <= len(title) <= 70:
+        if not generic and len(title) >= 18:
             return title
         if pts:
             p = pts[0]
             p = re.sub(r"\s*(?:-|\|)\s*(?:[^-_|]{2,20})$", "", p).strip()
             return p[:110]
         return title[:110]
-
-    def _build_news_context(self, title, body, subtitle="", source="", link="", companies=None):
-        """AI 없이 뉴스 한 건을 구조화한다: 원문/숫자/기업/출처를 하나의 NEWS_CONTEXT로 고정."""
-        title = self._clean(title)
-        body = self._clean(body)
-        subtitle = self._clean(subtitle)
-        text = self._clean(" ".join(x for x in (title, subtitle, body) if x))
-        sentences = self._sentences(body or subtitle or title)
-        numbers = re.findall(r"(?<![A-Za-z])[-+]?\d[\d,.]*(?:\s*(?:%|억|조|만원|억원|조원|원|달러|위안|유로|달러|만대|천대|백만|million|billion))?", text, re.I)
-        dates = re.findall(r"(?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일|다음주|다음달|내달|하반기|상반기)", text, re.I)
-        return {
-            "title": title, "subtitle": subtitle, "body": body,
-            "text": text, "sentences": sentences[:30],
-            "numbers": list(dict.fromkeys(numbers))[:30],
-            "dates": list(dict.fromkeys(dates))[:20],
-            "companies": list(dict.fromkeys([self._clean(x) for x in (companies or []) if self._clean(x)]))[:30],
-            "source": self._clean(source), "link": self._clean(link),
-        }
-
-    def _facts(self, context):
-        """원문에 직접 적힌 사실만 추출. 해석 문구는 넣지 않는다."""
-        sentences = context.get("sentences") or []
-        fact_words = re.compile(r"수주|계약|공급|납품|구매|도입|투자|증설|생산|양산|출시|상용화|승인|허가|인증|테스트|검증|매출|영업이익|순이익|배당|자사주|인수|합병|지원|정책|시장|수요|가격|규모|전망|계획|발표|확정")
-        scored=[]
-        for i,s in enumerate(sentences):
-            score=len(fact_words.findall(s))*4 + (5 if re.search(r"\d|%|억|조|원|달러|위안",s) else 0) + min(len(s),180)/100
-            if fact_words.search(s): scored.append((score,i,s))
-        scored.sort(reverse=True)
-        out=[]
-        for _,_,s in scored:
-            if any(self._norm(s)==self._norm(x) for x in out): continue
-            out.append(s[:260])
-            if len(out)>=6: break
-        return out
-
-    def _changes(self, text, facts):
-        """팩트에서 '무엇이 달라졌는가'를 규칙으로 판정한다."""
-        rules = [
-            (r"구매|도입|채택", "기술·전시 중심에서 실제 구매·도입 단계로 이동"),
-            (r"수주|공급계약|계약 체결|본계약", "기대 단계에서 계약·수주라는 실행 단계로 진전"),
-            (r"양산|대량생산|생산 돌입|출하|납품", "개발·검증을 넘어 실제 생산·공급 단계로 진전"),
-            (r"상용화|상업화|판매 개시|출시", "개발 결과가 실제 시장 판매·서비스 단계로 이동"),
-            (r"고객 검증|고객사 검증|현장 검증|실증", "기술 검증에서 고객·현장 검증 단계로 이동"),
-            (r"테스트 완료|검증 완료|시험 완료|인증|승인|허가", "기술·제품의 검증 또는 규제 관문을 통과"),
-            (r"증설|생산라인|공장|CAPEX|시설투자", "수요 대응을 위한 생산능력·설비 확대가 진행"),
-            (r"매출|영업이익|순이익|실적", "기술·사업 이벤트가 실제 재무성과로 확인되기 시작"),
-            (r"시장 규모|시장 전망|수요 전망", "시장 기대치 또는 수요 전망이 새롭게 제시됨"),
-            (r"정부 지원|정책|보조금|지원금", "정책 지원이 사업 확산의 외부 조건으로 추가됨"),
-        ]
-        out=[]
-        for pattern,change in rules:
-            if re.search(pattern,text,re.I):
-                concrete=next((f for f in facts if re.search(pattern,f,re.I)),"")
-                out.append(f"{change} ← {concrete[:180]}" if concrete else change)
-            if len(out)>=5: break
-        return out
-
-    def _value_chain_analysis(self, text):
-        maps = [
-            (r"휴머노이드|로봇", ["완제품·로봇 시스템", "구동부품·모터", "감속기·액추에이터", "센서·제어", "자동화·소프트웨어"]),
-            (r"HBM|AI 반도체|AI칩|반도체", ["AI 가속기·메모리", "패키징·검사", "장비·소재", "전력·냉각", "데이터센터"]),
-            (r"2차전지|배터리|전고체", ["배터리 셀", "양극재·음극재", "전해질·분리막", "장비", "재활용"]),
-            (r"조선|LNG선|선박", ["선박·조선", "엔진·기자재", "탱크·밸브", "전장·제어", "친환경 연료"]),
-            (r"방산|미사일|전투기", ["완성 무기체계", "유도·추진", "전자·레이더", "부품·소재", "정비·MRO"]),
-            (r"원전|SMR", ["원자로·SMR", "원전 기자재", "터빈·밸브", "전력·제어", "건설·정비"]),
-            (r"바이오|신약|임상|FDA|허가", ["신약·의약품", "CDMO", "진단·플랫폼", "임상·규제", "유통·판매"]),
-        ]
-        for pattern, chain in maps:
-            if re.search(pattern,text,re.I): return chain
-        return []
-
-    def _commercial_analysis(self, text, facts):
-        """개발→시제품→테스트→고객검증→구매→수주→양산→매출의 현재 단계를 판단."""
-        stages = [
-            (8, "매출", r"매출 발생|매출 증가|매출 인식|영업이익|순이익|실적 개선"),
-            (7, "양산·판매", r"양산|대량생산|생산 돌입|출하|납품|판매 증가|판매 개시"),
-            (6, "수주·계약", r"수주|공급계약|공급 계약|계약 체결|본계약|판매계약|장기공급"),
-            (5, "구매·도입", r"구매|실제 도입|현장 도입|채택|발주"),
-            (4, "고객 검증", r"고객 검증|고객사 검증|현장 검증|실증|고객 테스트"),
-            (3, "테스트·승인", r"테스트 완료|검증 완료|시험 완료|인증|승인|허가"),
-            (2, "시제품", r"시제품|프로토타입|prototype|데모"),
-            (1, "기술개발·투자", r"개발|연구|R&D|투자|증설|시설투자|CAPEX"),
-        ]
-        found=[]
-        sentences = self._sentences(text) or [text]
-        future_re = re.compile(r"예정|계획|준비 중|준비중|검토|추진|도입할|구매할|납품할|출시할|양산할|발표할", re.I)
-        confirmed_re = re.compile(r"확정|공식|체결|완료|실제|진행|돌입|개시|발생|인식|수주", re.I)
-        for rank,label,pat in stages:
-            matched_sentence = next((sent for sent in sentences if re.search(pat, sent, re.I)), "")
-            m=re.search(pat, matched_sentence or text, re.I)
-            if not m:
-                continue
-            # 미래 계획만 적힌 표현은 현재 상용화 단계로 승격하지 않는다.
-            if matched_sentence and future_re.search(matched_sentence) and not confirmed_re.search(matched_sentence):
-                continue
-            found.append((rank,label,m.group(0)))
-        if not found:
-            return "", "", [], "미확인"
-        rank,label,ev=max(found,key=lambda x:x[0])
-        signals=[f"{label}: {ev}"]
-        if any(re.search(r"확정|공식|체결|승인|허가|수주|계약|실제 구매|실제 도입|양산|매출 발생|실적 개선|완료",f,re.I) for f in facts) and not any(re.search(r"전망|예상|가능성|추정|검토|추진",f,re.I) for f in facts):
-            confidence="확정"
-        elif any(re.search(r"전망|예상|가능성|추정|검토|추진|계획",f,re.I) for f in facts):
-            confidence="가능성 높음" if rank >= 5 else "가능성"
-        else:
-            confidence="가능성"
-        return label, ev, signals, confidence
-
-    def _investor_title(self, title, body, context, changes, stage):
-        """제목은 MASTER 단독 결정. 없거나 길면 본문에서 투자자용 제목을 재생성한다."""
-        clean=self._clean(title)
-        generic=bool(re.search(r"모닝|브리핑|뉴스모음|오늘의|종합|프리뷰|시황|경제브리핑|속보모음",clean,re.I))
-        sentences=context.get("sentences") or []
-        needs_regen=(not clean) or generic or len(clean)>70
-        if not needs_regen:
-            return clean
-        candidates=[]
-        for f in sentences:
-            f=self._clean(f)
-            if len(f)>=18 and self._norm(f)!=self._norm(clean):
-                score=(8 if re.search(r"수주|계약|구매|도입|양산|매출|출시|승인|허가|투자|증설",f,re.I) else 0)
-                score+=(4 if re.search(r"\d|%|억|조|원|달러|위안",f) else 0)
-                candidates.append((score,f))
-        best=max(candidates,key=lambda x:x[0])[1] if candidates else ""
-        if not best:
-            best=self._clean(next((x for x in (context.get("sentences") or []) if x), ""))
-        if not best:
-            return clean[:70]
-        best=re.sub(r"\s+"," ",best).strip(" -•")
-        if len(best)>70:
-            best=best[:70].rsplit(" ",1)[0]
-        if stage in ("구매·도입","수주·계약","양산·판매","매출"):
-            return ("🎯 "+best)[:70]
-        return best[:70]
-
-    def _market_outlook(self, text, facts, stage, value_chain, related):
-        out=[]
-        confidence="확정" if any(re.search(r"확정|공식|체결|승인|허가|수주|실적|완료",f,re.I) for f in facts) and not any(re.search(r"전망|예상|가능성|추정|검토|추진",f,re.I) for f in facts) else ("가능성 높음" if stage in ("구매·도입","수주·계약","양산·판매") else "가능성")
-        if stage in ("구매·도입","수주·계약","양산·판매","매출"):
-            out.append({"level":confidence,"text":f"{stage} 신호가 확인돼 기술 기대보다 실제 매출·수요 전환 여부가 핵심이다."})
-        if value_chain and stage in ("구매·도입","수주·계약","양산·판매"):
-            out.append({"level":"가능성","text":f"{value_chain[0]}에서 시작한 변화가 {'·'.join(value_chain[1:4])} 등 밸류체인으로 확산되는지 확인할 필요가 있다."})
-        if re.search(r"시장 규모|시장 전망|수요",text,re.I):
-            out.append({"level":"가능성","text":"제시된 시장 규모·수요 전망이 실제 주문·생산·매출로 전환되는지가 핵심 확인 포인트다."})
-        if re.search(r"투자|증설|CAPEX|생산라인",text,re.I):
-            out.append({"level":"가능성","text":"투자·생산능력 확대가 실제 고객 수요와 가동률 개선으로 이어지는지 확인해야 한다."})
-        return out[:3]
 
     def _stage(self, text):
         found = []
@@ -534,12 +413,6 @@ class MasterConditionManager:
             m = re.search(pattern, text, re.I)
             if m:
                 matched.append((m.start(), sentence, m.group(0)))
-        # [위탁·중개 우선] "OO증권이 XX의 자사주 매입을 위탁 중개해 상한가"처럼 자기 자신이
-        # 아니라 대리·중개 역할을 한 기사에서, "자사주/배당" 패턴(발행사 본인의 환원 관점)이
-        # 위탁·중개 패턴과 함께 잡히면 실제 그림과 다른 전망이 섞여 나간다.
-        # 이런 경우 더 구체적이고 사실에 맞는 위탁·중개 관점만 남긴다.
-        if any("위탁" in a or "중개" in a or "주관" in a or "주선" in a for _, _, a in matched):
-            matched = [m for m in matched if not ("자사주" in m[2] or "배당" in m[2] or "주주환원" in m[2])]
         if not matched:
             return ["기사에서 확인된 사건이 실제 기업 실적·수급으로 연결되는 경로를 추가 확인할 필요가 있습니다."]
         matched.sort(key=lambda x: x[0])
@@ -606,13 +479,11 @@ class MasterConditionManager:
             else:
                 state["key_points"] = [x for x in state["key_points"] if not re.fullmatch(r"후속.*확인.*", x)] or state["key_points"]
         elif name == "상용화단계":
-            # 새 상용화 사다리(고객검증→구매→수주→양산→매출)를 사용한다.
-            if not state.get("commercial_stage"):
-                state["stage"], state["commercial_evidence"], state["commercial_signals"], state["commercial_confidence"] = self._commercial_analysis(text, state.get("facts", []))
-                state["commercial_stage"] = state["stage"]
+            state["stage"], state["commercial_evidence"] = self._stage(text)
+            state["commercial_stage"] = state["stage"]
         elif name == "실행신호":
-            # 이미 계산된 상용화 단계의 근거를 유지하고 더 낮은 단계로 되돌리지 않는다.
-            state["stage"] = state.get("commercial_stage") or state.get("stage", "")
+            # 실행신호는 이미 계산된 stage를 뒤에서 더 높은 단계로 덮어쓴다.
+            state["stage"], state["commercial_evidence"] = self._stage(text)
         elif name == "미래일정검증":
             state["schedule"] = self._future_schedule(state["schedule"], state["body"])
         elif name == "시장영향":
@@ -633,27 +504,11 @@ class MasterConditionManager:
         elif name == "점수화":
             state["related"], state["leader"], state["observe"] = self._select_related(state["candidates"], text)
         elif name == "조건중앙관리":
-            # 65번은 분석 계층까지 최종 고정한다. 이후 Formatter/Telegram은 재판단하지 않는다.
-            state["stage"] = state.get("commercial_stage") or self._stage(text)[0]
-            state["commercial_stage"] = state["stage"]
+            # 65번은 최종 override: 앞선 중간 결과를 다시 덮어쓰지 않고,
+            # 현재까지의 모든 조건을 최종 상태로 고정한다.
+            state["stage"], state["commercial_evidence"] = self._stage(text)
             state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
-            state["relation_analysis"] = []
-            tier_map = [("direct", "직접 수혜"), ("event_link", "사업 연관"), ("supply_chain", "공급망"), ("theme_link", "테마 연관")]
-            for c in state["related"]:
-                c = dict(c)
-                c["relation_type"] = next((label for key,label in tier_map if c.get(key)), "테마 연관")
-                state["relation_analysis"].append({"name": self._clean(c.get("name")), "type": c["relation_type"], "reason": self._clean(c.get("reason"))})
-            state["implications"] = []
-            if state["changes"]:
-                for ch in state["changes"][:3]:
-                    if "구매·도입" in ch or "수주" in ch or "양산" in ch or "상용화" in ch:
-                        state["implications"].append("실제 고객 수요·매출 전환 여부를 확인할 수 있는 실행 단계의 진전")
-                    elif "증설" in ch:
-                        state["implications"].append("생산능력 확대가 실제 수요 증가에 대응하는 신호인지 확인")
-                    elif "검증" in ch or "승인" in ch:
-                        state["implications"].append("다음 상용화 관문을 통과할 가능성을 높이는 검증 진전")
-            state["market_outlook"] = self._market_outlook(text, state["facts"], state["stage"], state["value_chain"], state["related"])
-            state["outlook"] = [x["text"] for x in state["market_outlook"][:3]]
+            state["outlook"] = self._outlook(text, state["stage"], state["key_points"])[:3]
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
             state["master_confirmed"] = bool(
                 state["news_value"] in ("높음", "중간") and
@@ -671,78 +526,14 @@ class MasterConditionManager:
         # 나머지 조건도 '방문 완료' 자체가 실행 증거가 된다.
         state["executed_orders"].append(order)
 
-    def _build_display(self, state):
-        """최종 표시 규칙도 MASTER 한 곳에서만 결정한다.
-        Formatter/Telegram은 이 결과를 그대로 표시하며 별도 판단하지 않는다.
-        """
-        summary = []
-        subtitle = self._clean(state.get("subtitle"))
-        if subtitle:
-            summary.append(subtitle)
-        if not subtitle:
-            for x in (state.get("key_points") or [])[:2]:
-                x = self._clean(x)
-                if x and self._norm(x) != self._norm(state.get("title")) and x not in summary:
-                    summary.append(x)
-        for label, values in (("변화", (state.get("changes") or [])[:1]), ("상용화", [state.get("commercial_stage")]), ("밸류체인", [])):
-            if label == "밸류체인":
-                vc = " → ".join(self._clean(x) for x in state.get("value_chain") or [] if self._clean(x))
-                values = [vc] if vc else []
-            for x in values or []:
-                x = self._clean(x)
-                if x and x not in summary:
-                    summary.append(f"{label}: {x}")
-        industry_market = []
-        for x in state.get("implications") or []:
-            x = self._clean(x)
-            if x and x not in industry_market:
-                industry_market.append(x)
-        for x in state.get("market_outlook") or []:
-            if isinstance(x, dict):
-                level=self._clean(x.get("level")); text=self._clean(x.get("text"))
-                if text:
-                    industry_market.append(f"{level} · {text}" if level else text)
-        industry_market = list(dict.fromkeys(industry_market))[:5]
-        display = {
-            "summary": summary[:5],
-            "facts": list(state.get("facts") or [])[:6],
-            "industry_market": industry_market,
-            "related": list(state.get("related") or [])[:self.max_related],
-            "related_none_reason": self._clean(state.get("related_none_reason")),
-            "schedule": self._clean(state.get("schedule")),
-        }
-        state["summary"] = display["summary"]
-        state["industry_market"] = display["industry_market"]
-        state["display_categories"] = {
-            "summary": bool(display["summary"]),
-            "facts": bool(display["facts"]),
-            "industry_market": bool(display["industry_market"]),
-            "related": bool(display["related"] or display["related_none_reason"]),
-            "schedule": bool(display["schedule"]),
-        }
-
-    def analyze(self, title, body, source="", link="", candidates=None, schedule="", evidence=None, subtitle="", companies=None):
+    def analyze(self, title, body, source="", link="", candidates=None, schedule="", evidence=None):
         title = self._clean(title)
         body = self._clean(body)
-        context = self._build_news_context(title, body, subtitle, source, link, companies)
-        text = context["text"]
-        facts = self._facts(context)
-        changes = self._changes(text, facts)
-        stage0, stage_evidence, commercial_signals, commercial_confidence = self._commercial_analysis(text, facts)
-        value_chain = self._value_chain_analysis(text)
-        investor_title = self._investor_title(title, body, context, changes, stage0)
+        text = self._clean(f"{title} {body}")
         state = {
-            "title": investor_title,
+            "title": self._synthesize_title(title, body),
             "body": body,
             "text": text,
-            "subtitle": subtitle,
-            "news_context": context,
-            "facts": facts,
-            "changes": changes,
-            "implications": [],
-            "value_chain": value_chain,
-            "commercial_signals": commercial_signals,
-            "commercial_confidence": commercial_confidence,
             "source": self._clean(source),
             "link": self._clean(link),
             "candidates": list(candidates or []),
@@ -750,11 +541,9 @@ class MasterConditionManager:
             "leader": None,
             "observe": [],
             "key_points": self._key_points(title, body),
-            "stage": stage0,
-            "commercial_stage": stage0,
-            "commercial_evidence": stage_evidence,
-            "relation_analysis": [],
-            "market_outlook": [],
+            "stage": "",
+            "commercial_stage": "",
+            "commercial_evidence": "",
             "schedule": self._future_schedule(schedule, body),
             "outlook": [],
             "evidence": [self._clean(x) for x in (evidence or []) if self._clean(x)],
@@ -792,8 +581,6 @@ class MasterConditionManager:
         # 65번 이후 재호출이 되어 조건53(재호출금지)·조건65(조건중앙관리)를 위반한다.
         # related/leader/observe는 order 31~35에서, stage/outlook/news_value/master_confirmed는
         # order 65("조건중앙관리")에서 이미 최종 확정되었으므로 그대로 사용한다.
-        # 65번까지의 모든 판단이 끝난 뒤 표시용 결과를 딱 한 번 생성한다.
-        self._build_display(state)
         expected_orders = {int(r["order"]) for r in CONDITION_RULES}
         missing = sorted(expected_orders - set(state["executed_orders"]))
         if missing:
@@ -809,18 +596,6 @@ class MasterConditionManager:
             stage=state["stage"],
             commercial_stage=state["commercial_stage"],
             commercial_evidence=state["commercial_evidence"],
-            commercial_signals=state["commercial_signals"],
-            commercial_confidence=state["commercial_confidence"],
-            news_context=state["news_context"],
-            facts=state["facts"][:6],
-            changes=state["changes"][:5],
-            implications=state["implications"][:3],
-            value_chain=state["value_chain"][:6],
-            relation_analysis=state["relation_analysis"][:3],
-            market_outlook=state["market_outlook"][:3],
-            summary=state["summary"],
-            industry_market=state["industry_market"],
-            display_categories=state["display_categories"],
             schedule=state["schedule"],
             outlook=state["outlook"][:3],
             selection_method=list(self.SELECTION_METHOD),
@@ -853,6 +628,8 @@ class MasterConditionManager:
         points = [self._clean(x) for x in (result.get("key_points") or []) if self._clean(x)]
         if not title:
             errors.append("제목 없음")
+        if not points:
+            errors.append("핵심요약 없음")
         if any(self._norm(k) == title_n for k in points):
             errors.append("요약이 제목과 동일함")
         if len(points) > 3:
@@ -868,6 +645,8 @@ class MasterConditionManager:
         if not related and not self._clean(result.get("related_none_reason")):
             errors.append("관련주 없음 이유 없음")
         outlook = [self._clean(x) for x in (result.get("outlook") or []) if self._clean(x)]
+        if not outlook:
+            errors.append("시장전망 없음")
         if len(outlook) > 3:
             errors.append("시장전망 3개 초과")
         # generic fallback 흔적 차단
@@ -882,10 +661,6 @@ class MasterConditionManager:
             errors.append("범용 시장전망 문구 사용")
         if result.get("master_confirmed") and result.get("news_value") == "낮음":
             errors.append("뉴스가치 낮은데 MASTER 확정")
-        if result.get("market_outlook") and any(not self._clean(x.get("text")) for x in result.get("market_outlook") if isinstance(x, dict)):
-            errors.append("시장전망 구조 오류")
-        if result.get("commercial_stage") and not result.get("commercial_evidence"):
-            errors.append("상용화 단계 근거 없음")
         result["validation_errors"] = errors
         return result
 
@@ -913,4 +688,4 @@ def analyze_news(**kwargs):
     return manager.lock(result)
 
 
-__all__ = ["RULE_VERSION", "CONDITION_RULES", "MASTER_PRIORITY_POLICY", "MasterResult", "MasterConditionManager", "analyze_news"]
+__all__ = ["RULE_VERSION", "CONDITION_RULES", "MasterResult", "MasterConditionManager", "analyze_news"]
