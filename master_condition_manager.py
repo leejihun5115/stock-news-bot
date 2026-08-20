@@ -290,7 +290,7 @@ class MasterConditionManager:
         # 단순 브리핑 제목/유튜브 제목/클릭베이트면 핵심 사건을 재구성한다.
         generic = re.search(r"모닝|브리핑|뉴스모음|오늘의|종합|프리뷰|시황|경제브리핑", title, re.I)
         # 제목이 없거나 너무 길거나 일반적인 제목이면 반드시 본문에서 재생성한다.
-        if not generic and 1 <= len(title) <= 50 and not re.search(r"(?:했다고 밝혔다|있다고 밝혔다|있다고 말했다|있다고 전했다|했다|한다|있다|이다|전망이다|밝혔다|말했다|예정이다|추진한다|확대되고 있다|나타났다|전해졌다)$", title):
+        if not generic and 18 <= len(title) <= 70:
             return title
         if pts:
             p = pts[0]
@@ -410,7 +410,7 @@ class MasterConditionManager:
         clean=self._clean(title)
         generic=bool(re.search(r"모닝|브리핑|뉴스모음|오늘의|종합|프리뷰|시황|경제브리핑|속보모음",clean,re.I))
         sentences=context.get("sentences") or []
-        needs_regen=(not clean) or generic or len(clean)>50 or bool(re.search(r"(?:했다고 밝혔다|있다고 밝혔다|있다고 말했다|있다고 전했다|했다|한다|있다|이다|전망이다|밝혔다|말했다|예정이다|추진한다|확대되고 있다|나타났다|전해졌다)$", clean))
+        needs_regen=(not clean) or generic or len(clean)>70
         if not needs_regen:
             return clean
         candidates=[]
@@ -424,31 +424,13 @@ class MasterConditionManager:
         if not best:
             best=self._clean(next((x for x in (context.get("sentences") or []) if x), ""))
         if not best:
-            return clean[:50]
+            return clean[:70]
         best=re.sub(r"\s+"," ",best).strip(" -•")
-        best=best.rstrip(".。!?！")
-        # 서술형 문장을 투자자용 요약형 헤드라인으로 압축한다.
-        if re.search(r"(?:했다고 밝혔다|있다고 밝혔다|있다고 말했다|있다고 전했다|했다|한다|있다|이다|전망이다|밝혔다|말했다|예정이다|추진한다|확대되고 있다|나타났다|전해졌다)$", best):
-            base = re.sub(r"(?:했다고 밝혔다|있다고 밝혔다|있다고 말했다|있다고 전했다|밝혔다|말했다|예정이다|추진한다|확대되고 있다|나타났다|전해졌다|했다|한다|있다|이다|전망이다)$", "", clean).strip(" .。,-")
-            if re.search(r"구매|도입|채택", best, re.I):
-                subject = re.split(r"(?:이|가|은|는)\s", base, maxsplit=1)[0].strip() or base
-                best = f"{subject}, 실제 구매·현장 도입 확대"
-            elif re.search(r"수주|계약", best, re.I):
-                subject = re.split(r"(?:이|가|은|는)\s", base, maxsplit=1)[0].strip() or base
-                best = f"{subject}, 수주·공급계약 진전"
-            elif re.search(r"양산|출하|납품|판매", best, re.I):
-                subject = re.split(r"(?:이|가|은|는)\s", base, maxsplit=1)[0].strip() or base
-                best = f"{subject}, 양산·판매 단계 진전"
-            elif re.search(r"시장|수요", best, re.I):
-                subject = re.split(r"(?:이|가|은|는)\s", base, maxsplit=1)[0].strip() or base
-                best = f"{subject}, 시장·수요 확대"
-            else:
-                best = base or best
-        if len(best)>50:
-            best=best[:50].rsplit(" ",1)[0]
+        if len(best)>70:
+            best=best[:70].rsplit(" ",1)[0]
         if stage in ("구매·도입","수주·계약","양산·판매","매출"):
-            return ("🎯 "+best)[:50]
-        return best[:50]
+            return ("🎯 "+best)[:70]
+        return best[:70]
 
     def _market_outlook(self, text, facts, stage, value_chain, related):
         out=[]
@@ -559,7 +541,7 @@ class MasterConditionManager:
         if any("위탁" in a or "중개" in a or "주관" in a or "주선" in a for _, _, a in matched):
             matched = [m for m in matched if not ("자사주" in m[2] or "배당" in m[2] or "주주환원" in m[2])]
         if not matched:
-            return []
+            return ["기사에서 확인된 사건이 실제 기업 실적·수급으로 연결되는 경로를 추가 확인할 필요가 있습니다."]
         matched.sort(key=lambda x: x[0])
         result = []
         seen = set()
@@ -727,6 +709,7 @@ class MasterConditionManager:
             "industry_market": industry_market,
             "related": list(state.get("related") or [])[:self.max_related],
             "related_none_reason": self._clean(state.get("related_none_reason")),
+            "schedule": self._clean(state.get("schedule")),
         }
         state["summary"] = display["summary"]
         state["industry_market"] = display["industry_market"]
@@ -735,6 +718,7 @@ class MasterConditionManager:
             "facts": bool(display["facts"]),
             "industry_market": bool(display["industry_market"]),
             "related": bool(display["related"] or display["related_none_reason"]),
+            "schedule": bool(display["schedule"]),
         }
 
     def analyze(self, title, body, source="", link="", candidates=None, schedule="", evidence=None, subtitle="", companies=None):
