@@ -2695,17 +2695,7 @@ def _engine_master_result(item):
     (MASTER는 title/body만으로 자체적으로 제목 재구성·핵심요약·근거를 계산한다.)
     """
     try:
-        rows = _engine_domestic_watchlist(item)
         candidates = []
-        for row in rows or []:
-            candidates.append({
-                "name": str(row.get("name", "")).strip(),
-                "reason": str(row.get("reason", "")).strip(),
-                "score": float(row.get("score", 0) or 0),
-                "direct": bool(row.get("direct")),
-                "theme_link": not bool(row.get("direct")),
-                "domestic_listed": True,
-            })
         raw_title = str(item.get("title", "")).strip()
         rss_body = str(item.get("extra", "")).strip()
         raw_body = rss_body
@@ -2744,7 +2734,7 @@ def _engine_master_result(item):
             link=str(item.get("link", "")),
             candidates=candidates,
             schedule=_engine_future_schedule(raw_body),
-            subtitle=str(item.get("subtitle", "")),
+            subtitle=subtitle,
             companies=item.get("companies", []),
         )
         _engine_log(
@@ -2907,11 +2897,6 @@ def _engine_format_message(item):
         elif none_reason:
             lines.append('     ✔ 관련주 없음 — ' + html.escape(none_reason[:200]))
 
-    schedule = str(master_result.get("schedule") or "").strip()
-    if categories.get("schedule") and schedule:
-        lines.append('📅 [일정]')
-        lines.append('     ✔ ' + html.escape(schedule[:220]))
-
     link = str(master_result.get("link") or item.get("link") or "").strip()
     if link:
         lines.append(f'<a href="{html.escape(link, quote=True)}">🔗 원문 보기</a>')
@@ -2943,12 +2928,6 @@ def _engine_flush_pending():
         master_result = _engine_master_result(item)
         item["_master_result"] = master_result
         message = _engine_format_message(item)
-        master_badge = _engine_master_badge(master_result)
-        image_sent = False
-        if master_badge:
-            image_path = _engine_master_image_path(master_result)
-            if image_path:
-                image_sent = _engine_send_telegram_photo(image_path, caption=master_badge)
         text_sent = _engine_send_telegram(message)
         if text_sent:
             _engine_mark_seen(key)
@@ -3010,61 +2989,29 @@ def _engine_process_item(source, title, link, published="", extra=""):
     # 이후 🔎/테마/관련주/출력은 동일한 한국어 분석 원문을 사용한다.
     title, extra, translation_ok = _engine_translate_foreign_item(source, title, extra)
     if not translation_ok:
-        return False
+        # 번역 실패는 분석 실패가 아니라 원문 fallback이다.
+        title = _engine_clean(title)
+        extra = _engine_clean(extra)
 
     # 원문 전체를 보존한다. 요약문으로 extra를 덮어쓰지 않는다.
 
-    # 사용자가 원치 않는 [그로쓰리서치] 속보/단독/특징주 채널은 원천 제외.
-    growth_block = ("그로쓰리서치" in str(source)) or ("rocket_news1" in link) or ("growth_semi" in link) or ("growthbio" in link) or ("growthresearch" in link)
-    if growth_block:
-        _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
-        return False
-
-    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
-    # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
-    if not _engine_is_within_recent_window(published, 60):
-        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
-        return False
-    ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
-    market_state = _engine_market_state(source, published)
-    gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
-    if not gate_ok:
-        _engine_log("info", "[제외] ⏱️ %s | %s", gate_reason, title[:80])
-        return False
-    if market_state == "시장시간 확인불가":
-        _engine_log("warning", "[로직] 시장시간 확인 필요 | source=%s | %s", source, title[:80])
-    # 송출 대상이 아니어도 미래의 중요 일정은 별도 DB에 누적한다.
-    # 일정 추출 함수에서 특징주/급등/상한가/주요 이벤트 여부를 다시 엄격히 검증한다.
-    try:
-        _schedule_add_news_item(source, title, extra, link, published, companies, market_hits)
-    except Exception as e:
-        _engine_log('warning', '[일정DB 누적 실패] %s', str(e)[:160])
+    # 최종 분석/선정은 MASTER만 수행한다.
+    # 기존 봇의 독립적인 채널 차단, 기업·주가재료 게이트, 시장시간 게이트, 최근 1시간 게이트는 제거한다.
     key = link or f"{source}|{title}"
     with _engine_lock:
         if key in _engine_seen:
             return False
-    if not ok:
-        reason = "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
-        _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80])
-        return False
     time_text = ""
     dt = _engine_parse_datetime(published)
     if dt:
         time_text = dt.strftime("%H:%M")
     _engine_pending.append({"source":source,"title":title,"link":link,"published":published,"extra":extra,
-                            "article_body":"","subtitle":"","key":key,"category":category,
-                            "companies":companies,"k1":k1,"k2":k2,"market_hits":market_hits,
-                            "time_text":time_text,"market_state":market_state})
-    try:
-        dt_mem = _engine_parse_datetime(published) or _now_kst()
-        with _US_BRIEFING_LOCK:
-            _US_BRIEFING_NEWS_MEMORY.append({"published_dt": dt_mem, "title": title, "text": f"{title} {extra}", "source": source})
-            if len(_US_BRIEFING_NEWS_MEMORY) > 500:
-                del _US_BRIEFING_NEWS_MEMORY[:-350]
-    except Exception:
-        pass
-    _engine_log("info", "[후보] %s | 기업=%s | 재료=%s | %s", category, ",".join(companies[:3]) or "없음", ",".join(market_hits[:3]) or "없음", market_state)
+                            "article_body":"","subtitle":"","key":key,
+                            "companies":[],"k1":"","k2":"","market_hits":[],
+                            "time_text":time_text,"market_state":""})
+    _engine_log("info", "[MASTER 대기] %s | %s", source, title[:100])
     return True
+
 
 
 def _engine_entry_published(entry):
