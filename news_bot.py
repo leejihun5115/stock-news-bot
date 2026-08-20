@@ -236,8 +236,6 @@ def master_finalize_news(
     candidates=None,
     schedule="",
     evidence=None,
-    subtitle="",
-    companies=None,
 ):
     """뉴스 1건을 MASTER -> Validator -> FINAL LOCK 순으로 확정."""
     result = _MASTER_MANAGER.analyze(
@@ -248,8 +246,6 @@ def master_finalize_news(
         candidates=candidates or [],
         schedule=schedule,
         evidence=evidence or [],
-        subtitle=subtitle,
-        companies=companies or [],
     )
     result = _MASTER_MANAGER.validate(result)
     if result.get("validation_errors"):
@@ -2105,6 +2101,43 @@ def _engine_theme(text):
             return theme
     return ""
 
+def _engine_relation_reason(text, companies, market_hits):
+    low = _engine_clean(text).lower()
+    domestic = [c for c in companies if c not in GLOBAL_COMPANY_KEYWORDS and _engine_company_is_directly_related(text, c)]
+
+    if domestic:
+        # 뉴스에서 실제로 확인되는 사건을 우선해 이유를 만든다.
+        if any(x in low for x in ["기술이전", "기술수출", "라이선스", "로열티", "마일스톤"]):
+            return "기술이전·기술수출 및 로열티/마일스톤의 실제 현금창출 가능성과 직접 연결"
+        if any(x in low for x in ["임상", "fda", "승인", "허가", "상업화"]):
+            return "임상·허가·상업화 단계가 실제 매출과 기업가치 변화로 이어질 가능성이 확인됨"
+        if any(x in low for x in ["지분", "매수", "투자", "유치", "3자배정", "제3자배정"]):
+            return "실제 자금 유입·지분 확대가 확인된 기업으로 이번 뉴스의 투자 이벤트와 직접 연결"
+        if any(x in low for x in ["수주", "공급계약", "계약", "납품", "공급"]):
+            return "실제 수주·계약·공급이 확인돼 향후 매출과 실적에 직접 연결"
+        if any(x in low for x in ["실적", "매출", "영업이익", "흑자전환"]):
+            return "실적·매출 변화가 직접 확인돼 사업가치와 주가 재평가 가능성 연결"
+        if any(x in low for x in ["증설", "양산", "생산", "출시"]):
+            return "생산능력 확대·제품 출시가 실제 사업 확대로 이어지는 구간"
+        return "뉴스의 핵심 사건 당사자로 직접 확인되며 사업·실적과 연결"
+
+    if any(x in low for x in ["기술이전", "기술수출", "로열티", "마일스톤"]):
+        return "기술이전·상업화 가능성이 확인된 바이오 사업가치 변화 테마"
+    if any(x in low for x in ["임상", "fda", "승인", "허가", "상업화"]):
+        return "임상·허가·상업화 진척이 실제 기업가치에 영향을 주는 바이오 테마"
+    if any(x in low for x in ["수주", "공급계약", "계약", "납품"]):
+        if "lng" in low or "조선" in low:
+            return "조선 수주 확대가 국내 조선업체의 수주잔고·실적에 연결되는 테마"
+        if "hbm" in low or "반도체" in low or "ai" in low:
+            return "AI·반도체 수요 변화가 국내 HBM·메모리 공급망에 전이되는 테마"
+        return "계약·수주·공급 변화가 국내 관련 산업의 실적에 전이되는 테마"
+    if any(x in low for x in ["투자", "증설", "양산", "수요"]):
+        return "투자·증설·수요 변화가 국내 공급망과 관련 종목의 실적 기대에 연결되는 테마"
+    if market_hits:
+        return "뉴스에서 확인된 시장 재료가 국내 관련 산업의 수급과 실적 기대에 연결되는 테마"
+    return ""
+
+
 def _engine_domestic_watchlist(item):
     """[50] 국내 관련주 단일 판정기.
     출력용 서열(대장주/관찰/관심)을 절대 생성하지 않는다.
@@ -2502,67 +2535,42 @@ def _engine_translate_foreign_item(source: str, title: str, extra: str):
 # 넘어가며(전체 송출을 지연/차단하지 않음), 결과는 링크 기준으로 캐시한다.
 # ============================================================
 _SUBTITLE_CACHE = {}
-_ARTICLE_BODY_CACHE = {}
 SUBTITLE_FETCH_TIMEOUT = min(ENGINE_HTTP_TIMEOUT, 5)
-ARTICLE_FETCH_TIMEOUT = min(max(ENGINE_HTTP_TIMEOUT, 5), 8)
-_ARTICLE_MIN_LEN = 180
-
-def _engine_extract_article_parts(html_text: str, title: str = ""):
-    try:
-        soup = BeautifulSoup(html_text or "", "html.parser")
-        for bad in soup(["script","style","noscript","svg","iframe","nav","footer","header","form"]):
-            bad.decompose()
-        subtitle = ""
-        for attrs in ({"property":"og:description"},{"name":"twitter:description"},{"name":"description"}):
-            tag = soup.find("meta", attrs=attrs)
-            content = _engine_clean(tag.get("content") if tag else "")
-            if content and len(content) >= 8 and content != _engine_clean(title):
-                subtitle = content[:240]
-                break
-        selectors = ['[itemprop="articleBody"]','article','main','.article-body','.article-content',
-                     '.news-body','.news-content','.article-view','.view-cont',
-                     '#articleBody','#newsBody','#article']
-        candidates = []
-        for selector in selectors:
-            for node in soup.select(selector)[:5]:
-                parts = []
-                for el in node.find_all(["p","h2","h3","li","blockquote"]):
-                    s = _engine_clean(el.get_text(" ", strip=True))
-                    if len(s) >= 20: parts.append(s)
-                body = " ".join(dict.fromkeys(parts))
-                if len(body) >= _ARTICLE_MIN_LEN: candidates.append(body)
-        if not candidates:
-            parts = []
-            for el in soup.find_all(["p","h2","h3","blockquote"]):
-                s = _engine_clean(el.get_text(" ", strip=True))
-                if len(s) >= 30 and not re.search(r"(로그인|회원가입|Copyright|All rights reserved|개인정보처리방침)", s, re.I):
-                    parts.append(s)
-            body = " ".join(dict.fromkeys(parts))
-            if len(body) >= _ARTICLE_MIN_LEN: candidates.append(body)
-        body = max(candidates, key=len) if candidates else ""
-        return subtitle, re.sub(r"\s+", " ", body).strip()[:12000]
-    except Exception:
-        return "", ""
-
-def _engine_fetch_article(link: str, title: str = ""):
-    link = str(link or "").strip()
-    if not link.startswith("http"): return "", ""
-    if link in _ARTICLE_BODY_CACHE: return _ARTICLE_BODY_CACHE[link]
-    subtitle = body = ""
-    try:
-        r = requests.get(link, headers={"User-Agent":USER_AGENT, "Accept-Language":"ko-KR,ko;q=0.9,en;q=0.7"},
-                         timeout=ARTICLE_FETCH_TIMEOUT, allow_redirects=True)
-        if r.ok: subtitle, body = _engine_extract_article_parts(r.text, title)
-    except Exception as e:
-        _engine_log("debug", "[원문 본문 조회 실패] %s | %s", link[:100], str(e)[:120])
-    _ARTICLE_BODY_CACHE[link] = (subtitle, body)
-    return subtitle, body
 
 def _engine_fetch_subtitle(link: str) -> str:
-    return _engine_fetch_article(link, "")[0]
-
-def _engine_fetch_article_body(link: str, title: str = "") -> str:
-    return _engine_fetch_article(link, title)[1]
+    link = str(link or "").strip()
+    if not link.startswith("http"):
+        return ""
+    if link in _SUBTITLE_CACHE:
+        return _SUBTITLE_CACHE[link]
+    subtitle = ""
+    try:
+        r = requests.get(
+            link,
+            headers={"User-Agent": USER_AGENT},
+            timeout=SUBTITLE_FETCH_TIMEOUT,
+            allow_redirects=True,
+        )
+        if r.ok:
+            soup = BeautifulSoup(r.text, "html.parser")
+            for attrs in (
+                {"property": "og:description"},
+                {"name": "twitter:description"},
+                {"name": "description"},
+            ):
+                tag = soup.find("meta", attrs=attrs)
+                content = tag.get("content") if tag else ""
+                content = _engine_clean(content)
+                # 제목과 동일하거나 너무 짧으면 실제 부제목으로 보지 않는다.
+                if content and len(content) >= 8:
+                    subtitle = content
+                    break
+    except Exception as e:
+        _engine_log("debug", "[부제목 조회 실패] %s | %s", link[:80], str(e)[:100])
+        subtitle = ""
+    subtitle = subtitle[:120]
+    _SUBTITLE_CACHE[link] = subtitle
+    return subtitle
 
 
 # ============================================================
@@ -2572,6 +2580,42 @@ def _engine_fetch_article_body(link: str, title: str = "") -> str:
 # 원문에서 실제 부제목을 가져온 경우, 마지막 줄 끝에 " / 부제목"으로 병기한다.
 # ============================================================
 _KEYPOINT_MARKER_RE = re.compile(r"([①②③④⑤⑥⑦⑧⑨⑩]|(?<!\d)\d+[.)])\s*")
+
+def _engine_format_keypoint_lines(keypoint: str, subtitle: str = "") -> list:
+    """규칙기반(비-AI) 핵심요약을 '🔎 요약' 헤더 + '     ✔ ...' 체크마크 형식으로 조립.
+    AI 분석이 꺼져있을 때도 동일한 보기 형식을 쓰기 위함."""
+    text = str(keypoint or "").strip()
+    if not text:
+        return []
+
+    markers = list(_KEYPOINT_MARKER_RE.finditer(text))
+    segments = []
+    for i, m in enumerate(markers):
+        start = m.end()
+        end = markers[i + 1].start() if i + 1 < len(markers) else len(text)
+        body = re.sub(r"🔎\s*", "", text[start:end]).strip(" .,-")
+        if body:
+            segments.append(body)
+
+    if not segments:
+        # 번호 마커가 없으면 원문 전체를 한 항목으로 취급.
+        whole = re.sub(r"🔎\s*", "", text).strip(" .,-")
+        if whole:
+            segments = [whole]
+
+    if not segments:
+        return []
+
+    subtitle = str(subtitle or "").strip()
+
+    out_lines = ["🔎 요약"]
+    for i, body in enumerate(segments):
+        line = f"     ✔ {html.escape(body)}"
+        if i == len(segments) - 1 and subtitle:
+            line += f"   /  {html.escape(subtitle)}"
+        out_lines.append(line)
+    return out_lines
+
 
 def _apply_domestic_highlight(text: str, domestic_list: list) -> str:
     for c in domestic_list:
@@ -2623,6 +2667,68 @@ def _engine_extract_title(title: str, extra: str) -> str:
                 raw = part[:180]
                 break
     return raw[:180].strip()
+
+
+def _engine_news_insight(title: str, body: str, source: str = "") -> dict:
+    """[DEPRECATED] 더 이상 MASTER 입력이나 Formatter 표시에 사용되지 않는다.
+    제목/요약/상용화단계/시장전망/관련주 판단은 반드시 master_condition_manager의
+    MasterConditionManager(65조건) -> Validator -> FINAL LOCK 결과만 사용한다.
+    (조건1 원문확보 / 조건51 Formatter무판단 / 조건53 재호출금지)
+    이 함수는 하위호환을 위해서만 남겨둔다. 새 코드에서 호출하지 말 것.
+    """
+    t = _engine_clean_telegram_meta(body)
+    title = _engine_extract_title(title, t)
+    # 제목 반복/출처 반복 제거
+    t = re.sub(re.escape(title), ' ', t, count=1, flags=re.I) if title else t
+    t = re.sub(r'\s+', ' ', t).strip()
+    sentences = [x.strip(' -•') for x in re.split(r'(?<=[.!?。！？])\s+|\s+•\s+|\s+▶️\s+', t) if x.strip()]
+    sentences = [x for x in sentences if len(re.sub(r'[^0-9A-Za-z가-힣]', '', x)) >= 12]
+    event_terms = ['수주','계약','공급','투자','증설','양산','출시','상용화','승인','허가','임상','기술이전','기술수출','실적','매출','영업이익','배당','자사주','주주환원','정책','관세','금리','수요','가격','생산','판매','구매','도입','발표','FCF']
+    change_terms = ['확대','증가','감소','강화','약화','전환','개선','악화','본격','가속','확정','신설','도입','재개','중단','상승','하락']
+    scored=[]
+    for i,x in enumerate(sentences):
+        score=sum(5 for k in event_terms if k in x)+sum(3 for k in change_terms if k in x)+(4 if re.search(r'\d|%|억|조|원|달러',x) else 0)+min(len(x),180)/100
+        scored.append((score,i,x))
+    scored.sort(reverse=True)
+    picked=[]
+    for _,_,x in scored:
+        if any(_engine_similar(x,y) for y in picked): continue
+        picked.append(x)
+        if len(picked)>=3: break
+    # 원문이 짧으면 제목이 아닌 실제 본문 한 줄을 사용
+    if not picked and sentences: picked=sentences[:1]
+
+    low=(title+' '+t).lower()
+    commercial=[]
+    stage_map=[
+        ('양산·판매/공급','양산|대량생산|판매개시|판매 개시|공급 확대'),
+        ('수주·계약','수주|공급계약|계약 체결|본계약|판매계약'),
+        ('상용화·구매','상용화|상업화|구매|실제 도입|현장 도입'),
+        ('검증·승인','승인|허가|인증|테스트 완료|검증'),
+        ('개발·투자','개발|연구|투자|증설|시설투자'),
+    ]
+    for label,pat in stage_map:
+        if re.search(pat, low, re.I): commercial.append(label)
+    stage=commercial[0] if commercial else ''
+
+    outlook=[]
+    if any(k in low for k in ['자사주','주주환원','배당','fcf']):
+        outlook.append('주주환원 강화가 주가의 실적 외 지지 요인으로 작용할 가능성')
+    elif any(k in low for k in ['수주','공급계약','계약 체결','판매계약']):
+        outlook.append('계약·수주가 실제 매출과 수주잔고로 이어지는지 확인하는 구간')
+    elif any(k in low for k in ['양산','상용화','실제 도입','구매']):
+        outlook.append('기술·테마 단계에서 실제 매출과 생산으로 넘어가는지 여부가 핵심')
+    elif any(k in low for k in ['증설','투자','생산']):
+        outlook.append('투자·생산 확대가 공급능력과 관련 밸류체인 수요 증가로 이어질 가능성')
+    elif any(k in low for k in ['승인','허가','임상']):
+        outlook.append('규제·임상 진전 이후 실제 상업화와 매출 전환 여부가 핵심')
+    else:
+        outlook.append('후속 발표와 실제 실적 반영 여부가 시장 영향의 핵심 확인 포인트')
+    if stage:
+        outlook.append(f'현재 뉴스는 {stage} 신호가 확인돼 단순 기대보다 실행 단계의 진전 여부가 중요')
+    if re.search(r'\d+\s*(?:억|조|원|%)', low):
+        outlook.append('제시된 수치의 실제 집행 규모와 지속성이 주가 반응을 좌우할 가능성')
+    return {'title':title,'key_points':picked,'stage':stage,'outlook':outlook[:3]}
 
 
 def _engine_future_schedule(text: str) -> str:
@@ -2707,14 +2813,7 @@ def _engine_master_result(item):
                 "domestic_listed": True,
             })
         raw_title = str(item.get("title", "")).strip()
-        rss_body = str(item.get("extra", "")).strip()
-        raw_body = rss_body
-        fetched_subtitle, article_body = _engine_fetch_article(str(item.get("link", "")), raw_title)
-        subtitle = fetched_subtitle or str(item.get("subtitle", "")).strip()
-        if article_body and len(article_body) >= max(_ARTICLE_MIN_LEN, len(rss_body) + 40):
-            raw_body = article_body
-        elif article_body and not raw_body:
-            raw_body = article_body
+        raw_body = str(item.get("extra", "")).strip()
 
         # [특징주 자기종목 보정] "[특징주] 회사, 사유 '반응'" 헤드라인이고, 본문이 제목과
         # 사실상 동일해 추가 정보가 없는 경우: 제목 안의 사유를 실제 문장으로 풀어서
@@ -2744,8 +2843,6 @@ def _engine_master_result(item):
             link=str(item.get("link", "")),
             candidates=candidates,
             schedule=_engine_future_schedule(raw_body),
-            subtitle=str(item.get("subtitle", "")),
-            companies=item.get("companies", []),
         )
         _engine_log(
             "info",
@@ -2850,72 +2947,84 @@ def _engine_is_pharma_news(title, extra_text=""):
 
 
 def _engine_format_message(item):
-    """MASTER FINAL LOCK 결과를 표시만 한다.
-    중요: 제목/요약/팩트/산업시장/관련주를 이 함수에서 재판단하거나 재생성하지 않는다.
-    모든 명령 우선순위는 master_condition_manager_v4.py가 가진다.
+    """최종 뉴스 카드.
+    [조건51/조건52/조건53 강제] Formatter는 판단하지 않는다.
+    MASTER(65조건) -> Validator -> FINAL LOCK 결과(item['_master_result'])만 표시하며,
+    제목·요약·관련주·상용화단계·시장전망·일정을 이 함수에서 다시 계산하지 않는다.
     """
-    master_result = item.get("master_result") or {}
-    if not master_result.get("locked"):
-        return ""
-    source_display = str(item.get("source", "")).strip()
-    freshness = str(item.get("freshness", "신규")).strip() or "신규"
-    time_text = str(item.get("time_text", "")).strip()
-    header = f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
-    if time_text:
-        header += f'   🕐 {html.escape(time_text)}'
-    lines = [header, f'<b>📌 {html.escape(str(master_result.get("title", "")).strip())}</b>']
+    source_raw=str(item.get('source',''))
+    source_display='🇺🇸' if source_raw=='Google-US' else source_raw
+    time_text=str(item.get('time_text','')).strip()
+    raw_title=str(item.get('title','')).strip()
 
-    categories = master_result.get("display_categories") or {}
-    summary = master_result.get("summary") or []
-    facts = master_result.get("facts") or []
-    industry_market = master_result.get("industry_market") or []
-    related = master_result.get("related") or []
-    none_reason = str(master_result.get("related_none_reason") or "").strip()
+    master_result=item.get('_master_result')
+    if master_result and master_result.get('locked'):
+        # MASTER FINAL LOCK 값만 사용한다. (조건51 Formatter무판단)
+        title=master_result.get('title') or _engine_strip_foreign_publisher_suffix(raw_title)
+        key_points=list(master_result.get('key_points') or [])
+        stage=master_result.get('stage') or ''
+        outlook=list(master_result.get('outlook') or [])
+        related=list(master_result.get('related') or [])
+        schedule=master_result.get('schedule') or ''
+    else:
+        # MASTER가 실패/미확정인 경우에도 Formatter가 재분석하지 않는다.
+        # 원문 최소 표시만 하고, 판단이 필요한 항목은 비워둔다.
+        _engine_log("warning", "[MASTER] 결과 없음/미확정 | source=%s | Formatter는 재분석하지 않음", source_raw)
+        title=_engine_strip_foreign_publisher_suffix(raw_title)
+        key_points, stage, outlook, related, schedule = [], '', [], [], ''
 
-    if categories.get("summary") and summary:
-        lines.append('🔎 [요약]')
-        for x in summary[:5]:
-            x = str(x).strip()
-            if x:
-                lines.append('     ✔ ' + html.escape(x[:220]))
+    companies=item.get('companies',[]) or []
+    domestic=_engine_domestic_companies(companies)
+    title=_apply_domestic_highlight(title,domestic)
+    if _engine_is_commercial_value(item,title,' '.join(key_points)) and not title.startswith('🎯'):
+        title='🎯 '+title
+    # [제약/바이오 마커] 제목 맨 앞에 💊를 붙인다.
+    if _engine_is_pharma_news(title, ' '.join(key_points)) and not title.startswith('💊'):
+        title='💊 '+title
+    freshness,prev=_engine_freshness(item)
+    header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
+    if time_text: header += f'   🕐 {html.escape(time_text)}'
+    lines=[header,f'<b>📌 {html.escape(title)}</b>']
+    master_badge=_engine_master_badge(master_result)
+    if master_badge:
+        lines.append('<b>'+master_badge+'</b>')
+    if freshness in ('재탕','업그레이드') and prev:
+        lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
 
-    if categories.get("facts") and facts:
-        lines.append('📌 [팩트]')
-        for x in facts[:6]:
-            x = str(x).strip()
-            if x:
-                lines.append('     ✔ ' + html.escape(x[:240]))
+    lines.append('🔎 [요약]')
+    for kp in key_points[:3]: lines.append('     ✔ '+html.escape(str(kp)[:220]))
 
-    if categories.get("industry_market") and industry_market:
-        lines.append('📈 [산업 영향·시장 분석]')
-        for x in industry_market[:5]:
-            x = str(x).strip()
-            if x:
-                lines.append('     ✔ ' + html.escape(x[:240]))
+    if stage:
+        lines.append('🧭 [진행 과정] ===> '+html.escape(stage))
 
-    # 관련주도 MASTER가 확정한 이름과 이유만 표시한다.
-    if categories.get("related") and (related or none_reason):
-        lines.append('👀 [관련주]')
-        if related:
-            for r in related[:3]:
-                name = str(r.get("name", "")).strip()
-                reason = str(r.get("reason", "")).strip()
-                relation_type = str(r.get("relation_type", "")).strip()
-                if name:
-                    prefix = f'{relation_type}: ' if relation_type else ''
-                    lines.append('     ✔ ⚡️' + html.escape(name) + (' — ' + html.escape((prefix + reason)[:180]) if reason else ''))
-        elif none_reason:
-            lines.append('     ✔ 관련주 없음 — ' + html.escape(none_reason[:200]))
+    if outlook:
+        lines.append('✅ [시장전망] ==> '+html.escape(str(outlook[0])))
+        for o in outlook[1:3]: lines.append('     ✔ '+html.escape(str(o)))
 
-    schedule = str(master_result.get("schedule") or "").strip()
-    if categories.get("schedule") and schedule:
-        lines.append('📅 [일정]')
-        lines.append('     ✔ ' + html.escape(schedule[:220]))
+    # 관련주는 MASTER FINAL LOCK 결과만 사용한다. Formatter 자체 재계산/테마 자동 채우기는 금지.
+    if related:
+        related=related[:3]
+        names=' · '.join('⚡️'+html.escape(str(r.get('name',''))) for r in related)
+        lines.append('👀 [관련주] : '+names)
+        reasons=[str(r.get('reason','')) for r in related if r.get('reason')]
+        if reasons:
+            lines.append('    👀관련주 근거 : '+' · '.join(html.escape(x[:120]) for x in reasons))
+    else:
+        related_none_reason = (master_result or {}).get('related_none_reason') or ''
+        if related_none_reason:
+            lines.append('👀 [관련주] : 無 ('+html.escape(str(related_none_reason)[:200])+')')
+        else:
+            lines.append('👀 [관련주] : 無')
 
-    link = str(master_result.get("link") or item.get("link") or "").strip()
-    if link:
-        lines.append(f'<a href="{html.escape(link, quote=True)}">🔗 원문 보기</a>')
-    return '\n\n'.join(lines)
+    if schedule:
+        dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
+        lines.append('📅 일정')
+        if dm: lines.append(html.escape(dm.group(1).replace('/','.').replace('-','.')))
+        rest=schedule.replace(dm.group(1),'').strip(' -—:·') if dm else schedule
+        if rest: lines.append('✔ '+html.escape(rest[:220]))
+    if item.get('link'):
+        lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문 보기</a>')
+    return '\n\n'.join(x for x in lines if str(x).strip())
 
 def _engine_flush_pending():
     """대기 뉴스는 유사기사라도 묶거나 재탕 차단하지 않는다.
@@ -3051,10 +3160,12 @@ def _engine_process_item(source, title, link, published="", extra=""):
     dt = _engine_parse_datetime(published)
     if dt:
         time_text = dt.strftime("%H:%M")
-    _engine_pending.append({"source":source,"title":title,"link":link,"published":published,"extra":extra,
-                            "article_body":"","subtitle":"","key":key,"category":category,
-                            "companies":companies,"k1":k1,"k2":k2,"market_hits":market_hits,
-                            "time_text":time_text,"market_state":market_state})
+    _engine_pending.append({"source":source,"title":title,"link":link,"published":published,"extra":extra,"key":key,"category":category,"companies":companies,"k1":k1,"k2":k2,"market_hits":market_hits,"time_text":time_text,"market_state":market_state})
+    # 뉴스 1건을 수집 주기 끝까지 대기시키지 않는다. 등록 즉시 MASTER→포맷→Telegram 송출한다.
+    try:
+        _engine_flush_pending()
+    except Exception as e:
+        log_error("뉴스 즉시 MASTER/송출", e, source=source, title=title[:120])
     try:
         dt_mem = _engine_parse_datetime(published) or _now_kst()
         with _US_BRIEFING_LOCK:
@@ -4307,13 +4418,8 @@ def _engine_cycle():
         _engine_us_market_close_monitor()
     except Exception as e:
         log_error("미장 장마감 브리핑", e)
-    try:
-        _engine_schedule_daily_monitor()
-    except Exception as e:
-        log_error("일정 일일 브리핑", e)
-    sent = _engine_flush_pending()
     _engine_last_cycle_finished = time.time()
-    _engine_log("info", "[주기 완료] %.2f초 | Telegram 신규송출=%d | pending=%d", time.time()-started, sent, len(_engine_pending))
+    _engine_log("info", "[주기 완료] %.2f초 | Telegram 즉시송출 구조", time.time()-started)
 
 
 
@@ -4380,12 +4486,6 @@ if __name__ == "__main__":
         )
         health_thread.start()
         time.sleep(0.3)
-
-        # 1년치 특징주/급등 뉴스에서 미래 일정 DB를 최초 1회 구축한다.
-        schedule_bootstrap_thread = threading.Thread(
-            target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True
-        )
-        schedule_bootstrap_thread.start()
 
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
         _engine_log("info", "[BOOT] NAVER_HUB=%s | NAVER_LEGACY=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
