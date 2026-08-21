@@ -24,24 +24,16 @@ CONDITION_RULES 안의 "rule" 문구(설명 텍스트)는 실행 코드가 읽�
   대장주선정, 대장주이유, 관찰후보, 관련주없음, 점수화, 조건중앙관리,
   FINAL_LOCK, Formatter무판단/Telegram무판단, 재호출금지
 
-  [2026-08-22] 위 "점수화"(order 31, _select_related 호출)에 조건24
-  "테마연결"의 실제 검증 로직을 추가함 — theme_link 전용 후보(직접 사업연관
-  근거가 전혀 없는 후보)는 원문에 특정 질환/영역명이 있는데 종목명이 원문에
-  없으면 더 이상 통과하지 못함(_theme_link_has_real_evidence 참고). 즉
-  "테마연결"은 이제 CONDITION_RULES의 설명 문구가 아니라 실제로 관련주를
-  걸러내는 코드다.
-
 ▶ 결과를 확실히 바꾸고 싶다면 CONDITION_RULES의 문구를 고치지 말고,
   아래 실제 함수를 직접 수정하세요:
     - 제목 자동 생성        → _synthesize_title(title, body)
     - 서브제목/요약(핵심포인트) → _key_points(title, body)
     - 관련종목 선정/필터     → _select_related(candidates, text)
       (관련종목 후보 자체는 news_bot.py의 STOCK_LINK_MAP / _engine_domestic_watchlist)
-      (조건24 테마연결의 실제 근거 검증 → _theme_link_has_real_evidence(name, text))
     - 시장전망 문구          → _outlook(text, stage, key_points) / OUTLOOK_PATTERNS
     - 상용화 단계 판정       → _stage(text) / STAGES
 
-나머지 45개(예: 직접사업연관/실제사건연결/과거급등이력/글로벌오인방지 등)는
+나머지 46개(예: 직접사업연관/실제사건연결/과거급등이력/글로벌오인방지 등)는
 "이 원칙을 지킨다"는 설명일 뿐 별도 코드가 없습니다. 이 조건들의 실질 효과가
 필요하면 CONDITION_RULES를 고치는 게 아니라 _execute_rule()에 새 elif 분기를
 추가해야 합니다.
@@ -98,7 +90,7 @@ CONDITION_RULES = [
     {"order": 21, "name": "직접사업연관", "rule": "직접 사업연관을 최우선으로 평가한다."},
     {"order": 22, "name": "실제사건연결", "rule": "수주·계약·공급·구매·투자를 높게 평가한다."},
     {"order": 23, "name": "공급망연결", "rule": "공급망·밸류체인 연결을 평가한다."},
-    {"order": 24, "name": "테마연결", "rule": "실제 시장의 동일 테마 근거가 있을 때 연결한다. [코드 구현: _select_related → _theme_link_has_real_evidence]"},
+    {"order": 24, "name": "테마연결", "rule": "실제 시장의 동일 테마 근거가 있을 때 연결한다."},
     {"order": 25, "name": "과거급등이력", "rule": "과거 상한가·급등 이력은 보조근거다."},
     {"order": 26, "name": "과거주도이력", "rule": "과거 테마 주도 이력을 보조점수로 사용한다."},
     {"order": 27, "name": "수급탄력", "rule": "반복적인 강한 수급 반응을 보조근거로 사용한다."},
@@ -432,6 +424,18 @@ class MasterConditionManager:
         generic = re.search(r"모닝|브리핑|뉴스모음|오늘의|종합|프리뷰|시황|경제브리핑", title, re.I)
         too_long = len(title) > 60
         narrative = self._is_narrative_title(title)
+        # [영문/말줄임 제목 정리] 제목 끝이 "및…/및..."처럼 잘린 번역·나열형이거나
+        # 영문 고유명사가 과도하게 섞인 경우에는 원문을 그대로 내보내지 않고,
+        # 본문에서 추출한 핵심 사건을 기준으로 짧은 한국어 제목으로 재구성한다.
+        # 단, 본문 근거가 없으면 임의 해석하지 않고 원 제목을 보존한다.
+        english_tokens = re.findall(r"[A-Za-z][A-Za-z0-9&'’.-]*", title)
+        english_ratio = len("".join(english_tokens)) / max(1, len(re.sub(r"\s+", "", title)))
+        truncated = bool(re.search(r"(?:및|그리고|and|&)?\s*(?:…|\.\.\.)$", title, re.I))
+        if pts and (truncated or english_ratio >= 0.22):
+            p = pts[0]
+            p = re.sub(r"\s*(?:- |\| )?(?:[^-_|]{2,20})$", "", p).strip()
+            if len(p) >= 12:
+                return self._trim_for_readability(p)[:80]
         if not generic and not too_long and not narrative and len(title) >= 18:
             return title
         # [요약칸 보존] 본문에 핵심문장이 2개 이상 있을 때만 그중 하나를 제목으로 쓴다.
@@ -477,6 +481,26 @@ class MasterConditionManager:
         text = self._clean(f"{schedule} {body}")
         if not text:
             return ""
+        low = text.lower()
+        # [MASTER 일정 최종검증] 시장 전망/해설의 상대시간 표현은 일정으로 인정하지 않는다.
+        generic_schedule = (
+            '증시 전망','시장 전망','주가 전망','투자 전망','다음주 전망','이번주 전망',
+            '주요 일정','증시 일정','시장 일정','관심 일정','일정에 주목','일정 주목',
+            '시장 방향','증시 방향','투자 방향','관심 종목','다음주 증시','이번주 증시',
+        )
+        if any(x in low for x in generic_schedule):
+            return ""
+        # 실제 미래 이벤트가 확인된 경우에만 일정으로 허용한다.
+        event_words = (
+            '실적발표','실적 발표','어닝','실적 공개','임상 결과','임상결과','임상 발표',
+            '임상시험 결과','탑라인','데이터 발표','허가','승인','품목허가','fda 승인',
+            '금리결정','기준금리 결정','수주','공급계약','계약 체결','공급 개시',
+            '양산 시작','양산 개시','출시','출시 예정','상용화','상용화 예정','기술이전',
+            '마일스톤','주주총회','합병','분할','공개매수','증자','신규시설투자','증설',
+            '착공','fomc','cpi','pce','고용지표','gdp','ism','소비자물가','고용보고서',
+        )
+        if not any(x in low for x in event_words):
+            return ""
         today = date.today()
         dates = re.findall(r"(20\d{2})[./-](\d{1,2})[./-](\d{1,2})|(\d{1,2})월\s*(\d{1,2})일", text)
         for y, m, d, mm, dd in dates:
@@ -486,8 +510,9 @@ class MasterConditionManager:
                     return f"{dt.isoformat()} 예정"
             except ValueError:
                 continue
-        if re.search(r"다음주|다음 달|다음달|내달|향후|예정|계획|출시 예정|양산 예정|임상 예정", text, re.I):
-            return self._clean(schedule) or "향후 일정 예정"
+        # 정확한 날짜가 없는 상대 표현도 실제 이벤트가 함께 확인될 때만 허용한다.
+        if re.search(r"다음주|다음 달|다음달|내달|향후|예정|계획", text, re.I):
+            return self._clean(schedule) if any(x in low for x in event_words) else ""
         return ""
 
     def _score(self, c):
@@ -502,25 +527,6 @@ class MasterConditionManager:
         if c.get("domestic_listed") is False: score = 0
         return max(0, min(score, 100))
 
-    # [2026-08-22] 조건24 "테마연결"의 실제 코드 구현.
-    # 지금까지 이 조건은 CONDITION_RULES 문구("실제 시장의 동일 테마 근거가
-    # 있을 때 연결한다")로만 존재했고, 실제로는 theme_link 후보를 has_precomputed_link
-    # 하나만으로 무조건 통과시켰다(테마 근거가 진짜인지 원문으로 재검증하지 않음).
-    # 그 결과 "치매 치료제 임상" 기사에 사업연관 없는 알테오젠이 "신약/바이오"
-    # 같은 범용 테마 단어만으로 연결되는 문제가 MASTER 단에서도 그대로 통과됨.
-    # 이제 direct/event_link/supply_chain/commercial_link(=실제 사업연관)가 전혀
-    # 없는 순수 theme_link 후보는, 원문에 특정 질환/영역명이 있는데 해당 종목명이
-    # 원문에 단 한 번도 등장하지 않으면 "동일 테마 실제 근거 없음"으로 보고 제외한다.
-    DISEASE_SPECIFIC_TERMS = ["치매", "알츠하이머", "당뇨", "비만", "파킨슨", "루게릭", "희귀질환", "자폐"]
-
-    def _theme_link_has_real_evidence(self, name, text):
-        """조건24 테마연결: theme_link 전용 후보가 실제 원문 근거 없이
-        범용 질환/업종 단어만으로 연결된 경우를 걸러낸다."""
-        disease_hits = [d for d in self.DISEASE_SPECIFIC_TERMS if d in text]
-        if not disease_hits:
-            return True
-        return self._norm(name) in self._norm(text)
-
     def _select_related(self, candidates, text):
         scored = []
         for raw in candidates or []:
@@ -529,12 +535,6 @@ class MasterConditionManager:
             reason = self._clean(c.get("reason"))
             if not name or not reason or c.get("domestic_listed") is False:
                 continue
-            has_direct_business_link = bool(
-                c.get("direct") or c.get("event_link") or c.get("supply_chain") or c.get("commercial_link")
-            )
-            if c.get("theme_link") and not has_direct_business_link:
-                if not self._theme_link_has_real_evidence(name, text):
-                    continue
             # 후보 이유가 기사와 실제 연결되는지 최소한의 텍스트 교차검증
             # [조건24 테마연결 수정] theme_link 후보는 reason이 정형 문구라 기사 원문에
             # 그대로 포함되지 않는 게 정상이다. direct/event_link/supply_chain/commercial_link와
@@ -566,7 +566,7 @@ class MasterConditionManager:
             return "후보 종목은 있었지만 국내 상장 여부 또는 기사와 직접 연결되는 근거가 부족했습니다."
         return "후보 종목은 있었지만 기사 사건과의 직접 연결·공급망·상용화 근거가 약해 관련주로 확정하지 않았습니다."
 
-    def _outlook(self, text, stage, key_points, body=None, title=""):
+    def _outlook(self, text, stage, key_points, body=None):
         # generic fallback을 없애고, 실제 문장과 매칭된 사건만 전망으로 만든다.
         # [조건41 전망근거 강화] 같은 카테고리(예: 자사주/배당)라도 기사마다 실제 수치·사건이
         # 다르므로, 정형 문구만 반복하지 않고 기사에서 실제로 뽑힌 핵심문장(key_points)을
@@ -575,11 +575,7 @@ class MasterConditionManager:
         # 아니라 body만 뒤진다. text(title+body 합본)를 쓰면 anchor가 제목 쪽에서
         # 매칭됐을 때 창(window)이 제목 구간을 그대로 퍼오게 되어 "요약/전망에 제목이
         # 그대로 다시 등장"하는 결과가 나온다.
-        # [2026-08-22 제목반복금지 + 짧게 요약 강화] 본문이 얇은 외신/속보(RSS 요약이
-        # 제목과 거의 같은 경우)는 body만 뒤져도 여전히 title과 사실상 같은 문장을
-        # 근거로 퍼올 수 있다. title_n을 별도로 두고 그 경우 근거 문장을 버린다.
         body_text = self._clean(body) if body is not None else text
-        title_n = self._norm(title)
         matched = []
         for pattern, sentence in self.OUTLOOK_PATTERNS:
             m = re.search(pattern, text, re.I)
@@ -607,26 +603,13 @@ class MasterConditionManager:
             # anchor(예: '자사주')가 실제로 들어있는 기사 핵심문장을 찾아 그대로 근거로 붙인다.
             # 같은 패턴이 여러 기사에 걸려도, 기사마다 실제 문장이 다르므로 출력이 붕어빵처럼
             # 똑같아지지 않고 그 기사의 구체적 수치·주체가 그대로 드러난다.
-            # [2026-08-22 문장 단위 추출] 예전에는 anchor 앞뒤 ±40/70자 "글자수 창"으로
-            # 잘라서 concrete를 만들었는데, 본문이 여러 사건/문장을 다루는 기사(예: 미국
-            # 증시 종합 브리핑)에서는 이 창이 서로 무관한 문장 두 개를 가로질러 잘라내
-            # "너지 강세에 EPS 올해 $350..."처럼 뜻이 안 통하는 조각이 만들어졌다.
-            # anchor가 포함된 실제 문장 하나를 통째로 찾아 쓰면 이런 붕괴가 없다.
             concrete = next((kp for kp in key_points if anchor in kp), None)
-            if not concrete:
-                concrete = next((s for s in self._sentences(body_text) if anchor in s), None)
             if not concrete:
                 idx = body_text.find(anchor)
                 if idx >= 0:
                     concrete = body_text[max(0, idx - 40): idx + 70].strip(" .,")
-            # [제목반복금지] concrete가 제목과 사실상 같은 문장이면(본문이 얇아
-            # 문맥 창이 제목을 그대로 퍼온 경우) 그대로 쓰지 않는다. → 억지로 만든
-            # 긴 문장 대신 anchor 중심의 짧은 문구로 대체한다(짧게 요약 원칙).
-            if concrete and title_n and self._is_title_near_dup(concrete, title_n):
-                concrete = None
             if concrete:
-                concrete = self._trim_for_readability(concrete.rstrip('.'))
-                result.append(f"{concrete} → {sentence}")
+                result.append(f"{concrete.rstrip('.')} → {sentence}")
             else:
                 result.append(f"{anchor} 관련해서 {sentence}")
             if len(result) >= 3:
@@ -684,21 +667,14 @@ class MasterConditionManager:
         elif name == "시장영향":
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
         elif name in ("전망근거", "후속확인", "지속성"):
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])
+            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"])
         elif name == "시장전망최대3":
             state["outlook"] = state["outlook"][:3]
         elif name == "대장주선정":
             state["leader"] = state["related"][0] if state["related"] else None
         elif name == "대장주이유" and state["leader"]:
             state["leader"] = dict(state["leader"])
-            reason = self._clean(state["leader"].get("reason"))
-            # [제목반복금지 + 짧게 요약 - 최종 안전장치] 후보 생성 단계(main.py)에서
-            # 걸러지지 않은 경우를 대비해, MASTER(조건중앙관리)에서도 대장주 '연결
-            # 이유'가 제목과 사실상 같은 문장이면 그대로 쓰지 않고 짧게 자른다.
-            title_n = self._norm(state["title"])
-            if reason and title_n and self._is_title_near_dup(reason, title_n):
-                reason = reason[:40].rstrip() + ("…" if len(reason) > 40 else "")
-            state["leader"]["reason"] = reason
+            state["leader"]["reason"] = self._clean(state["leader"].get("reason"))
         elif name == "관찰후보":
             state["observe"] = state["related"][1:self.max_related]
         elif name == "관련주없음":
@@ -710,7 +686,7 @@ class MasterConditionManager:
             # 현재까지의 모든 조건을 최종 상태로 고정한다.
             state["stage"], state["commercial_evidence"] = self._stage(text)
             state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])[:3]
+            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"])[:3]
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
             state["master_confirmed"] = bool(
                 state["news_value"] in ("높음", "중간") and
@@ -848,6 +824,18 @@ class MasterConditionManager:
             errors.append("관련주 최대 개수 초과")
         if not related and not self._clean(result.get("related_none_reason")):
             errors.append("관련주 없음 이유 없음")
+        # [MASTER 일정 최종 차단] Validator 단계에서도 관계없는 전망 문구가 일정으로 살아남지 못하게 한다.
+        schedule_text = self._clean(result.get("schedule"))
+        if schedule_text:
+            sl = schedule_text.lower()
+            generic_schedule = (
+                '증시 전망','시장 전망','주가 전망','투자 전망','다음주 전망','이번주 전망',
+                '주요 일정','증시 일정','시장 일정','관심 일정','일정에 주목','일정 주목',
+                '시장 방향','증시 방향','투자 방향','관심 종목','다음주 증시','이번주 증시',
+            )
+            if any(x in sl for x in generic_schedule):
+                result["schedule"] = ""
+                schedule_text = ""
         outlook = [self._clean(x) for x in (result.get("outlook") or []) if self._clean(x)]
         # [조건19 빈요약허용] 시장전망은 패턴이 실제로 매칭됐을 때만 채워진다.
         # 매칭되는 사건이 없으면 억지로 만들지 않고 빈 상태를 정상으로 허용한다.

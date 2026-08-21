@@ -1124,6 +1124,21 @@ SCHEDULE_MAJOR_WORDS = {
     '마일스톤','주주총회','합병','분할','공개매수','증자','신규시설투자','증설',
     'FOMC','CPI','PCE','고용지표','금리결정','잭슨홀','GDP','ISM','소비자물가',
 }
+# [일정 최종정리] 단순 전망/시장해설을 일정으로 오인하지 않도록 실제 미래 이벤트만 인정한다.
+SCHEDULE_EVENT_WORDS = {
+    '실적발표','실적 발표','어닝','실적 공개','실적 공개일',
+    '임상 결과','임상결과','임상 발표','임상시험 결과','탑라인','데이터 발표',
+    '허가','승인','품목허가','FDA 승인','결정','금리결정','기준금리 결정',
+    '수주','공급계약','계약 체결','공급 개시','양산 시작','양산 개시',
+    '출시','출시 예정','상용화','상용화 예정','기술이전','마일스톤',
+    '주주총회','합병','분할','공개매수','증자','신규시설투자','증설','착공',
+    'FOMC','CPI','PCE','고용지표','GDP','ISM','소비자물가','고용보고서',
+}
+SCHEDULE_GENERIC_WORDS = {
+    '증시 전망','시장 전망','주가 전망','투자 전망','다음주 전망','이번주 전망',
+    '주요 일정','증시 일정','시장 일정','관심 일정','일정에 주목','일정 주목',
+    '시장 방향','증시 방향','투자 방향','관심 종목','다음주 증시','이번주 증시',
+}
 SCHEDULE_NOISE_WORDS = {'텔레그램','조회수','좋아요','구독','광고','이벤트','쿠폰','게시','업로드'}
 
 def _schedule_load_json(path, default):
@@ -1221,9 +1236,13 @@ def _schedule_is_high_impact_context(text, companies=None, market_hits=None):
 
 def _schedule_extract_from_text(title, extra, source, published='', companies=None, market_hits=None, limitup=False):
     text=_engine_clean(f'{title} {extra}')
-    if not text or any(w in text.lower() for w in SCHEDULE_NOISE_WORDS):
+    low=text.lower()
+    if not text or any(w in low for w in SCHEDULE_NOISE_WORDS):
         return None
-    if not any(w.lower() in text.lower() for w in SCHEDULE_MAJOR_WORDS):
+    # 전망/해설에 '다음주·주요 일정'이라는 표현만 있는 경우는 일정으로 만들지 않는다.
+    if any(w in low for w in SCHEDULE_GENERIC_WORDS):
+        return None
+    if not any(w.lower() in low for w in SCHEDULE_MAJOR_WORDS):
         return None
     if not _schedule_is_high_impact_context(text, companies, market_hits) and not limitup:
         return None
@@ -1250,8 +1269,12 @@ def _schedule_extract_from_text(title, extra, source, published='', companies=No
     if dt < base or dt > base+datetime.timedelta(days=SCHEDULE_DAILY_FORWARD_DAYS):
         return None
     pos=text.find(found)
-    snippet=text[max(0,pos-160):min(len(text),pos+260)].strip()
-    if not any(w.lower() in snippet.lower() for w in SCHEDULE_MAJOR_WORDS):
+    snippet=text[max(0,pos-180):min(len(text),pos+280)].strip()
+    snippet_low=snippet.lower()
+    # 날짜와 실제 이벤트가 같은 문맥에 있어야 한다. '다음주 증시 전망/주요 일정'은 제외.
+    if any(w in snippet_low for w in SCHEDULE_GENERIC_WORDS):
+        return None
+    if not any(w.lower() in snippet_low for w in SCHEDULE_EVENT_WORDS):
         return None
     category='공시' if str(source).startswith('DART') else ('미국일정' if 'US' in str(source) or 'Google-US' in str(source) else '뉴스일정')
     tag='상한가연계' if limitup else '특징주연계' if any(x in text.lower() for x in ('특징주','급등')) else '주요뉴스'
@@ -2047,12 +2070,8 @@ STOCK_LINK_MAP = {
     "신약": ["알테오젠", "유한양행", "셀트리온"],
     "기술이전": ["알테오젠", "유한양행", "올릭스"],
     "로열티": ["알테오젠", "유한양행", "셀트리온"],
+    "임상": ["HLB", "알테오젠", "유한양행"],
     "항암": ["HLB", "알테오젠", "유한양행"],
-    # [2026-08-22] "임상" 키 제거: "임상"이라는 단어 자체는 질환 분야를 전혀
-    # 특정하지 않음(치매/당뇨/희귀질환 등 어떤 신약 기사에도 등장) - 이 단어
-    # 하나만으로 알테오젠/HLB/유한양행을 고정 연결하면, 해당 종목과 무관한
-    # 질환 뉴스(예: 치매 치료제 임상 현황 기사)에도 잘못 붙는 오탐이 발생함.
-    # 실제 사업연관이 있는 "항암"처럼 질환/영역이 구체적인 키만 남긴다.
 }
 
 def _engine_stock_links(text, companies):
@@ -2079,18 +2098,9 @@ def _engine_stock_links(text, companies):
     if not links:
         theme_keys = []
         low = t.lower()
-        # [2026-08-22] 질환 무관 오탐 방지 (아래 _engine_relation_reason의
-        # GENERIC_BIO_THEME_KEYS/DISEASE_SPECIFIC_TERMS와 동일한 원칙).
-        generic_bio_keys = {"바이오","헬스케어","신약","항암","임상","로열티","마일스톤","기술이전"}
-        disease_terms = ["치매","알츠하이머","당뇨","비만","파킨슨","루게릭","희귀질환","자폐"]
-        disease_hits = [d for d in disease_terms if d in low]
         for key in sorted(STOCK_LINK_MAP, key=len, reverse=True):
-            if key.lower() not in low:
-                continue
-            if key in generic_bio_keys and disease_hits:
-                if not any(stock.lower() in low for stock in STOCK_LINK_MAP.get(key, [])):
-                    continue
-            theme_keys.append(key)
+            if key.lower() in low:
+                theme_keys.append(key)
         # 테마는 단어 하나만으로 강제하지 않고, 사건/수급/산업 변화가 함께 있어야 한다.
         theme_event = any(k in low for k in [
             "수주", "계약", "공급", "투자", "증설", "양산", "출시", "상용화", "승인",
@@ -2179,14 +2189,8 @@ def _engine_theme_context(text, keyword):
     """[관련테마 이유 강화] 테마 키워드가 본문 어느 문장/구절에서 나왔는지
     실제 근거 텍스트를 찾아 반환한다. 정형 문구만 붙이지 않고 본문 내용을
     직접 인용해 왜 이 테마·종목이 연결됐는지 사람이 바로 이해할 수 있게 한다.
-    [2026-08-22] 먼저 키워드가 포함된 완결된 한 문장을 통째로 찾는다(문장을
-    가로질러 자르는 글자수 창 방식은 뜻이 안 통하는 조각을 만들 수 있음).
-    문장을 못 찾을 때만 기존 글자수 창 방식으로 폴백한다.
     """
     t = _engine_clean(text)
-    sent = _engine_sentence_containing(t, keyword)
-    if sent:
-        return _engine_safe_trim(re.sub(r"\s+", " ", sent).strip(" .,-"), 90)
     m = re.search(re.escape(keyword), t, re.I)
     if not m:
         return ""
@@ -2205,75 +2209,6 @@ def _engine_theme_context(text, keyword):
     return ctx
 
 
-def _engine_norm_compact(s):
-    return re.sub(r"[^0-9A-Za-z가-힣]", "", str(s or "")).lower()
-
-
-def _engine_sentence_containing(text, keyword):
-    """키워드가 들어있는 실제 문장 하나를 통째로 찾아 반환한다.
-    [2026-08-22] 글자수 창(±N자)으로 앞뒤를 자르면, 여러 사건을 다루는 기사
-    (예: 미국 증시 종합 브리핑처럼 EPS·연준·반도체·중간선거가 한 기사에 섞인
-    경우)에서는 서로 무관한 문장 두 개를 가로질러 잘라내 뜻이 안 통하는 조각
-    ("너지 강세에 EPS 올해 $350...")이 만들어졌다. 문장 경계를 지켜 하나의
-    완결된 문장만 근거로 쓴다.
-    """
-    t = _engine_clean(text)
-    if not t or not keyword:
-        return ""
-    parts = re.split(
-        r"(?<=[.!?。！？])\s+|[\r\n]+|(?<=다)\s{2,}|(?<=다\.)(?=[가-힣A-Za-z0-9])",
-        t,
-    )
-    for p in parts:
-        p = p.strip(" -•")
-        if len(p) >= 8 and keyword.lower() in p.lower():
-            return p
-    return ""
-
-
-def _engine_is_near_dup_of_title(snippet, title):
-    """[제목반복금지 - 관련주 근거] 본문이 짧은 외신/속보 기사는 회사명 주변
-    문맥 창(±150자)이 사실상 제목 전체를 그대로 퍼오게 된다. 이 경우 '연결
-    이유'가 제목을 그대로 복사한 문장이 되어버리므로, 근거 문장이 제목과
-    사실상 같은지(정확 일치/포함/앞부분 대량 겹침) 판정해 걸러낸다.
-    """
-    a = _engine_norm_compact(snippet)
-    b = _engine_norm_compact(title)
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
-    if len(shorter) < 10:
-        return False
-    if shorter in longer:
-        return True
-    common = 0
-    for x, y in zip(a, b):
-        if x != y:
-            break
-        common += 1
-    if common >= max(10, int(len(shorter) * 0.75)):
-        return True
-    match = difflib.SequenceMatcher(None, a, b).find_longest_match(0, len(a), 0, len(b))
-    return match.size >= max(12, int(len(shorter) * 0.6))
-
-
-def _engine_reason_from_snippet(snippet, title, max_len=60):
-    """'연결 이유'를 짧고 제목과 겹치지 않게 다듬는다. 문맥 창이 제목과
-    사실상 같은 문장이면(외신/속보 등 본문이 얇은 경우) 그 문장을 그대로 쓰지
-    않고, 안전하게 잘라 반복을 피한다. 어느 쪽이든 결과는 max_len 이내로
-    짧게 유지한다(요약칸을 길게 늘어뜨리지 않기 위함).
-    """
-    snippet = re.sub(r"\s+", " ", str(snippet or "")).strip(" -–—.,·")
-    if not snippet:
-        return snippet
-    if _engine_is_near_dup_of_title(snippet, title):
-        # 제목과 겹치는 문장을 그대로 복사하지 않고, 짧게만 남긴다.
-        snippet = _engine_safe_trim(snippet, min(max_len, 40))
-    return _engine_safe_trim(snippet, max_len)
-
-
 def _engine_domestic_watchlist(item):
     """[50] 국내 관련주 단일 판정기.
     출력용 서열(대장주/관찰/관심)을 절대 생성하지 않는다.
@@ -2283,7 +2218,6 @@ def _engine_domestic_watchlist(item):
     low = text.lower()
     companies = item.get("companies", []) or []
     theme = _engine_theme(text)
-    title_only = _engine_clean(item.get("title", ""))
     rows = []
 
     def event_score(stock):
@@ -2329,9 +2263,7 @@ def _engine_domestic_watchlist(item):
         hist,leader,limitup,surge=history(c)
         reason = "뉴스 핵심 사건의 직접 사업연관"
         if ctx:
-            # [제목반복금지 + 짧게 요약] 문맥 창이 제목과 사실상 같은 문장이면
-            # (본문이 얇은 외신/속보에서 흔함) 그대로 복사하지 않고 짧게 다듬는다.
-            reason = _engine_reason_from_snippet(ctx, title_only, max_len=60)
+            reason = re.sub(r"\s+"," ",ctx)[:150]
         rows.append({"name":c,"theme":theme or "직접 관련","reason":reason,"score":1000+es*8+leader*10+limitup*12+surge*4,"direct":True})
     if rows:
         rows.sort(key=lambda x:x["score"],reverse=True)
@@ -2340,61 +2272,25 @@ def _engine_domestic_watchlist(item):
     # 50-02~04 테마/간접 연결: 실제 사건이 있는 경우만
     event_words=["수주","계약","공급","납품","투자","증설","양산","출시","상용화","승인","허가","기술이전","기술수출","임상","지분","실적","매출","수출","정책","규제","관세","수요","가격","데이터센터","AI칩","HBM"]
     if not any(k.lower() in low for k in event_words): return []
-    # [관련성 강화] "로열티/마일스톤/기술이전"은 바이오뿐 아니라 반도체 라이선스,
-    # 일반 사업 마일스톤 등에서도 흔히 쓰이는 단어다. 실제 바이오 맥락을 확인할
-    # 다른 단어가 함께 없으면 바이오 테마로 연결하지 않는다.
-    # (예: "브로드컴 로열티 수익" 같은 반도체 기사에 알테오젠 같은 바이오주가
-    #  엉뚱하게 연결되던 문제.)
-    AMBIGUOUS_THEME_CONFIRM = {
-        "로열티": ["바이오","신약","임상","제약","항암","파이프라인","라이선스아웃"],
-        "마일스톤": ["바이오","신약","임상","제약","항암","파이프라인"],
-        "기술이전": ["바이오","신약","임상","제약","특허","파이프라인"],
-    }
-    # [2026-08-22] "질환 무관 오탐" 방지: "바이오/헬스케어/신약/항암" 같은 범용
-    # 키는 질환 분야를 특정하지 않는다. 기사가 특정 질환(치매 등)을 다루고
-    # 있는데 STOCK_LINK_MAP 후보 종목명이 본문에 전혀 언급되지 않으면, 그
-    # 종목의 실제 사업과 무관한 질환 뉴스에 억지로 연결하지 않는다.
-    # (예: "치매 치료제 임상" 기사에 사업연관 없는 알테오젠이 "신약" 단어
-    #  하나만으로 자동 연결되던 문제.)
-    GENERIC_BIO_THEME_KEYS = {"바이오","헬스케어","신약","항암","임상","로열티","마일스톤","기술이전"}
-    DISEASE_SPECIFIC_TERMS = ["치매","알츠하이머","당뇨","비만","파킨슨","루게릭","희귀질환","자폐"]
-    disease_hits = [d for d in DISEASE_SPECIFIC_TERMS if d in low]
-    theme_keys=[]
-    for k in sorted(STOCK_LINK_MAP,key=len,reverse=True):
-        if k.lower() not in low: continue
-        confirmers = AMBIGUOUS_THEME_CONFIRM.get(k)
-        if confirmers and not any(c.lower() in low for c in confirmers):
-            continue
-        if k in GENERIC_BIO_THEME_KEYS and disease_hits:
-            named = any(stock.lower() in low for stock in STOCK_LINK_MAP.get(k, []))
-            if not named:
-                continue
-        theme_keys.append(k)
+    theme_keys=[k for k in sorted(STOCK_LINK_MAP,key=len,reverse=True) if k.lower() in low]
     if not theme_keys:
         if any(k in low for k in ["h200","hbm","ai칩","ai 반도체","반도체","메모리"]): theme_keys=["HBM"]
-        elif any(k in low for k in ["바이오","신약","임상","fda","키트루다"]): theme_keys=["바이오"]
+        elif any(k in low for k in ["바이오","신약","임상","fda","키트루다","로열티","마일스톤"]): theme_keys=["바이오"]
         elif any(k in low for k in ["lng선","lng","조선","선박"]): theme_keys=["조선"]
         elif any(k in low for k in ["방산","미사일","무기","전투기"]): theme_keys=["방산"]
     if not theme_keys: return []
     scored=[]
     for key in theme_keys[:5]:
         if not any(k.lower() in low for k in event_words): continue
-        # [관련테마 이유 강화] 근거 문맥은 먼저 실제 매칭된 테마 키워드(key) 주변에서
-        # 찾는다. 순서상 처음 나오는 아무 이벤트 단어(예: 기사 앞부분의 "실적")부터
-        # 잡으면, 정작 이 종목이 왜 연결됐는지와 무관한 다른 회사 얘기가 근거로
-        # 붙는 문제가 있었다.
-        ctx = _engine_theme_context(text, key)
-        if not ctx:
-            matched_event = next((w for w in event_words if w.lower() in low), "")
-            ctx = _engine_theme_context(text, matched_event) if matched_event else ""
-        if ctx and _engine_is_near_dup_of_title(ctx, title_only):
-            ctx = ""  # 제목과 사실상 같은 문맥은 근거로 다시 붙이지 않는다.
+        # [관련테마 이유 강화] 매칭된 이벤트 키워드 중 본문에 실제로 등장하는 것을 찾아
+        # 그 주변 문맥을 근거 문장으로 함께 붙인다. 정형 문구만 반복하지 않는다.
+        matched_event = next((w for w in event_words if w.lower() in low), "")
+        ctx = _engine_theme_context(text, matched_event) if matched_event else ""
         base_reason = f"{THEME_MAP.get(key,key)} 테마의 실제 사업·수요 변화와 연결"
         reason = f"{ctx} → {base_reason}" if ctx else base_reason
-        reason = _engine_safe_trim(reason, 90)
         for stock in STOCK_LINK_MAP.get(key,[]):
             hist,leader,limitup,surge=history(stock)
-            scored.append({"name":stock,"theme":key,"reason":reason,"score":300+limitup*30+leader*20+surge*8+hist*2,"direct":False})
+            scored.append({"name":stock,"theme":key,"reason":reason[:180],"score":300+limitup*30+leader*20+surge*8+hist*2,"direct":False})
     best={}
     for r in scored:
         if r["name"] not in best or r["score"]>best[r["name"]]["score"]: best[r["name"]]=r
@@ -2458,6 +2354,18 @@ def _engine_score(item):
 _engine_pending = []
 _engine_sent_fingerprints = []  # {text, source, time_text, published, title}
 
+# 동일/유사 뉴스 차단 기준
+# URL이 달라도 제목+본문이 80% 이상 유사하면 같은 기사로 보고 송출하지 않는다.
+NEWS_DUPLICATE_SIMILARITY_THRESHOLD = 0.80
+
+
+def _engine_text_similarity_ratio(a, b):
+    ta = re.sub(r"[^0-9a-zA-Z가-힣]", "", str(a or "").lower())
+    tb = re.sub(r"[^0-9a-zA-Z가-힣]", "", str(b or "").lower())
+    if not ta or not tb:
+        return 0.0
+    return difflib.SequenceMatcher(None, ta[:240], tb[:240]).ratio()
+
 
 def _engine_freshness(item):
     """시장 반영 가능 여부를 고려한 신규/업그레이드/재탕 판정."""
@@ -2493,10 +2401,8 @@ def _engine_freshness(item):
 
 
 def _engine_similar(a, b):
-    ta = re.sub(r"[^0-9a-zA-Z가-힣]", "", a.lower())
-    tb = re.sub(r"[^0-9a-zA-Z가-힣]", "", b.lower())
-    ratio = difflib.SequenceMatcher(None, ta[:240], tb[:240]).ratio()
-    if ratio >= 0.78:
+    ratio = _engine_text_similarity_ratio(a, b)
+    if ratio >= NEWS_DUPLICATE_SIMILARITY_THRESHOLD:
         return True
     ca = set(_engine_find_companies(a))
     cb = set(_engine_find_companies(b))
@@ -3249,29 +3155,6 @@ def _engine_safe_trim(text, limit):
     return head.rstrip(" -–—,·") + "…"
 
 
-_ENGINE_SOURCE_DISPLAY_ALIASES = {
-    # [헤더 표시 축약] 내부 판정 로직(재탕/스팸/시간창 등)이 쓰는 원본 source
-    # 문자열("텔레그램/시황맨의 주식이야기" 등, source.startswith("텔레그램/") 비교에
-    # 쓰임)은 절대 건드리지 않는다. 여기는 화면에 보여줄 이름만 짧게 다듬는 표다.
-    "시황맨의 주식이야기": "시황맨",
-}
-
-
-def _engine_source_display(source_raw):
-    """헤더 [소스] 표시를 짧게 다듬는다. "텔레그램/이름" 형태는 "텔레그램_이름"으로,
-    긴 채널명은 위 별칭표가 있으면 축약한다. 판정에 쓰이는 item['source'] 원본은
-    이 함수 밖에서 그대로 유지된다(호출부에서 source_raw만 넘겨받아 가공).
-    """
-    s = str(source_raw or "")
-    if s == "Google-US":
-        return "🇺🇸"
-    if "/" in s:
-        prefix, _, name = s.partition("/")
-        name = _ENGINE_SOURCE_DISPLAY_ALIASES.get(name, name)
-        return f"{prefix}_{name}"
-    return s
-
-
 def _engine_format_message(item):
     """최종 뉴스 카드.
     [조건51/조건52/조건53 강제] Formatter는 판단하지 않는다.
@@ -3285,12 +3168,11 @@ def _engine_format_message(item):
          제목 바로 아래에 표시한다.
       4) 👀[관련주] 다중 종목 리스트는 표시하지 않는다. 연결 이유는 대장주 1건만 표시.
       5) 🧭 진행 과정은 "===>" 화살표 없이 표시.
-      6) 📢 시장 전망은 섹션 헤더 없이 핵심 문구만 표시(최대 2건, 각각 ✔️로 짧게).
+      6) 📢 시장 전망은 섹션 헤더 없이 핵심 문구 1건만 표시.
       7) 서술형 종결("~했다/~밝혔다/~는지")은 개조식("~함/~밝힘/~여부")으로 변환.
-      8) [2026-08-22] 헤더 소스명 축약("텔레그램/시황맨의 주식이야기" → "텔레그램_시황맨").
     """
     source_raw=str(item.get('source',''))
-    source_display=_engine_source_display(source_raw)
+    source_display='🇺🇸' if source_raw=='Google-US' else source_raw
     time_text=str(item.get('time_text','')).strip()
     raw_title=str(item.get('title','')).strip()
 
@@ -3342,15 +3224,16 @@ def _engine_format_message(item):
     if stage:
         lines.append('🧭 [진행 과정] '+html.escape(stage))
 
+    if outlook:
+        # 섹션 헤더 없이 핵심 전망 문구 1건만 개조식으로 표시한다.
+        lines.append(' ✔️ '+html.escape(_engine_to_gaejo(_engine_safe_trim(outlook[0], 90))))
+
     # 관련주는 MASTER FINAL LOCK 결과만 사용한다. Formatter 자체 재계산/테마 자동 채우기는 금지.
     # [관련주 표시 개편] 다중 종목 리스트 대신 대장주 1건의 연결 이유만 표시한다.
-    # [2026-08-22 짧게 요약] 90자 → 60자로 더 짧게. 제목 반복 여부는 MASTER에서
-    # 이미 걸러졌으므로(main.py 후보 생성 + master_condition_manager 안전장치),
-    # 여기서는 화면 폭에 맞춰 자르기만 한다.
     leader_reason = str(leader.get('reason','')).strip() if leader else ''
     if leader_reason:
         leader_reason, _ = _engine_extract_publisher_suffix(leader_reason)
-        lines.append('ㄴ연결 이유 : '+html.escape(_engine_to_gaejo(_engine_safe_trim(leader_reason, 60))))
+        lines.append('ㄴ연결 이유 : '+html.escape(_engine_to_gaejo(_engine_safe_trim(leader_reason, 90))))
 
     if schedule:
         dm = re.search(r'(20\d{2})[./-](\d{1,2})[./-](\d{1,2})|(\d{1,2})월\s*(\d{1,2})일', schedule)
@@ -3367,13 +3250,6 @@ def _engine_format_message(item):
         if rest: lines.append('✔ '+html.escape(_engine_safe_trim(rest, 150)))
     if item.get('link'):
         lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문 보기</a>')
-
-    # [2026-08-22 배치 변경] ✔️ 시장전망은 링크 다음(메시지 맨 끝)으로 이동.
-    # [본문 이해 후 짧게 요약] 시장전망은 최대 2건까지, 각각 독립된 ✔️ 한 줄로
-    # 짧게 보여준다(한 줄에 다 몰아넣지 않음).
-    for ob in outlook[:2]:
-        lines.append(' ✔️ '+html.escape(_engine_to_gaejo(_engine_safe_trim(ob, 55))))
-
     return '\n\n'.join(x for x in lines if str(x).strip())
 
 def _engine_flush_pending():
@@ -3388,6 +3264,8 @@ def _engine_flush_pending():
     candidates.sort(key=_engine_score, reverse=True)
     sent = 0
     cycle_keys = set()
+    cycle_fingerprints = []
+    similarity_blocked = 0
     for item in candidates[:ENGINE_MAX_SEND_PER_CYCLE]:
         key = item["key"]
         if key in cycle_keys:
@@ -3395,6 +3273,33 @@ def _engine_flush_pending():
         cycle_keys.add(key)
         if not _engine_telegram_spam_allowed(item):
             continue
+
+        # [유사율 80% 차단] URL이 달라도 같은 내용의 재수집/재전송을 차단한다.
+        # 이미 송출된 뉴스 + 같은 폴링에서 먼저 통과한 뉴스 모두 비교한다.
+        full_text = item["title"] + " " + item.get("extra", "")
+        duplicate_ratio = 0.0
+        duplicate_found = False
+        for prev in reversed(_engine_sent_fingerprints):
+            prev_text = prev.get("text", "") if isinstance(prev, dict) else str(prev)
+            ratio = _engine_text_similarity_ratio(full_text, prev_text)
+            if ratio > duplicate_ratio:
+                duplicate_ratio = ratio
+            if ratio >= NEWS_DUPLICATE_SIMILARITY_THRESHOLD:
+                duplicate_found = True
+                break
+        if not duplicate_found:
+            for prev_text in reversed(cycle_fingerprints):
+                ratio = _engine_text_similarity_ratio(full_text, prev_text)
+                if ratio > duplicate_ratio:
+                    duplicate_ratio = ratio
+                if ratio >= NEWS_DUPLICATE_SIMILARITY_THRESHOLD:
+                    duplicate_found = True
+                    break
+        if duplicate_found:
+            similarity_blocked += 1
+            _engine_log("info", "[차단] 유사뉴스 %.1f%% | 기준 %.0f%% | %s", duplicate_ratio * 100, NEWS_DUPLICATE_SIMILARITY_THRESHOLD * 100, item["title"][:80])
+            continue
+        cycle_fingerprints.append(full_text)
         # 기존 상태파일에 이미 저장된 URL은 같은 기사의 무한 반복만 방지한다.
         # 서로 다른 보도 링크/재보도는 차단하지 않고 반드시 [재탕]으로 송출한다.
         if key in _engine_seen:
@@ -3425,7 +3330,7 @@ def _engine_flush_pending():
             if master_badge and not image_sent:
                 _engine_log("warning", "[MASTER] 텍스트 송출 성공 / 이미지 송출 실패")
             _engine_log("info", "[성공] %s | 송출", item["category"])
-    _engine_log("info", "[송출결과] 후보=%d | 묶음차단=0 | 재탕차단=0 | 전송=%d", len(_engine_pending), sent)
+    _engine_log("info", "[송출결과] 후보=%d | 유사뉴스차단=%d | 전송=%d", len(_engine_pending), similarity_blocked, sent)
     _engine_pending = []
     return sent
 
@@ -4477,7 +4382,7 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     for s in ("^KS11","^KQ11"):
         q=snapshot.get(s)
         if q: lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
-    lines += ["", "<b>📈 주요 종목 변화</b>"]
+    lines += ["", "<b>⚡️ 주요 종목 변화</b>"]
     rows=[]
     for s,q in snapshot.items():
         if s in {"^KS11","^KQ11","USDKRW=X"}: continue
@@ -4487,7 +4392,7 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     for q in rows[:8]:
         pct=q.get("change_pct")
         if abs(pct or 0)<1.0: continue
-        lines.append(f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}")
+        lines.append(f"• ⚡️ {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}")
         shown+=1
     if not shown: lines.append("• 주요 종목 큰 변동 없음")
     fx=snapshot.get("USDKRW=X")
@@ -4495,7 +4400,7 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     if events:
         lines += ["", "<b>🚨 장중 구조 변화</b>"]
         for _,_,q,delta in events[:5]:
-            lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q.get('change_pct'))}")
+            lines.append(f"• ⚡️ {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q.get('change_pct'))}")
     return "\n".join(lines)
 
 def _engine_krx_market_monitor():
@@ -4836,41 +4741,10 @@ def _us_direction(pct):
     return "🔺상승" if pct >= 0 else "▼하락"
 
 
-def _us_arrow(pct):
-    """방향 화살표만 반환(상승/하락 텍스트 없이). 지수·환율·원자재·MSCI 등
-    '요약형' 시세 줄에서 사용."""
-    if pct is None:
-        return ""
-    return "🔺" if pct >= 0 else "▼ "
-
-
 def _us_format_pct(pct):
     if pct is None:
         return "시세 확인불가"
     return f"{pct:+.2f}%"
-
-
-# [2026-08-22] 미장 브리핑 급등/급락 종목명 한글 표기. 대형/주요 종목만 확인된
-# 한글명을 쓰고, DB에 없는 종목은 원문 영문명을 그대로 쓴다(지어내지 않음).
-# 종목코드(symbol)는 항상 실제 조회값이므로 괄호 표기로 함께 붙여 식별성을 높인다.
-US_TICKER_NAME_KO = {
-    "TSLA": "테슬라", "PLTR": "팔란티어", "NVDA": "엔비디아", "AAPL": "애플",
-    "MSFT": "마이크로소프트", "GOOGL": "알파벳", "GOOG": "알파벳", "AMZN": "아마존",
-    "META": "메타", "AMD": "AMD", "AVGO": "브로드컴", "MU": "마이크론",
-    "HOOD": "로빈후드", "NFLX": "넷플릭스", "INTC": "인텔", "QCOM": "퀄컴",
-    "CRM": "세일즈포스", "ORCL": "오라클", "IBM": "IBM", "UBER": "우버",
-    "COIN": "코인베이스", "SOFI": "소파이", "RIVN": "리비안", "LCID": "루시드",
-}
-
-
-def _us_display_name_ko(q):
-    """종목명을 한글로 표기하고 뒤에 (종목코드)를 붙인다.
-    확인된 한글명이 없으면 원문(영문) 이름을 그대로 쓴다 - 임의 번역 금지."""
-    symbol = str(q.get("symbol") or "").upper().strip()
-    raw_name = str(q.get("name") or symbol).strip()
-    ko = US_TICKER_NAME_KO.get(symbol)
-    base = ko if ko else raw_name
-    return f"{base}({symbol})" if symbol else base
 
 
 def _us_open_briefing(snapshot, et):
@@ -4902,14 +4776,13 @@ def _us_open_briefing(snapshot, et):
         if q.get("market_cap"):
             cap_note = " 🐘" if q["market_cap"] >= 100_000_000_000 else ""
         reason = _us_briefing_reason(q["name"], q["theme"])
-        line = f"• {html.escape(_us_display_name_ko(q))}{cap_note} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
+        line = f"• {q['name']}{cap_note} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
         if reason:
             line += f" · 원인: {html.escape(reason)}"
         lines.append(line)
         related = _us_related_domestic_stocks(q.get("industry_theme") or q["theme"])
         if related:
-            # [2026-08-22] ⚡️는 개별 뉴스 노출용 - 전체 정리 브리핑에서는 뺀다.
-            related_text = " · ".join(html.escape(s) for _, s, _, _ in related)
+            related_text = " · ".join(f"⚡️{html.escape(s)}" for _, s, _, _ in related)
             lines.append(f"  🇰🇷 관련주 : {related_text}")
     lines += ["", "<b>🛢️ 환율·원자재</b>"]
     for s in macro:
@@ -5160,7 +5033,7 @@ def _us_extract_past_move(row):
 
 def _us_close_briefing(snapshot, et):
     lines = [
-        "<b>🌐🇺🇸 [미장 마감 브리핑]</b>",
+        "<b>🌐 [미장 마감 브리핑]</b>",
         f"🕐 {et.strftime('%Y-%m-%d %H:%M ET')} · 정규장 마감",
         "",
         "<b>📊 전체 시장 흐름</b>",
@@ -5168,15 +5041,14 @@ def _us_close_briefing(snapshot, et):
     for s in ["^IXIC","^GSPC","^DJI","^RUT","^SOX","^VIX"]:
         q = snapshot.get(s)
         if q:
-            pct = q.get('change_pct')
-            lines.append(f"• {html.escape(q['name'])} {_us_arrow(pct)}{_us_format_pct(pct)}")
+            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
 
     ranked = _us_close_rank_themes(snapshot)
     if ranked:
         lines += ["", "<b>🔥 오늘의 강한 종목군·테마</b>"]
         for _, theme, qs in ranked[:4]:
             members = sorted(qs, key=lambda q: abs(q.get("change_pct") or 0), reverse=True)[:4]
-            member_text = " · ".join(f"{html.escape(_us_display_name_ko(q))} {_us_format_pct(q.get('change_pct'))}" for q in members)
+            member_text = " · ".join(f"{html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}" for q in members)
             lines.append(f"• <b>{html.escape(theme)}</b> · {member_text}")
 
             lead = members[0] if members else {}
@@ -5204,9 +5076,7 @@ def _us_close_briefing(snapshot, et):
                     if hist >= 2 or lead_hist >= 2:
                         why.append("끼·탄력 확인")
                     why_text = "·".join(why)[:90]
-                    # [2026-08-22] ⚡️는 개별 뉴스 노출(1건 기사) 표시용이다.
-                    # 미장/국내장 브리핑처럼 전체를 정리하는 곳에서는 빼고 표시.
-                    related_text.append(f"{html.escape(stock)}({html.escape(why_text)})")
+                    related_text.append(f"⚡️{html.escape(stock)}({html.escape(why_text)})")
                 lines.append("  ✔👀관련주 : " + " · ".join(related_text))
             # [카테고리 숨김] 관련주가 없으면 '無' 문구 없이 섹션 자체를 생략한다.
 
@@ -5240,8 +5110,7 @@ def _us_close_briefing(snapshot, et):
     for s in ["USDKRW=X","CL=F","GC=F"]:
         q = snapshot.get(s)
         if q:
-            pct = q.get('change_pct')
-            lines.append(f"• {html.escape(q['name'])} {_us_arrow(pct)}{_us_format_pct(pct)}")
+            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
 
     lines += ["", "<b>🇰🇷 ADR</b>"]
     adr_symbols = ["PKX","LPL","KEP","KB","SHG","SKM"]
@@ -5250,8 +5119,7 @@ def _us_close_briefing(snapshot, et):
         q = snapshot.get(s)
         if q:
             found = True
-            pct = q.get('change_pct')
-            lines.append(f"• {html.escape(q['name'])} {_us_arrow(pct)}{_us_format_pct(pct)}")
+            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
     if not found:
         lines.append("• ADR 시세 확인불가")
 
@@ -5259,7 +5127,7 @@ def _us_close_briefing(snapshot, et):
     msci_quote = snapshot.get("URTH")
     if msci_quote:
         pct = msci_quote.get("change_pct")
-        lines.append(f"• {html.escape(msci_quote.get('name', 'MSCI World'))} {_us_arrow(pct)}{_us_format_pct(pct)}")
+        lines.append(f"• {html.escape(msci_quote.get('name', 'MSCI World'))} {_us_direction(pct)} {_us_format_pct(pct)}")
     else:
         lines.append("• MSCI 시세 확인불가")
 
@@ -5289,12 +5157,14 @@ def _us_close_briefing(snapshot, et):
             if len(strong_rows) >= 3:
                 break
     if strong_rows:
-        lines += ["", "<b>🔥 [시장 재료]</b>"]
+        lines += ["", "<b>👍 강한 재료</b>"]
         for row in strong_rows:
             tx = str(row.get("title",""))[:220]
             amount = re.search(r"(?:[0-9][0-9,]*(?:\.\d+)?)\s*(?:억|조|억원|조원|달러|USD|million|billion)", tx, re.I)
             suffix = f" · 금액 {amount.group(0)}" if amount else ""
-            lines.append(f"✔️ {html.escape(tx)}{html.escape(suffix)}")
+            lines.append(f"• {html.escape(tx)}{html.escape(suffix)}")
+            if row.get("link"):
+                lines.append(f'<a href="{html.escape(str(row["link"]), quote=True)}">🔗 원문</a>')
 
     lines += [
         "",
