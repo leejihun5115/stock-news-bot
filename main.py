@@ -1423,9 +1423,13 @@ STRONG_MARKET_HITS = {
     "목표가 상향", "목표가 하향", "어닝서프라이즈", "어닝 서프라이즈", "어닝쇼크",
     "자사주 공개매수", "공개매수", "자사주 매입", "자사주 소각", "수혜", "수혜주",
 }
-BREAKING_WORDS = {"속보"}
-FEATURE_WORDS = {"특징주"}
-EXCLUSIVE_WORDS = {"단독"}
+# [영문 속보/단독/특징주 누락 방지] 외신은 번역을 거쳐 여기 들어오지만, 번역기가
+# "EXCLUSIVE"를 "단독"이 아니라 "독점"으로, "BREAKING"을 "속보"가 아니라
+# "긴급"/"브레이킹뉴스"로 옮기는 경우가 있어 한국어 표지 1개만으로는 놓친다.
+# 번역 전 영문 원표기와, 번역 후 흔히 나오는 동의어를 함께 인정한다.
+BREAKING_WORDS = {"속보", "긴급", "브레이킹", "breaking", "breaking news", "속보:"}
+FEATURE_WORDS = {"특징주", "주목 종목", "관심 종목", "급등 종목", "이슈 종목", "테마주"}
+EXCLUSIVE_WORDS = {"단독", "독점", "단독보도", "exclusive"}
 
 _engine_seen = set()
 _engine_lock = threading.Lock()
@@ -2616,6 +2620,42 @@ def _engine_translate_to_korean(text: str) -> str:
     # 영문 원문을 그대로 송출하지 않기 위해 실패는 빈 문자열로 처리한다.
     return ""
 
+_ARTICLE_SUMMARY_CACHE = {}
+
+
+def _engine_fetch_short_summary(link: str):
+    """[본문보강-경량] RSS가 본문 없이 제목만 주는 경우("전략인가 광기인가...
+    '치명적 결정'" 처럼 제목만으론 무슨 내용인지 알 수 없는 클릭베이트/사설류),
+    기사 전체를 긁어오는 대신 원문 페이지의 og:description/meta description
+    한 줄만 가볍게 가져와 짧은 요약 재료로 쓴다. 사이트마다 다른 본문 구조를
+    파싱할 필요가 없어 안전하고 빠르며, 실패해도 전체 처리를 막지 않는다.
+    """
+    link = str(link or "").strip()
+    if not link:
+        return ""
+    if link in _ARTICLE_SUMMARY_CACHE:
+        return _ARTICLE_SUMMARY_CACHE[link]
+    summary = ""
+    try:
+        r = requests.get(link, headers={"User-Agent": USER_AGENT}, timeout=6)
+        if r.ok:
+            soup = BeautifulSoup(r.text, "html.parser")
+            tag = (
+                soup.find("meta", attrs={"property": "og:description"})
+                or soup.find("meta", attrs={"name": "description"})
+                or soup.find("meta", attrs={"name": "twitter:description"})
+            )
+            if tag and tag.get("content"):
+                summary = _engine_clean(tag["content"])
+    except Exception as e:
+        _engine_log("debug", "[본문보강 실패] %s | %s", link[:80], str(e)[:100])
+    _ARTICLE_SUMMARY_CACHE[link] = summary
+    if len(_ARTICLE_SUMMARY_CACHE) > 500:
+        for k in list(_ARTICLE_SUMMARY_CACHE.keys())[:200]:
+            del _ARTICLE_SUMMARY_CACHE[k]
+    return summary
+
+
 def _engine_translate_foreign_item(source: str, title: str, extra: str):
     title = _engine_strip_foreign_publisher_suffix(title)
     extra = str(extra or "").strip()
@@ -3163,10 +3203,17 @@ def _engine_format_message(item):
         lines.append('ㄴ연결 이유 : '+html.escape(_engine_to_gaejo(_engine_safe_trim(leader_reason, 90))))
 
     if schedule:
-        dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
-        lines.append('📅 일정')
-        if dm: lines.append(html.escape(dm.group(1).replace('/','.').replace('-','.')))
-        rest=schedule.replace(dm.group(1),'').strip(' -—:·') if dm else schedule
+        dm = re.search(r'(20\d{2})[./-](\d{1,2})[./-](\d{1,2})|(\d{1,2})월\s*(\d{1,2})일', schedule)
+        date_disp = ""
+        if dm:
+            if dm.group(1):
+                date_disp = f"{dm.group(1)}. {int(dm.group(2))}. {int(dm.group(3)):02d}일"
+                matched_text = dm.group(0)
+            else:
+                date_disp = f"{_now_kst().year}. {int(dm.group(4))}. {int(dm.group(5)):02d}일"
+                matched_text = dm.group(0)
+        lines.append('⏰[일정]  ' + (date_disp if date_disp else ''))
+        rest = schedule.replace(dm.group(0), '').strip(' -—:·') if dm else schedule
         if rest: lines.append('✔ '+html.escape(_engine_safe_trim(rest, 150)))
     if item.get('link'):
         lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문 보기</a>')
@@ -3291,6 +3338,15 @@ def _engine_process_item(source, title, link, published="", extra=""):
         return False
 
     # 원문 전체를 보존한다. 요약문으로 extra를 덮어쓰지 않는다.
+
+    # [본문보강-경량] extra(본문)가 없거나 30자 미만이면, MASTER가 요약을 뽑을
+    # 재료 자체가 없어 "🔎 요약"이 통째로 빈 채로 나간다. 이때만 원문 페이지의
+    # 짧은 meta description(1줄)을 가볍게 가져와 보충한다 - 전체 본문을 긁는
+    # 무거운 크롤링은 하지 않고, 실패해도 기존 흐름을 막지 않는다.
+    if len(extra) < 30 and link:
+        fetched = _engine_fetch_short_summary(link)
+        if fetched:
+            extra = fetched
 
     # 사용자가 원치 않는 [그로쓰리서치] 속보/단독/특징주 채널은 원천 제외.
     growth_block = ("그로쓰리서치" in str(source)) or ("rocket_news1" in link) or ("growth_semi" in link) or ("growthbio" in link) or ("growthresearch" in link)
