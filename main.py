@@ -3915,8 +3915,8 @@ def _engine_dart_build_financial_card(row):
 
     consensus = _engine_naver_consensus(stock_code)
 
-    def _line_with_consensus(label, actual_won, cons_key):
-        base = f"{label} : {_engine_format_eok(actual_won)}"
+    def _line_with_consensus(label, actual_won, cons_key, qoq_str=""):
+        base = f"{label} : {_engine_format_eok(actual_won)}{qoq_str}"
         cons_eok = consensus.get(cons_key)
         if cons_eok is None or actual_won is None:
             return base, None
@@ -3925,6 +3925,20 @@ def _engine_dart_build_financial_card(row):
             return base, None
         diff_pct = (actual_won - cons_won) / abs(cons_won) * 100
         return f"{base} (예상치 : {cons_eok:,.0f}억/ {diff_pct:+.1f}%)", diff_pct
+
+    prev_row = quarters[1] if len(quarters) > 1 else {}
+
+    def _qoq_change_str(cur_val, prev_val):
+        """[전분기 대비 증감률] 매출액/영업이익/순이익 금액 바로 뒤에
+        '(전분기대비🔺+50.0%)' / '(전분기대비▼30.0%)' 형태로, 어떤 기준으로
+        계산한 비율인지 라벨과 함께 붙인다. 전분기가 적자였어도(적자축소/
+        흑자전환 포함) 개선폭을 그대로 %로 보여준다.
+        """
+        if cur_val is None or prev_val is None or prev_val == 0:
+            return ""
+        pct = (cur_val - prev_val) / abs(prev_val) * 100
+        arrow_pct = f"🔺+{pct:.1f}%" if pct >= 0 else f"▼{abs(pct):.1f}%"
+        return f" (전분기대비{arrow_pct})"
 
     try:
         dt_disp = datetime.datetime.strptime(rcept_dt[:8], "%Y%m%d").strftime("%Y.%m.%d")
@@ -3935,11 +3949,12 @@ def _engine_dart_build_financial_card(row):
     lines.append(f"<b>✅ {html.escape(corp_name)} (시총 : {html.escape(cap_str)})</b>   🕐 {html.escape(dt_disp)}")
     lines.append(f"📁 {html.escape(DART_QUARTER_LABEL.get(q, report_nm))} ({year}.{q*3:02d})")
     lines.append(f"✔️ 잠정실적 : {'Y' if is_preliminary else 'N'}")
-    sales_line, _ = _line_with_consensus("매출액", cur['매출액'], "매출액")
-    op_line, op_diff_pct = _line_with_consensus("영업익", cur['영업이익'], "영업이익")
+    sales_line, _ = _line_with_consensus("매출액", cur['매출액'], "매출액", _qoq_change_str(cur.get('매출액'), prev_row.get('매출액')))
+    op_line, op_diff_pct = _line_with_consensus("영업익", cur['영업이익'], "영업이익", _qoq_change_str(cur.get('영업이익'), prev_row.get('영업이익')))
     lines.append(sales_line)
     lines.append(op_line)
-    lines.append(f"순이익 : {_engine_format_eok(cur['당기순이익'])}")
+    net_qoq = _qoq_change_str(cur.get('당기순이익'), prev_row.get('당기순이익'))
+    lines.append(f"순이익 : {_engine_format_eok(cur['당기순이익'])}{net_qoq}")
     lines.append(f"목표가 : {target_str}")
     lines.append("")
     lines.append("✔️ [최근 실적]")
@@ -3954,7 +3969,26 @@ def _engine_dart_build_financial_card(row):
             highlights.append(f"🔥어닝 쇼크({op_diff_pct:+.1f}%)")
     prev_op = quarters[1].get("영업이익") if len(quarters) > 1 else None
     prev_net = quarters[1].get("당기순이익") if len(quarters) > 1 else None
+
+    def _turnaround_pct(cur_val, prev_val, cur_sales, prev_sales):
+        """[흑자전환 비율] 적자→흑자 전환폭(swing)을 두 기준으로 계산해서
+        절댓값이 더 큰 쪽을 채택한다 ('크게 나온 비율 기준으로' 요청 반영).
+        - 매출액 대비 : 전환폭이 이번 분기 매출 규모 대비 얼마나 큰지
+        - 영업이익 대비 : 적자였던 전분기 금액 대비 이번에 얼마나 크게 개선됐는지
+        (이번 분기 매출이 N/A면 전분기 매출로 대체하고, 그마저 없으면 그 기준은 건너뛴다.)
+        """
+        swing = cur_val - prev_val
+        candidates = []
+        base_sales = cur_sales if cur_sales else prev_sales
+        if base_sales:
+            candidates.append(swing / base_sales * 100)
+        if prev_val:
+            candidates.append(swing / abs(prev_val) * 100)
+        return max(candidates, key=abs) if candidates else None
+
     if prev_op is not None and prev_op <= 0 and (cur.get("영업이익") or 0) > 0:
+        # [중복표시 방지] 전환 비율은 위 '영업익 : ... (전분기대비🔺+..%)' 줄에
+        # 이미 표시되므로, 여기서는 흑자전환 태그만 남긴다.
         highlights.append("🔥흑자전환(영업이익)")
     if prev_net is not None and prev_net <= 0 and (cur.get("당기순이익") or 0) > 0:
         highlights.append("🔥흑자전환(순이익)")
@@ -4005,9 +4039,17 @@ def _engine_run_dart():
             corp = row.get("corp_name", "")
             link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
             _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""))
-            # [재무카드 분기] 반기/분기/사업보고서·잠정실적은 MASTER 뉴스판단을 타지 않고
-            # 재무카드로 직접 전송한다. 실패하면(수치를 못 구하면) 기존 뉴스 경로로 폴백한다.
+            # [버그수정] 실적공시 재무카드는 일반 뉴스 경로(_engine_process_item)를 안 타서
+            # 중복전송 방지(_engine_seen) 체크가 아예 빠져 있었다. 이 루프는 오늘자 전체
+            # 공시목록(bgn_de=today)을 실행 주기마다 다시 불러오므로, 체크가 없으면 이미
+            # 보낸 같은 공시를 하루종일 매 주기 재전송해서 "몇십 개씩 도배"되는 원인이 된다.
+            # rcept_no(접수번호)는 공시 1건마다 고유하므로 이걸 키로 1회만 전송한다.
+            # (전송이 실제로 성공했을 때만 seen 처리 - 실패 시 다음 주기에 재시도 가능)
+            rcept_no = str(row.get("rcept_no", "")).strip()
+            card_key = f"DART-CARD|{rcept_no}"
             if _engine_dart_is_financial_report(report):
+                if card_key in _engine_seen:
+                    continue
                 try:
                     card = _engine_dart_build_financial_card(row)
                 except Exception as e:
@@ -4015,6 +4057,7 @@ def _engine_run_dart():
                     _engine_log("warning", "[재무카드] 생성 실패 | corp=%s | 원인=%s", corp, str(e)[:160])
                 if card:
                     if _engine_send_telegram(card):
+                        _engine_mark_seen(card_key)
                         sent += 1
                     continue
             title = f"{corp} | {report}"

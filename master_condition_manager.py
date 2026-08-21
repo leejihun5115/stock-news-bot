@@ -44,6 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 import re
+import difflib
 from typing import Any, Dict, Iterable, List, Optional
 
 RULE_VERSION = "MASTER_CONDITION_MANAGER_V1"
@@ -199,35 +200,32 @@ class MasterConditionManager:
     STAGE_RANK = {label: i for i, (label, _) in enumerate(STAGES, 1)}
 
     # 사건별 전망은 고정문구가 아니라 '사실 + 다음 확인할 경제적 연결'로 만든다.
-    # [반줄평 형식] 서술형 한 문장 대신, 짧은 구(句) 2개로 쪼개 저장한다.
-    # 첫 구는 앞에 anchor(매칭된 키워드)가 붙고, 둘째 구는 "~가 핵심"으로 끝난다.
     OUTLOOK_PATTERNS = [
         (r"수주|공급계약|계약 체결|본계약|판매계약|장기공급",
-         ["계약 규모가 실제 매출·수주잔고로 인식되는 시점", "추가 공급 확대 여부가 핵심"]),
+         "계약 규모가 실제 매출·수주잔고로 인식되는 시점과 추가 공급 확대 여부가 핵심이다."),
         (r"양산|대량생산|출하|납품|공급 확대",
-         ["실제 출하량과 생산능력 확대 여부", "매출·마진 개선으로 이어지는지가 핵심"]),
+         "실제 출하량과 생산능력 확대가 매출·마진 개선으로 이어지는지가 핵심이다."),
         (r"상용화|상업화|출시|구매|실제 도입|채택",
-         ["초기 도입이 반복 구매로 이어지는지", "매출 증가로 이어지는지가 핵심"]),
+         "초기 도입이 반복 구매와 매출 증가로 이어지는지가 핵심이다."),
         (r"임상|허가|승인|인증",
-         ["다음 규제·판매 단계로 이어지는지", "실제 매출화 시점이 핵심"]),
+         "이번 진전이 다음 규제·판매 단계로 이어지는지와 실제 매출화 시점이 핵심이다."),
         (r"증설|시설투자|투자",
-         ["투자 규모가 실제 생산능력 확대로 연결되는지", "고객 수요 증가 여부가 핵심"]),
+         "투자 규모가 실제 생산능력과 고객 수요 증가로 연결되는지가 핵심이다."),
         (r"실적|영업이익|매출|순이익|최대 실적",
-         ["실적 개선이 일회성이 아닌지", "다음 분기 이익 증가 지속 여부가 핵심"]),
+         "실적 개선이 일회성이 아닌지와 다음 분기에도 이익 증가가 이어지는지가 핵심이다."),
         (r"금리|국채|채권|연준|FOMC|CPI|인플레이션",
-         ["금리 변화가 할인율에 미치는 영향", "위험자산 선호 지속 여부가 핵심"]),
+         "금리 변화가 할인율과 위험자산 선호를 얼마나 지속적으로 바꾸는지가 핵심이다."),
         (r"비트코인|이더리움|가상자산|암호화폐",
-         ["가격 상승이 거래량·실적으로 이어지는지", "위험선호 확대 여부가 핵심"]),
+         "가격 상승이 거래량·관련 기업 실적 또는 위험선호 확대로 이어지는지가 핵심이다."),
         (r"파업|노조|준법투쟁|임금|성과보상|노사",
-         ["갈등 장기화 여부", "생산·영업 차질·비용 증가 여부가 핵심"]),
+         "갈등의 장기화 여부와 생산·영업 차질 또는 비용 증가로 이어지는지가 핵심이다."),
         (r"소송|규제|제재|조사",
-         ["규제·법적 결과의 범위", "실제 비용·사업 제한 여부가 핵심"]),
+         "규제·법적 결과의 범위와 실제 비용·사업 제한으로 이어지는지가 핵심이다."),
         (r"위탁\s*중개|주관사|주선사|자문사|중개 계약",
-         ["위탁·중개 수수료·자문 수익 규모", "반복 발생 여부가 핵심"]),
+         "위탁·중개 역할에 따른 수수료·자문 수익이 얼마나 반복적으로 발생하는지가 핵심이다."),
         (r"자사주|배당|주주환원",
-         ["환원 규모와 현금흐름 대비 지속 가능성", "주주가치에 미치는 영향이 핵심"]),
+         "환원 규모와 실제 현금흐름 대비 지속 가능성이 주주가치에 미치는 영향이 핵심이다."),
     ]
-
 
     SELECTION_METHOD = [
         "65조건 순차 실행",
@@ -244,9 +242,20 @@ class MasterConditionManager:
         self.min_score = min_score
         self._rules = sorted(CONDITION_RULES, key=lambda x: int(x["order"]))
 
+    # [바이라인 제거] "(서울=연합뉴스) 김유향 기자 = ..." 처럼 기사 맨 앞에 붙는
+    # 데이트라인+기자서명은 뉴스 내용이 아니라 통신사 관행 문구다. 이걸 안 떼면
+    # 요약 첫 줄이 "누가 썼는지"로 시작해서 실제 사건 내용과 상관없는 문장이 되고,
+    # 제목과 겹치지도 않아 필터도 못 거른다.
+    _BYLINE_RE = re.compile(
+        r"^\([가-힣A-Za-z0-9·\s]{1,15}=[가-힣A-Za-z0-9·\s]{1,15}\)\s*"
+        r"[가-힣]{2,5}\s*(?:기자|특파원|논설위원)?\s*=\s*"
+    )
+
     @staticmethod
     def _clean(x):
-        return re.sub(r"\s+", " ", str(x or "")).strip()
+        s = re.sub(r"\s+", " ", str(x or "")).strip()
+        s = MasterConditionManager._BYLINE_RE.sub("", s).strip()
+        return s
 
     @staticmethod
     def _norm(x):
@@ -267,18 +276,14 @@ class MasterConditionManager:
         text = re.sub(r"\[[^\]]{0,30}\]", " ", text)
         # 한국어 기사는 종종 "...다." 뒤에 공백 없이 다음 문장이 바로 붙는다(예: "...있다.인공지능...").
         # 이 경우를 분리하지 못하면 여러 사건이 한 문장으로 뭉쳐 핵심요약이 1개로만 나온다.
-        # [버그수정] 텔레그램 게시물은 마침표 없이 ▶️/•/►/★ 같은 불릿 기호로만 항목을 구분하는
-        # 경우가 많다. 이걸 문장 경계로 인식하지 못하면 서로 다른 여러 항목이 하나의 거대한
-        # "문장"으로 뭉쳐서 뽑히고, 60자 제한에서 절 경계 없이 중간에 잘려 뒤죽박죽 출력된다.
         parts = re.split(
-            r"(?<=[.!?。！？])\s+|[\r\n]+|(?<=다)\s{2,}|(?<=다\.)(?=[가-힣A-Za-z0-9])"
-            r"|▶️?|●|▪️?|►|★|☆|✔️?|✅",
+            r"(?<=[.!?。！？])\s+|[\r\n]+|(?<=다)\s{2,}|(?<=다\.)(?=[가-힣A-Za-z0-9])",
             text,
         )
         out = []
         seen = set()
         for s in parts:
-            s = self._clean(s).strip(" -•▶►★☆")
+            s = self._clean(s).strip(" -•")
             if len(s) < 12:
                 continue
             n = self._norm(s)
@@ -290,16 +295,7 @@ class MasterConditionManager:
         text = self._clean(f"{title} {body}")
         sentences = self._sentences(body)
         if not sentences:
-            # [버그수정] 본문이 없을 때 제목 전체를 후보로 넣으면 _key_points()의
-            # 제목-중복 필터(_is_title_near_dup)에 곧바로 걸려 요약이 항상 빈 채로
-            # 나온다. 제목을 절 단위(쉼표/말줄임표/공백2칸)로 쪼개면 조각들은
-            # 제목 전체와 달라서 필터를 통과하고, 본문 없이도 짧은 요점을 남길 수 있다.
-            clauses = [
-                c.strip(" -–—·")
-                for c in re.split(r"[,，…]|\s{2,}", title)
-                if len(c.strip()) >= 4
-            ]
-            sentences = clauses if len(clauses) >= 2 else [self._clean(title)]
+            sentences = [self._clean(title)]
         # 사건성 점수: 변화/수치/행동/결과가 있는 문장을 우선
         action = re.compile(
             r"급등|급락|상승|하락|돌파|최대|최초|성공|실패|체결|수주|공급|계약|"
@@ -338,7 +334,14 @@ class MasterConditionManager:
             if a != b:
                 break
             common += 1
-        return common >= max(10, int(len(shorter) * 0.75))
+        if common >= max(10, int(len(shorter) * 0.75)):
+            return True
+        # [어순 달라도 실질 중복] 문장 앞부분만 비교하면, 접속사/날짜/장소를 앞에
+        # 붙여 시작만 바꾼 "사실상 제목 재진술" 요약을 못 걸러낸다. 위치 상관없이
+        # 겹치는 가장 긴 연속 구간이 짧은 쪽의 60% 이상이면 실질적으로 같은 내용,
+        # 즉 요약이 제목을 풀어쓴 것에 불과하다고 본다.
+        match = difflib.SequenceMatcher(None, n, title_n).find_longest_match(0, len(n), 0, len(title_n))
+        return match.size >= max(12, int(len(shorter) * 0.6))
 
     def _key_points(self, title, body):
         title_n = self._norm(title)
@@ -541,10 +544,10 @@ class MasterConditionManager:
         # 그대로 다시 등장"하는 결과가 나온다.
         body_text = self._clean(body) if body is not None else text
         matched = []
-        for pattern, phrases in self.OUTLOOK_PATTERNS:
+        for pattern, sentence in self.OUTLOOK_PATTERNS:
             m = re.search(pattern, text, re.I)
             if m:
-                matched.append((m.start(), phrases, m.group(0)))
+                matched.append((m.start(), sentence, m.group(0)))
         # [위탁·중개 우선] "OO증권이 XX의 자사주 매입을 위탁 중개해 상한가"처럼 자기 자신이
         # 아니라 대리·중개 역할을 한 기사에서, "자사주/배당" 패턴(발행사 본인의 환원 관점)이
         # 위탁·중개 패턴과 함께 잡히면 실제 그림과 다른 전망이 섞여 나간다.
@@ -560,41 +563,22 @@ class MasterConditionManager:
         matched.sort(key=lambda x: x[0])
         result = []
         seen = set()
-        for _, phrases, anchor in matched:
-            key = tuple(phrases)
-            if key in seen:
+        for _, sentence, anchor in matched:
+            if sentence in seen:
                 continue
-            seen.add(key)
-            # [반줄평 형식] 서술형 문장으로 잇지 않고, 짧은 구 2개를 각각 한 줄씩 낸다.
-            # 첫 구 앞에는 실제 매칭된 anchor(예: '수주')를 붙여 사건과 바로 연결되게 하고,
-            # concrete(기사 핵심문장 속 실제 근거)가 있으면 그걸 anchor 대신 앞에 붙인다.
+            seen.add(sentence)
+            # anchor(예: '자사주')가 실제로 들어있는 기사 핵심문장을 찾아 그대로 근거로 붙인다.
+            # 같은 패턴이 여러 기사에 걸려도, 기사마다 실제 문장이 다르므로 출력이 붕어빵처럼
+            # 똑같아지지 않고 그 기사의 구체적 수치·주체가 그대로 드러난다.
             concrete = next((kp for kp in key_points if anchor in kp), None)
             if not concrete:
-                # [버그수정] body_text[idx-40:idx+70] 같은 고정폭 문자 윈도우는 단어 중간을
-                # 잘라 "시 반영하지못할"처럼 깨진 텍스트를 만든다. 대신 anchor가 포함된
-                # 실제 문장을 통째로 찾아 절 단위로 다듬어 쓴다.
-                hit = next((s for s in self._sentences(body_text) if anchor in s), None)
-                if hit:
-                    concrete = self._trim_for_readability(hit)
-            lead = concrete.rstrip('.') if concrete else anchor
-            # [줄바꿈 버그수정] lead가 이미 "…"로 끝나는(60자 넘어 잘린) 문장이면, 그 뒤에
-            # 공백 하나로 다음 전망 문구("금리 변화가 할인율에 미치는 영향" 등)를 바로
-            # 이어붙이면 "…" 뒤에 안 이어지는 문장이 붙은 것처럼 줄이 깨져 보인다.
-            # 이 경우 lead와 첫 전망 문구를 같은 줄에 합치지 않고 각각 별도 줄(✔️ 항목)로 낸다.
-            lead_is_cut = lead.endswith("…") or lead.endswith("...")
-            for i, phrase in enumerate(phrases):
-                if i == 0:
-                    if lead_is_cut:
-                        result.append(lead)
-                        if len(result) >= 3:
-                            break
-                        result.append(phrase)
-                    else:
-                        result.append(f"{lead} {phrase}")
-                else:
-                    result.append(phrase)
-                if len(result) >= 3:
-                    break
+                idx = body_text.find(anchor)
+                if idx >= 0:
+                    concrete = body_text[max(0, idx - 40): idx + 70].strip(" .,")
+            if concrete:
+                result.append(f"{concrete.rstrip('.')} → {sentence}")
+            else:
+                result.append(f"{anchor} 관련해서 {sentence}")
             if len(result) >= 3:
                 break
         return result
