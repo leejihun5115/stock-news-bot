@@ -533,7 +533,7 @@ class MasterConditionManager:
             return "후보 종목은 있었지만 국내 상장 여부 또는 기사와 직접 연결되는 근거가 부족했습니다."
         return "후보 종목은 있었지만 기사 사건과의 직접 연결·공급망·상용화 근거가 약해 관련주로 확정하지 않았습니다."
 
-    def _outlook(self, text, stage, key_points, body=None):
+    def _outlook(self, text, stage, key_points, body=None, title=""):
         # generic fallback을 없애고, 실제 문장과 매칭된 사건만 전망으로 만든다.
         # [조건41 전망근거 강화] 같은 카테고리(예: 자사주/배당)라도 기사마다 실제 수치·사건이
         # 다르므로, 정형 문구만 반복하지 않고 기사에서 실제로 뽑힌 핵심문장(key_points)을
@@ -542,7 +542,11 @@ class MasterConditionManager:
         # 아니라 body만 뒤진다. text(title+body 합본)를 쓰면 anchor가 제목 쪽에서
         # 매칭됐을 때 창(window)이 제목 구간을 그대로 퍼오게 되어 "요약/전망에 제목이
         # 그대로 다시 등장"하는 결과가 나온다.
+        # [2026-08-22 제목반복금지 + 짧게 요약 강화] 본문이 얇은 외신/속보(RSS 요약이
+        # 제목과 거의 같은 경우)는 body만 뒤져도 여전히 title과 사실상 같은 문장을
+        # 근거로 퍼올 수 있다. title_n을 별도로 두고 그 경우 근거 문장을 버린다.
         body_text = self._clean(body) if body is not None else text
+        title_n = self._norm(title)
         matched = []
         for pattern, sentence in self.OUTLOOK_PATTERNS:
             m = re.search(pattern, text, re.I)
@@ -570,13 +574,26 @@ class MasterConditionManager:
             # anchor(예: '자사주')가 실제로 들어있는 기사 핵심문장을 찾아 그대로 근거로 붙인다.
             # 같은 패턴이 여러 기사에 걸려도, 기사마다 실제 문장이 다르므로 출력이 붕어빵처럼
             # 똑같아지지 않고 그 기사의 구체적 수치·주체가 그대로 드러난다.
+            # [2026-08-22 문장 단위 추출] 예전에는 anchor 앞뒤 ±40/70자 "글자수 창"으로
+            # 잘라서 concrete를 만들었는데, 본문이 여러 사건/문장을 다루는 기사(예: 미국
+            # 증시 종합 브리핑)에서는 이 창이 서로 무관한 문장 두 개를 가로질러 잘라내
+            # "너지 강세에 EPS 올해 $350..."처럼 뜻이 안 통하는 조각이 만들어졌다.
+            # anchor가 포함된 실제 문장 하나를 통째로 찾아 쓰면 이런 붕괴가 없다.
             concrete = next((kp for kp in key_points if anchor in kp), None)
+            if not concrete:
+                concrete = next((s for s in self._sentences(body_text) if anchor in s), None)
             if not concrete:
                 idx = body_text.find(anchor)
                 if idx >= 0:
                     concrete = body_text[max(0, idx - 40): idx + 70].strip(" .,")
+            # [제목반복금지] concrete가 제목과 사실상 같은 문장이면(본문이 얇아
+            # 문맥 창이 제목을 그대로 퍼온 경우) 그대로 쓰지 않는다. → 억지로 만든
+            # 긴 문장 대신 anchor 중심의 짧은 문구로 대체한다(짧게 요약 원칙).
+            if concrete and title_n and self._is_title_near_dup(concrete, title_n):
+                concrete = None
             if concrete:
-                result.append(f"{concrete.rstrip('.')} → {sentence}")
+                concrete = self._trim_for_readability(concrete.rstrip('.'))
+                result.append(f"{concrete} → {sentence}")
             else:
                 result.append(f"{anchor} 관련해서 {sentence}")
             if len(result) >= 3:
@@ -634,14 +651,21 @@ class MasterConditionManager:
         elif name == "시장영향":
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
         elif name in ("전망근거", "후속확인", "지속성"):
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"])
+            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])
         elif name == "시장전망최대3":
             state["outlook"] = state["outlook"][:3]
         elif name == "대장주선정":
             state["leader"] = state["related"][0] if state["related"] else None
         elif name == "대장주이유" and state["leader"]:
             state["leader"] = dict(state["leader"])
-            state["leader"]["reason"] = self._clean(state["leader"].get("reason"))
+            reason = self._clean(state["leader"].get("reason"))
+            # [제목반복금지 + 짧게 요약 - 최종 안전장치] 후보 생성 단계(main.py)에서
+            # 걸러지지 않은 경우를 대비해, MASTER(조건중앙관리)에서도 대장주 '연결
+            # 이유'가 제목과 사실상 같은 문장이면 그대로 쓰지 않고 짧게 자른다.
+            title_n = self._norm(state["title"])
+            if reason and title_n and self._is_title_near_dup(reason, title_n):
+                reason = reason[:40].rstrip() + ("…" if len(reason) > 40 else "")
+            state["leader"]["reason"] = reason
         elif name == "관찰후보":
             state["observe"] = state["related"][1:self.max_related]
         elif name == "관련주없음":
@@ -653,7 +677,7 @@ class MasterConditionManager:
             # 현재까지의 모든 조건을 최종 상태로 고정한다.
             state["stage"], state["commercial_evidence"] = self._stage(text)
             state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"])[:3]
+            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])[:3]
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
             state["master_confirmed"] = bool(
                 state["news_value"] in ("높음", "중간") and

@@ -2166,8 +2166,14 @@ def _engine_theme_context(text, keyword):
     """[관련테마 이유 강화] 테마 키워드가 본문 어느 문장/구절에서 나왔는지
     실제 근거 텍스트를 찾아 반환한다. 정형 문구만 붙이지 않고 본문 내용을
     직접 인용해 왜 이 테마·종목이 연결됐는지 사람이 바로 이해할 수 있게 한다.
+    [2026-08-22] 먼저 키워드가 포함된 완결된 한 문장을 통째로 찾는다(문장을
+    가로질러 자르는 글자수 창 방식은 뜻이 안 통하는 조각을 만들 수 있음).
+    문장을 못 찾을 때만 기존 글자수 창 방식으로 폴백한다.
     """
     t = _engine_clean(text)
+    sent = _engine_sentence_containing(t, keyword)
+    if sent:
+        return _engine_safe_trim(re.sub(r"\s+", " ", sent).strip(" .,-"), 90)
     m = re.search(re.escape(keyword), t, re.I)
     if not m:
         return ""
@@ -2186,6 +2192,75 @@ def _engine_theme_context(text, keyword):
     return ctx
 
 
+def _engine_norm_compact(s):
+    return re.sub(r"[^0-9A-Za-z가-힣]", "", str(s or "")).lower()
+
+
+def _engine_sentence_containing(text, keyword):
+    """키워드가 들어있는 실제 문장 하나를 통째로 찾아 반환한다.
+    [2026-08-22] 글자수 창(±N자)으로 앞뒤를 자르면, 여러 사건을 다루는 기사
+    (예: 미국 증시 종합 브리핑처럼 EPS·연준·반도체·중간선거가 한 기사에 섞인
+    경우)에서는 서로 무관한 문장 두 개를 가로질러 잘라내 뜻이 안 통하는 조각
+    ("너지 강세에 EPS 올해 $350...")이 만들어졌다. 문장 경계를 지켜 하나의
+    완결된 문장만 근거로 쓴다.
+    """
+    t = _engine_clean(text)
+    if not t or not keyword:
+        return ""
+    parts = re.split(
+        r"(?<=[.!?。！？])\s+|[\r\n]+|(?<=다)\s{2,}|(?<=다\.)(?=[가-힣A-Za-z0-9])",
+        t,
+    )
+    for p in parts:
+        p = p.strip(" -•")
+        if len(p) >= 8 and keyword.lower() in p.lower():
+            return p
+    return ""
+
+
+def _engine_is_near_dup_of_title(snippet, title):
+    """[제목반복금지 - 관련주 근거] 본문이 짧은 외신/속보 기사는 회사명 주변
+    문맥 창(±150자)이 사실상 제목 전체를 그대로 퍼오게 된다. 이 경우 '연결
+    이유'가 제목을 그대로 복사한 문장이 되어버리므로, 근거 문장이 제목과
+    사실상 같은지(정확 일치/포함/앞부분 대량 겹침) 판정해 걸러낸다.
+    """
+    a = _engine_norm_compact(snippet)
+    b = _engine_norm_compact(title)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    if len(shorter) < 10:
+        return False
+    if shorter in longer:
+        return True
+    common = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        common += 1
+    if common >= max(10, int(len(shorter) * 0.75)):
+        return True
+    match = difflib.SequenceMatcher(None, a, b).find_longest_match(0, len(a), 0, len(b))
+    return match.size >= max(12, int(len(shorter) * 0.6))
+
+
+def _engine_reason_from_snippet(snippet, title, max_len=60):
+    """'연결 이유'를 짧고 제목과 겹치지 않게 다듬는다. 문맥 창이 제목과
+    사실상 같은 문장이면(외신/속보 등 본문이 얇은 경우) 그 문장을 그대로 쓰지
+    않고, 안전하게 잘라 반복을 피한다. 어느 쪽이든 결과는 max_len 이내로
+    짧게 유지한다(요약칸을 길게 늘어뜨리지 않기 위함).
+    """
+    snippet = re.sub(r"\s+", " ", str(snippet or "")).strip(" -–—.,·")
+    if not snippet:
+        return snippet
+    if _engine_is_near_dup_of_title(snippet, title):
+        # 제목과 겹치는 문장을 그대로 복사하지 않고, 짧게만 남긴다.
+        snippet = _engine_safe_trim(snippet, min(max_len, 40))
+    return _engine_safe_trim(snippet, max_len)
+
+
 def _engine_domestic_watchlist(item):
     """[50] 국내 관련주 단일 판정기.
     출력용 서열(대장주/관찰/관심)을 절대 생성하지 않는다.
@@ -2195,6 +2270,7 @@ def _engine_domestic_watchlist(item):
     low = text.lower()
     companies = item.get("companies", []) or []
     theme = _engine_theme(text)
+    title_only = _engine_clean(item.get("title", ""))
     rows = []
 
     def event_score(stock):
@@ -2240,7 +2316,9 @@ def _engine_domestic_watchlist(item):
         hist,leader,limitup,surge=history(c)
         reason = "뉴스 핵심 사건의 직접 사업연관"
         if ctx:
-            reason = re.sub(r"\s+"," ",ctx)[:150]
+            # [제목반복금지 + 짧게 요약] 문맥 창이 제목과 사실상 같은 문장이면
+            # (본문이 얇은 외신/속보에서 흔함) 그대로 복사하지 않고 짧게 다듬는다.
+            reason = _engine_reason_from_snippet(ctx, title_only, max_len=60)
         rows.append({"name":c,"theme":theme or "직접 관련","reason":reason,"score":1000+es*8+leader*10+limitup*12+surge*4,"direct":True})
     if rows:
         rows.sort(key=lambda x:x["score"],reverse=True)
@@ -2249,25 +2327,48 @@ def _engine_domestic_watchlist(item):
     # 50-02~04 테마/간접 연결: 실제 사건이 있는 경우만
     event_words=["수주","계약","공급","납품","투자","증설","양산","출시","상용화","승인","허가","기술이전","기술수출","임상","지분","실적","매출","수출","정책","규제","관세","수요","가격","데이터센터","AI칩","HBM"]
     if not any(k.lower() in low for k in event_words): return []
-    theme_keys=[k for k in sorted(STOCK_LINK_MAP,key=len,reverse=True) if k.lower() in low]
+    # [관련성 강화] "로열티/마일스톤/기술이전"은 바이오뿐 아니라 반도체 라이선스,
+    # 일반 사업 마일스톤 등에서도 흔히 쓰이는 단어다. 실제 바이오 맥락을 확인할
+    # 다른 단어가 함께 없으면 바이오 테마로 연결하지 않는다.
+    # (예: "브로드컴 로열티 수익" 같은 반도체 기사에 알테오젠 같은 바이오주가
+    #  엉뚱하게 연결되던 문제.)
+    AMBIGUOUS_THEME_CONFIRM = {
+        "로열티": ["바이오","신약","임상","제약","항암","파이프라인","라이선스아웃"],
+        "마일스톤": ["바이오","신약","임상","제약","항암","파이프라인"],
+        "기술이전": ["바이오","신약","임상","제약","특허","파이프라인"],
+    }
+    theme_keys=[]
+    for k in sorted(STOCK_LINK_MAP,key=len,reverse=True):
+        if k.lower() not in low: continue
+        confirmers = AMBIGUOUS_THEME_CONFIRM.get(k)
+        if confirmers and not any(c.lower() in low for c in confirmers):
+            continue
+        theme_keys.append(k)
     if not theme_keys:
         if any(k in low for k in ["h200","hbm","ai칩","ai 반도체","반도체","메모리"]): theme_keys=["HBM"]
-        elif any(k in low for k in ["바이오","신약","임상","fda","키트루다","로열티","마일스톤"]): theme_keys=["바이오"]
+        elif any(k in low for k in ["바이오","신약","임상","fda","키트루다"]): theme_keys=["바이오"]
         elif any(k in low for k in ["lng선","lng","조선","선박"]): theme_keys=["조선"]
         elif any(k in low for k in ["방산","미사일","무기","전투기"]): theme_keys=["방산"]
     if not theme_keys: return []
     scored=[]
     for key in theme_keys[:5]:
         if not any(k.lower() in low for k in event_words): continue
-        # [관련테마 이유 강화] 매칭된 이벤트 키워드 중 본문에 실제로 등장하는 것을 찾아
-        # 그 주변 문맥을 근거 문장으로 함께 붙인다. 정형 문구만 반복하지 않는다.
-        matched_event = next((w for w in event_words if w.lower() in low), "")
-        ctx = _engine_theme_context(text, matched_event) if matched_event else ""
+        # [관련테마 이유 강화] 근거 문맥은 먼저 실제 매칭된 테마 키워드(key) 주변에서
+        # 찾는다. 순서상 처음 나오는 아무 이벤트 단어(예: 기사 앞부분의 "실적")부터
+        # 잡으면, 정작 이 종목이 왜 연결됐는지와 무관한 다른 회사 얘기가 근거로
+        # 붙는 문제가 있었다.
+        ctx = _engine_theme_context(text, key)
+        if not ctx:
+            matched_event = next((w for w in event_words if w.lower() in low), "")
+            ctx = _engine_theme_context(text, matched_event) if matched_event else ""
+        if ctx and _engine_is_near_dup_of_title(ctx, title_only):
+            ctx = ""  # 제목과 사실상 같은 문맥은 근거로 다시 붙이지 않는다.
         base_reason = f"{THEME_MAP.get(key,key)} 테마의 실제 사업·수요 변화와 연결"
         reason = f"{ctx} → {base_reason}" if ctx else base_reason
+        reason = _engine_safe_trim(reason, 90)
         for stock in STOCK_LINK_MAP.get(key,[]):
             hist,leader,limitup,surge=history(stock)
-            scored.append({"name":stock,"theme":key,"reason":reason[:180],"score":300+limitup*30+leader*20+surge*8+hist*2,"direct":False})
+            scored.append({"name":stock,"theme":key,"reason":reason,"score":300+limitup*30+leader*20+surge*8+hist*2,"direct":False})
     best={}
     for r in scored:
         if r["name"] not in best or r["score"]>best[r["name"]]["score"]: best[r["name"]]=r
@@ -3122,6 +3223,29 @@ def _engine_safe_trim(text, limit):
     return head.rstrip(" -–—,·") + "…"
 
 
+_ENGINE_SOURCE_DISPLAY_ALIASES = {
+    # [헤더 표시 축약] 내부 판정 로직(재탕/스팸/시간창 등)이 쓰는 원본 source
+    # 문자열("텔레그램/시황맨의 주식이야기" 등, source.startswith("텔레그램/") 비교에
+    # 쓰임)은 절대 건드리지 않는다. 여기는 화면에 보여줄 이름만 짧게 다듬는 표다.
+    "시황맨의 주식이야기": "시황맨",
+}
+
+
+def _engine_source_display(source_raw):
+    """헤더 [소스] 표시를 짧게 다듬는다. "텔레그램/이름" 형태는 "텔레그램_이름"으로,
+    긴 채널명은 위 별칭표가 있으면 축약한다. 판정에 쓰이는 item['source'] 원본은
+    이 함수 밖에서 그대로 유지된다(호출부에서 source_raw만 넘겨받아 가공).
+    """
+    s = str(source_raw or "")
+    if s == "Google-US":
+        return "🇺🇸"
+    if "/" in s:
+        prefix, _, name = s.partition("/")
+        name = _ENGINE_SOURCE_DISPLAY_ALIASES.get(name, name)
+        return f"{prefix}_{name}"
+    return s
+
+
 def _engine_format_message(item):
     """최종 뉴스 카드.
     [조건51/조건52/조건53 강제] Formatter는 판단하지 않는다.
@@ -3135,11 +3259,12 @@ def _engine_format_message(item):
          제목 바로 아래에 표시한다.
       4) 👀[관련주] 다중 종목 리스트는 표시하지 않는다. 연결 이유는 대장주 1건만 표시.
       5) 🧭 진행 과정은 "===>" 화살표 없이 표시.
-      6) 📢 시장 전망은 섹션 헤더 없이 핵심 문구 1건만 표시.
+      6) 📢 시장 전망은 섹션 헤더 없이 핵심 문구만 표시(최대 2건, 각각 ✔️로 짧게).
       7) 서술형 종결("~했다/~밝혔다/~는지")은 개조식("~함/~밝힘/~여부")으로 변환.
+      8) [2026-08-22] 헤더 소스명 축약("텔레그램/시황맨의 주식이야기" → "텔레그램_시황맨").
     """
     source_raw=str(item.get('source',''))
-    source_display='🇺🇸' if source_raw=='Google-US' else source_raw
+    source_display=_engine_source_display(source_raw)
     time_text=str(item.get('time_text','')).strip()
     raw_title=str(item.get('title','')).strip()
 
@@ -3191,16 +3316,15 @@ def _engine_format_message(item):
     if stage:
         lines.append('🧭 [진행 과정] '+html.escape(stage))
 
-    if outlook:
-        # 섹션 헤더 없이 핵심 전망 문구 1건만 개조식으로 표시한다.
-        lines.append(' ✔️ '+html.escape(_engine_to_gaejo(_engine_safe_trim(outlook[0], 90))))
-
     # 관련주는 MASTER FINAL LOCK 결과만 사용한다. Formatter 자체 재계산/테마 자동 채우기는 금지.
     # [관련주 표시 개편] 다중 종목 리스트 대신 대장주 1건의 연결 이유만 표시한다.
+    # [2026-08-22 짧게 요약] 90자 → 60자로 더 짧게. 제목 반복 여부는 MASTER에서
+    # 이미 걸러졌으므로(main.py 후보 생성 + master_condition_manager 안전장치),
+    # 여기서는 화면 폭에 맞춰 자르기만 한다.
     leader_reason = str(leader.get('reason','')).strip() if leader else ''
     if leader_reason:
         leader_reason, _ = _engine_extract_publisher_suffix(leader_reason)
-        lines.append('ㄴ연결 이유 : '+html.escape(_engine_to_gaejo(_engine_safe_trim(leader_reason, 90))))
+        lines.append('ㄴ연결 이유 : '+html.escape(_engine_to_gaejo(_engine_safe_trim(leader_reason, 60))))
 
     if schedule:
         dm = re.search(r'(20\d{2})[./-](\d{1,2})[./-](\d{1,2})|(\d{1,2})월\s*(\d{1,2})일', schedule)
@@ -3217,6 +3341,13 @@ def _engine_format_message(item):
         if rest: lines.append('✔ '+html.escape(_engine_safe_trim(rest, 150)))
     if item.get('link'):
         lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문 보기</a>')
+
+    # [2026-08-22 배치 변경] ✔️ 시장전망은 링크 다음(메시지 맨 끝)으로 이동.
+    # [본문 이해 후 짧게 요약] 시장전망은 최대 2건까지, 각각 독립된 ✔️ 한 줄로
+    # 짧게 보여준다(한 줄에 다 몰아넣지 않음).
+    for ob in outlook[:2]:
+        lines.append(' ✔️ '+html.escape(_engine_to_gaejo(_engine_safe_trim(ob, 55))))
+
     return '\n\n'.join(x for x in lines if str(x).strip())
 
 def _engine_flush_pending():
