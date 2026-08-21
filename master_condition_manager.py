@@ -171,6 +171,7 @@ class MasterResult:
     master_confirmed: bool = False
     commercial_stage: str = ""
     commercial_evidence: str = ""
+    term_explanations: List[Dict[str, str]] = field(default_factory=list)
 
     def as_dict(self):
         return self.__dict__.copy()
@@ -343,6 +344,39 @@ class MasterConditionManager:
         match = difflib.SequenceMatcher(None, n, title_n).find_longest_match(0, len(n), 0, len(title_n))
         return match.size >= max(12, int(len(shorter) * 0.6))
 
+    def _term_explanations(self, title, body):
+        """기사에 실제 등장한 낯선 영문 고유명사/제품·행사명을 설명용으로 추출한다.
+        기사에 없는 정의는 만들지 않고, 본문 문맥으로 확인 가능한 종류만 표시한다.
+        """
+        text = self._clean(f"{title} {body}")
+        if not text:
+            return []
+        candidates = []
+        pat = re.compile(r"\b[A-Z][A-Za-z0-9&\'-]*(?:\s+[A-Z][A-Za-z0-9&\'-]*){0,4}\b")
+        stop = {"The","This","That","And","For","With","From","New","Today","Market",
+                "United States","New York","Wall Street","Federal Reserve","Google News"}
+        for match in pat.finditer(text):
+            term = match.group(0).strip()
+            if len(term) < 3 or term in stop or (term.isupper() and len(term) <= 4):
+                continue
+            if any(term == x["term"] for x in candidates):
+                continue
+            left = text[max(0, match.start()-90):match.start()]
+            right = text[match.end():min(len(text), match.end()+90)]
+            ctx = left + term + right
+            if re.search(r"출시|제품|서비스|플랫폼|앱|솔루션|판매|구매|도입", ctx, re.I):
+                kind = "제품·서비스명"
+            elif re.search(r"시상|수상|행사|라디오|프로그램|어워드|honors?|award", ctx, re.I):
+                kind = "행사·프로그램명"
+            elif re.search(rf"{re.escape(term)}\s*(?:의|가|은|는)", ctx):
+                kind = "인물·기관명"
+            else:
+                kind = "기사에 등장한 고유명사"
+            candidates.append({"term": term, "description": f"기사상 {kind}"})
+            if len(candidates) >= 5:
+                break
+        return candidates
+
     def _key_points(self, title, body):
         title_n = self._norm(title)
         points = []
@@ -379,14 +413,14 @@ class MasterConditionManager:
         if len(s) > 60:
             cut = self._clause_cut(s)
             if cut:
-                s = cut + "…"
+                s = cut
             else:
                 head = s[:70]
                 last_punct = max(head.rfind("."), head.rfind(","), head.rfind(" "))
-                s = (head[:last_punct].rstrip(",，") + "…") if last_punct > 30 else head.rstrip() + "…"
+                s = head[:last_punct].rstrip(",，") if last_punct > 30 else head.rstrip()
         # 문장 종결형 어미를 떼어 서술형 문장이 아니라 요점(구)처럼 보이게 정리한다.
-        # (이미 절단되어 "…"로 끝나는 경우는 건드리지 않는다.)
-        if not s.endswith("…"):
+        # 절단 결과에는 말줄임표를 넣지 않고 완결된 구로 표시한다.
+        if True:
             s = re.sub(
                 r"(?:(?:라고|다고)\s*)?(?:밝혔다|전했다|전해졌다|나타났다|드러났다|확인됐다|알려졌다|설명했다|덧붙였다|밝혀졌다)\.?$",
                 "", s,
@@ -424,18 +458,6 @@ class MasterConditionManager:
         generic = re.search(r"모닝|브리핑|뉴스모음|오늘의|종합|프리뷰|시황|경제브리핑", title, re.I)
         too_long = len(title) > 60
         narrative = self._is_narrative_title(title)
-        # [영문/말줄임 제목 정리] 제목 끝이 "및…/및..."처럼 잘린 번역·나열형이거나
-        # 영문 고유명사가 과도하게 섞인 경우에는 원문을 그대로 내보내지 않고,
-        # 본문에서 추출한 핵심 사건을 기준으로 짧은 한국어 제목으로 재구성한다.
-        # 단, 본문 근거가 없으면 임의 해석하지 않고 원 제목을 보존한다.
-        english_tokens = re.findall(r"[A-Za-z][A-Za-z0-9&'’.-]*", title)
-        english_ratio = len("".join(english_tokens)) / max(1, len(re.sub(r"\s+", "", title)))
-        truncated = bool(re.search(r"(?:및|그리고|and|&)?\s*(?:…|\.\.\.)$", title, re.I))
-        if pts and (truncated or english_ratio >= 0.22):
-            p = pts[0]
-            p = re.sub(r"\s*(?:- |\| )?(?:[^-_|]{2,20})$", "", p).strip()
-            if len(p) >= 12:
-                return self._trim_for_readability(p)[:80]
         if not generic and not too_long and not narrative and len(title) >= 18:
             return title
         # [요약칸 보존] 본문에 핵심문장이 2개 이상 있을 때만 그중 하나를 제목으로 쓴다.
@@ -448,13 +470,13 @@ class MasterConditionManager:
             # 80자 제한이 더 짧으므로 필요하면 한 번 더 절 경계에서 자른다.
             if len(p) > 80:
                 cut = self._clause_cut(p)
-                p = (cut + "…") if cut else p
+                p = cut if cut else p
             return p[:80]
         # 핵심문장을 못 뽑았고 원제목만 서술형인 경우, 원제목이라도 앞 절만 잘라 간결화
         if narrative:
             cut = self._clause_cut(title)
             if cut:
-                return (cut + "…")[:80]
+                return cut[:80]
         # [본문 없이도 자동요약] 본문이 짧아 핵심문장을 못 뽑았어도, 제목이 60자를
         # 넘으면 단어 경계에서 자연스럽게 잘라 짧게 만든다. 문자수로 그냥 자르면
         # 단어 중간이 잘려 어색해지므로, 뒤에서부터 가장 가까운 공백/구두점을 찾는다.
@@ -462,8 +484,8 @@ class MasterConditionManager:
             head = title[:70]
             cut_at = max(head.rfind(" "), head.rfind(","), head.rfind("·"), head.rfind("-"))
             if cut_at > 25:
-                return head[:cut_at].rstrip(" -–—,·") + "…"
-            return head.rstrip() + "…"
+                return head[:cut_at].rstrip(" -–—,·")
+            return head.rstrip()
         return title[:110]
 
     def _stage(self, text):
@@ -481,26 +503,6 @@ class MasterConditionManager:
         text = self._clean(f"{schedule} {body}")
         if not text:
             return ""
-        low = text.lower()
-        # [MASTER 일정 최종검증] 시장 전망/해설의 상대시간 표현은 일정으로 인정하지 않는다.
-        generic_schedule = (
-            '증시 전망','시장 전망','주가 전망','투자 전망','다음주 전망','이번주 전망',
-            '주요 일정','증시 일정','시장 일정','관심 일정','일정에 주목','일정 주목',
-            '시장 방향','증시 방향','투자 방향','관심 종목','다음주 증시','이번주 증시',
-        )
-        if any(x in low for x in generic_schedule):
-            return ""
-        # 실제 미래 이벤트가 확인된 경우에만 일정으로 허용한다.
-        event_words = (
-            '실적발표','실적 발표','어닝','실적 공개','임상 결과','임상결과','임상 발표',
-            '임상시험 결과','탑라인','데이터 발표','허가','승인','품목허가','fda 승인',
-            '금리결정','기준금리 결정','수주','공급계약','계약 체결','공급 개시',
-            '양산 시작','양산 개시','출시','출시 예정','상용화','상용화 예정','기술이전',
-            '마일스톤','주주총회','합병','분할','공개매수','증자','신규시설투자','증설',
-            '착공','fomc','cpi','pce','고용지표','gdp','ism','소비자물가','고용보고서',
-        )
-        if not any(x in low for x in event_words):
-            return ""
         today = date.today()
         dates = re.findall(r"(20\d{2})[./-](\d{1,2})[./-](\d{1,2})|(\d{1,2})월\s*(\d{1,2})일", text)
         for y, m, d, mm, dd in dates:
@@ -510,9 +512,8 @@ class MasterConditionManager:
                     return f"{dt.isoformat()} 예정"
             except ValueError:
                 continue
-        # 정확한 날짜가 없는 상대 표현도 실제 이벤트가 함께 확인될 때만 허용한다.
-        if re.search(r"다음주|다음 달|다음달|내달|향후|예정|계획", text, re.I):
-            return self._clean(schedule) if any(x in low for x in event_words) else ""
+        if re.search(r"다음주|다음 달|다음달|내달|향후|예정|계획|출시 예정|양산 예정|임상 예정", text, re.I):
+            return self._clean(schedule) or "향후 일정 예정"
         return ""
 
     def _score(self, c):
@@ -719,6 +720,7 @@ class MasterConditionManager:
             "leader": None,
             "observe": [],
             "key_points": self._key_points(title, body),
+            "term_explanations": self._term_explanations(title, body),
             "stage": "",
             "commercial_stage": "",
             "commercial_evidence": "",
@@ -774,6 +776,7 @@ class MasterConditionManager:
             stage=state["stage"],
             commercial_stage=state["commercial_stage"],
             commercial_evidence=state["commercial_evidence"],
+            term_explanations=list(state.get("term_explanations") or [])[:5],
             schedule=state["schedule"],
             outlook=state["outlook"][:3],
             selection_method=list(self.SELECTION_METHOD),
@@ -824,18 +827,6 @@ class MasterConditionManager:
             errors.append("관련주 최대 개수 초과")
         if not related and not self._clean(result.get("related_none_reason")):
             errors.append("관련주 없음 이유 없음")
-        # [MASTER 일정 최종 차단] Validator 단계에서도 관계없는 전망 문구가 일정으로 살아남지 못하게 한다.
-        schedule_text = self._clean(result.get("schedule"))
-        if schedule_text:
-            sl = schedule_text.lower()
-            generic_schedule = (
-                '증시 전망','시장 전망','주가 전망','투자 전망','다음주 전망','이번주 전망',
-                '주요 일정','증시 일정','시장 일정','관심 일정','일정에 주목','일정 주목',
-                '시장 방향','증시 방향','투자 방향','관심 종목','다음주 증시','이번주 증시',
-            )
-            if any(x in sl for x in generic_schedule):
-                result["schedule"] = ""
-                schedule_text = ""
         outlook = [self._clean(x) for x in (result.get("outlook") or []) if self._clean(x)]
         # [조건19 빈요약허용] 시장전망은 패턴이 실제로 매칭됐을 때만 채워진다.
         # 매칭되는 사건이 없으면 억지로 만들지 않고 빈 상태를 정상으로 허용한다.

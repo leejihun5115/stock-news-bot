@@ -1124,21 +1124,6 @@ SCHEDULE_MAJOR_WORDS = {
     '마일스톤','주주총회','합병','분할','공개매수','증자','신규시설투자','증설',
     'FOMC','CPI','PCE','고용지표','금리결정','잭슨홀','GDP','ISM','소비자물가',
 }
-# [일정 최종정리] 단순 전망/시장해설을 일정으로 오인하지 않도록 실제 미래 이벤트만 인정한다.
-SCHEDULE_EVENT_WORDS = {
-    '실적발표','실적 발표','어닝','실적 공개','실적 공개일',
-    '임상 결과','임상결과','임상 발표','임상시험 결과','탑라인','데이터 발표',
-    '허가','승인','품목허가','FDA 승인','결정','금리결정','기준금리 결정',
-    '수주','공급계약','계약 체결','공급 개시','양산 시작','양산 개시',
-    '출시','출시 예정','상용화','상용화 예정','기술이전','마일스톤',
-    '주주총회','합병','분할','공개매수','증자','신규시설투자','증설','착공',
-    'FOMC','CPI','PCE','고용지표','GDP','ISM','소비자물가','고용보고서',
-}
-SCHEDULE_GENERIC_WORDS = {
-    '증시 전망','시장 전망','주가 전망','투자 전망','다음주 전망','이번주 전망',
-    '주요 일정','증시 일정','시장 일정','관심 일정','일정에 주목','일정 주목',
-    '시장 방향','증시 방향','투자 방향','관심 종목','다음주 증시','이번주 증시',
-}
 SCHEDULE_NOISE_WORDS = {'텔레그램','조회수','좋아요','구독','광고','이벤트','쿠폰','게시','업로드'}
 
 def _schedule_load_json(path, default):
@@ -1236,13 +1221,9 @@ def _schedule_is_high_impact_context(text, companies=None, market_hits=None):
 
 def _schedule_extract_from_text(title, extra, source, published='', companies=None, market_hits=None, limitup=False):
     text=_engine_clean(f'{title} {extra}')
-    low=text.lower()
-    if not text or any(w in low for w in SCHEDULE_NOISE_WORDS):
+    if not text or any(w in text.lower() for w in SCHEDULE_NOISE_WORDS):
         return None
-    # 전망/해설에 '다음주·주요 일정'이라는 표현만 있는 경우는 일정으로 만들지 않는다.
-    if any(w in low for w in SCHEDULE_GENERIC_WORDS):
-        return None
-    if not any(w.lower() in low for w in SCHEDULE_MAJOR_WORDS):
+    if not any(w.lower() in text.lower() for w in SCHEDULE_MAJOR_WORDS):
         return None
     if not _schedule_is_high_impact_context(text, companies, market_hits) and not limitup:
         return None
@@ -1269,12 +1250,8 @@ def _schedule_extract_from_text(title, extra, source, published='', companies=No
     if dt < base or dt > base+datetime.timedelta(days=SCHEDULE_DAILY_FORWARD_DAYS):
         return None
     pos=text.find(found)
-    snippet=text[max(0,pos-180):min(len(text),pos+280)].strip()
-    snippet_low=snippet.lower()
-    # 날짜와 실제 이벤트가 같은 문맥에 있어야 한다. '다음주 증시 전망/주요 일정'은 제외.
-    if any(w in snippet_low for w in SCHEDULE_GENERIC_WORDS):
-        return None
-    if not any(w.lower() in snippet_low for w in SCHEDULE_EVENT_WORDS):
+    snippet=text[max(0,pos-160):min(len(text),pos+260)].strip()
+    if not any(w.lower() in snippet.lower() for w in SCHEDULE_MAJOR_WORDS):
         return None
     category='공시' if str(source).startswith('DART') else ('미국일정' if 'US' in str(source) or 'Google-US' in str(source) else '뉴스일정')
     tag='상한가연계' if limitup else '특징주연계' if any(x in text.lower() for x in ('특징주','급등')) else '주요뉴스'
@@ -2354,18 +2331,6 @@ def _engine_score(item):
 _engine_pending = []
 _engine_sent_fingerprints = []  # {text, source, time_text, published, title}
 
-# 동일/유사 뉴스 차단 기준
-# URL이 달라도 제목+본문이 80% 이상 유사하면 같은 기사로 보고 송출하지 않는다.
-NEWS_DUPLICATE_SIMILARITY_THRESHOLD = 0.80
-
-
-def _engine_text_similarity_ratio(a, b):
-    ta = re.sub(r"[^0-9a-zA-Z가-힣]", "", str(a or "").lower())
-    tb = re.sub(r"[^0-9a-zA-Z가-힣]", "", str(b or "").lower())
-    if not ta or not tb:
-        return 0.0
-    return difflib.SequenceMatcher(None, ta[:240], tb[:240]).ratio()
-
 
 def _engine_freshness(item):
     """시장 반영 가능 여부를 고려한 신규/업그레이드/재탕 판정."""
@@ -2401,8 +2366,10 @@ def _engine_freshness(item):
 
 
 def _engine_similar(a, b):
-    ratio = _engine_text_similarity_ratio(a, b)
-    if ratio >= NEWS_DUPLICATE_SIMILARITY_THRESHOLD:
+    ta = re.sub(r"[^0-9a-zA-Z가-힣]", "", a.lower())
+    tb = re.sub(r"[^0-9a-zA-Z가-힣]", "", b.lower())
+    ratio = difflib.SequenceMatcher(None, ta[:240], tb[:240]).ratio()
+    if ratio >= 0.78:
         return True
     ca = set(_engine_find_companies(a))
     cb = set(_engine_find_companies(b))
@@ -3152,7 +3119,7 @@ def _engine_safe_trim(text, limit):
     cut = max(head.rfind(" "), head.rfind(","), head.rfind("·"), head.rfind("—"))
     if cut > limit * 0.5:
         head = head[:cut]
-    return head.rstrip(" -–—,·") + "…"
+    return head.rstrip(" -–—,·")
 
 
 def _engine_format_message(item):
@@ -3224,6 +3191,23 @@ def _engine_format_message(item):
     if stage:
         lines.append('🧭 [진행 과정] '+html.escape(stage))
 
+    # MASTER가 확정한 핵심내용을 실제 송출한다. Formatter에서 재생성하지 않는다.
+    key_points=list(master_result.get('key_points') or []) if master_result and master_result.get('locked') else []
+    for kp in key_points[:3]:
+        kp=_engine_to_gaejo(str(kp).strip())
+        if kp:
+            lines.append('✔️ '+html.escape(kp))
+
+    # 기사에서 확인 가능한 고유명사만 설명한다. 정의를 추측하지 않는다.
+    term_explanations=list(master_result.get('term_explanations') or []) if master_result and master_result.get('locked') else []
+    if term_explanations:
+        lines.append('💡 [용어 설명]')
+        for row in term_explanations[:5]:
+            term=str(row.get('term','')).strip()
+            desc=str(row.get('description','')).strip()
+            if term and desc:
+                lines.append(f'• <b>{html.escape(term)}</b> : {html.escape(desc)}')
+
     if outlook:
         # 섹션 헤더 없이 핵심 전망 문구 1건만 개조식으로 표시한다.
         lines.append(' ✔️ '+html.escape(_engine_to_gaejo(_engine_safe_trim(outlook[0], 90))))
@@ -3264,8 +3248,6 @@ def _engine_flush_pending():
     candidates.sort(key=_engine_score, reverse=True)
     sent = 0
     cycle_keys = set()
-    cycle_fingerprints = []
-    similarity_blocked = 0
     for item in candidates[:ENGINE_MAX_SEND_PER_CYCLE]:
         key = item["key"]
         if key in cycle_keys:
@@ -3273,33 +3255,6 @@ def _engine_flush_pending():
         cycle_keys.add(key)
         if not _engine_telegram_spam_allowed(item):
             continue
-
-        # [유사율 80% 차단] URL이 달라도 같은 내용의 재수집/재전송을 차단한다.
-        # 이미 송출된 뉴스 + 같은 폴링에서 먼저 통과한 뉴스 모두 비교한다.
-        full_text = item["title"] + " " + item.get("extra", "")
-        duplicate_ratio = 0.0
-        duplicate_found = False
-        for prev in reversed(_engine_sent_fingerprints):
-            prev_text = prev.get("text", "") if isinstance(prev, dict) else str(prev)
-            ratio = _engine_text_similarity_ratio(full_text, prev_text)
-            if ratio > duplicate_ratio:
-                duplicate_ratio = ratio
-            if ratio >= NEWS_DUPLICATE_SIMILARITY_THRESHOLD:
-                duplicate_found = True
-                break
-        if not duplicate_found:
-            for prev_text in reversed(cycle_fingerprints):
-                ratio = _engine_text_similarity_ratio(full_text, prev_text)
-                if ratio > duplicate_ratio:
-                    duplicate_ratio = ratio
-                if ratio >= NEWS_DUPLICATE_SIMILARITY_THRESHOLD:
-                    duplicate_found = True
-                    break
-        if duplicate_found:
-            similarity_blocked += 1
-            _engine_log("info", "[차단] 유사뉴스 %.1f%% | 기준 %.0f%% | %s", duplicate_ratio * 100, NEWS_DUPLICATE_SIMILARITY_THRESHOLD * 100, item["title"][:80])
-            continue
-        cycle_fingerprints.append(full_text)
         # 기존 상태파일에 이미 저장된 URL은 같은 기사의 무한 반복만 방지한다.
         # 서로 다른 보도 링크/재보도는 차단하지 않고 반드시 [재탕]으로 송출한다.
         if key in _engine_seen:
@@ -3330,7 +3285,7 @@ def _engine_flush_pending():
             if master_badge and not image_sent:
                 _engine_log("warning", "[MASTER] 텍스트 송출 성공 / 이미지 송출 실패")
             _engine_log("info", "[성공] %s | 송출", item["category"])
-    _engine_log("info", "[송출결과] 후보=%d | 유사뉴스차단=%d | 전송=%d", len(_engine_pending), similarity_blocked, sent)
+    _engine_log("info", "[송출결과] 후보=%d | 묶음차단=0 | 재탕차단=0 | 전송=%d", len(_engine_pending), sent)
     _engine_pending = []
     return sent
 
@@ -4891,13 +4846,13 @@ def _us_intraday_briefing(snapshot, events, et):
     if sector_moves:
         lines.append("<b>📌 시장·테마 변화</b>")
         for _, q, delta in sector_moves[:5]:
-            lines.append(f"• {q['name']} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}%")
+            lines.append(f"• {q['name']} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% (전일 대비)")
         lines.append("")
     if stock_moves:
         lines.append("<b>📈📉 개별종목 변화</b>")
         for _, symbol, q, delta in [(abs(d), s, q, d) for _, s, q, d in stock_moves[:6]]:
             reason = _us_briefing_reason(q["name"], q["theme"])
-            line = f"• {q['name']} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% · {q['theme']}"
+            line = f"• {q['name']} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% (전일 대비) · {q['theme']}"
             if reason:
                 line += f" · 원인: {html.escape(reason)}"
             else:
@@ -4907,7 +4862,7 @@ def _us_intraday_briefing(snapshot, events, et):
     if macro_moves:
         lines.append("<b>🛢️ 환율·원자재 변화</b>")
         for _, q, delta in macro_moves:
-            lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q['change_pct'])}")
+            lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q['change_pct'])} (전일 대비)")
         lines.append("")
     if not events:
         return ""
