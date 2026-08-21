@@ -350,22 +350,30 @@ class MasterConditionManager:
         return ""
 
     def _trim_for_readability(self, sentence):
-        """[본문이해 요약] 90자를 넘는 늘어진 문장(번역체·유튜브 서술)은
-        자연스러운 절 경계(면서/라며/는데/이에 따라 등)에서 앞부분 핵심만 남긴다.
-        핵심 수치·주체가 담긴 첫 절만 남기면 뒤 문장을 안 봐도 사건이 이해된다.
+        """[요점만 요약] 요약(핵심포인트)은 서술형 문장을 그대로 옮기지 않고,
+        읽는 즉시 요점만 파악되도록 짧게 다듬는다.
+        1) 60자를 넘는 문장은 자연스러운 절 경계(면서/라며/는데/이에 따라 등)에서 자른다.
+        2) 문장이 짧아도 '~했다/~밝혔다/~전했다/~나타났다'처럼 서술형으로 끝나면
+           마침표 없이 사실(누가/무엇을/얼마나)만 남도록 종결어미를 정리한다.
         """
         s = sentence.strip()
-        if len(s) <= 90:
-            return s
-        cut = self._clause_cut(s)
-        if cut:
-            return cut + "…"
-        # 접속어로도 못 자르면 문장부호(., 마침표) 기준으로 앞 90자 내 마지막 구두점까지만.
-        head = s[:100]
-        last_punct = max(head.rfind("."), head.rfind(","), head.rfind(" "))
-        if last_punct > 40:
-            return head[:last_punct].rstrip(",，") + "…"
-        return head.rstrip() + "…"
+        if len(s) > 60:
+            cut = self._clause_cut(s)
+            if cut:
+                s = cut + "…"
+            else:
+                head = s[:70]
+                last_punct = max(head.rfind("."), head.rfind(","), head.rfind(" "))
+                s = (head[:last_punct].rstrip(",，") + "…") if last_punct > 30 else head.rstrip() + "…"
+        # 문장 종결형 어미를 떼어 서술형 문장이 아니라 요점(구)처럼 보이게 정리한다.
+        # (이미 절단되어 "…"로 끝나는 경우는 건드리지 않는다.)
+        if not s.endswith("…"):
+            s = re.sub(
+                r"(?:(?:라고|다고)\s*)?(?:밝혔다|전했다|전해졌다|나타났다|드러났다|확인됐다|알려졌다|설명했다|덧붙였다|밝혀졌다)\.?$",
+                "", s,
+            ).strip()
+            s = re.sub(r"(?:했다|됐다|졌다|이다|한다)\.$", "", s).strip()
+        return s or sentence.strip()
 
     def _is_narrative_title(self, title):
         """제목이 '헤드라인'이 아니라 '서술형 문장'인지 판정한다.
@@ -414,7 +422,17 @@ class MasterConditionManager:
         # 핵심문장을 못 뽑았고 원제목만 서술형인 경우, 원제목이라도 앞 절만 잘라 간결화
         if narrative:
             cut = self._clause_cut(title)
-            return (cut + "…" if cut else title)[:80]
+            if cut:
+                return (cut + "…")[:80]
+        # [본문 없이도 자동요약] 본문이 짧아 핵심문장을 못 뽑았어도, 제목이 60자를
+        # 넘으면 단어 경계에서 자연스럽게 잘라 짧게 만든다. 문자수로 그냥 자르면
+        # 단어 중간이 잘려 어색해지므로, 뒤에서부터 가장 가까운 공백/구두점을 찾는다.
+        if too_long or narrative:
+            head = title[:70]
+            cut_at = max(head.rfind(" "), head.rfind(","), head.rfind("·"), head.rfind("-"))
+            if cut_at > 25:
+                return head[:cut_at].rstrip(" -–—,·") + "…"
+            return head.rstrip() + "…"
         return title[:110]
 
     def _stage(self, text):
@@ -616,7 +634,7 @@ class MasterConditionManager:
             # 현재까지의 모든 조건을 최종 상태로 고정한다.
             state["stage"], state["commercial_evidence"] = self._stage(text)
             state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"])[:3]
+            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"])[:3]
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
             state["master_confirmed"] = bool(
                 state["news_value"] in ("높음", "중간") and
@@ -736,8 +754,10 @@ class MasterConditionManager:
         points = [self._clean(x) for x in (result.get("key_points") or []) if self._clean(x)]
         if not title:
             errors.append("제목 없음")
-        if not points:
-            errors.append("핵심요약 없음")
+        # [조건19 빈요약허용 확장] 본문이 짧은 외신/속보성 기사는 제목과 겹치지 않는
+        # 핵심문장을 뽑을 수 없는 경우가 있다. 이때 억지로 요약을 만들거나 MASTER
+        # 분석 자체를 실패시키지 않고, 관련주 無 / 시장전망 無와 같은 원칙으로
+        # 빈 요약을 정상 허용한다(요약칸은 화면에서 자연히 생략됨).
         if any(self._is_title_near_dup(k, title_n) for k in points):
             errors.append("요약이 제목과 동일함")
         if len(points) > 3:
