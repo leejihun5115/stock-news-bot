@@ -577,8 +577,22 @@ class MasterConditionManager:
                 if hit:
                     concrete = self._trim_for_readability(hit)
             lead = concrete.rstrip('.') if concrete else anchor
+            # [줄바꿈 버그수정] lead가 이미 "…"로 끝나는(60자 넘어 잘린) 문장이면, 그 뒤에
+            # 공백 하나로 다음 전망 문구("금리 변화가 할인율에 미치는 영향" 등)를 바로
+            # 이어붙이면 "…" 뒤에 안 이어지는 문장이 붙은 것처럼 줄이 깨져 보인다.
+            # 이 경우 lead와 첫 전망 문구를 같은 줄에 합치지 않고 각각 별도 줄(✔️ 항목)로 낸다.
+            lead_is_cut = lead.endswith("…") or lead.endswith("...")
             for i, phrase in enumerate(phrases):
-                result.append(f"{lead} {phrase}" if i == 0 else phrase)
+                if i == 0:
+                    if lead_is_cut:
+                        result.append(lead)
+                        if len(result) >= 3:
+                            break
+                        result.append(phrase)
+                    else:
+                        result.append(f"{lead} {phrase}")
+                else:
+                    result.append(phrase)
                 if len(result) >= 3:
                     break
             if len(result) >= 3:

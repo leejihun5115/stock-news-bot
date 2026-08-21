@@ -2823,6 +2823,16 @@ _FEATURED_STOCK_HEADLINE_RE = re.compile(
     r"(?P<reason>.+?)\s*['\"“]?(?P<reaction>상한가|하한가|급등|급락|강세|약세|신고가|신저가)['\"”]?\s*$"
 )
 
+# [지수명 오인 방지] "코스피, 혼조속 상승 탄력 모색…코스닥 5%대 급락" 같은 헤드라인은
+# 위 정규식 형태(회사, 사유 반응)와 우연히 일치하지만 "코스피"는 실제 상장종목이 아니라
+# 시장 지수 이름이다. 관련주는 반드시 상장종목만 표시해야 하므로, 지수/시장 명칭은
+# _engine_parse_featured_stock_headline()의 종목 후보에서 제외한다.
+_MARKET_INDEX_NAMES = {
+    "코스피", "코스닥", "코스피200", "코스닥150", "나스닥", "다우", "다우존스",
+    "S&P", "S&P500", "니케이", "니케이225", "항셍", "상해종합", "유로스톡스",
+    "DAX", "FTSE", "필라델피아반도체", "필라델피아 반도체", "러셀2000",
+}
+
 
 def _engine_has_jongsung(ch: str) -> bool:
     """한글 음절의 받침 유무. 조사(이/가, 을/를)를 문법에 맞게 고르기 위해 사용."""
@@ -2856,6 +2866,8 @@ def _engine_parse_featured_stock_headline(title):
     reason = re.sub(r"(에|으로|로)$", "", reason).strip()
     reaction = m.group("reaction").strip()
     if len(company) < 2 or len(reason) < 4:
+        return None
+    if company in _MARKET_INDEX_NAMES:
         return None
     return {"company": company, "reason": reason, "reaction": reaction}
 
@@ -2934,8 +2946,7 @@ def _engine_master_badge(result):
         return ""
     return (
         f"🟢 [MASTER 확정] 관련주={len(related)} | "
-        f"대장주={html.escape(str(leader.get('name')))} "
-        f"// [요약]"
+        f"대장주={html.escape(str(leader.get('name')))}"
     )
 
 
@@ -3054,9 +3065,6 @@ def _engine_format_message(item):
     header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
     if time_text: header += f'   🕐 {html.escape(time_text)}'
     lines=[header,f'<b>📌 {html.escape(title)}</b>']
-    master_badge=_engine_master_badge(master_result)
-    if master_badge:
-        lines.append('<b>'+master_badge+'</b>')
     if freshness in ('재탕','업그레이드') and prev:
         lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
 
@@ -3087,6 +3095,13 @@ def _engine_format_message(item):
                     seen_reason.add(x); uniq_reasons.append(x)
             lines.append('    ㄴ연결 이유 : '+' · '.join(html.escape(_engine_safe_trim(x, 70)) for x in uniq_reasons))
     # [관련주 無 숨김] 관련주가 없으면 '👀[관련주] : 無' 줄 자체를 표시하지 않는다.
+
+    # [배지 위치] MASTER 확정 배지는 관련주 판정 결과를 최종 요약하는 줄이므로
+    # 관련주 섹션 바로 아래에 표시한다(예전엔 제목 바로 아래/요약 위에 있어서
+    # 아직 관련주를 보지도 않은 상태에서 확정 여부부터 보이는 순서가 어색했음).
+    master_badge=_engine_master_badge(master_result)
+    if master_badge:
+        lines.append('<b>'+master_badge+'</b>')
 
     if schedule:
         dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
