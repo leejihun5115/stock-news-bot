@@ -1854,7 +1854,23 @@ def _engine_company_direct_context(text, company):
     t = _engine_clean(text)
     contexts = []
     for m in re.finditer(re.escape(company), t, re.I):
-        contexts.append(t[max(0,m.start()-150):min(len(t),m.end()+150)])
+        # [버그수정] 고정폭(±150자) 슬라이스는 단어 중간에서 끊겨 "▶️ 데이터센터는..." 같은
+        # 여러 항목이 뒤섞인 깨진 텍스트를 만든다. 텔레그램 불릿(▶️/•/★)이나 문장부호를
+        # 경계로 우선 잘라내고, 그래도 남으면 공백 경계로 스냅한다.
+        start, end = max(0, m.start() - 150), min(len(t), m.end() + 150)
+        window = t[start:end]
+        rel_start, rel_end = m.start() - start, m.end() - start
+        boundary_re = re.compile(r"[▶►●★☆.!?。！？]")
+        before = window[:rel_start]
+        bm = list(boundary_re.finditer(before))
+        left = bm[-1].end() if bm else 0
+        after = window[rel_end:]
+        am = boundary_re.search(after)
+        right = rel_end + (am.start() if am else len(after))
+        snippet = window[left:right].strip(" -–—.,·")
+        if len(snippet) < 20:
+            snippet = window.strip(" -–—.,·")
+        contexts.append(snippet)
     return contexts
 
 
@@ -2409,7 +2425,11 @@ def _engine_telegram_title(raw_text, channel_name=""):
 
     # 바이라인이 없으면 기존 방식대로 문장 후보 중 첫 기사형 문장을 제목으로 사용.
     raw_for_extra = _engine_clean_telegram_meta(raw)
-    parts = re.split(r"(?<=[.!?])\s+|\s{2,}|\n+", str(raw))
+    # [버그수정] 텔레그램 게시물은 문장 사이 마침표 없이 "|"나 ▶️/•/★ 같은 불릿
+    # 기호로만 항목을 구분하는 경우가 많다. 이걸 경계로 안 잡으면 "헤드라인 | 기자명
+    # ▶️ 본문..." 전체(최대 240자)가 통째로 제목이 되어, 뒤에서 70자로 자를 때
+    # 기자 이름·불릿 기호가 낀 채로 잘려버린다.
+    parts = re.split(r"(?<=[.!?])\s+|\s{2,}|\n+|\s*\|\s*|▶️?|●|▪️?|►|★|☆", str(raw))
     candidates = []
     for part in parts:
         part = _engine_clean(part).strip("-—|")
@@ -2913,9 +2933,9 @@ def _engine_master_badge(result):
     if not related or not leader.get("name"):
         return ""
     return (
-        f"🎯🟢 [MASTER 확정] 관련주={len(related)} | "
-        f"대장주={html.escape(str(leader.get('name')))} | "
-        f"stage={html.escape(str(result.get('stage') or '없음'))}"
+        f"🟢 [MASTER 확정] 관련주={len(related)} | "
+        f"대장주={html.escape(str(leader.get('name')))} "
+        f"// [요약]"
     )
 
 
@@ -2981,6 +3001,20 @@ def _engine_send_telegram_photo(photo_path, caption=""):
     return False
 
 
+def _engine_safe_trim(text, limit):
+    """[버그수정] 고정 글자수로 그냥 자르면 '9300억 규모…'가 '930…'처럼 숫자/단어
+    중간에서 잘린다. limit을 넘으면 그 안에서 가장 가까운 공백/구두점까지만 남기고
+    말줄임표를 붙인다."""
+    s = str(text or "")
+    if len(s) <= limit:
+        return s
+    head = s[:limit]
+    cut = max(head.rfind(" "), head.rfind(","), head.rfind("·"), head.rfind("—"))
+    if cut > limit * 0.5:
+        head = head[:cut]
+    return head.rstrip(" -–—,·") + "…"
+
+
 def _engine_format_message(item):
     """최종 뉴스 카드.
     [조건51/조건52/조건53 강제] Formatter는 판단하지 않는다.
@@ -3028,14 +3062,14 @@ def _engine_format_message(item):
 
     if key_points:
         lines.append('🔎 요약')
-        for kp in key_points[:3]: lines.append('     ✔️ '+html.escape(str(kp)[:220]))
+        for kp in key_points[:3]: lines.append('     ✔️ '+html.escape(_engine_safe_trim(kp, 90)))
 
     if stage:
         lines.append('🧭 [진행 과정] ===> '+html.escape(stage))
 
     if outlook:
         lines.append('📢 [시장 전망]')
-        for o in outlook[:3]: lines.append('     ✔️ '+html.escape(str(o)))
+        for o in outlook[:3]: lines.append('     ✔️ '+html.escape(_engine_safe_trim(o, 90)))
 
     # 관련주는 MASTER FINAL LOCK 결과만 사용한다. Formatter 자체 재계산/테마 자동 채우기는 금지.
     if related:
@@ -3051,7 +3085,7 @@ def _engine_format_message(item):
             for x in reasons:
                 if x not in seen_reason:
                     seen_reason.add(x); uniq_reasons.append(x)
-            lines.append('    ㄴ연결 이유 : '+' · '.join(html.escape(x[:120]) for x in uniq_reasons))
+            lines.append('    ㄴ연결 이유 : '+' · '.join(html.escape(_engine_safe_trim(x, 70)) for x in uniq_reasons))
     # [관련주 無 숨김] 관련주가 없으면 '👀[관련주] : 無' 줄 자체를 표시하지 않는다.
 
     if schedule:
@@ -3059,7 +3093,7 @@ def _engine_format_message(item):
         lines.append('📅 일정')
         if dm: lines.append(html.escape(dm.group(1).replace('/','.').replace('-','.')))
         rest=schedule.replace(dm.group(1),'').strip(' -—:·') if dm else schedule
-        if rest: lines.append('✔ '+html.escape(rest[:220]))
+        if rest: lines.append('✔ '+html.escape(_engine_safe_trim(rest, 150)))
     if item.get('link'):
         lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문 보기</a>')
     return '\n\n'.join(x for x in lines if str(x).strip())
