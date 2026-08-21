@@ -24,16 +24,24 @@ CONDITION_RULES 안의 "rule" 문구(설명 텍스트)는 실행 코드가 읽�
   대장주선정, 대장주이유, 관찰후보, 관련주없음, 점수화, 조건중앙관리,
   FINAL_LOCK, Formatter무판단/Telegram무판단, 재호출금지
 
+  [2026-08-22] 위 "점수화"(order 31, _select_related 호출)에 조건24
+  "테마연결"의 실제 검증 로직을 추가함 — theme_link 전용 후보(직접 사업연관
+  근거가 전혀 없는 후보)는 원문에 특정 질환/영역명이 있는데 종목명이 원문에
+  없으면 더 이상 통과하지 못함(_theme_link_has_real_evidence 참고). 즉
+  "테마연결"은 이제 CONDITION_RULES의 설명 문구가 아니라 실제로 관련주를
+  걸러내는 코드다.
+
 ▶ 결과를 확실히 바꾸고 싶다면 CONDITION_RULES의 문구를 고치지 말고,
   아래 실제 함수를 직접 수정하세요:
     - 제목 자동 생성        → _synthesize_title(title, body)
     - 서브제목/요약(핵심포인트) → _key_points(title, body)
     - 관련종목 선정/필터     → _select_related(candidates, text)
       (관련종목 후보 자체는 news_bot.py의 STOCK_LINK_MAP / _engine_domestic_watchlist)
+      (조건24 테마연결의 실제 근거 검증 → _theme_link_has_real_evidence(name, text))
     - 시장전망 문구          → _outlook(text, stage, key_points) / OUTLOOK_PATTERNS
     - 상용화 단계 판정       → _stage(text) / STAGES
 
-나머지 46개(예: 직접사업연관/실제사건연결/과거급등이력/글로벌오인방지 등)는
+나머지 45개(예: 직접사업연관/실제사건연결/과거급등이력/글로벌오인방지 등)는
 "이 원칙을 지킨다"는 설명일 뿐 별도 코드가 없습니다. 이 조건들의 실질 효과가
 필요하면 CONDITION_RULES를 고치는 게 아니라 _execute_rule()에 새 elif 분기를
 추가해야 합니다.
@@ -90,7 +98,7 @@ CONDITION_RULES = [
     {"order": 21, "name": "직접사업연관", "rule": "직접 사업연관을 최우선으로 평가한다."},
     {"order": 22, "name": "실제사건연결", "rule": "수주·계약·공급·구매·투자를 높게 평가한다."},
     {"order": 23, "name": "공급망연결", "rule": "공급망·밸류체인 연결을 평가한다."},
-    {"order": 24, "name": "테마연결", "rule": "실제 시장의 동일 테마 근거가 있을 때 연결한다."},
+    {"order": 24, "name": "테마연결", "rule": "실제 시장의 동일 테마 근거가 있을 때 연결한다. [코드 구현: _select_related → _theme_link_has_real_evidence]"},
     {"order": 25, "name": "과거급등이력", "rule": "과거 상한가·급등 이력은 보조근거다."},
     {"order": 26, "name": "과거주도이력", "rule": "과거 테마 주도 이력을 보조점수로 사용한다."},
     {"order": 27, "name": "수급탄력", "rule": "반복적인 강한 수급 반응을 보조근거로 사용한다."},
@@ -494,6 +502,25 @@ class MasterConditionManager:
         if c.get("domestic_listed") is False: score = 0
         return max(0, min(score, 100))
 
+    # [2026-08-22] 조건24 "테마연결"의 실제 코드 구현.
+    # 지금까지 이 조건은 CONDITION_RULES 문구("실제 시장의 동일 테마 근거가
+    # 있을 때 연결한다")로만 존재했고, 실제로는 theme_link 후보를 has_precomputed_link
+    # 하나만으로 무조건 통과시켰다(테마 근거가 진짜인지 원문으로 재검증하지 않음).
+    # 그 결과 "치매 치료제 임상" 기사에 사업연관 없는 알테오젠이 "신약/바이오"
+    # 같은 범용 테마 단어만으로 연결되는 문제가 MASTER 단에서도 그대로 통과됨.
+    # 이제 direct/event_link/supply_chain/commercial_link(=실제 사업연관)가 전혀
+    # 없는 순수 theme_link 후보는, 원문에 특정 질환/영역명이 있는데 해당 종목명이
+    # 원문에 단 한 번도 등장하지 않으면 "동일 테마 실제 근거 없음"으로 보고 제외한다.
+    DISEASE_SPECIFIC_TERMS = ["치매", "알츠하이머", "당뇨", "비만", "파킨슨", "루게릭", "희귀질환", "자폐"]
+
+    def _theme_link_has_real_evidence(self, name, text):
+        """조건24 테마연결: theme_link 전용 후보가 실제 원문 근거 없이
+        범용 질환/업종 단어만으로 연결된 경우를 걸러낸다."""
+        disease_hits = [d for d in self.DISEASE_SPECIFIC_TERMS if d in text]
+        if not disease_hits:
+            return True
+        return self._norm(name) in self._norm(text)
+
     def _select_related(self, candidates, text):
         scored = []
         for raw in candidates or []:
@@ -502,6 +529,12 @@ class MasterConditionManager:
             reason = self._clean(c.get("reason"))
             if not name or not reason or c.get("domestic_listed") is False:
                 continue
+            has_direct_business_link = bool(
+                c.get("direct") or c.get("event_link") or c.get("supply_chain") or c.get("commercial_link")
+            )
+            if c.get("theme_link") and not has_direct_business_link:
+                if not self._theme_link_has_real_evidence(name, text):
+                    continue
             # 후보 이유가 기사와 실제 연결되는지 최소한의 텍스트 교차검증
             # [조건24 테마연결 수정] theme_link 후보는 reason이 정형 문구라 기사 원문에
             # 그대로 포함되지 않는 게 정상이다. direct/event_link/supply_chain/commercial_link와

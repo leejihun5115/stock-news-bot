@@ -2047,8 +2047,12 @@ STOCK_LINK_MAP = {
     "신약": ["알테오젠", "유한양행", "셀트리온"],
     "기술이전": ["알테오젠", "유한양행", "올릭스"],
     "로열티": ["알테오젠", "유한양행", "셀트리온"],
-    "임상": ["HLB", "알테오젠", "유한양행"],
     "항암": ["HLB", "알테오젠", "유한양행"],
+    # [2026-08-22] "임상" 키 제거: "임상"이라는 단어 자체는 질환 분야를 전혀
+    # 특정하지 않음(치매/당뇨/희귀질환 등 어떤 신약 기사에도 등장) - 이 단어
+    # 하나만으로 알테오젠/HLB/유한양행을 고정 연결하면, 해당 종목과 무관한
+    # 질환 뉴스(예: 치매 치료제 임상 현황 기사)에도 잘못 붙는 오탐이 발생함.
+    # 실제 사업연관이 있는 "항암"처럼 질환/영역이 구체적인 키만 남긴다.
 }
 
 def _engine_stock_links(text, companies):
@@ -2075,9 +2079,18 @@ def _engine_stock_links(text, companies):
     if not links:
         theme_keys = []
         low = t.lower()
+        # [2026-08-22] 질환 무관 오탐 방지 (아래 _engine_relation_reason의
+        # GENERIC_BIO_THEME_KEYS/DISEASE_SPECIFIC_TERMS와 동일한 원칙).
+        generic_bio_keys = {"바이오","헬스케어","신약","항암","임상","로열티","마일스톤","기술이전"}
+        disease_terms = ["치매","알츠하이머","당뇨","비만","파킨슨","루게릭","희귀질환","자폐"]
+        disease_hits = [d for d in disease_terms if d in low]
         for key in sorted(STOCK_LINK_MAP, key=len, reverse=True):
-            if key.lower() in low:
-                theme_keys.append(key)
+            if key.lower() not in low:
+                continue
+            if key in generic_bio_keys and disease_hits:
+                if not any(stock.lower() in low for stock in STOCK_LINK_MAP.get(key, [])):
+                    continue
+            theme_keys.append(key)
         # 테마는 단어 하나만으로 강제하지 않고, 사건/수급/산업 변화가 함께 있어야 한다.
         theme_event = any(k in low for k in [
             "수주", "계약", "공급", "투자", "증설", "양산", "출시", "상용화", "승인",
@@ -2337,12 +2350,25 @@ def _engine_domestic_watchlist(item):
         "마일스톤": ["바이오","신약","임상","제약","항암","파이프라인"],
         "기술이전": ["바이오","신약","임상","제약","특허","파이프라인"],
     }
+    # [2026-08-22] "질환 무관 오탐" 방지: "바이오/헬스케어/신약/항암" 같은 범용
+    # 키는 질환 분야를 특정하지 않는다. 기사가 특정 질환(치매 등)을 다루고
+    # 있는데 STOCK_LINK_MAP 후보 종목명이 본문에 전혀 언급되지 않으면, 그
+    # 종목의 실제 사업과 무관한 질환 뉴스에 억지로 연결하지 않는다.
+    # (예: "치매 치료제 임상" 기사에 사업연관 없는 알테오젠이 "신약" 단어
+    #  하나만으로 자동 연결되던 문제.)
+    GENERIC_BIO_THEME_KEYS = {"바이오","헬스케어","신약","항암","임상","로열티","마일스톤","기술이전"}
+    DISEASE_SPECIFIC_TERMS = ["치매","알츠하이머","당뇨","비만","파킨슨","루게릭","희귀질환","자폐"]
+    disease_hits = [d for d in DISEASE_SPECIFIC_TERMS if d in low]
     theme_keys=[]
     for k in sorted(STOCK_LINK_MAP,key=len,reverse=True):
         if k.lower() not in low: continue
         confirmers = AMBIGUOUS_THEME_CONFIRM.get(k)
         if confirmers and not any(c.lower() in low for c in confirmers):
             continue
+        if k in GENERIC_BIO_THEME_KEYS and disease_hits:
+            named = any(stock.lower() in low for stock in STOCK_LINK_MAP.get(k, []))
+            if not named:
+                continue
         theme_keys.append(k)
     if not theme_keys:
         if any(k in low for k in ["h200","hbm","ai칩","ai 반도체","반도체","메모리"]): theme_keys=["HBM"]
@@ -4451,7 +4477,7 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     for s in ("^KS11","^KQ11"):
         q=snapshot.get(s)
         if q: lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
-    lines += ["", "<b>⚡️ 주요 종목 변화</b>"]
+    lines += ["", "<b>📈 주요 종목 변화</b>"]
     rows=[]
     for s,q in snapshot.items():
         if s in {"^KS11","^KQ11","USDKRW=X"}: continue
@@ -4461,7 +4487,7 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     for q in rows[:8]:
         pct=q.get("change_pct")
         if abs(pct or 0)<1.0: continue
-        lines.append(f"• ⚡️ {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}")
+        lines.append(f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}")
         shown+=1
     if not shown: lines.append("• 주요 종목 큰 변동 없음")
     fx=snapshot.get("USDKRW=X")
@@ -4469,7 +4495,7 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     if events:
         lines += ["", "<b>🚨 장중 구조 변화</b>"]
         for _,_,q,delta in events[:5]:
-            lines.append(f"• ⚡️ {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q.get('change_pct'))}")
+            lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q.get('change_pct'))}")
     return "\n".join(lines)
 
 def _engine_krx_market_monitor():
@@ -4810,10 +4836,41 @@ def _us_direction(pct):
     return "🔺상승" if pct >= 0 else "▼하락"
 
 
+def _us_arrow(pct):
+    """방향 화살표만 반환(상승/하락 텍스트 없이). 지수·환율·원자재·MSCI 등
+    '요약형' 시세 줄에서 사용."""
+    if pct is None:
+        return ""
+    return "🔺" if pct >= 0 else "▼ "
+
+
 def _us_format_pct(pct):
     if pct is None:
         return "시세 확인불가"
     return f"{pct:+.2f}%"
+
+
+# [2026-08-22] 미장 브리핑 급등/급락 종목명 한글 표기. 대형/주요 종목만 확인된
+# 한글명을 쓰고, DB에 없는 종목은 원문 영문명을 그대로 쓴다(지어내지 않음).
+# 종목코드(symbol)는 항상 실제 조회값이므로 괄호 표기로 함께 붙여 식별성을 높인다.
+US_TICKER_NAME_KO = {
+    "TSLA": "테슬라", "PLTR": "팔란티어", "NVDA": "엔비디아", "AAPL": "애플",
+    "MSFT": "마이크로소프트", "GOOGL": "알파벳", "GOOG": "알파벳", "AMZN": "아마존",
+    "META": "메타", "AMD": "AMD", "AVGO": "브로드컴", "MU": "마이크론",
+    "HOOD": "로빈후드", "NFLX": "넷플릭스", "INTC": "인텔", "QCOM": "퀄컴",
+    "CRM": "세일즈포스", "ORCL": "오라클", "IBM": "IBM", "UBER": "우버",
+    "COIN": "코인베이스", "SOFI": "소파이", "RIVN": "리비안", "LCID": "루시드",
+}
+
+
+def _us_display_name_ko(q):
+    """종목명을 한글로 표기하고 뒤에 (종목코드)를 붙인다.
+    확인된 한글명이 없으면 원문(영문) 이름을 그대로 쓴다 - 임의 번역 금지."""
+    symbol = str(q.get("symbol") or "").upper().strip()
+    raw_name = str(q.get("name") or symbol).strip()
+    ko = US_TICKER_NAME_KO.get(symbol)
+    base = ko if ko else raw_name
+    return f"{base}({symbol})" if symbol else base
 
 
 def _us_open_briefing(snapshot, et):
@@ -4845,13 +4902,14 @@ def _us_open_briefing(snapshot, et):
         if q.get("market_cap"):
             cap_note = " 🐘" if q["market_cap"] >= 100_000_000_000 else ""
         reason = _us_briefing_reason(q["name"], q["theme"])
-        line = f"• {q['name']}{cap_note} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
+        line = f"• {html.escape(_us_display_name_ko(q))}{cap_note} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
         if reason:
             line += f" · 원인: {html.escape(reason)}"
         lines.append(line)
         related = _us_related_domestic_stocks(q.get("industry_theme") or q["theme"])
         if related:
-            related_text = " · ".join(f"⚡️{html.escape(s)}" for _, s, _, _ in related)
+            # [2026-08-22] ⚡️는 개별 뉴스 노출용 - 전체 정리 브리핑에서는 뺀다.
+            related_text = " · ".join(html.escape(s) for _, s, _, _ in related)
             lines.append(f"  🇰🇷 관련주 : {related_text}")
     lines += ["", "<b>🛢️ 환율·원자재</b>"]
     for s in macro:
@@ -5102,7 +5160,7 @@ def _us_extract_past_move(row):
 
 def _us_close_briefing(snapshot, et):
     lines = [
-        "<b>🌐 [미장 마감 브리핑]</b>",
+        "<b>🌐🇺🇸 [미장 마감 브리핑]</b>",
         f"🕐 {et.strftime('%Y-%m-%d %H:%M ET')} · 정규장 마감",
         "",
         "<b>📊 전체 시장 흐름</b>",
@@ -5110,14 +5168,15 @@ def _us_close_briefing(snapshot, et):
     for s in ["^IXIC","^GSPC","^DJI","^RUT","^SOX","^VIX"]:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
+            pct = q.get('change_pct')
+            lines.append(f"• {html.escape(q['name'])} {_us_arrow(pct)}{_us_format_pct(pct)}")
 
     ranked = _us_close_rank_themes(snapshot)
     if ranked:
         lines += ["", "<b>🔥 오늘의 강한 종목군·테마</b>"]
         for _, theme, qs in ranked[:4]:
             members = sorted(qs, key=lambda q: abs(q.get("change_pct") or 0), reverse=True)[:4]
-            member_text = " · ".join(f"{html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}" for q in members)
+            member_text = " · ".join(f"{html.escape(_us_display_name_ko(q))} {_us_format_pct(q.get('change_pct'))}" for q in members)
             lines.append(f"• <b>{html.escape(theme)}</b> · {member_text}")
 
             lead = members[0] if members else {}
@@ -5145,7 +5204,9 @@ def _us_close_briefing(snapshot, et):
                     if hist >= 2 or lead_hist >= 2:
                         why.append("끼·탄력 확인")
                     why_text = "·".join(why)[:90]
-                    related_text.append(f"⚡️{html.escape(stock)}({html.escape(why_text)})")
+                    # [2026-08-22] ⚡️는 개별 뉴스 노출(1건 기사) 표시용이다.
+                    # 미장/국내장 브리핑처럼 전체를 정리하는 곳에서는 빼고 표시.
+                    related_text.append(f"{html.escape(stock)}({html.escape(why_text)})")
                 lines.append("  ✔👀관련주 : " + " · ".join(related_text))
             # [카테고리 숨김] 관련주가 없으면 '無' 문구 없이 섹션 자체를 생략한다.
 
@@ -5179,7 +5240,8 @@ def _us_close_briefing(snapshot, et):
     for s in ["USDKRW=X","CL=F","GC=F"]:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
+            pct = q.get('change_pct')
+            lines.append(f"• {html.escape(q['name'])} {_us_arrow(pct)}{_us_format_pct(pct)}")
 
     lines += ["", "<b>🇰🇷 ADR</b>"]
     adr_symbols = ["PKX","LPL","KEP","KB","SHG","SKM"]
@@ -5188,7 +5250,8 @@ def _us_close_briefing(snapshot, et):
         q = snapshot.get(s)
         if q:
             found = True
-            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
+            pct = q.get('change_pct')
+            lines.append(f"• {html.escape(q['name'])} {_us_arrow(pct)}{_us_format_pct(pct)}")
     if not found:
         lines.append("• ADR 시세 확인불가")
 
@@ -5196,7 +5259,7 @@ def _us_close_briefing(snapshot, et):
     msci_quote = snapshot.get("URTH")
     if msci_quote:
         pct = msci_quote.get("change_pct")
-        lines.append(f"• {html.escape(msci_quote.get('name', 'MSCI World'))} {_us_direction(pct)} {_us_format_pct(pct)}")
+        lines.append(f"• {html.escape(msci_quote.get('name', 'MSCI World'))} {_us_arrow(pct)}{_us_format_pct(pct)}")
     else:
         lines.append("• MSCI 시세 확인불가")
 
@@ -5226,14 +5289,12 @@ def _us_close_briefing(snapshot, et):
             if len(strong_rows) >= 3:
                 break
     if strong_rows:
-        lines += ["", "<b>👍 강한 재료</b>"]
+        lines += ["", "<b>🔥 [시장 재료]</b>"]
         for row in strong_rows:
             tx = str(row.get("title",""))[:220]
             amount = re.search(r"(?:[0-9][0-9,]*(?:\.\d+)?)\s*(?:억|조|억원|조원|달러|USD|million|billion)", tx, re.I)
             suffix = f" · 금액 {amount.group(0)}" if amount else ""
-            lines.append(f"• {html.escape(tx)}{html.escape(suffix)}")
-            if row.get("link"):
-                lines.append(f'<a href="{html.escape(str(row["link"]), quote=True)}">🔗 원문</a>')
+            lines.append(f"✔️ {html.escape(tx)}{html.escape(suffix)}")
 
     lines += [
         "",
