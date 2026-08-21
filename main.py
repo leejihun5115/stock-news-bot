@@ -2519,6 +2519,65 @@ def _engine_strip_foreign_publisher_suffix(title: str) -> str:
     t = re.sub(r"\s+[-–—|]\s*(?:AD HOC NEWS|Simplywall\.st|simplywall\.st)\s*$", "", t, flags=re.I)
     return t.strip()
 
+# [매체명 분리] "... 밝혔다 - digittimes" 처럼 제목 끝에 영문 매체명이 " - 이름" 형태로
+# 붙어있으면, 이걸 제목에서 떼어내 헤더 줄(✅ [소스] [신규] _ 매체명)로 옮기기 위해 추출한다.
+# 한글 문장에서 '-'가 접속부호로 쓰인 경우까지 잘못 떼어내지 않도록, 떼어낼 조각이
+# 영문 위주(_engine_is_mostly_english)일 때만 매체명으로 인정한다.
+_PUBLISHER_SUFFIX_RE = re.compile(
+    r"\s[-–—]\s*([A-Za-z][A-Za-z0-9&.,'’\-]{1,30}(?:\s[A-Za-z0-9&.,'’\-]{1,30}){0,3})\s*$"
+)
+
+def _engine_extract_publisher_suffix(title: str):
+    t = str(title or "").strip()
+    m = _PUBLISHER_SUFFIX_RE.search(t)
+    if not m:
+        return t, ""
+    tail = m.group(1).strip()
+    if not tail:
+        return t, ""
+    # [판별 기준] _engine_is_mostly_english는 en>=12 조건이라 "digittimes"(10자) 같은
+    # 짧은 매체명에는 안 맞는다. 여기서는 한글이 섞이지 않고 영문이 최소 2자 이상이면
+    # 매체명으로 인정한다(짧은 접미사 전용 판별).
+    korean = re.findall(r"[가-힣]", tail)
+    latin = re.findall(r"[A-Za-z]", tail)
+    if korean or len(latin) < 2:
+        return t, ""
+    clean = t[: m.start()].rstrip()
+    if len(clean) < 6:
+        return t, ""
+    return clean, tail
+
+# [개조식 변환] 서술형 종결("~했다/~밝혔다/~는지")을 명사형 개조식("~함/~밝힘/~여부")으로
+# 정리한다. 구체적인(긴) 어미부터 먼저 매칭해야 "밝혔다"가 "했다" 규칙에 잘못 걸리지 않는다.
+_GAEJO_EXACT_MAP = {
+    "밝혔다": "밝힘", "전했다": "전함", "전해졌다": "전해짐", "나타났다": "나타남",
+    "드러났다": "드러남", "확인됐다": "확인됨", "알려졌다": "알려짐", "설명했다": "설명함",
+    "덧붙였다": "덧붙임", "밝혀졌다": "밝혀짐", "전망했다": "전망함", "예상했다": "예상함",
+    "관측했다": "관측함", "발표했다": "발표함", "공시했다": "공시함",
+}
+
+def _engine_to_gaejo(text):
+    s = str(text or "").strip()
+    if not s or s.endswith("…") or s.endswith("..."):
+        # 이미 말줄임표로 잘린 문장은 종결어미가 없으므로 건드리지 않는다.
+        return s
+    if s.endswith("."):
+        s = s[:-1]
+    for k in sorted(_GAEJO_EXACT_MAP, key=len, reverse=True):
+        if s.endswith(k):
+            return s[: -len(k)] + _GAEJO_EXACT_MAP[k]
+    m = re.search(r"(?:되는지|하는지|인지|한지)$", s)
+    if m:
+        return s[: m.start()] + " 여부"
+    for pat, rep in (
+        (r"했다$", "함"), (r"됐다$", "됨"), (r"졌다$", "짐"),
+        (r"한다$", "함"), (r"된다$", "됨"), (r"이다$", "임"),
+    ):
+        s2 = re.sub(pat, rep, s)
+        if s2 != s:
+            return s2
+    return s
+
 def _engine_translate_to_korean(text: str) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     if not text:
@@ -2944,10 +3003,7 @@ def _engine_master_badge(result):
     leader = result.get("leader") or {}
     if not related or not leader.get("name"):
         return ""
-    return (
-        f"🟢 [MASTER 확정] 관련주={len(related)} | "
-        f"대장주={html.escape(str(leader.get('name')))}"
-    )
+    return f"🟢 [MASTER] 관련주 : {html.escape(str(leader.get('name')))}"
 
 
 def _engine_master_image_path(result):
@@ -3031,6 +3087,16 @@ def _engine_format_message(item):
     [조건51/조건52/조건53 강제] Formatter는 판단하지 않는다.
     MASTER(65조건) -> Validator -> FINAL LOCK 결과(item['_master_result'])만 표시하며,
     제목·요약·관련주·상용화단계·시장전망·일정을 이 함수에서 다시 계산하지 않는다.
+
+    [2026-08-21 포맷 개편]
+      1) 제목 끝의 " - 매체명"(예: "- digittimes")은 제목에서 떼어 헤더 줄로 옮긴다.
+      2) 🔎 요약 섹션은 표시하지 않는다.
+      3) 🟢 MASTER 배지는 "관련주=N | 대장주=X" 대신 "관련주 : {대장주}" 단순 표기로,
+         제목 바로 아래에 표시한다.
+      4) 👀[관련주] 다중 종목 리스트는 표시하지 않는다. 연결 이유는 대장주 1건만 표시.
+      5) 🧭 진행 과정은 "===>" 화살표 없이 표시.
+      6) 📢 시장 전망은 섹션 헤더 없이 핵심 문구 1건만 표시.
+      7) 서술형 종결("~했다/~밝혔다/~는지")은 개조식("~함/~밝힘/~여부")으로 변환.
     """
     source_raw=str(item.get('source',''))
     source_display='🇺🇸' if source_raw=='Google-US' else source_raw
@@ -3041,67 +3107,60 @@ def _engine_format_message(item):
     if master_result and master_result.get('locked'):
         # MASTER FINAL LOCK 값만 사용한다. (조건51 Formatter무판단)
         title=master_result.get('title') or _engine_strip_foreign_publisher_suffix(raw_title)
-        key_points=list(master_result.get('key_points') or [])
         stage=master_result.get('stage') or ''
         outlook=list(master_result.get('outlook') or [])
         related=list(master_result.get('related') or [])
+        leader=master_result.get('leader') or {}
         schedule=master_result.get('schedule') or ''
     else:
         # MASTER가 실패/미확정인 경우에도 Formatter가 재분석하지 않는다.
         # 원문 최소 표시만 하고, 판단이 필요한 항목은 비워둔다.
         _engine_log("warning", "[MASTER] 결과 없음/미확정 | source=%s | Formatter는 재분석하지 않음", source_raw)
         title=_engine_strip_foreign_publisher_suffix(raw_title)
-        key_points, stage, outlook, related, schedule = [], '', [], [], ''
+        stage, outlook, related, leader, schedule = '', [], [], {}, ''
+
+    # [매체명 분리] 제목 끝의 " - 매체명"을 떼어 헤더로 옮긴다.
+    title, publisher = _engine_extract_publisher_suffix(title)
+    # [개조식 변환] 서술형 종결을 명사형으로 정리한다.
+    title = _engine_to_gaejo(title)
 
     companies=item.get('companies',[]) or []
     domestic=_engine_domestic_companies(companies)
     title=_apply_domestic_highlight(title,domestic)
-    if _engine_is_commercial_value(item,title,' '.join(key_points)) and not title.startswith('🎯'):
+    if _engine_is_commercial_value(item,title,'') and not title.startswith('🎯'):
         title='🎯 '+title
     # [제약/바이오 마커] 제목 맨 앞에 💊를 붙인다.
-    if _engine_is_pharma_news(title, ' '.join(key_points)) and not title.startswith('💊'):
+    if _engine_is_pharma_news(title, '') and not title.startswith('💊'):
         title='💊 '+title
     freshness,prev=_engine_freshness(item)
-    header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
+    header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]'
+    if publisher:
+        header += f' _ {html.escape(publisher)}'
+    header += '</b>'
     if time_text: header += f'   🕐 {html.escape(time_text)}'
     lines=[header,f'<b>📌 {html.escape(title)}</b>']
-    if freshness in ('재탕','업그레이드') and prev:
-        lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
 
-    if key_points:
-        lines.append('🔎 요약')
-        for kp in key_points[:3]: lines.append('     ✔️ '+html.escape(_engine_safe_trim(kp, 90)))
-
-    if stage:
-        lines.append('🧭 [진행 과정] ===> '+html.escape(stage))
-
-    if outlook:
-        lines.append('📢 [시장 전망]')
-        for o in outlook[:3]: lines.append('     ✔️ '+html.escape(_engine_safe_trim(o, 90)))
-
-    # 관련주는 MASTER FINAL LOCK 결과만 사용한다. Formatter 자체 재계산/테마 자동 채우기는 금지.
-    if related:
-        related=related[:3]
-        names=' · '.join('⚡️'+html.escape(str(r.get('name',''))) for r in related)
-        lines.append('👀[관련주] : '+names)
-        reasons=[str(r.get('reason','')) for r in related if r.get('reason')]
-        if reasons:
-            # 같은 테마 키워드로 여러 종목이 묶이면 근거 문장이 통째로 반복될 수 있어
-            # 중복 문구는 한 번만 남긴다(내용은 그대로, 줄만 안 길어지게).
-            seen_reason=set()
-            uniq_reasons=[]
-            for x in reasons:
-                if x not in seen_reason:
-                    seen_reason.add(x); uniq_reasons.append(x)
-            lines.append('    ㄴ연결 이유 : '+' · '.join(html.escape(_engine_safe_trim(x, 70)) for x in uniq_reasons))
-    # [관련주 無 숨김] 관련주가 없으면 '👀[관련주] : 無' 줄 자체를 표시하지 않는다.
-
-    # [배지 위치] MASTER 확정 배지는 관련주 판정 결과를 최종 요약하는 줄이므로
-    # 관련주 섹션 바로 아래에 표시한다(예전엔 제목 바로 아래/요약 위에 있어서
-    # 아직 관련주를 보지도 않은 상태에서 확정 여부부터 보이는 순서가 어색했음).
+    # [배지 위치] MASTER 배지는 제목 바로 아래에서 관련주 확정 여부를 바로 보여준다.
     master_badge=_engine_master_badge(master_result)
     if master_badge:
         lines.append('<b>'+master_badge+'</b>')
+
+    if freshness in ('재탕','업그레이드') and prev:
+        lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
+
+    if stage:
+        lines.append('🧭 [진행 과정] '+html.escape(stage))
+
+    if outlook:
+        # 섹션 헤더 없이 핵심 전망 문구 1건만 개조식으로 표시한다.
+        lines.append(' ✔️ '+html.escape(_engine_to_gaejo(_engine_safe_trim(outlook[0], 90))))
+
+    # 관련주는 MASTER FINAL LOCK 결과만 사용한다. Formatter 자체 재계산/테마 자동 채우기는 금지.
+    # [관련주 표시 개편] 다중 종목 리스트 대신 대장주 1건의 연결 이유만 표시한다.
+    leader_reason = str(leader.get('reason','')).strip() if leader else ''
+    if leader_reason:
+        leader_reason, _ = _engine_extract_publisher_suffix(leader_reason)
+        lines.append('ㄴ연결 이유 : '+html.escape(_engine_to_gaejo(_engine_safe_trim(leader_reason, 90))))
 
     if schedule:
         dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
