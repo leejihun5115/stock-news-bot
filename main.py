@@ -3498,40 +3498,123 @@ def _engine_master_badge(result):
     return f"🟢 [MASTER] {names}" if names else ""
 
 
-def _engine_master_image_path(result):
-    """MASTER 확정 배지 PNG를 동적으로 생성한다. 확정 뉴스에만 사용."""
+def _engine_master_image_path(result, item=None):
+    """MASTER 확정 이미지에 현재/과거 시장상태 비교와 누적 분석값을 표시."""
     if not result or not result.get("locked"):
         return ""
     related = result.get("related") or []
     leader = result.get("leader") or {}
     if not related or not leader.get("name"):
         return ""
+
     try:
         base = os.path.dirname(os.path.abspath(__file__))
         out = MASTER_CONFIRMATION_IMAGE
         if not os.path.isabs(out):
             out = os.path.join(base, out)
         os.makedirs(os.path.dirname(out) or base, exist_ok=True)
-        img = Image.new("RGB", (1500, 260), (5, 17, 25))
+
+        # 현재 시장상태
+        current_market = str((item or {}).get("market_state") or "확인중")
+
+        # 과거시장상태: 성과 DB에 기록된 market_state 중 현재와 같은 상태를 우선 사용.
+        historical_market = "데이터 수집중"
+        sample_count = 0
+        win_rate = None
+
+        try:
+            rows = []
+            if os.path.exists(OUTCOME_TRACKING_DB):
+                with open(OUTCOME_TRACKING_DB, "r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            r = json.loads(line)
+                            if r.get("checked") and (r.get("outcome") or {}).get("change_pct") is not None:
+                                rows.append(r)
+                        except Exception:
+                            continue
+
+            sample_count = len(rows)
+
+            states = []
+            for r in rows:
+                st = str(r.get("market_state") or "").strip()
+                if st:
+                    states.append(st)
+
+            if states:
+                # 가장 많이 나타난 과거 시장상태를 대표값으로 표시
+                from collections import Counter
+                historical_market = Counter(states).most_common(1)[0][0]
+
+            if sample_count:
+                wins = sum(
+                    1 for r in rows
+                    if float((r.get("outcome") or {}).get("change_pct") or 0) > 0
+                )
+                win_rate = wins / sample_count * 100.0
+        except Exception:
+            pass
+
+        # 간단한 시장상태 비교
+        if current_market == "확인중" or historical_market == "데이터 수집중":
+            similarity = "비교중"
+        elif current_market == historical_market:
+            similarity = "유사"
+        else:
+            similarity = "상이"
+
+        score = result.get("score")
+        if score is None:
+            score = result.get("master_score")
+        score_text = f"{float(score):.0f}" if isinstance(score, (int, float)) else "—"
+
+        lines = [
+            f"MASTER {score_text}  |  현재시장 {current_market}",
+            f"과거시장 {historical_market}  |  시장비교 {similarity}",
+            f"대장주 {leader.get('name')}  |  관련주 {len(related)}",
+            (
+                f"누적성과 {sample_count}건  |  성공률 {win_rate:.1f}%"
+                if win_rate is not None
+                else "누적성과 데이터 수집중"
+            ),
+        ]
+
+        img = Image.new("RGB", (1500, 450), (5, 17, 25))
         draw = ImageDraw.Draw(img)
         font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
-        font_big = ImageFont.truetype(font_path, 54)
-        font_small = ImageFont.truetype(font_path, 42)
-        # Green confirmation frame
-        draw.rounded_rectangle((18, 18, 1482, 242), radius=28, outline=(65, 235, 45), width=5, fill=(7, 25, 18))
-        # Target + green indicator
-        draw.ellipse((45, 75, 125, 155), fill=(55, 210, 45), outline=(180, 255, 150), width=4)
-        draw.ellipse((66, 96, 104, 134), fill=(5, 17, 25))
-        text = f"[MASTER 확정] 관련주={len(related)} | 대장주={leader.get('name')} | stage={result.get('stage') or '없음'}"
-        # Fit text to width.
-        font = font_big
-        while draw.textbbox((0,0), text, font=font)[2] > 1310 and font.size > 28:
-            font = ImageFont.truetype(font_path, font.size - 2)
-        draw.text((145, 82), text, font=font, fill=(85, 255, 45))
+        font_big = ImageFont.truetype(font_path, 46)
+        font_small = ImageFont.truetype(font_path, 31)
+
+        draw.rounded_rectangle(
+            (18, 18, 1482, 432),
+            radius=28,
+            outline=(65, 235, 45),
+            width=5,
+            fill=(7, 25, 18),
+        )
+
+        draw.ellipse((45, 58, 125, 138), fill=(55, 210, 45),
+                     outline=(180, 255, 150), width=4)
+        draw.ellipse((66, 79, 104, 117), fill=(5, 17, 25))
+
+        draw.text((145, 45), "[MASTER 확정]", font=font_big, fill=(85, 255, 45))
+
+        y = 112
+        for i, line in enumerate(lines):
+            font = font_small
+            draw.text(
+                (145, y),
+                line,
+                font=font,
+                fill=(255, 255, 255) if i < 2 else (225, 245, 230),
+            )
+            y += 70
+
         img.save(out, format="PNG", optimize=True)
         return out
     except Exception as e:
-        _engine_log("warning", "[MASTER] 이미지 생성 실패 | 원인=%s", str(e)[:160])
+        _engine_log("warning", "[MASTER] 분석 이미지 생성 실패 | 원인=%s", str(e)[:160])
         return ""
 
 
@@ -3690,7 +3773,7 @@ def _engine_flush_pending():
         master_badge = _engine_master_badge(master_result)
         image_sent = False
         if master_badge:
-            image_path = _engine_master_image_path(master_result)
+            image_path = _engine_master_image_path(master_result, item=item)
             if image_path:
                 image_sent = _engine_send_telegram_photo(image_path, caption=master_badge)
         text_sent = _engine_send_telegram(message)
@@ -5333,76 +5416,3 @@ if __name__ == "__main__":
 # 기존 뉴스 처리 함수가 확보한 title/body/candidates/schedule/evidence를
 # Telegram 송출 직전에 master_finalize_news(...)에 전달한다.
 # 이 지점은 기존 송출 코드를 자동으로 덮어쓰지 않도록 별도 함수로 둔다.
-
-# ============================================================
-# [FREE AUTO FEEDBACK]
-# 무료 자동 성과 피드백 — 외부 AI/API 없이 동작
-# 원본 MASTER 65조건은 변경하지 않고, 성과 통계만 자동 누적/조정합니다.
-# 노하우: "나빠질 때는 빠르게 엄격하게, 좋아질 때는 천천히 완화"
-# ============================================================
-FREE_AUTO_STATE_FILE = "free_auto_state.json"
-
-def _free_auto_load():
-    try:
-        with open(FREE_AUTO_STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"threshold": 40, "history": [], "last_change": 0}
-
-def _free_auto_save(state):
-    try:
-        with open(FREE_AUTO_STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-def free_auto_feedback(outcome_pct):
-    """
-    outcome_pct: 실제 신호의 결과 수익률(%).
-    40건이 쌓인 뒤 최근 성과를 보고 최소 신호 기준을 보수적으로 조정.
-    자동 변경 범위: 35~50, 24시간에 1회 이하.
-    """
-    try:
-        state = _free_auto_load()
-        hist = list(state.get("history") or [])
-        hist.append(float(outcome_pct))
-        hist = hist[-200:]
-        state["history"] = hist
-
-        if len(hist) >= 40:
-            now = time.time()
-            last_change = float(state.get("last_change") or 0)
-            if now - last_change >= 86400:
-                recent = hist[-40:]
-                win_rate = sum(1 for x in recent if x > 0) / len(recent)
-
-                old = int(state.get("threshold", 40))
-                new = old
-
-                # 노하우: 손실/약세 구간에서는 빠르게 엄격화,
-                # 강한 구간에서는 천천히 완화.
-                if win_rate < 0.55:
-                    new = min(50, old + 2)
-                elif win_rate > 0.75:
-                    new = max(35, old - 1)
-
-                if new != old:
-                    state["threshold"] = new
-                    state["last_change"] = now
-                    state["last_win_rate"] = round(win_rate * 100, 2)
-
-        _free_auto_save(state)
-        return state
-    except Exception:
-        return {"threshold": 40, "history": []}
-
-def free_auto_status():
-    state = _free_auto_load()
-    hist = list(state.get("history") or [])
-    recent = hist[-40:]
-    win = (sum(1 for x in recent if x > 0) / len(recent) * 100) if recent else None
-    return {
-        "threshold": int(state.get("threshold", 40)),
-        "sample_count": len(hist),
-        "recent40_win_rate": round(win, 2) if win is not None else None,
-    }
