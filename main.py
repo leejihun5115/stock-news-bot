@@ -205,7 +205,22 @@
 
 
 
-from master_condition_manager import MasterConditionManager
+try:
+    from master_condition_manager import MasterConditionManager
+except ModuleNotFoundError:
+    # 원본 파일명(master_condition_manager(7).py)을 그대로 유지해도 부팅 가능하도록
+    # 로컬 파일을 모듈명 master_condition_manager로 안전하게 로드한다.
+    import importlib.util as _icu
+    _os = __import__("os")
+    _sys = __import__("sys")
+    _mcm_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "master_condition_manager(7).py")
+    _mcm_spec = _icu.spec_from_file_location("master_condition_manager", _mcm_path)
+    if _mcm_spec is None or _mcm_spec.loader is None:
+        raise ImportError(f"MasterConditionManager 모듈을 찾을 수 없습니다: {_mcm_path}")
+    _mcm_mod = _icu.module_from_spec(_mcm_spec)
+    _sys.modules["master_condition_manager"] = _mcm_mod
+    _mcm_spec.loader.exec_module(_mcm_mod)
+    MasterConditionManager = _mcm_mod.MasterConditionManager
 import sys
 import time
 import datetime
@@ -223,8 +238,6 @@ import difflib
 import zipfile
 import io
 import xml.etree.ElementTree as ET
-import io
-import zipfile
 from collections import defaultdict
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
@@ -242,10 +255,6 @@ def master_finalize_news(
     candidates=None,
     schedule="",
     evidence=None,
-    freshness="",
-    freshness_evidence=None,
-    historical_stats=None,
-    market_context=None,
 ):
     """뉴스 1건을 MASTER -> Validator -> FINAL LOCK 순으로 확정."""
     result = _MASTER_MANAGER.analyze(
@@ -256,10 +265,6 @@ def master_finalize_news(
         candidates=candidates or [],
         schedule=schedule,
         evidence=evidence or [],
-        freshness=freshness,
-        freshness_evidence=freshness_evidence or [],
-        historical_stats=historical_stats or {},
-        market_context=market_context or {},
     )
     result = _MASTER_MANAGER.validate(result)
     if result.get("validation_errors"):
@@ -1015,7 +1020,9 @@ DART_RUMOR_KEYWORDS = ["조회공시", "풍문", "보도", "해명", "설명요�
 
 # [불변 명령체계] 최신 사용자 지시가 최우선이며 충돌하는 하위 출력 명령은 실행하지 않는다.
 LATEST_USER_COMMAND_WINS = True
-COMMAND_PRIORITY_POLICY = ("LATEST_USER_COMMAND", "MASTER", "VALIDATOR", "FINAL_LOCK", "FORMATTER", "TELEGRAM")
+COMMAND_PRIORITY_POLICY = ("LATEST_USER_COMMAND",)
+# 하위 명령/출력 레이어는 사용자 최우선 명령을 덮어쓸 수 없다.
+DISABLE_LEGACY_SUBCOMMAND_OVERRIDES = True
 
 DART_STRONG_REPORT_KEYWORDS = {
     "유상증자결정", "무상증자결정", "전환사채권발행결정", "신주인수권부사채권발행결정",
@@ -1686,13 +1693,9 @@ def _engine_record_outcome_tracking(item, master_result):
     row = {
         "ts": _now_kst().isoformat(),
         "source": str(item.get("source", ""))[:80],
-        "source_type": ("DART" if str(item.get("source", "")).startswith("DART") else "YouTube" if str(item.get("source", "")).startswith("유튜브/") else "Telegram" if str(item.get("source", "")).startswith("텔레그램/") else "Blog" if str(item.get("source", "")).startswith("블로그/") else "News"),
-        "freshness": str(item.get("_freshness", ""))[:20],
         "title": str(master_result.get("title") or item.get("title", ""))[:300],
         "link": str(item.get("link", ""))[:1000],
         "market_state": str(item.get("market_state", ""))[:40],
-        "market_snapshot": dict((item.get("_market_context") or {}).get("snapshot") or {}),
-        "market_regime": _engine_market_regime(dict((item.get("_market_context") or {}).get("snapshot") or {})),
         "stage": str(master_result.get("stage", ""))[:80],
         "leader": str(leader.get("name", ""))[:60],
         "leader_code": _resolve_stock_code_for_name(leader.get("name", "")) if ENABLE_OUTCOME_TRACKING else "",
@@ -3321,6 +3324,68 @@ def _engine_extract_title(title: str, extra: str) -> str:
     return raw[:180].strip()
 
 
+def _engine_news_insight(title: str, body: str, source: str = "") -> dict:
+    """[DEPRECATED] 더 이상 MASTER 입력이나 Formatter 표시에 사용되지 않는다.
+    제목/요약/상용화단계/시장전망/관련주 판단은 반드시 master_condition_manager의
+    MasterConditionManager(65조건) -> Validator -> FINAL LOCK 결과만 사용한다.
+    (조건1 원문확보 / 조건51 Formatter무판단 / 조건53 재호출금지)
+    이 함수는 하위호환을 위해서만 남겨둔다. 새 코드에서 호출하지 말 것.
+    """
+    t = _engine_clean_telegram_meta(body)
+    title = _engine_extract_title(title, t)
+    # 제목 반복/출처 반복 제거
+    t = re.sub(re.escape(title), ' ', t, count=1, flags=re.I) if title else t
+    t = re.sub(r'\s+', ' ', t).strip()
+    sentences = [x.strip(' -•') for x in re.split(r'(?<=[.!?。！？])\s+|\s+•\s+|\s+▶️\s+', t) if x.strip()]
+    sentences = [x for x in sentences if len(re.sub(r'[^0-9A-Za-z가-힣]', '', x)) >= 12]
+    event_terms = ['수주','계약','공급','투자','증설','양산','출시','상용화','승인','허가','임상','기술이전','기술수출','실적','매출','영업이익','배당','자사주','주주환원','정책','관세','금리','수요','가격','생산','판매','구매','도입','발표','FCF']
+    change_terms = ['확대','증가','감소','강화','약화','전환','개선','악화','본격','가속','확정','신설','도입','재개','중단','상승','하락']
+    scored=[]
+    for i,x in enumerate(sentences):
+        score=sum(5 for k in event_terms if k in x)+sum(3 for k in change_terms if k in x)+(4 if re.search(r'\d|%|억|조|원|달러',x) else 0)+min(len(x),180)/100
+        scored.append((score,i,x))
+    scored.sort(reverse=True)
+    picked=[]
+    for _,_,x in scored:
+        if any(_engine_similar(x,y) for y in picked): continue
+        picked.append(x)
+        if len(picked)>=3: break
+    # 원문이 짧으면 제목이 아닌 실제 본문 한 줄을 사용
+    if not picked and sentences: picked=sentences[:1]
+
+    low=(title+' '+t).lower()
+    commercial=[]
+    stage_map=[
+        ('양산·판매/공급','양산|대량생산|판매개시|판매 개시|공급 확대'),
+        ('수주·계약','수주|공급계약|계약 체결|본계약|판매계약'),
+        ('상용화·구매','상용화|상업화|구매|실제 도입|현장 도입'),
+        ('검증·승인','승인|허가|인증|테스트 완료|검증'),
+        ('개발·투자','개발|연구|투자|증설|시설투자'),
+    ]
+    for label,pat in stage_map:
+        if re.search(pat, low, re.I): commercial.append(label)
+    stage=commercial[0] if commercial else ''
+
+    outlook=[]
+    if any(k in low for k in ['자사주','주주환원','배당','fcf']):
+        outlook.append('주주환원 강화가 주가의 실적 외 지지 요인으로 작용할 가능성')
+    elif any(k in low for k in ['수주','공급계약','계약 체결','판매계약']):
+        outlook.append('계약·수주가 실제 매출과 수주잔고로 이어지는지 확인하는 구간')
+    elif any(k in low for k in ['양산','상용화','실제 도입','구매']):
+        outlook.append('기술·테마 단계에서 실제 매출과 생산으로 넘어가는지 여부가 핵심')
+    elif any(k in low for k in ['증설','투자','생산']):
+        outlook.append('투자·생산 확대가 공급능력과 관련 밸류체인 수요 증가로 이어질 가능성')
+    elif any(k in low for k in ['승인','허가','임상']):
+        outlook.append('규제·임상 진전 이후 실제 상업화와 매출 전환 여부가 핵심')
+    else:
+        outlook.append('후속 발표와 실제 실적 반영 여부가 시장 영향의 핵심 확인 포인트')
+    if stage:
+        outlook.append(f'현재 뉴스는 {stage} 신호가 확인돼 단순 기대보다 실행 단계의 진전 여부가 중요')
+    if re.search(r'\d+\s*(?:억|조|원|%)', low):
+        outlook.append('제시된 수치의 실제 집행 규모와 지속성이 주가 반응을 좌우할 가능성')
+    return {'title':title,'key_points':picked,'stage':stage,'outlook':outlook[:3]}
+
+
 def _engine_future_schedule(text: str) -> str:
     """오늘 이전/당일 발생 사실은 일정으로 내보내지 않고 미래 이벤트만 반환."""
     s=_engine_schedule(text)
@@ -3384,97 +3449,6 @@ def _engine_parse_featured_stock_headline(title):
     return {"company": company, "reason": reason, "reaction": reaction}
 
 
-_MARKET_ANALYSIS_CACHE = {"ts": 0.0, "data": {}}
-
-def _engine_current_market_snapshot():
-    """현재 KOSPI/KOSDAQ/VIX를 60초 캐시로 읽는다. 실패하면 빈 값으로 둔다."""
-    now = time.time()
-    if now - float(_MARKET_ANALYSIS_CACHE.get("ts", 0)) < 60:
-        return dict(_MARKET_ANALYSIS_CACHE.get("data") or {})
-    data = {}
-    try:
-        for symbol, label in (("^KS11", "KOSPI"), ("^KQ11", "KOSDAQ"), ("^VIX", "VIX")):
-            q = _yahoo_chart_quote(symbol)
-            if q and q.get("change_pct") is not None:
-                data[label] = round(float(q.get("change_pct")), 2)
-    except Exception:
-        pass
-    _MARKET_ANALYSIS_CACHE["ts"] = now
-    _MARKET_ANALYSIS_CACHE["data"] = data
-    return dict(data)
-
-
-def _engine_market_regime(snapshot):
-    if not snapshot: return ""
-    vals=[float(snapshot[k]) for k in ("KOSPI","KOSDAQ") if k in snapshot]
-    if not vals: return ""
-    avg=sum(vals)/len(vals)
-    if avg >= 0.7: return "강세"
-    if avg <= -0.7: return "약세"
-    return "혼조"
-
-def _engine_analysis_context(item, freshness, previous=None):
-    """누적 데이터 기반 분석 컨텍스트.
-    없는 수치는 만들지 않는다. 현재/과거 시장은 현재 저장된 market_state와
-    실제 성과 DB를 연결하고, 동일 시장상태 표본만 성과통계에 사용한다.
-    """
-    current_state = str(item.get("market_state", "")).strip()
-    snap = _engine_current_market_snapshot()
-    current_regime = _engine_market_regime(snap)
-    rows = []
-    try:
-        for r in _OUTCOME_TRACKING_ROWS[-5000:]:
-            if not r.get("checked"):
-                continue
-            outcome = r.get("outcome") or {}
-            change = outcome.get("change_pct")
-            if change is None:
-                continue
-            old_regime = str(r.get("market_regime", "")).strip()
-            same = (current_regime and old_regime == current_regime) or (not current_regime and current_state and str(r.get("market_state", "")).strip() == current_state)
-            if same:
-                rows.append(r)
-    except Exception:
-        rows = []
-
-    stats = {"sample_count": len(rows)}
-    if rows:
-        vals = [float((r.get("outcome") or {}).get("change_pct")) for r in rows]
-        stats["win_rate"] = round(sum(v > 0 for v in vals) / len(vals) * 100.0, 2)
-        stats["avg_change"] = round(sum(vals) / len(vals), 2)
-        stats["median_change"] = round(sorted(vals)[len(vals)//2], 2)
-
-    historical = current_regime if rows and current_regime else (current_state if rows else "데이터 부족")
-    snap = _engine_current_market_snapshot()
-    market_label = current_state or "확인중"
-    if snap:
-        parts = []
-        for k in ("KOSPI", "KOSDAQ", "VIX"):
-            if k in snap: parts.append(f"{k} {snap[k]:+.2f}%")
-        if parts: market_label = market_label + " | " + " · ".join(parts)
-    market_context = {
-        "current": market_label,
-        "historical": historical,
-        "match_count": len(rows),
-        "snapshot": snap,
-    }
-    fresh_evidence = []
-    if previous:
-        prev_text = str(previous.get("text", ""))
-        full = _engine_clean(str(item.get("title", "")) + " " + str(item.get("extra", "")))
-        # 새로 추가된 확정 수치/사건만 간단히 근거로 남긴다.
-        for pat in [r"\d+(?:\.\d+)?\s*(?:%|억|조|억원|조원|달러|USD|million|billion)",
-                    r"(?:계약|수주|공급|승인|허가|소각|배당|양산|출시|투자)[^,.。]{0,35}"]:
-            for m in re.findall(pat, full, re.I):
-                if m and m.lower() not in prev_text.lower() and m not in fresh_evidence:
-                    fresh_evidence.append(m[:80])
-                if len(fresh_evidence) >= 3:
-                    break
-            if len(fresh_evidence) >= 3:
-                break
-    return market_context, stats, fresh_evidence
-
-
 def _engine_master_result(item):
     """뉴스 1건을 MASTER -> Validator -> FINAL LOCK으로 확정한다.
     [조건1/조건10 강제] MASTER는 반드시 원 제목 + 원문 본문을 직접 입력받는다.
@@ -3524,10 +3498,6 @@ def _engine_master_result(item):
             link=str(item.get("link", "")),
             candidates=candidates,
             schedule=_engine_future_schedule(raw_body),
-            freshness=str(item.get("_freshness", "")),
-            freshness_evidence=item.get("_freshness_evidence", []),
-            historical_stats=item.get("_historical_stats", {}),
-            market_context=item.get("_market_context", {}),
         )
         if result.get("locked"):
             _engine_log("info", "[FINAL LOCK 통과] %s", str(result.get("title") or item.get("title") or "")[:220])
@@ -3538,15 +3508,30 @@ def _engine_master_result(item):
 
 
 def _engine_master_badge(result):
+    """관련 종목 라벨만 출력한다. 제목에는 아이콘을 붙이지 않는다."""
     if not result or not result.get("locked"):
         return ""
     related = result.get("related") or []
-    names = ' · '.join(html.escape(str(r.get('name',''))) for r in related if r.get('name'))
-    return f"🟢 [MASTER] {names}" if names else ""
+    names = " · ".join(html.escape(str(r.get("name", ""))) for r in related if r.get("name"))
+    if not names:
+        return ""
+    direct = any(bool(r.get("direct")) for r in related)
+    value = str(result.get("news_value") or "").strip()
+    commercial = bool(result.get("commercial_stage") or result.get("commercial_evidence"))
+    labels = []
+    if direct:
+        labels.append("🎯 직접 연결 종목")
+    else:
+        labels.append("🎯 관련 종목")
+    if commercial or value == "높음":
+        labels.append("💰 돈되는 뉴스")
+    if value == "높음":
+        labels.append("🔥 강한 뉴스")
+    return " | ".join(labels) + "\n" + names
 
 
-def _engine_master_image_path(result, item=None):
-    """MASTER 확정 이미지에 분석 핵심값을 표시한다."""
+def _engine_master_image_path(result):
+    """MASTER 확정 배지 PNG를 동적으로 생성한다. 확정 뉴스에만 사용."""
     if not result or not result.get("locked"):
         return ""
     related = result.get("related") or []
@@ -3556,31 +3541,30 @@ def _engine_master_image_path(result, item=None):
     try:
         base = os.path.dirname(os.path.abspath(__file__))
         out = MASTER_CONFIRMATION_IMAGE
-        if not os.path.isabs(out): out = os.path.join(base, out)
+        if not os.path.isabs(out):
+            out = os.path.join(base, out)
         os.makedirs(os.path.dirname(out) or base, exist_ok=True)
-        fresh = str(result.get("freshness") or (item or {}).get("_freshness") or "")
-        stats = result.get("historical_stats") or (item or {}).get("_historical_stats") or {}
-        market = result.get("market_context") or (item or {}).get("_market_context") or {}
-        score = result.get("score") or result.get("master_score")
-        score_text = f"MASTER {float(score):.0f}" if isinstance(score,(int,float)) else "MASTER"
-        perf = f"성과 {int(stats.get('sample_count',0))}건" if stats.get("sample_count") else "성과 데이터 수집중"
-        if stats.get("win_rate") is not None: perf += f" · 성공률 {float(stats['win_rate']):.1f}%"
-        market_text = f"현재 {market.get('current','확인중')} · 과거 {market.get('historical','데이터 부족')}"
-        text_lines = [f"[MASTER 확정] {score_text} · {fresh or '분석'}", market_text, perf, f"대장주 {leader.get('name')}"]
-        img = Image.new("RGB", (1500, 430), (5,17,25)); draw=ImageDraw.Draw(img)
-        font_path="/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
-        font_big=ImageFont.truetype(font_path,48); font=ImageFont.truetype(font_path,32)
-        draw.rounded_rectangle((18,18,1482,412),radius=28,outline=(65,235,45),width=5,fill=(7,25,18))
-        draw.ellipse((45,58,125,138),fill=(55,210,45),outline=(180,255,150),width=4); draw.ellipse((66,79,104,117),fill=(5,17,25))
-        y=48
-        for i,line in enumerate(text_lines):
-            f=font_big if i==0 else font
-            while draw.textbbox((0,0),line,font=f)[2]>1300 and f.size>24:
-                f=ImageFont.truetype(font_path,f.size-2)
-            draw.text((145,y),line,font=f,fill=(85,255,45) if i==0 else (235,245,235)); y+=75
-        img.save(out,format="PNG",optimize=True); return out
+        img = Image.new("RGB", (1500, 260), (5, 17, 25))
+        draw = ImageDraw.Draw(img)
+        font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+        font_big = ImageFont.truetype(font_path, 54)
+        font_small = ImageFont.truetype(font_path, 42)
+        # Green confirmation frame
+        draw.rounded_rectangle((18, 18, 1482, 242), radius=28, outline=(65, 235, 45), width=5, fill=(7, 25, 18))
+        # Target + green indicator
+        draw.ellipse((45, 75, 125, 155), fill=(55, 210, 45), outline=(180, 255, 150), width=4)
+        draw.ellipse((66, 96, 104, 134), fill=(5, 17, 25))
+        text = f"[MASTER 확정] 관련주={len(related)} | 대장주={leader.get('name')} | stage={result.get('stage') or '없음'}"
+        # Fit text to width.
+        font = font_big
+        while draw.textbbox((0,0), text, font=font)[2] > 1310 and font.size > 28:
+            font = ImageFont.truetype(font_path, font.size - 2)
+        draw.text((145, 82), text, font=font, fill=(85, 255, 45))
+        img.save(out, format="PNG", optimize=True)
+        return out
     except Exception as e:
-        _engine_log("warning","[MASTER] 이미지 생성 실패 | 원인=%s",str(e)[:160]); return ""
+        _engine_log("warning", "[MASTER] 이미지 생성 실패 | 원인=%s", str(e)[:160])
+        return ""
 
 
 def _engine_send_telegram_photo(photo_path, caption=""):
@@ -3620,97 +3604,115 @@ def _engine_is_pharma_news(title, extra_text=""):
 
 
 def _engine_format_message(item):
-    """모든 소스 공통의 간결한 데이터 기반 카드.
-    Formatter는 재분석하지 않고 FINAL LOCK 결과만 표시한다.
+    """최종 Telegram 메시지.
+    최우선 사용자 출력 규칙: 짧고 사실/데이터 중심이며 중복 장식은 금지한다.
+    Formatter는 판단하지 않고 MASTER FINAL LOCK 결과만 표시한다.
     """
-    source_raw = str(item.get("source", ""))
-    source_display = "🇺🇸" if source_raw == "Google-US" else source_raw
-    time_text = str(item.get("time_text", "")).strip()
-    raw_title = str(item.get("title", "")).strip()
-    result = item.get("_master_result") or {}
+    source_raw = str(item.get('source','')).strip()
+    source_display = '🇺🇸' if source_raw == 'Google-US' else source_raw
+    time_text = str(item.get('time_text','')).strip()
+    raw_title = str(item.get('title','')).strip()
+    master_result = item.get('_master_result') or {}
 
-    if result.get("locked"):
-        title = result.get("title") or _engine_strip_foreign_publisher_suffix(raw_title)
-        key_points = list(result.get("key_points") or [])[:3]
-        analysis = str(result.get("analysis") or "").strip()
-        related = list(result.get("related") or [])
-        freshness = str(result.get("freshness") or item.get("_freshness") or "").strip()
-        fresh_evidence = list(result.get("freshness_evidence") or item.get("_freshness_evidence") or [])[:3]
-        schedule = str(result.get("schedule") or "").strip()
-        stats = result.get("historical_stats") or item.get("_historical_stats") or {}
-        market = result.get("market_context") or item.get("_market_context") or {}
+    if master_result.get('locked'):
+        title = master_result.get('title') or _engine_strip_foreign_publisher_suffix(raw_title)
+        key_points = list(master_result.get('key_points') or [])[:3]
+        stage = str(master_result.get('stage') or '').strip()
+        outlook = list(master_result.get('outlook') or [])
+        related = list(master_result.get('related') or [])[:3]
+        schedule = str(master_result.get('schedule') or '').strip()
+        analysis = str(master_result.get('analysis') or '').strip()
+        freshness = str(master_result.get('freshness') or '').strip()
+        if not freshness:
+            freshness, _ = _engine_freshness(item)
     else:
-        _engine_log("warning", "[MASTER] 결과 없음/미확정 | source=%s", source_raw)
         title = _engine_strip_foreign_publisher_suffix(raw_title)
-        key_points, analysis, related, freshness, fresh_evidence, schedule = [], "", [], "", [], ""
-        stats, market = {}, {}
+        key_points, stage, outlook, related, schedule, analysis = [], '', [], [], '', ''
+        freshness, _ = _engine_freshness(item)
 
-    companies = item.get("companies", []) or []
+    # 제목 규칙: 일반 뉴스만 📌. 상장종목/제약 마커는 제목 앞에 붙이지 않는다.
+    companies = item.get('companies', []) or []
     domestic = _engine_domestic_companies(companies)
     title = _apply_domestic_highlight(title, domestic)
-    if _engine_is_commercial_value(item, title, " ".join(key_points)) and not title.startswith("🎯"):
-        title = "🎯 " + title
-    if _engine_is_pharma_news(title, " ".join(key_points)) and not title.startswith("💊"):
-        title = "💊 " + title
+    is_pharma = _engine_is_pharma_news(title, ' '.join(key_points))
+    is_listed = bool(domestic)
 
-    header = f'<b>📰 [{html.escape(source_display)}]</b>'
-    if freshness:
-        icon = {"신규":"🆕", "후속":"🔄", "재탕":"♻️"}.get(freshness, "")
-        header += f'  {icon} <b>{html.escape(freshness)}</b>'
+    # 출처 + 신규성은 한 줄. 장식 아이콘은 최소화.
+    header = f'<b>📰 [{html.escape(source_display)}] {html.escape(freshness or "신규")}</b>'
     if time_text:
         header += f'  🕐 {html.escape(time_text)}'
+    title_prefix = '📌 '
+    if is_listed:
+        title_prefix = ''
+    if is_pharma:
+        title_prefix = ''
+    lines = [header, f'<b>{title_prefix}{html.escape(title)}</b>']
 
-    lines = [header, f'<b>📌 {html.escape(title)}</b>']
+    # 사용자가 요청한 표식은 종목/제약 라벨 위치에만 사용.
+    if is_listed:
+        names = ' · '.join(str(x) for x in domestic[:3])
+        lines.append(f'⚡️ <b>상장종목</b> · {html.escape(names)}')
+    elif is_pharma:
+        lines.append('💊 <b>제약뉴스</b>')
 
-    if freshness == "후속" and fresh_evidence:
-        lines.append("↳ 추가 확인: " + " · ".join(html.escape(x) for x in fresh_evidence[:2]))
-    elif freshness == "재탕":
-        lines.append("↳ 기존 보도와 핵심 내용이 겹치며 새로운 확정 정보가 제한적")
+    if freshness == '업그레이드':
+        lines.append('🔄 <b>후속</b> · 기존 보도에 새로운 확정 내용이 추가됨')
+    elif freshness == '재탕':
+        lines.append('♻️ <b>재탕</b> · 기존 보도와 비교해 새로운 핵심 정보가 제한적')
 
     if key_points:
-        lines.append("🔎 <b>핵심</b>")
+        lines.append('🔎 <b>핵심</b>')
         for kp in key_points:
-            lines.append("• " + html.escape(str(kp)[:220]))
+            clean = re.sub(r'^[▶️•✔️\s]+', '', str(kp)).strip()
+            if clean:
+                lines.append('• ' + html.escape(clean[:180]))
 
+    # 분석은 별도 전망 항목 없이 자연어 한 덩어리로만 표시한다.
+    analysis_parts = []
     if analysis:
-        lines.append("🧠 <b>데이터 기반 분석</b>")
-        lines.append(html.escape(analysis[:1100]))
-
-    if market.get("current") and market.get("historical") and market.get("historical") != "데이터 부족":
-        lines.append(f'📊 시장 비교: 현재 <b>{html.escape(str(market.get("current")))}</b> · 과거 유사환경 <b>{html.escape(str(market.get("historical")))}</b> · 표본 {int(market.get("match_count",0))}건')
-
-    if stats.get("sample_count"):
-        perf = f'📈 누적성과 {int(stats["sample_count"])}건'
-        if stats.get("win_rate") is not None: perf += f' · 성공률 {float(stats["win_rate"]):.1f}%'
-        if stats.get("avg_change") is not None: perf += f' · 평균 {float(stats["avg_change"]):+.2f}%'
-        lines.append(perf)
+        analysis_parts.append(analysis)
+    elif outlook:
+        analysis_parts.append(str(outlook[0]))
+    if stage:
+        analysis_parts.append(f'현재 단계는 {stage}이다.')
+    market_state = str(item.get('market_state') or '').strip()
+    if market_state:
+        analysis_parts.append(f'현재 시장은 {market_state} 상태다.')
+    if analysis_parts:
+        lines.append('🧠 <b>분석</b>')
+        lines.append(html.escape(' '.join(analysis_parts)[:650]))
 
     if related:
-        concrete = [r for r in related if r.get("name")]
-        if concrete:
-            lines.append("🏷️ <b>직접 연결 종목</b>")
-            for r in concrete[:3]:
-                reason = str(r.get("reason", "")).strip()
-                text = html.escape(str(r.get("name")))
-                if reason:
-                    text += " — " + html.escape(reason[:130])
-                lines.append("• " + text)
+        direct = [r for r in related if r.get('direct')]
+        if direct:
+            names = ' · '.join(str(r.get('name','')).strip() for r in direct[:3] if r.get('name'))
+            if names:
+                lines.append(f'🎯 <b>직접 연결 종목</b> · {html.escape(names)}')
+
+    badge_text = str(_engine_master_badge(master_result) or '')
+    if '돈되는 뉴스' in badge_text:
+        lines.append('💰 <b>돈되는 뉴스</b>')
+    if '강한 뉴스' in badge_text:
+        lines.append('🔥 <b>강한 뉴스</b>')
+
+    terms = (master_result or {}).get('term_explanations') or []
+    if terms:
+        shown = []
+        for t in terms[:2]:
+            term = str(t.get('term','')).strip()
+            desc = str(t.get('description','')).strip()
+            if term and desc:
+                shown.append(f'{term}: {desc}')
+        if shown:
+            lines.append('💡 <b>용어</b>')
+            lines.append(html.escape(' · '.join(shown)[:420]))
 
     if schedule:
-        lines.append("📅 " + html.escape(schedule[:180]))
-
-    terms = (result or {}).get("term_explanations") or []
-    if terms:
-        pairs = []
-        for t in terms[:3]:
-            term = str(t.get("term", "")).strip(); desc = str(t.get("description", "")).strip()
-            if term and desc: pairs.append(f"{html.escape(term)}: {html.escape(desc)}")
-        if pairs:
-            lines.append("💡 " + " · ".join(pairs))
-
-    if item.get("link"):
+        lines.append('📅 ' + html.escape(schedule[:180]))
+    if item.get('link'):
         lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문</a>')
-    return "\n\n".join(x for x in lines if str(x).strip())
+    return '\n\n'.join(x for x in lines if str(x).strip())
+
 
 def _engine_flush_pending():
     """대기 뉴스는 유사기사라도 묶어서 요약하지 않고 각 기사를 그대로 판단한다.
@@ -3746,22 +3748,12 @@ def _engine_flush_pending():
             _engine_log("info", "[제외] 유사도 80%%+ 도배 차단 | %s | 선행=%s", item.get("title", "")[:80], prev_title)
             _engine_mark_seen(key)
             continue
-        freshness, freshness_prev = _engine_freshness(item)
-        market_context, historical_stats, freshness_evidence = _engine_analysis_context(item, freshness, freshness_prev)
-        item["_freshness"] = freshness
-        item["_freshness_prev"] = freshness_prev
-        item["_historical_stats"] = historical_stats
-        item["_market_context"] = market_context
-        item["_freshness_evidence"] = freshness_evidence
         master_result = _engine_master_result(item)
         item["_master_result"] = master_result
         message = _engine_format_message(item)
         master_badge = _engine_master_badge(master_result)
         image_sent = False
-        if master_badge:
-            image_path = _engine_master_image_path(master_result, item=item)
-            if image_path:
-                image_sent = _engine_send_telegram_photo(image_path, caption=master_badge)
+        # 뉴스 본문은 텍스트 카드만 전송한다. 기존 MASTER 🎯 이미지 카드는 사용하지 않는다.
         text_sent = _engine_send_telegram(message)
         if text_sent:
             _engine_mark_seen(key)
@@ -3782,8 +3774,6 @@ def _engine_flush_pending():
             _engine_record_historical_case(item)
             _engine_record_outcome_tracking(item, master_result)
             sent += 1
-            if master_badge and not image_sent:
-                _engine_log("warning", "[MASTER] 텍스트 송출 성공 / 이미지 송출 실패")
             _engine_log("info", "[Telegram 전송 성공] %s", str(item.get("title") or "")[:220])
     _engine_log("info", "[송출결과] 후보=%d | 묶음차단=0 | 도배차단=%d | 전송=%d", len(_engine_pending), dup_blocked, sent)
     _engine_pending = []
@@ -4146,35 +4136,6 @@ def _engine_run_keyword_combinations():
         if not success:
             _engine_log("error", "[실패] 키워드조합 | %s | 모든 NAVER 인증경로 실패", q)
 
-def _engine_fetch_dart_detail(rcept_no):
-    """중요 공시는 제목만 보내지 않고 DART 원문 일부를 확보해 MASTER가 사실 기반으로 요약하도록 한다."""
-    if not DART_API_KEY or not rcept_no:
-        return ""
-    try:
-        url = "https://opendart.fss.or.kr/api/document.xml"
-        r = requests.get(url, params={"crtfc_key": DART_API_KEY, "rcept_no": str(rcept_no)}, timeout=ENGINE_HTTP_TIMEOUT)
-        if not r.ok or not r.content:
-            return ""
-        raw = r.content
-        texts = []
-        if raw[:2] == b"PK":
-            with zipfile.ZipFile(io.BytesIO(raw)) as z:
-                for name in z.namelist()[:20]:
-                    if name.lower().endswith(('.xml','.txt','.html','.htm')):
-                        data = z.read(name)
-                        try: txt = data.decode('utf-8', errors='ignore')
-                        except Exception: txt = str(data)
-                        texts.append(BeautifulSoup(txt, 'html.parser').get_text(' ', strip=True))
-        else:
-            texts.append(BeautifulSoup(raw, 'html.parser').get_text(' ', strip=True))
-        text = _engine_clean(' '.join(texts))
-        # 공시 전체를 Telegram으로 보내지 않고 분석용으로만 앞부분을 제한한다.
-        return text[:12000]
-    except Exception as e:
-        _engine_log('warning', '[DART 원문] 확보 실패 | %s', str(e)[:160])
-        return ""
-
-
 def _engine_run_dart():
     if not ENABLE_DART:
         _engine_log("warning", "[DART] ENABLE_DART=OFF")
@@ -4207,8 +4168,7 @@ def _engine_run_dart():
             title = f"{corp} | {report}"
             link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
             _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""))
-            dart_body = _engine_fetch_dart_detail(row.get("rcept_no", ""))
-            if _engine_process_item("DART", title, link, row.get("rcept_dt", ""), dart_body):
+            if _engine_process_item("DART", title, link, row.get("rcept_dt", "")):
                 sent += 1
         _engine_log("info", "[DART] 후보=%d건", sent)
     except Exception as e:
@@ -4334,25 +4294,6 @@ def _engine_youtube_channel_id(handle):
         except Exception:
             continue
     return ""
-
-
-def _engine_run_blog():
-    if not ENABLE_BLOG:
-        return
-    total = 0
-    for name, url in ANALYSIS_BLOG_RSS_URLS:
-        try:
-            entries = _engine_fetch_rss(url, f"블로그/{name}")
-            for e in entries[:10]:
-                title = _engine_clean(e.get("title", ""))
-                extra = _engine_clean(e.get("summary", "") or e.get("description", ""))
-                published = _engine_entry_published(e)
-                link = e.get("link", "")
-                if _engine_process_item(f"블로그/{name}", title, link, published, extra):
-                    total += 1
-        except Exception as e:
-            _engine_log("warning", "[블로그 실패] %s | %s", name, str(e)[:120])
-    _engine_log("info", "[블로그] 통합분석 후보=%d건", total)
 
 
 def _engine_run_youtube():
@@ -5312,10 +5253,6 @@ def _engine_cycle():
         _engine_run_telegram_channels()
     except Exception as e:
         log_error("텔레그램 채널 전체", e)
-    try:
-        _engine_run_blog()
-    except Exception as e:
-        log_error("블로그 전체", e)
     try:
         _engine_run_youtube()
     except Exception as e:
