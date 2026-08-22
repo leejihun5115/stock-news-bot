@@ -198,7 +198,7 @@
 # - 유튜브: 채널 핸들 -> 실제 channel_id 자동 해석/캐시/재시도
 # - 미국장: 정규장 개장~마감까지 30분마다 정기 브리핑
 # - 미장 브리핑: 시간만 표시(개장 30분 문구 제거)
-# - 주요 지수/종목/ADR: 🔺상승 / ▼하락 + 등락률
+# - 주요 지수/종목/ADR: 🔺/▼ 아이콘 + 등락률 (한글 상승/하락 문구 없음)
 # - 미국뉴스에서 실제 국내 관심종목으로 연결될 때만 🇰🇷 표시
 # - 기존 대장주/관심종목/공시/재무/일정/최근1시간/과거사례 로직 보존
 # ============================================================
@@ -3021,15 +3021,24 @@ def _engine_master_result(item):
             candidates=candidates,
             schedule=_engine_future_schedule(raw_body),
         )
-        _engine_log(
-            "info",
-            "[MASTER] 완료 | source=%s | 관련주=%d | 대장주=%s | stage=%s | FINAL_LOCK=%s",
-            item.get("source", ""),
-            len(result.get("related") or []),
-            (result.get("leader") or {}).get("name", "無"),
-            result.get("stage") or "없음",
-            bool(result.get("locked")),
-        )
+        # 운영 로그는 최종 확인에 필요한 정보만 남긴다.
+        # 제목은 실제 FINAL LOCK 통과 여부를 사람이 바로 확인할 수 있도록 표시한다.
+        final_title = str(result.get("title") or raw_title).strip()
+        final_title = re.sub(r"\s+", " ", final_title)[:220]
+        if result.get("locked"):
+            _engine_log(
+                "info",
+                "[FINAL LOCK 통과] %s | source=%s",
+                final_title,
+                item.get("source", ""),
+            )
+        else:
+            _engine_log(
+                "warning",
+                "[FINAL LOCK 제외] %s | source=%s",
+                final_title,
+                item.get("source", ""),
+            )
         return result
     except Exception as e:
         _engine_log("error", "[MASTER] 실패 | source=%s | 원인=%s", item.get("source", ""), str(e)[:180])
@@ -3198,16 +3207,6 @@ def _engine_format_message(item):
         if kp:
             lines.append('✔️ '+html.escape(kp))
 
-    # 기사에서 확인 가능한 고유명사만 설명한다. 정의를 추측하지 않는다.
-    term_explanations=list(master_result.get('term_explanations') or []) if master_result and master_result.get('locked') else []
-    if term_explanations:
-        lines.append('💡 [용어 설명]')
-        for row in term_explanations[:5]:
-            term=str(row.get('term','')).strip()
-            desc=str(row.get('description','')).strip()
-            if term and desc:
-                lines.append(f'• <b>{html.escape(term)}</b> : {html.escape(desc)}')
-
     if outlook:
         # 섹션 헤더 없이 핵심 전망 문구 1건만 개조식으로 표시한다.
         lines.append(' ✔️ '+html.escape(_engine_to_gaejo(_engine_safe_trim(outlook[0], 90))))
@@ -3283,9 +3282,10 @@ def _engine_flush_pending():
             _engine_record_historical_case(item)
             sent += 1
             if master_badge and not image_sent:
-                _engine_log("warning", "[MASTER] 텍스트 송출 성공 / 이미지 송출 실패")
-            _engine_log("info", "[성공] %s | 송출", item["category"])
-    _engine_log("info", "[송출결과] 후보=%d | 묶음차단=0 | 재탕차단=0 | 전송=%d", len(_engine_pending), sent)
+                _engine_log("warning", "[Telegram] 텍스트 전송 성공 / MASTER 이미지 전송 실패 | %s", str(item.get("title", "")).strip()[:220])
+            # 어떤 뉴스가 실제 Telegram까지 도착했는지 제목으로 확인할 수 있게 한다.
+            _engine_log("info", "[Telegram 전송 성공] %s", str(item.get("title", "")).strip()[:220])
+    _engine_log("info", "[송출 완료] 전송=%d건 / 후보=%d건", sent, len(_engine_pending))
     _engine_pending = []
     return sent
 
@@ -4690,10 +4690,89 @@ def _us_briefing_fetch_all():
     return data
 
 
+# [최종 사용자 지시 우선] 미장 시세 방향은 한글 상승/하락 문구를 사용하지 않고
+# 아이콘만 등락률 바로 앞에 표시한다. 기존 하위 출력 규칙은 이 규칙과 충돌하지 않도록 제거한다.
 def _us_direction(pct):
     if pct is None:
         return ""
-    return "🔺상승" if pct >= 0 else "▼하락"
+    return "🔺" if pct >= 0 else "▼"
+
+
+# [최종 사용자 지시] 미국 기업명은 Telegram 미장 브리핑에서 한국어 회사명 +
+# 영문 대문자 티커(약자)로 표시한다. Yahoo의 긴 법인명은 정규화한다.
+_US_COMPANY_KO_NAMES = {
+    "SELLAS Life Sciences Group, Inc": "셀라스 라이프 사이언스",
+    "SELLAS Life Sciences Group, Inc.": "셀라스 라이프 사이언스",
+    "IQM Quantum Computers Oyj": "아이큐엠 퀀텀 컴퓨터스",
+    "Uranium Energy Corp.": "우라늄 에너지",
+    "Uranium Energy Corp": "우라늄 에너지",
+    "Robinhood Markets, Inc.": "로빈후드",
+    "Robinhood Markets, Inc": "로빈후드",
+    "Tesla, Inc.": "테슬라", "Tesla Inc.": "테슬라", "Tesla": "테슬라",
+    "Palantir Technologies Inc.": "팔란티어", "Palantir Technologies": "팔란티어", "Palantir": "팔란티어",
+    "NVIDIA Corporation": "엔비디아", "NVIDIA": "엔비디아",
+    "Microsoft Corporation": "마이크로소프트", "Microsoft": "마이크로소프트",
+    "Amazon.com, Inc.": "아마존", "Amazon.com, Inc": "아마존", "Amazon": "아마존",
+    "Alphabet Inc.": "알파벳", "Alphabet": "알파벳",
+    "Apple Inc.": "애플", "Apple": "애플",
+    "Meta Platforms, Inc.": "메타", "Meta Platforms": "메타", "Meta": "메타",
+    "Advanced Micro Devices, Inc.": "에이엠디", "Advanced Micro Devices": "에이엠디",
+    "Broadcom Inc.": "브로드컴", "Broadcom": "브로드컴",
+    "Micron Technology, Inc.": "마이크론", "Micron Technology": "마이크론", "Micron": "마이크론",
+    "Taiwan Semiconductor Manufacturing Company Limited": "TSMC",
+    "Taiwan Semiconductor Manufacturing Company": "TSMC", "TSMC": "TSMC",
+    "Intel Corporation": "인텔", "Intel": "인텔",
+    "ASML Holding N.V.": "에이에스엠엘", "ASML Holding": "에이에스엠엘", "ASML": "에이에스엠엘",
+}
+
+_US_COMPANY_TICKERS = {
+    "SELLAS Life Sciences Group, Inc": "SLS",
+    "SELLAS Life Sciences Group, Inc.": "SLS",
+    "IQM Quantum Computers Oyj": "IQM",
+    "Uranium Energy Corp.": "UEC",
+    "Uranium Energy Corp": "UEC",
+    "Robinhood Markets, Inc.": "HOOD",
+    "Robinhood Markets, Inc": "HOOD",
+    "Tesla, Inc.": "TSLA", "Tesla Inc.": "TSLA", "Tesla": "TSLA",
+    "Palantir Technologies Inc.": "PLTR", "Palantir Technologies": "PLTR", "Palantir": "PLTR",
+    "NVIDIA Corporation": "NVDA", "NVIDIA": "NVDA",
+    "Microsoft Corporation": "MSFT", "Microsoft": "MSFT",
+    "Amazon.com, Inc.": "AMZN", "Amazon.com, Inc": "AMZN", "Amazon": "AMZN",
+    "Alphabet Inc.": "GOOGL", "Alphabet": "GOOGL",
+    "Apple Inc.": "AAPL", "Apple": "AAPL",
+    "Meta Platforms, Inc.": "META", "Meta Platforms": "META", "Meta": "META",
+    "Advanced Micro Devices, Inc.": "AMD", "Advanced Micro Devices": "AMD",
+    "Broadcom Inc.": "AVGO", "Broadcom": "AVGO",
+    "Micron Technology, Inc.": "MU", "Micron Technology": "MU", "Micron": "MU",
+    "Taiwan Semiconductor Manufacturing Company Limited": "TSM",
+    "Taiwan Semiconductor Manufacturing Company": "TSM", "TSMC": "TSM",
+    "Intel Corporation": "INTC", "Intel": "INTC",
+    "ASML Holding N.V.": "ASML", "ASML Holding": "ASML", "ASML": "ASML",
+}
+
+_US_TICKER_KO_NAMES = {
+    "SLS":"셀라스 라이프 사이언스", "IQM":"아이큐엠 퀀텀 컴퓨터스", "UEC":"우라늄 에너지",
+    "HOOD":"로빈후드", "TSLA":"테슬라", "PLTR":"팔란티어", "NVDA":"엔비디아",
+    "MSFT":"마이크로소프트", "AMZN":"아마존", "GOOGL":"알파벳", "AAPL":"애플",
+    "META":"메타", "AMD":"에이엠디", "AVGO":"브로드컴", "MU":"마이크론",
+    "TSM":"TSMC", "INTC":"인텔", "ASML":"에이에스엠엘",
+}
+
+def _us_display_company_name(q):
+    raw = str((q or {}).get("name", "") or "").strip()
+    symbol = str((q or {}).get("symbol", "") or "").strip().upper()
+    ko = _US_COMPANY_KO_NAMES.get(raw) or _US_TICKER_KO_NAMES.get(symbol)
+    ticker = _US_COMPANY_TICKERS.get(raw) or symbol
+    if ko and ticker and re.fullmatch(r"[A-Z][A-Z0-9.]{1,9}", ticker):
+        return f"{ko} ({ticker})"
+    if ko:
+        return ko
+    # 알려진 영문 법인 접미사만 제거하고, 번역 매핑이 없는 회사는 원문을 보존한다.
+    # 근거 없이 회사명을 임의 음역하지 않는다.
+    cleaned = re.sub(r",?\s*(?:Inc\.?|Corp\.?|Corporation|Company|Co\.?|Ltd\.?|Limited|plc)\s*$", "", raw, flags=re.I).strip()
+    if cleaned and ticker and re.fullmatch(r"[A-Z][A-Z0-9.]{1,9}", ticker):
+        return f"{cleaned} ({ticker})"
+    return cleaned or raw
 
 
 def _us_format_pct(pct):
@@ -4714,7 +4793,7 @@ def _us_open_briefing(snapshot, et):
     for s in indices:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+            lines.append(f"• {_us_display_company_name(q)} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
     movers = []
     for s, q in snapshot.items():
         if s in indices or s in macro:
@@ -4731,7 +4810,7 @@ def _us_open_briefing(snapshot, et):
         if q.get("market_cap"):
             cap_note = " 🐘" if q["market_cap"] >= 100_000_000_000 else ""
         reason = _us_briefing_reason(q["name"], q["theme"])
-        line = f"• {q['name']}{cap_note} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
+        line = f"• {_us_display_company_name(q)}{cap_note} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
         if reason:
             line += f" · 원인: {html.escape(reason)}"
         lines.append(line)
@@ -4744,7 +4823,7 @@ def _us_open_briefing(snapshot, et):
         q = snapshot.get(s)
         if q:
             pct = q.get("change_pct")
-            lines.append(f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)}")
+            lines.append(f"• {_us_display_company_name(q)} {_us_direction(pct)} {_us_format_pct(pct)}")
 
     # 미국장 개장 30분 브리핑에도 국내 시장 대응용 ADR을 반드시 포함한다.
     lines += ["", "<b>🇰🇷 ADR</b>"]
@@ -4846,13 +4925,13 @@ def _us_intraday_briefing(snapshot, events, et):
     if sector_moves:
         lines.append("<b>📌 시장·테마 변화</b>")
         for _, q, delta in sector_moves[:5]:
-            lines.append(f"• {q['name']} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% (전일 대비)")
+            lines.append(f"• {_us_display_company_name(q)} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% (전일 대비)")
         lines.append("")
     if stock_moves:
         lines.append("<b>📈📉 개별종목 변화</b>")
         for _, symbol, q, delta in [(abs(d), s, q, d) for _, s, q, d in stock_moves[:6]]:
             reason = _us_briefing_reason(q["name"], q["theme"])
-            line = f"• {q['name']} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% (전일 대비) · {q['theme']}"
+            line = f"• {_us_display_company_name(q)} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% (전일 대비) · {q['theme']}"
             if reason:
                 line += f" · 원인: {html.escape(reason)}"
             else:
@@ -4862,7 +4941,7 @@ def _us_intraday_briefing(snapshot, events, et):
     if macro_moves:
         lines.append("<b>🛢️ 환율·원자재 변화</b>")
         for _, q, delta in macro_moves:
-            lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q['change_pct'])} (전일 대비)")
+            lines.append(f"• {_us_display_company_name(q)} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q['change_pct'])} (전일 대비)")
         lines.append("")
     if not events:
         return ""
@@ -4996,14 +5075,14 @@ def _us_close_briefing(snapshot, et):
     for s in ["^IXIC","^GSPC","^DJI","^RUT","^SOX","^VIX"]:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
+            lines.append(f"• {html.escape(_us_display_company_name(q))} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
 
     ranked = _us_close_rank_themes(snapshot)
     if ranked:
         lines += ["", "<b>🔥 오늘의 강한 종목군·테마</b>"]
         for _, theme, qs in ranked[:4]:
             members = sorted(qs, key=lambda q: abs(q.get("change_pct") or 0), reverse=True)[:4]
-            member_text = " · ".join(f"{html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}" for q in members)
+            member_text = " · ".join(f"{html.escape(_us_display_company_name(q))} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}" for q in members)
             lines.append(f"• <b>{html.escape(theme)}</b> · {member_text}")
 
             lead = members[0] if members else {}
@@ -5065,7 +5144,7 @@ def _us_close_briefing(snapshot, et):
     for s in ["USDKRW=X","CL=F","GC=F"]:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
+            lines.append(f"• {html.escape(_us_display_company_name(q))} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
 
     lines += ["", "<b>🇰🇷 ADR</b>"]
     adr_symbols = ["PKX","LPL","KEP","KB","SHG","SKM"]
@@ -5074,7 +5153,7 @@ def _us_close_briefing(snapshot, et):
         q = snapshot.get(s)
         if q:
             found = True
-            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
+            lines.append(f"• {html.escape(_us_display_company_name(q))} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
     if not found:
         lines.append("• ADR 시세 확인불가")
 
@@ -5121,15 +5200,17 @@ def _us_close_briefing(snapshot, et):
             if row.get("link"):
                 lines.append(f'<a href="{html.escape(str(row["link"]), quote=True)}">🔗 원문</a>')
 
-    lines += [
-        "",
-        "<b>👀 다음 한국장 체크 기준</b>",
-        "• 직접 사업연관 우선",
-        "• 동일 테마 실제 움직임 확인",
-        "• 직접 사업연관과 실제 테마 연결 여부 우선",
-        "• 관련종목은 연결 근거를 함께 표시",
-        "• 글로벌 기업을 국내 관련주로 강제 연결하지 않음",
-    ]
+    # [용어 설명 최종 위치] 모든 본문 섹션이 끝난 뒤 맨 아래에만 표시한다.
+    # 고유명사 자체는 강조하지 않고 일반 텍스트로 출력한다.
+    term_explanations=list(master_result.get('term_explanations') or []) if master_result and master_result.get('locked') else []
+    if term_explanations:
+        lines += ["", '💡 [용어 설명]']
+        for row in term_explanations[:5]:
+            term=str(row.get('term','')).strip()
+            desc=str(row.get('description','')).strip()
+            if term and desc:
+                lines.append(f'• {html.escape(term)} : {html.escape(desc)}')
+
     return "\n".join(lines)
 
 def _engine_us_market_close_monitor():
@@ -5283,7 +5364,7 @@ if __name__ == "__main__":
                     ENABLE_DOMESTIC_NEWS,
                     ENABLE_US_NEWS,
                     ENABLE_TELEGRAM_CHANNELS)
-        _engine_log("info", "[BOOT] 국내장브리핑=%s | 미장30분브리핑=%s | 장중감시=%s | Naver=%s | Google=%s", ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_NAVER_NEWS, ENABLE_US_NEWS)
+        _engine_log("info", "[BOOT 완료] 뉴스엔진 시작 | Naver=%s | Google=%s | Telegram=%s", ENABLE_NAVER_NEWS, ENABLE_US_NEWS, bool(BOT_TOKEN and CHAT_ID))
 
         _engine_main_loop()
     except KeyboardInterrupt:
