@@ -1692,7 +1692,7 @@ def _engine_record_outcome_tracking(item, master_result):
       "관련주 無로 확정한 판단이 맞았는지" 나중에 검증할 수 있도록 함께 남긴다.
     - checked=False 레코드는 2단계 스크립트/함수가 나중에 시세를 채워 넣는다.
     """
-    if not ENABLE_OUTCOME_TRACKING or not master_result or not master_result.get("locked"):
+    if not ENABLE_OUTCOME_TRACKING or not _engine_master_usable(master_result):
         return
     related = master_result.get("related") or []
     leader = master_result.get("leader") or {}
@@ -3455,6 +3455,36 @@ def _engine_parse_featured_stock_headline(title):
     return {"company": company, "reason": reason, "reaction": reaction}
 
 
+def _engine_master_usable(result):
+    """[공용 판정] MASTER 결과가 FINAL LOCK(locked=True)까지 못 갔더라도, 실제로
+    쓸 만한 내용(제목 재구성/핵심요약)을 만들어냈으면 '사용 가능'으로 본다.
+    포맷터/배지/성과추적이 전부 이 기준으로 통일해야, 사소한 검증 오류 하나
+    때문에 화면 표시와 누적 기록이 서로 다른 기준으로 갈리는 일이 없다.
+    """
+    return bool(result) and bool(result.get('title') or result.get('key_points'))
+
+
+def _engine_company_history_score(name):
+    """[누적 데이터 연동 / 조건25·26 과거급등이력·과거주도이력]
+    과거 급등 이력 DB(HISTORICAL_SURGE_DB)에서 이 종목이 몇 번이나 강한 재료
+    기사에 등장했는지 세어 보조 점수로 변환한다. MasterConditionManager._score()의
+    history_score는 이 값을 받아 최대 8점까지만 반영한다(직접 근거를 넘어서지 않음).
+    """
+    name = str(name or "").strip()
+    if not name or not ENABLE_HISTORICAL_SURGE_DB or not _engine_historical_cache:
+        return 0.0
+    hits = 0
+    for row in _engine_historical_cache[-3000:]:
+        companies = [str(c).strip() for c in (row.get("companies") or [])]
+        if name in companies:
+            hits += 1
+            continue
+        # companies 목록에 안 잡혀도 과거 기사 본문에 종목명이 직접 언급됐다면 인정한다.
+        if name and name in str(row.get("text", "")):
+            hits += 1
+    return float(hits)
+
+
 def _engine_master_result(item):
     """뉴스 1건을 MASTER -> Validator -> FINAL LOCK으로 확정한다.
     [조건1/조건10 강제] MASTER는 반드시 원 제목 + 원문 본문을 직접 입력받는다.
@@ -3465,13 +3495,18 @@ def _engine_master_result(item):
         rows = _engine_domestic_watchlist(item)
         candidates = []
         for row in rows or []:
+            name = str(row.get("name", "")).strip()
             candidates.append({
-                "name": str(row.get("name", "")).strip(),
+                "name": name,
                 "reason": str(row.get("reason", "")).strip(),
                 "score": float(row.get("score", 0) or 0),
                 "direct": bool(row.get("direct")),
                 "theme_link": False,
                 "domestic_listed": True,
+                # [수정/누적 데이터 연동] 과거 급등 이력 DB 기반 보조점수를 연결한다.
+                # 기존에는 이 키가 어디서도 채워지지 않아 _score()의 history_score
+                # 가산 로직이 항상 0으로만 계산됐다.
+                "history_score": _engine_company_history_score(name),
             })
         raw_title = str(item.get("title", "")).strip()
         raw_body = str(item.get("extra", "")).strip()
@@ -3495,6 +3530,7 @@ def _engine_master_result(item):
                 "direct": True,
                 "theme_link": False,
                 "domestic_listed": True,
+                "history_score": _engine_company_history_score(featured["company"]),
             })
 
         result = master_finalize_news(
@@ -3642,9 +3678,7 @@ def _engine_format_message(item):
     # 계산된 제목/핵심/용어설명/관련종목까지 전부 버려지고 원본 제목만 나갔다.
     # 이제 locked 여부와 무관하게, MASTER가 실제로 뭔가 만들어낸 경우(제목 재구성
     # 결과나 핵심요약이 존재하는 경우)에는 그 내용을 그대로 사용한다.
-    master_usable = bool(master_result) and bool(
-        master_result.get('title') or master_result.get('key_points')
-    )
+    master_usable = _engine_master_usable(master_result)
     if master_usable:
         title = master_result.get('title') or _engine_strip_foreign_publisher_suffix(raw_title)
         key_points = list(master_result.get('key_points') or [])[:3]
