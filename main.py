@@ -220,6 +220,10 @@ import tempfile
 import re
 import os
 import difflib
+import zipfile
+import io
+import xml.etree.ElementTree as ET
+from collections import defaultdict
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -1405,6 +1409,24 @@ HISTORICAL_MATCH_THRESHOLD = float(os.environ.get("NEWS_BOT_HISTORICAL_MATCH_THR
 ENABLE_GLOBAL_BRIEFING_DB = _env_flag("ENABLE_GLOBAL_BRIEFING_DB")
 ENABLE_HISTORICAL_SURGE_DB = _env_flag("ENABLE_HISTORICAL_SURGE_DB")
 
+# [성과 피드백 루프 1단계] 실제로 알림을 보낸 뉴스의 "관련주 판정 근거"를 별도 DB에 기록한다.
+# 이 시점에는 아직 주가 반응을 모른다(checked=False) - 2단계(추후 시세 재조회)에서
+# 이 DB를 읽어 실제 등락률을 채워 넣고, 3단계(집계)에서 키워드/재료별 적중률을 계산하는 데 쓴다.
+# 지금은 "기록만" 한다 - 판정 로직/발송 로직에는 전혀 영향을 주지 않는 순수 부가 기능이다.
+OUTCOME_TRACKING_DB = os.environ.get("NEWS_BOT_OUTCOME_TRACKING_DB", "news_bot_outcome_tracking.jsonl")
+ENABLE_OUTCOME_TRACKING = _env_flag("ENABLE_OUTCOME_TRACKING", True)
+# [성과 피드백 루프 2단계-B] 발송 시점에는 시세를 조회하지 않으므로, 발송 직후
+# 별도로 "기준가(baseline)"를 한 번 잡아야 한다. 기준가를 못 잡고 이 시간이
+# 지나면 포기한다(그 종목은 코드 미확인/거래정지 등으로 추정).
+OUTCOME_BASELINE_WINDOW_MIN = max(3, int(os.environ.get("NEWS_BOT_OUTCOME_BASELINE_WINDOW_MIN", "20")))
+# 기준가 확보 후 이만큼 지나야 "결과"로 확정한다(단기 반응 확인용).
+OUTCOME_CHECK_DELAY_MIN = max(5, int(os.environ.get("NEWS_BOT_OUTCOME_CHECK_DELAY_MIN", "60")))
+# 이 루프 자체를 60초 주기 메인 사이클마다 돌리면 시세 API를 과도하게 두드리므로,
+# 최소 이 간격(초)마다 한 번만 실행한다.
+OUTCOME_CYCLE_INTERVAL_SEC = max(60, int(os.environ.get("NEWS_BOT_OUTCOME_CYCLE_INTERVAL_SEC", "300")))
+# 한 번의 루프에서 처리할 최대 건수(시세 API 순간 폭주 방지).
+OUTCOME_CYCLE_MAX_PER_RUN = max(5, int(os.environ.get("NEWS_BOT_OUTCOME_CYCLE_MAX_PER_RUN", "30")))
+
 _engine_last_cycle_started = 0.0
 _engine_last_cycle_finished = 0.0
 _engine_last_watchdog_alert = 0.0
@@ -1488,6 +1510,37 @@ def _engine_atomic_append_jsonl(path, obj):
         return True
     except Exception as e:
         log_error("JSONL 상태 저장", e, file=path)
+        return False
+
+
+def _engine_atomic_rewrite_jsonl(path, rows):
+    """JSONL 파일 전체를 다시 쓴다(append 전용 DB와 달리, 값을 갱신해야 하는
+    성과 피드백 DB처럼 '기존 줄의 내용을 수정'해야 하는 경우에만 사용한다).
+    임시파일에 먼저 쓰고 os.replace로 교체해 중간에 프로세스가 죽어도 원본이
+    깨지지 않게 한다."""
+    try:
+        directory = os.path.dirname(os.path.abspath(path)) or "."
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".tmp_", suffix=".jsonl")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                for row in rows:
+                    f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os.replace(tmp_path, path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+        return True
+    except Exception as e:
+        log_error("JSONL 전체 재작성", e, file=path)
         return False
 
 
@@ -1606,6 +1659,51 @@ def _engine_record_historical_case(item):
         _engine_historical_cache.append(row)
         if len(_engine_historical_cache) > 5000:
             del _engine_historical_cache[:-5000]
+
+
+def _engine_record_outcome_tracking(item, master_result):
+    """[성과 피드백 루프 1단계] 실제로 송출된 뉴스의 판정 근거를 기록만 한다.
+
+    - 여기서는 주가 조회를 하지 않는다(발송 경로를 절대 느리게 하지 않기 위함).
+    - MASTER가 관련주를 확정하지 못한 뉴스(related_none_reason만 있는 경우)도
+      "관련주 無로 확정한 판단이 맞았는지" 나중에 검증할 수 있도록 함께 남긴다.
+    - checked=False 레코드는 2단계 스크립트/함수가 나중에 시세를 채워 넣는다.
+    """
+    if not ENABLE_OUTCOME_TRACKING or not master_result or not master_result.get("locked"):
+        return
+    related = master_result.get("related") or []
+    leader = master_result.get("leader") or {}
+    row = {
+        "ts": _now_kst().isoformat(),
+        "source": str(item.get("source", ""))[:80],
+        "title": str(master_result.get("title") or item.get("title", ""))[:300],
+        "link": str(item.get("link", ""))[:1000],
+        "market_state": str(item.get("market_state", ""))[:40],
+        "stage": str(master_result.get("stage", ""))[:80],
+        "leader": str(leader.get("name", ""))[:60],
+        "leader_code": _resolve_stock_code_for_name(leader.get("name", "")) if ENABLE_OUTCOME_TRACKING else "",
+        "related": [
+            {
+                "name": str(r.get("name", ""))[:60],
+                "code": _resolve_stock_code_for_name(r.get("name", "")),
+                "reason": str(r.get("reason", ""))[:200],
+            }
+            for r in related[:3]
+        ],
+        "related_none_reason": str(master_result.get("related_none_reason", ""))[:200],
+        "evidence": [str(x)[:120] for x in (master_result.get("evidence") or [])[:8]],
+        "baseline_price": None,
+        "baseline_failed": False,
+        "checked": False,
+        "outcome": None,
+    }
+    if _engine_atomic_append_jsonl(OUTCOME_TRACKING_DB, row):
+        # 재시작 없이도 이번 프로세스의 성과추적 사이클이 바로 이 기록을 처리할 수 있도록
+        # 메모리 목록에도 함께 반영한다(파일에는 이미 append됐으므로 다음 로드 때도 정상 복원됨).
+        _engine_load_outcome_tracking()
+        _OUTCOME_TRACKING_ROWS.append(row)
+        if len(_OUTCOME_TRACKING_ROWS) > 5000:
+            del _OUTCOME_TRACKING_ROWS[:-5000]
 
 
 def _engine_telegram_spam_allowed(item):
@@ -1810,8 +1908,17 @@ def _admin_cmd_run(arg=""):
 
 def _admin_cmd_help(arg=""):
     lines = ["🟢 [통제소] 사용 가능한 명령", "/status : 엔진 상태 확인", "/pause : 일시정지",
-              "/resume : 재개", "/run : 지금 즉시 1회 사이클 강제 실행", "/help : 이 목록 표시"]
+              "/resume : 재개", "/run : 지금 즉시 1회 사이클 강제 실행",
+              "/성과리포트 : 송출된 뉴스의 실제 등락률 집계(키워드별 적중률)", "/help : 이 목록 표시"]
     return "\n".join(lines)
+
+
+def _admin_cmd_outcome_report(arg=""):
+    try:
+        min_samples = int(arg.strip()) if arg.strip() else 3
+    except ValueError:
+        min_samples = 3
+    return _outcome_aggregate_report(min_samples=min_samples)
 
 
 # 새 관리자 명령을 추가하려면 아래 딕셔너리에 "/명령어": 핸들러함수(arg) 형태로 등록만 하면 된다.
@@ -1822,6 +1929,7 @@ _ADMIN_COMMANDS = {
     "/resume": _admin_cmd_resume,
     "/run": _admin_cmd_run,
     "/help": _admin_cmd_help,
+    "/성과리포트": _admin_cmd_outcome_report,
 }
 
 
@@ -1982,6 +2090,194 @@ LISTED_COMPANY_ALIASES = {
     "엔비디아", "테슬라", "애플", "마이크로소프트", "구글", "아마존", "메타", "AMD",
     "ASML", "TSMC", "인텔", "마이크론", "넷플릭스", "팔란티어", "브로드컴", "퀄컴",
 }
+
+# ============================================================
+# [성과 피드백 루프 2단계 - 종목코드 매핑] DART corpCode.xml 기반
+# ------------------------------------------------------------
+# LISTED_COMPANY_ALIASES는 "이름만" 있고 종목코드가 없어서, 사후 시세 조회를
+# 하려면 이름→코드 매핑이 필요하다. DART가 제공하는 corpCode.xml(전체 상장/비상장
+# 법인 목록, zip 압축)을 내려받아 종목코드가 있는(=상장된) 법인만 추려서 캐시한다.
+# - 하루 수십~수백 건 조회에 매번 네트워크를 타지 않도록 디스크에 캐시하고,
+#   일정 기간(기본 7일)이 지나야 다시 내려받는다.
+# - 실패해도(키 없음/네트워크 오류) 조용히 빈 매핑으로 계속 동작한다(기존 기능에
+#   영향을 주지 않기 위함 - 종목코드가 없으면 해당 항목의 사후 시세 조회만 건너뜀).
+# ============================================================
+DART_CORP_CODE_CACHE = os.environ.get("NEWS_BOT_DART_CORP_CODE_CACHE", "dart_corp_code_map.json")
+DART_CORP_CODE_CACHE_DAYS = max(1, int(os.environ.get("NEWS_BOT_DART_CORP_CODE_CACHE_DAYS", "7")))
+
+_DART_CORP_CODE_MAP = {}          # {법인명: 종목코드(6자리)}
+_DART_CORP_CODE_LOADED = False    # 이번 프로세스에서 로드를 시도했는지(성공/실패 무관)
+
+
+def _dart_download_corp_code_map():
+    """DART corpCode.xml을 내려받아 종목코드가 있는 법인만 {이름: 코드}로 반환한다.
+    실패 시 빈 dict를 반환한다(예외를 던지지 않음 - 호출부가 항상 안전하게 처리)."""
+    if not DART_API_KEY:
+        _engine_log("warning", "[DART corpCode] DART_API_KEY 없음 - 종목코드 매핑 건너뜀")
+        return {}
+    try:
+        r = requests.get(
+            "https://opendart.fss.or.kr/api/corpCode.xml",
+            params={"crtfc_key": DART_API_KEY},
+            timeout=30,
+        )
+        if not r.ok:
+            _engine_log("warning", "[DART corpCode] 다운로드 실패 | status=%s", r.status_code)
+            return {}
+        with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+            xml_bytes = zf.read("CORPCODE.xml")
+        root = ET.fromstring(xml_bytes)
+        mapping = {}
+        for node in root.iter("list"):
+            name = (node.findtext("corp_name") or "").strip()
+            code = (node.findtext("stock_code") or "").strip()
+            if name and code and code.isdigit() and len(code) == 6:
+                # 동일 이름이 여러 번 나오면 먼저 나온 것을 유지한다(개명/재상장 등 예외 케이스).
+                mapping.setdefault(name, code)
+        _engine_log("info", "[DART corpCode] 종목코드 매핑 구축 완료 | 상장법인=%d건", len(mapping))
+        return mapping
+    except Exception as e:
+        _engine_log("warning", "[DART corpCode] 처리 실패 | 원인=%s", str(e)[:160])
+        return {}
+
+
+def _dart_load_corp_code_map(force=False):
+    """디스크 캐시가 신선하면 그대로 쓰고, 오래됐거나 없으면 새로 받아 캐시한다."""
+    global _DART_CORP_CODE_MAP, _DART_CORP_CODE_LOADED
+    if _DART_CORP_CODE_LOADED and not force:
+        return _DART_CORP_CODE_MAP
+    _DART_CORP_CODE_LOADED = True
+    try:
+        if os.path.exists(DART_CORP_CODE_CACHE) and not force:
+            age_days = (time.time() - os.path.getmtime(DART_CORP_CODE_CACHE)) / 86400.0
+            if age_days < DART_CORP_CODE_CACHE_DAYS:
+                with open(DART_CORP_CODE_CACHE, "r", encoding="utf-8") as f:
+                    _DART_CORP_CODE_MAP = json.load(f) or {}
+                _engine_log("info", "[DART corpCode] 캐시 로드 완료 | %d건 | %.1f일 경과",
+                            len(_DART_CORP_CODE_MAP), age_days)
+                return _DART_CORP_CODE_MAP
+    except Exception as e:
+        _engine_log("warning", "[DART corpCode] 캐시 로드 실패 | 원인=%s", str(e)[:160])
+
+    mapping = _dart_download_corp_code_map()
+    if mapping:
+        _DART_CORP_CODE_MAP = mapping
+        try:
+            with open(DART_CORP_CODE_CACHE, "w", encoding="utf-8") as f:
+                json.dump(mapping, f, ensure_ascii=False)
+        except Exception as e:
+            _engine_log("warning", "[DART corpCode] 캐시 저장 실패 | 원인=%s", str(e)[:160])
+    elif os.path.exists(DART_CORP_CODE_CACHE):
+        # 이번 다운로드는 실패했지만 예전 캐시가 있으면(만료됐어도) 없는 것보다는 낫다.
+        try:
+            with open(DART_CORP_CODE_CACHE, "r", encoding="utf-8") as f:
+                _DART_CORP_CODE_MAP = json.load(f) or {}
+            _engine_log("warning", "[DART corpCode] 새 다운로드 실패 - 만료된 캐시로 계속 사용 | %d건",
+                        len(_DART_CORP_CODE_MAP))
+        except Exception:
+            _DART_CORP_CODE_MAP = {}
+    return _DART_CORP_CODE_MAP
+
+
+def _dart_stock_code_for_name(name):
+    """종목명으로 6자리 종목코드를 찾는다. 못 찾으면 빈 문자열을 반환한다(예외 없음)."""
+    name = str(name or "").strip()
+    if not name:
+        return ""
+    mapping = _dart_load_corp_code_map()
+    if not mapping:
+        return ""
+    if name in mapping:
+        return mapping[name]
+    # DART 정식 법인명과 뉴스에서 쓰는 약칭이 다를 수 있어(예: "현대차" vs "현대자동차")
+    # 흔한 접두/접미 변형 한두 가지만 보조로 시도한다. 억지 유사매칭은 하지 않는다(오탐 방지).
+    for suffix in ("보통주", "우선주"):
+        if name.endswith(suffix) and name[:-len(suffix)].strip() in mapping:
+            return mapping[name[:-len(suffix)].strip()]
+    return ""
+
+
+# ------------------------------------------------------------
+# [성과 피드백 루프 2단계 - 네이버 보완 조회] DART corpCode에 없는 이름(약칭·최근
+# 상장·표기 차이 등)을 위한 폴백. finance.naver.com 종목검색은 별도 인증이 필요
+# 없다. 매 조회마다 네트워크를 타지 않도록 결과(성공/실패 모두)를 디스크에 캐시하고,
+# 일정 기간이 지나야 재시도한다(재상장/이름변경 등을 반영할 여지를 남김).
+# ------------------------------------------------------------
+NAVER_STOCK_CODE_CACHE = os.environ.get("NEWS_BOT_NAVER_STOCK_CODE_CACHE", "naver_stock_code_cache.json")
+NAVER_STOCK_CODE_CACHE_DAYS = max(1, int(os.environ.get("NEWS_BOT_NAVER_STOCK_CODE_CACHE_DAYS", "30")))
+
+_NAVER_STOCK_CODE_CACHE = {}       # {이름: {"code": "005930" 또는 "", "ts": epoch초}}
+_NAVER_STOCK_CODE_CACHE_LOADED = False
+
+
+def _naver_load_stock_code_cache():
+    global _NAVER_STOCK_CODE_CACHE, _NAVER_STOCK_CODE_CACHE_LOADED
+    if _NAVER_STOCK_CODE_CACHE_LOADED:
+        return
+    _NAVER_STOCK_CODE_CACHE_LOADED = True
+    if os.path.exists(NAVER_STOCK_CODE_CACHE):
+        try:
+            with open(NAVER_STOCK_CODE_CACHE, "r", encoding="utf-8") as f:
+                _NAVER_STOCK_CODE_CACHE = json.load(f) or {}
+        except Exception as e:
+            _engine_log("warning", "[네이버 종목코드] 캐시 로드 실패 | 원인=%s", str(e)[:160])
+            _NAVER_STOCK_CODE_CACHE = {}
+
+
+def _naver_save_stock_code_cache():
+    try:
+        with open(NAVER_STOCK_CODE_CACHE, "w", encoding="utf-8") as f:
+            json.dump(_NAVER_STOCK_CODE_CACHE, f, ensure_ascii=False)
+    except Exception as e:
+        _engine_log("warning", "[네이버 종목코드] 캐시 저장 실패 | 원인=%s", str(e)[:160])
+
+
+def _naver_search_stock_code(name):
+    """finance.naver.com 종목검색 결과에서 이름과 정확히 일치하는 첫 항목의 코드를 찾는다.
+    부분일치/유사매칭은 하지 않는다(엉뚱한 종목코드를 기록하는 것이 아예 없는 것보다 위험).
+    실패해도 예외를 던지지 않고 빈 문자열을 반환한다."""
+    try:
+        r = requests.get(
+            "https://finance.naver.com/search/searchList.naver",
+            params={"query": name},
+            headers={"User-Agent": USER_AGENT},
+            timeout=10,
+        )
+        if not r.ok:
+            return ""
+        soup = BeautifulSoup(r.text, "html.parser")
+        for a in soup.select("table.tbl_search a[href*='/item/main.naver']"):
+            row_text = _engine_clean(a.find_parent("tr").get_text(" ")) if a.find_parent("tr") else ""
+            link_name = _engine_clean(a.get_text(" "))
+            if link_name != name and name not in row_text.split():
+                continue
+            m = re.search(r"code=(\d{6})", a.get("href", ""))
+            if m:
+                return m.group(1)
+        return ""
+    except Exception as e:
+        _engine_log("warning", "[네이버 종목코드] 검색 실패 | %s | 원인=%s", name, str(e)[:120])
+        return ""
+
+
+def _resolve_stock_code_for_name(name):
+    """DART corpCode → (없으면) 네이버 종목검색 순으로 조회한다.
+    두 경로 모두 실패하면 조용히 빈 문자열을 반환한다(사후 시세 조회만 건너뜀)."""
+    name = str(name or "").strip()
+    if not name:
+        return ""
+    code = _dart_stock_code_for_name(name)
+    if code:
+        return code
+    _naver_load_stock_code_cache()
+    cached = _NAVER_STOCK_CODE_CACHE.get(name)
+    if cached and (time.time() - float(cached.get("ts", 0))) < NAVER_STOCK_CODE_CACHE_DAYS * 86400:
+        return cached.get("code", "")
+    code = _naver_search_stock_code(name)
+    _NAVER_STOCK_CODE_CACHE[name] = {"code": code, "ts": time.time()}
+    _naver_save_stock_code_cache()
+    return code
+
 
 def _engine_company_mentions(text):
     """기업명을 '발견'하는 것과 관심종목으로 '인정'하는 것을 분리한다.
@@ -3415,6 +3711,7 @@ def _engine_flush_pending():
             _engine_telegram_mark_sent(item)
             _engine_record_global_briefing(item)
             _engine_record_historical_case(item)
+            _engine_record_outcome_tracking(item, master_result)
             sent += 1
             if master_badge and not image_sent:
                 _engine_log("warning", "[MASTER] 텍스트 송출 성공 / 이미지 송출 실패")
@@ -4207,6 +4504,194 @@ def _yahoo_chart_quote(symbol, interval="5m", range_="1d"):
         return None
 
 
+def _kr_yahoo_quote(stock_code):
+    """국내 종목코드(6자리)로 Yahoo chart 시세를 조회한다.
+    코스피(.KS)를 먼저 시도하고 실패하면 코스닥(.KQ)으로 재시도한다."""
+    stock_code = str(stock_code or "").strip()
+    if not stock_code or not stock_code.isdigit() or len(stock_code) != 6:
+        return None
+    for suffix in (".KS", ".KQ"):
+        q = _yahoo_chart_quote(f"{stock_code}{suffix}")
+        if q and q.get("price") is not None:
+            return q
+    return None
+
+
+# ============================================================
+# [성과 피드백 루프 2단계-B] 사후 시세 조회
+# ------------------------------------------------------------
+# 1단계에서 "판정 근거만" 기록해둔 OUTCOME_TRACKING_DB를 메모리에 올려두고,
+# 별도 주기(기본 5분)로:
+#   1) baseline_price가 없는 최근 기록 -> 지금 시세를 "기준가"로 한 번 잡는다.
+#   2) 기준가는 있는데 아직 checked=False이고 충분한 시간(기본 60분)이 지난
+#      기록 -> 지금 시세를 다시 조회해서 기준가 대비 등락률을 outcome에 채운다.
+# 값을 "갱신"해야 하므로 append가 아니라 전체 재작성(rewrite)을 쓴다.
+# 이 루프가 실패하거나 꺼져 있어도(ENABLE_OUTCOME_TRACKING=false) 기존 뉴스
+# 판정/발송 경로에는 전혀 영향을 주지 않는다.
+# ============================================================
+_OUTCOME_TRACKING_ROWS = []
+_OUTCOME_TRACKING_LOADED = False
+_OUTCOME_TRACKING_LAST_RUN = 0.0
+
+
+def _engine_load_outcome_tracking():
+    global _OUTCOME_TRACKING_ROWS, _OUTCOME_TRACKING_LOADED
+    if _OUTCOME_TRACKING_LOADED:
+        return
+    _OUTCOME_TRACKING_LOADED = True
+    if not os.path.exists(OUTCOME_TRACKING_DB):
+        return
+    try:
+        with open(OUTCOME_TRACKING_DB, "r", encoding="utf-8") as f:
+            _OUTCOME_TRACKING_ROWS = [json.loads(x) for x in f if x.strip()][-5000:]
+        _engine_log("info", "[성과추적] 기존 기록 %d건 로드", len(_OUTCOME_TRACKING_ROWS))
+    except Exception as e:
+        log_error("성과추적 DB 읽기", e, file=OUTCOME_TRACKING_DB)
+        _OUTCOME_TRACKING_ROWS = []
+
+
+def _outcome_row_code(row):
+    """기록된 대장주 코드를 우선 쓰고, 없으면 관련주 중 코드가 있는 첫 종목을 쓴다."""
+    if row.get("leader_code"):
+        return row["leader_code"]
+    for r in row.get("related") or []:
+        if r.get("code"):
+            return r["code"]
+    return ""
+
+
+def _engine_outcome_tracking_cycle():
+    """5분(기본)마다 한 번, 기준가 미확보 건 -> 기준가 확보 / 결과 미확정 건 -> 결과 확정을 처리한다."""
+    global _OUTCOME_TRACKING_LAST_RUN
+    if not ENABLE_OUTCOME_TRACKING:
+        return
+    now_epoch = time.time()
+    if now_epoch - _OUTCOME_TRACKING_LAST_RUN < OUTCOME_CYCLE_INTERVAL_SEC:
+        return
+    _OUTCOME_TRACKING_LAST_RUN = now_epoch
+
+    _engine_load_outcome_tracking()
+    if not _OUTCOME_TRACKING_ROWS:
+        return
+
+    now = _now_kst()
+    dirty = False
+    processed = 0
+
+    for row in _OUTCOME_TRACKING_ROWS:
+        if processed >= OUTCOME_CYCLE_MAX_PER_RUN:
+            break
+        ts = _engine_parse_datetime(row.get("ts", ""))
+        if ts is None:
+            continue
+        age_min = (now - ts).total_seconds() / 60.0
+
+        # 1) 기준가 미확보
+        if row.get("baseline_price") is None and not row.get("baseline_failed"):
+            if age_min > OUTCOME_BASELINE_WINDOW_MIN:
+                row["baseline_failed"] = True
+                dirty = True
+                continue
+            code = _outcome_row_code(row)
+            if not code:
+                row["baseline_failed"] = True
+                dirty = True
+                continue
+            q = _kr_yahoo_quote(code)
+            processed += 1
+            time.sleep(0.3)
+            if q and q.get("price") is not None:
+                row["baseline_price"] = q["price"]
+                row["baseline_ts"] = now.isoformat()
+                dirty = True
+            continue
+
+        # 2) 기준가는 있고 결과 미확정 -> 지연시간 경과 시 결과 확정
+        if row.get("baseline_price") is not None and not row.get("checked"):
+            if age_min < OUTCOME_CHECK_DELAY_MIN:
+                continue
+            code = _outcome_row_code(row)
+            q = _kr_yahoo_quote(code) if code else None
+            processed += 1
+            time.sleep(0.3)
+            if q and q.get("price") is not None:
+                base = float(row["baseline_price"])
+                change_pct = ((q["price"] - base) / base * 100.0) if base else None
+                row["outcome"] = {
+                    "price": q["price"],
+                    "change_pct": round(change_pct, 2) if change_pct is not None else None,
+                    "checked_ts": now.isoformat(),
+                }
+                row["checked"] = True
+                dirty = True
+            elif age_min > OUTCOME_CHECK_DELAY_MIN * 4:
+                # 시세 조회가 계속 실패하면(거래정지/상장폐지 등) 무한 재시도하지 않는다.
+                row["checked"] = True
+                row["outcome"] = {"price": None, "change_pct": None, "checked_ts": now.isoformat(), "note": "조회실패"}
+                dirty = True
+
+    if dirty:
+        if len(_OUTCOME_TRACKING_ROWS) > 5000:
+            del _OUTCOME_TRACKING_ROWS[:-5000]
+        _engine_atomic_rewrite_jsonl(OUTCOME_TRACKING_DB, _OUTCOME_TRACKING_ROWS)
+
+
+# ============================================================
+# [성과 피드백 루프 3단계] 집계 - 키워드/재료별 적중률
+# ------------------------------------------------------------
+# 여기서는 어떤 값도 자동으로 바꾸지 않는다(MARKET_IMPACT_KEYWORDS 등 판정용
+# 상수를 이 함수가 직접 수정하지 않음). 결과를 사람이 읽고 "이 키워드는 계속
+# 강한 재료로 쓸지, 빼거나 순위를 낮출지" 판단하는 데 쓰는 리포트만 만든다.
+# (조건64 문제국소수정: 이상 신호가 보이면 해당 키워드만 사람이 손으로 수정)
+# ============================================================
+def _outcome_aggregate_report(min_samples=3, top_n=8):
+    """checked=True인 기록만 모아 키워드별 평균 등락률/상승비율을 계산해 텍스트로 반환한다."""
+    _engine_load_outcome_tracking()
+    rows = [
+        r for r in _OUTCOME_TRACKING_ROWS
+        if r.get("checked") and (r.get("outcome") or {}).get("change_pct") is not None
+    ]
+    if not rows:
+        return "📊 [성과리포트] 아직 결과가 확정된 기록이 없습니다. (checked=True 0건)"
+
+    total = len(rows)
+    changes = [r["outcome"]["change_pct"] for r in rows]
+    overall_avg = sum(changes) / total
+    overall_pos = sum(1 for c in changes if c > 0) / total * 100.0
+
+    kw_stats = defaultdict(list)
+    for r in rows:
+        for kw in (r.get("evidence") or []):
+            kw_stats[kw].append(r["outcome"]["change_pct"])
+
+    ranked = []
+    for kw, vals in kw_stats.items():
+        if len(vals) < min_samples:
+            continue
+        avg = sum(vals) / len(vals)
+        pos_rate = sum(1 for v in vals if v > 0) / len(vals) * 100.0
+        ranked.append((avg, kw, len(vals), pos_rate))
+    ranked.sort(reverse=True)
+
+    lines = [
+        f"📊 [성과리포트] 결과 확정 {total}건 | 전체 평균 등락률 {overall_avg:+.2f}% | 상승비율 {overall_pos:.0f}%",
+    ]
+    if not ranked:
+        lines.append(f"(표본 {min_samples}건 이상인 키워드가 아직 없습니다 - 더 쌓이면 표시됩니다)")
+    else:
+        lines.append("")
+        lines.append(f"🟢 반응 좋은 재료 키워드 (표본 {min_samples}건↑, 평균 등락률 상위)")
+        for avg, kw, n, pos in ranked[:top_n]:
+            lines.append(f"  • {kw} : 평균 {avg:+.2f}% | 상승비율 {pos:.0f}% | 표본 {n}건")
+        lines.append("")
+        lines.append("🔴 반응 약한 재료 키워드 (평균 등락률 하위)")
+        for avg, kw, n, pos in list(reversed(ranked))[:top_n]:
+            lines.append(f"  • {kw} : 평균 {avg:+.2f}% | 상승비율 {pos:.0f}% | 표본 {n}건")
+    lines.append("")
+    lines.append("※ 이 리포트는 참고용 통계일 뿐, 키워드 목록을 자동으로 바꾸지 않습니다.")
+    return "\n".join(lines)
+
+
 def _us_briefing_reason(name, theme):
     """최근 수집 뉴스에서 실제 언급된 원인을 찾는다. 없으면 추정하지 않는다."""
     now = _now_kst()
@@ -4726,6 +5211,10 @@ def _engine_cycle():
         _engine_us_market_close_monitor()
     except Exception as e:
         log_error("미장 장마감 브리핑", e)
+    try:
+        _engine_outcome_tracking_cycle()
+    except Exception as e:
+        log_error("성과 피드백 루프", e)
     _engine_last_cycle_finished = time.time()
     _engine_log("info", "[주기 완료] %.2f초 | Telegram 즉시송출 구조", time.time()-started)
 
@@ -4768,6 +5257,9 @@ def _start_render_health_server():
 def _engine_main_loop():
     _engine_load_seen()
     _engine_load_extended_state()
+    if ENABLE_OUTCOME_TRACKING:
+        _dart_load_corp_code_map()
+        _engine_load_outcome_tracking()
     _engine_log("info", "[엔진] 60초 주기 시작")
     while True:
         cycle_start = time.time()
