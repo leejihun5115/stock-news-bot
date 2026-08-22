@@ -5333,3 +5333,76 @@ if __name__ == "__main__":
 # 기존 뉴스 처리 함수가 확보한 title/body/candidates/schedule/evidence를
 # Telegram 송출 직전에 master_finalize_news(...)에 전달한다.
 # 이 지점은 기존 송출 코드를 자동으로 덮어쓰지 않도록 별도 함수로 둔다.
+
+# ============================================================
+# [FREE AUTO FEEDBACK]
+# 무료 자동 성과 피드백 — 외부 AI/API 없이 동작
+# 원본 MASTER 65조건은 변경하지 않고, 성과 통계만 자동 누적/조정합니다.
+# 노하우: "나빠질 때는 빠르게 엄격하게, 좋아질 때는 천천히 완화"
+# ============================================================
+FREE_AUTO_STATE_FILE = "free_auto_state.json"
+
+def _free_auto_load():
+    try:
+        with open(FREE_AUTO_STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"threshold": 40, "history": [], "last_change": 0}
+
+def _free_auto_save(state):
+    try:
+        with open(FREE_AUTO_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def free_auto_feedback(outcome_pct):
+    """
+    outcome_pct: 실제 신호의 결과 수익률(%).
+    40건이 쌓인 뒤 최근 성과를 보고 최소 신호 기준을 보수적으로 조정.
+    자동 변경 범위: 35~50, 24시간에 1회 이하.
+    """
+    try:
+        state = _free_auto_load()
+        hist = list(state.get("history") or [])
+        hist.append(float(outcome_pct))
+        hist = hist[-200:]
+        state["history"] = hist
+
+        if len(hist) >= 40:
+            now = time.time()
+            last_change = float(state.get("last_change") or 0)
+            if now - last_change >= 86400:
+                recent = hist[-40:]
+                win_rate = sum(1 for x in recent if x > 0) / len(recent)
+
+                old = int(state.get("threshold", 40))
+                new = old
+
+                # 노하우: 손실/약세 구간에서는 빠르게 엄격화,
+                # 강한 구간에서는 천천히 완화.
+                if win_rate < 0.55:
+                    new = min(50, old + 2)
+                elif win_rate > 0.75:
+                    new = max(35, old - 1)
+
+                if new != old:
+                    state["threshold"] = new
+                    state["last_change"] = now
+                    state["last_win_rate"] = round(win_rate * 100, 2)
+
+        _free_auto_save(state)
+        return state
+    except Exception:
+        return {"threshold": 40, "history": []}
+
+def free_auto_status():
+    state = _free_auto_load()
+    hist = list(state.get("history") or [])
+    recent = hist[-40:]
+    win = (sum(1 for x in recent if x > 0) / len(recent) * 100) if recent else None
+    return {
+        "threshold": int(state.get("threshold", 40)),
+        "sample_count": len(hist),
+        "recent40_win_rate": round(win, 2) if win is not None else None,
+    }
