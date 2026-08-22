@@ -29,7 +29,7 @@ CONDITION_RULES 안의 "rule" 문구(설명 텍스트)는 실행 코드가 읽�
     - 제목 자동 생성        → _synthesize_title(title, body)
     - 서브제목/요약(핵심포인트) → _key_points(title, body)
     - 관련종목 선정/필터     → _select_related(candidates, text)
-      (관련종목 후보 자체는 news_bot.py의 STOCK_LINK_MAP / _engine_domestic_watchlist)
+      (관련종목 후보는 MASTER가 기사 본문 근거를 검증한 국내 상장사 후보만 사용하며, 하위 테마 매핑은 관련주 확정 근거로 인정하지 않는다)
     - 시장전망 문구          → _outlook(text, stage, key_points) / OUTLOOK_PATTERNS
     - 상용화 단계 판정       → _stage(text) / STAGES
 
@@ -379,21 +379,62 @@ class MasterConditionManager:
         return candidates
 
     def _key_points(self, title, body):
+        """기사 전체를 단순 축약하지 않고 '무슨 일→핵심 의미→영향' 순으로 최대 3개만 고른다.
+        일반뉴스도 같은 원칙을 사용하되, 시장 영향이 본문에 실제로 있을 때만 영향 포인트를 포함한다.
+        서로 다른 내용은 반드시 별도 줄로 유지한다.
+        """
         title_n = self._norm(title)
-        points = []
-        for s in self._event_sentences(title, body):
-            trimmed = self._trim_for_readability(s)
-            # [제목-요약 중복 방지] 자르기 전 원문뿐 아니라, 자른 뒤(trim) 결과도 제목과
-            # 비교한다. 제목이 본문 핵심문장을 그대로 재사용해 만들어질 수 있으므로,
-            # trim 전/후 어느 쪽이든 제목과 같으면(근접 중복 포함) 요약에서 제외한다.
-            if self._is_title_near_dup(s, title_n) or self._is_title_near_dup(trimmed, title_n):
+        sentences = self._event_sentences(title, body)
+        if not sentences:
+            return []
+
+        impact_pat = re.compile(r"주가|증시|시장|투자자|금리|환율|유가|채권|수익률|실적|매출|영업이익|수주|계약|공급|출시|판매|승인|허가|정책|관세|제재|전쟁|인수|합병|기술|AI|반도체|원전", re.I)
+        meaning_pat = re.compile(r"핵심|중요|영향|전망|우려|기대|변화|확대|감소|증가|하락|상승|전환|부담|호재|악재|관건|주목", re.I)
+
+        scored = []
+        for idx, sentence in enumerate(sentences):
+            trimmed = self._trim_for_readability(sentence)
+            if self._is_title_near_dup(sentence, title_n) or self._is_title_near_dup(trimmed, title_n):
                 continue
-            if any(self._norm(trimmed) == self._norm(x) for x in points):
+            norm = self._norm(trimmed)
+            if not norm or any(norm == self._norm(x) for x in sentences[:idx]):
                 continue
-            points.append(trimmed)
-            if len(points) >= 3:
+            score = max(0, 30 - idx)
+            if re.search(r"누가|발표|결정|체결|출시|승인|확정|발생|기록", sentence, re.I):
+                score += 8
+            if meaning_pat.search(sentence):
+                score += 6
+            if impact_pat.search(sentence):
+                score += 5
+            scored.append((score, idx, trimmed, bool(impact_pat.search(sentence))))
+
+        if not scored:
+            return []
+
+        # 서로 다른 역할을 우선 확보: 사실 1개 + 의미 1개 + 실제 시장영향 1개.
+        selected = []
+        used_idx = set()
+        first = max(scored, key=lambda x: (x[0], -x[1]))
+        selected.append(first[2]); used_idx.add(first[1])
+
+        meaning_candidates = [x for x in scored if x[1] not in used_idx and meaning_pat.search(x[2])]
+        if meaning_candidates:
+            pick = max(meaning_candidates, key=lambda x: (x[0], -x[1]))
+            selected.append(pick[2]); used_idx.add(pick[1])
+
+        impact_candidates = [x for x in scored if x[1] not in used_idx and x[3]]
+        if impact_candidates:
+            pick = max(impact_candidates, key=lambda x: (x[0], -x[1]))
+            selected.append(pick[2]); used_idx.add(pick[1])
+
+        # 위 세 역할이 부족하면 가장 중요한 서로 다른 문장을 채운다.
+        for item in sorted(scored, key=lambda x: (-x[0], x[1])):
+            if len(selected) >= 3:
                 break
-        return points
+            if item[1] not in used_idx:
+                selected.append(item[2]); used_idx.add(item[1])
+
+        return selected[:3]
 
     def _clause_cut(self, s):
         """접속어(면서/라며/는데/이에 따라/이로 인해) 앞에서 문장을 자연스럽게 끊는다.
@@ -537,20 +578,30 @@ class MasterConditionManager:
             reason = self._clean(c.get("reason"))
             if not name or not reason or c.get("domestic_listed") is False:
                 continue
-            # 후보 이유가 기사와 실제 연결되는지 최소한의 텍스트 교차검증
-            # [조건24 테마연결 수정] theme_link 후보는 reason이 정형 문구라 기사 원문에
-            # 그대로 포함되지 않는 게 정상이다. direct/event_link/supply_chain/commercial_link와
-            # 동일하게 "이미 근거가 계산된 후보"로 인정해 통과시킨다(과거엔 theme_link가
-            # 이 목록에서 빠져 있어 테마 기반 후보가 전부 걸러지는 버그가 있었다).
-            has_precomputed_link = bool(
+            # [최종사용자지시우선 / MASTER 단일통제]
+            # 하위 함수가 넣은 단순 테마 매핑만으로는 관련주를 확정하지 않는다.
+            # 반드시 MASTER가 기사 본문에서 직접 사업연관/실제 사건/공급망/상용화 근거를
+            # 확인할 수 있어야 한다. theme_link 단독 후보는 무조건 탈락시킨다.
+            concrete_link = bool(
                 c.get("direct") or c.get("event_link") or c.get("supply_chain")
-                or c.get("commercial_link") or c.get("theme_link")
+                or c.get("commercial_link")
             )
             anchors = [self._clean(c.get(k)) for k in ("event", "event_link", "supply_chain", "commercial_link") if self._clean(c.get(k))]
-            anchor_blob = " ".join(anchors + [reason])
-            if not any(a and (self._norm(a) in self._norm(text) or has_precomputed_link) for a in anchors + [reason]):
-                if not has_precomputed_link:
+            reason_evidence = reason
+            if c.get("theme_link") and not concrete_link:
+                continue
+            if not concrete_link:
+                # 직접 후보라 하더라도 기사 본문에 후보명이 실제로 등장해야 한다.
+                if self._norm(name) not in self._norm(text):
                     continue
+            if concrete_link:
+                evidence_blob = " ".join(anchors + [reason_evidence])
+                # 후보의 연결 근거가 기사와 전혀 맞지 않으면 탈락.
+                if not any(a and self._norm(a) in self._norm(text) for a in anchors if a):
+                    if c.get("direct") and self._norm(name) in self._norm(text):
+                        pass
+                    else:
+                        continue
             c["score"] = round(self._score(c), 2)
             if c["score"] >= self.min_score:
                 scored.append(c)

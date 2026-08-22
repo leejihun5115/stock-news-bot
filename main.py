@@ -2246,32 +2246,11 @@ def _engine_domestic_watchlist(item):
         rows.sort(key=lambda x:x["score"],reverse=True)
         return rows[:3]
 
-    # 50-02~04 테마/간접 연결: 실제 사건이 있는 경우만
-    event_words=["수주","계약","공급","납품","투자","증설","양산","출시","상용화","승인","허가","기술이전","기술수출","임상","지분","실적","매출","수출","정책","규제","관세","수요","가격","데이터센터","AI칩","HBM"]
-    if not any(k.lower() in low for k in event_words): return []
-    theme_keys=[k for k in sorted(STOCK_LINK_MAP,key=len,reverse=True) if k.lower() in low]
-    if not theme_keys:
-        if any(k in low for k in ["h200","hbm","ai칩","ai 반도체","반도체","메모리"]): theme_keys=["HBM"]
-        elif any(k in low for k in ["바이오","신약","임상","fda","키트루다","로열티","마일스톤"]): theme_keys=["바이오"]
-        elif any(k in low for k in ["lng선","lng","조선","선박"]): theme_keys=["조선"]
-        elif any(k in low for k in ["방산","미사일","무기","전투기"]): theme_keys=["방산"]
-    if not theme_keys: return []
-    scored=[]
-    for key in theme_keys[:5]:
-        if not any(k.lower() in low for k in event_words): continue
-        # [관련테마 이유 강화] 매칭된 이벤트 키워드 중 본문에 실제로 등장하는 것을 찾아
-        # 그 주변 문맥을 근거 문장으로 함께 붙인다. 정형 문구만 반복하지 않는다.
-        matched_event = next((w for w in event_words if w.lower() in low), "")
-        ctx = _engine_theme_context(text, matched_event) if matched_event else ""
-        base_reason = f"{THEME_MAP.get(key,key)} 테마의 실제 사업·수요 변화와 연결"
-        reason = f"{ctx} → {base_reason}" if ctx else base_reason
-        for stock in STOCK_LINK_MAP.get(key,[]):
-            hist,leader,limitup,surge=history(stock)
-            scored.append({"name":stock,"theme":key,"reason":reason[:180],"score":300+limitup*30+leader*20+surge*8+hist*2,"direct":False})
-    best={}
-    for r in scored:
-        if r["name"] not in best or r["score"]>best[r["name"]]["score"]: best[r["name"]]=r
-    return sorted(best.values(),key=lambda x:x["score"],reverse=True)[:3]
+    # [최종사용자지시우선 / MASTER 단일통제]
+    # 테마·간접 관련주를 이 하위 함수에서 생성하지 않는다.
+    # 관련주 판단은 MASTER에서만 수행하며, 이 함수는 기사에 실제 등장하고
+    # 직접 사업연관이 확인되는 국내 상장사 후보만 전달한다.
+    return rows[:3]
 
 
 def _engine_schedule(text):
@@ -2791,9 +2770,18 @@ def _engine_clean_telegram_meta(text: str) -> str:
     t = re.sub(r'\b\d+(?:\.\d+)?\s*[Kk]?\s*views?\b', ' ', t, flags=re.I)
     # 조회수 다음에 붙는 게시 시각(예: "23:56")이 본문 맨 앞에 그대로 남는 경우 제거.
     t = re.sub(r'^\s*\d{1,2}:\d{2}\s+', '', t)
-    # 기자 바이라인/데이트라인 제거: "OOO 기자 = ", "(서울=뉴시스)" 등
-    t = re.sub(r'[가-힣]{2,4}\s*(?:기자|특파원|앵커)\s*=\s*', ' ', t)
-    t = re.sub(r'\([가-힣]{1,10}\s*=\s*[가-힣A-Za-z0-9]{1,20}\)\s*', ' ', t)
+    # 기자 바이라인/데이트라인 제거: 기사 본문에 붙는 통신사 기자 표기를 전체적으로 숨긴다.
+    # 예: "(서울=연합뉴스) 이세원 한지훈 배영경 기자 = "
+    # 예: "(서울=뉴시스) 홍길동 기자 = "
+    # 이름이 여러 명이어도 한 덩어리로 제거해 본문/요약/MASTER/Telegram 어디에도 남기지 않는다.
+    t = re.sub(
+        r'\([^)]{1,60}\)\s*(?:[가-힣]{2,5}\s+){1,8}(?:기자|특파원|앵커)\s*=\s*',
+        ' ', t, flags=re.I,
+    )
+    # 단독 데이트라인도 제거한다.
+    t = re.sub(r'\([가-힣]{1,10}\s*=\s*[가-힣A-Za-z0-9]{1,30}\)\s*', ' ', t)
+    # 남아 있는 단독 기자 바이라인도 제거한다.
+    t = re.sub(r'[가-힣]{2,5}\s*(?:기자|특파원|앵커)\s*=\s*', ' ', t)
     # 국내 주요 매체명이 채널명 뒤에 그대로 반복되는 경우 제거 (예: "재야의 고수들 뉴시스 ...")
     t = re.sub(
         r'^(?:뉴시스|연합뉴스|이데일리|조선비즈|한국경제|매일경제|머니투데이|파이낸셜뉴스|'
@@ -2992,26 +2980,10 @@ def _engine_master_result(item):
         raw_title = str(item.get("title", "")).strip()
         raw_body = str(item.get("extra", "")).strip()
 
-        # [특징주 자기종목 보정] "[특징주] 회사, 사유 '반응'" 헤드라인이고, 본문이 제목과
-        # 사실상 동일해 추가 정보가 없는 경우: 제목 안의 사유를 실제 문장으로 풀어서
-        # 본문에 채워 넣고, 헤드라인의 주인공 종목을 관련주 후보 1순위로 강제 등록한다.
-        featured = _engine_parse_featured_stock_headline(raw_title)
-        if featured:
-            body_is_thin = (not raw_body) or (_engine_clean(raw_body) == _engine_clean(raw_title)) \
-                or (len(raw_body) < len(raw_title) + 8)
-            if body_is_thin:
-                comp_josa = _engine_josa(featured['company'], '이', '가')
-                react_josa = _engine_josa(featured['reaction'], '을', '를')
-                synth = f"{featured['company']}{comp_josa} {featured['reason']}에 {featured['reaction']}{react_josa} 기록했다."
-                raw_body = synth
-            candidates.insert(0, {
-                "name": featured["company"],
-                "reason": f"헤드라인상 특징주 본인 종목({featured['reaction']} 사유: {featured['reason']})",
-                "score": 500.0,
-                "direct": True,
-                "theme_link": False,
-                "domestic_listed": True,
-            })
+        # [최종사용자지시우선 / MASTER 단일통제]
+        # 특징주 헤드라인을 이유로 하위 단계에서 관련주를 강제 등록하지 않는다.
+        # 원 제목·원문만 MASTER에 전달하고, 관련주 여부는 MASTER의 직접 사업연관
+        # 검증 결과로만 확정한다.
 
         result = master_finalize_news(
             title=raw_title,
@@ -3345,6 +3317,10 @@ def _engine_is_high_impact_move(text):
 
 def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
+    # [출력오염 방지] 데이트라인/기자서명은 뉴스 내용이 아니므로 MASTER 입력 전에 제거한다.
+    # 이렇게 해야 핵심요약·전망·Telegram 본문 어느 단계에서도 기자 표기가 재생성되지 않는다.
+    title = _engine_clean_telegram_meta(title)
+    extra = _engine_clean_telegram_meta(extra)
     if not title:
         return False
 
@@ -4605,37 +4581,6 @@ def _yahoo_chart_quote(symbol, interval="5m", range_="1d"):
         return None
 
 
-def _us_related_domestic_stocks(theme, limit=3):
-    """미국 종목의 테마와 동일한 국내 관련주를 찾는다.
-    [조건28 글로벌오인방지] 글로벌 종목명 자체를 국내 상장기업으로 연결하지 않고,
-    기존 STOCK_LINK_MAP(국내 테마->국내종목) 매핑만 재사용한다.
-    (news_bot.py 상단 FINAL AGREED BEHAVIOR: "미국뉴스에서 실제 국내 관심종목으로
-    연결될 때만 🇰🇷 표시" - 문서화만 되고 실제 구현이 없었던 부분)."""
-    theme = str(theme or "")
-    if not theme:
-        return []
-    candidates = []
-    for key, stocks in STOCK_LINK_MAP.items():
-        if key.lower() not in theme.lower():
-            continue
-        for stock in stocks:
-            hist = 0
-            lead_hist = 0
-            for h in _engine_historical_cache[-3000:]:
-                tx = str(h.get("text", ""))
-                if stock in tx:
-                    hist += 1
-                    if any(k in tx.lower() for k in ["상한가", "대장", "주도", "급등", "폭등", "신고가"]):
-                        lead_hist += 1
-            score = 10 + min(hist, 8) * 2 + min(lead_hist, 8) * 3
-            candidates.append((score, stock, hist, lead_hist))
-    best = {}
-    for c in candidates:
-        if c[1] not in best or c[0] > best[c[1]][0]:
-            best[c[1]] = c
-    return sorted(best.values(), reverse=True, key=lambda x: x[0])[:limit]
-
-
 def _us_briefing_reason(name, theme):
     """최근 수집 뉴스에서 실제 언급된 원인을 찾는다. 없으면 추정하지 않는다."""
     now = _now_kst()
@@ -4814,10 +4759,8 @@ def _us_open_briefing(snapshot, et):
         if reason:
             line += f" · 원인: {html.escape(reason)}"
         lines.append(line)
-        related = _us_related_domestic_stocks(q.get("industry_theme") or q["theme"])
-        if related:
-            related_text = " · ".join(f"⚡️{html.escape(s)}" for _, s, _, _ in related)
-            lines.append(f"  🇰🇷 관련주 : {related_text}")
+        # [최종사용자지시우선 / MASTER 단일통제]
+        # 미장 보조 브리핑에서는 국내 관련주를 생성하지 않는다.
     lines += ["", "<b>🛢️ 환율·원자재</b>"]
     for s in macro:
         q = snapshot.get(s)
@@ -5093,26 +5036,9 @@ def _us_close_briefing(snapshot, et):
             else:
                 lines.append("  ↳ 움직인 이유: 확인된 뉴스 없음")
 
-            # 국내 관련주 연결은 기존 STOCK_LINK_MAP + 과거 DB를 그대로 사용.
-            # 글로벌 종목명만으로 국내 종목을 만들지 않는다.
-            # [버그수정] "급등주"/"급락주" 같은 그룹 라벨만으로는 STOCK_LINK_MAP과 매칭이
-            # 안 되므로, 구성 종목들의 실제 업종(industry_theme)도 함께 매칭에 사용한다.
-            match_theme = theme + " " + " ".join(str(q.get("industry_theme") or "") for q in qs)
-            picks = _us_related_domestic_stocks(match_theme)
-            if picks:
-                related_text=[]
-                for _, stock, hist, lead_hist in picks:
-                    why = ["동일 테마 연결"]
-                    if hist:
-                        why.append(f"과거 급등/상한가 사례 {hist}건")
-                    if lead_hist:
-                        why.append("과거 테마 주도 이력")
-                    if hist >= 2 or lead_hist >= 2:
-                        why.append("끼·탄력 확인")
-                    why_text = "·".join(why)[:90]
-                    related_text.append(f"⚡️{html.escape(stock)}({html.escape(why_text)})")
-                lines.append("  ✔👀관련주 : " + " · ".join(related_text))
-            # [카테고리 숨김] 관련주가 없으면 '無' 문구 없이 섹션 자체를 생략한다.
+            # [최종사용자지시우선 / MASTER 단일통제]
+            # 미장 마감 브리핑의 국내 관련주를 하위 함수에서 생성하지 않는다.
+            # 관련주 판단은 MASTER 뉴스 분석에서만 수행한다.
 
             # 유사 과거 사례: 실제 수익률과 링크가 DB에 있을 때만 표시.
             if reason:
