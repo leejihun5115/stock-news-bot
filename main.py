@@ -1371,6 +1371,11 @@ OUTCOME_CHECK_DELAY_MIN = max(5, int(os.environ.get("NEWS_BOT_OUTCOME_CHECK_DELA
 OUTCOME_CYCLE_INTERVAL_SEC = max(60, int(os.environ.get("NEWS_BOT_OUTCOME_CYCLE_INTERVAL_SEC", "300")))
 # 한 번의 루프에서 처리할 최대 건수(시세 API 순간 폭주 방지).
 OUTCOME_CYCLE_MAX_PER_RUN = max(5, int(os.environ.get("NEWS_BOT_OUTCOME_CYCLE_MAX_PER_RUN", "30")))
+# [데이터 누적형 분석] 단일 시점(T+60 1회) 확인이 아니라 T+5/T+30/T+60 3개 시점을
+# 순서대로 확인한다. 각 값은 baseline_price 확보 시각 기준 경과 분(分)이다.
+OUTCOME_HORIZONS_MIN = [5, 30, 60]
+# 현재 시장환경(코스피/코스닥 등락률) 스냅샷을 매번 재조회하지 않고 재사용할 캐시 시간(초).
+MARKET_SNAPSHOT_CACHE_SEC = 60
 
 _engine_last_cycle_started = 0.0
 _engine_last_cycle_finished = 0.0
@@ -1616,6 +1621,178 @@ def _engine_accumulated_context(item):
     return result
 
 
+# ============================================================
+# [데이터 누적형 시장·뉴스 분석 시스템]
+# ------------------------------------------------------------
+# "이 뉴스가 좋은가"를 직접 판단하지 않는다. 대신
+#   ① 뉴스의 실제 내용(재료/기업) → ② 현재 시장상황(코스피/코스닥) →
+#   ③ 과거 유사 시장상황에서 ④ 실제로 발생한 결과(T+5/T+30/T+60)
+# 를 하나의 기록으로 연결해서, 근거가 있을 때만 표시한다.
+# 근거(표본)가 없으면 절대 만들어내지 않는다(추정 금지) - 이 섹션 전체가
+# _OUTCOME_TRACKING_ROWS에 실제로 쌓인 데이터가 있을 때만 값을 채운다.
+# ============================================================
+_MARKET_SNAPSHOT_CACHE = {"ts": 0.0, "data": None}
+
+
+def _market_dir(pct, strong=1.0, mild=0.15):
+    """등락률을 '강세/상승/보합/하락/약세'로 범주화한다(유사 시장환경 매칭용)."""
+    if pct is None:
+        return "미확인"
+    if pct >= strong:
+        return "강세"
+    if pct >= mild:
+        return "상승"
+    if pct <= -strong:
+        return "약세"
+    if pct <= -mild:
+        return "하락"
+    return "보합"
+
+
+def _market_bucket(kospi_pct, kosdaq_pct):
+    return f"코스피{_market_dir(kospi_pct)}_코스닥{_market_dir(kosdaq_pct)}"
+
+
+def _engine_market_snapshot():
+    """현재 KOSPI/KOSDAQ 등락률 스냅샷. 두 지수 모두 조회 실패하면 None을 반환하고,
+    호출부는 시장비교/유사사례 섹션을 그냥 표시하지 않는다(추정으로 채우지 않음)."""
+    now = time.time()
+    cached = _MARKET_SNAPSHOT_CACHE.get("data")
+    if cached and now - _MARKET_SNAPSHOT_CACHE.get("ts", 0) < MARKET_SNAPSHOT_CACHE_SEC:
+        return cached
+    try:
+        kospi = _yahoo_chart_quote("^KS11")
+        kosdaq = _yahoo_chart_quote("^KQ11")
+    except Exception as e:
+        _engine_log("warning", "[시장스냅샷] 조회 실패 | %s", str(e)[:120])
+        return None
+    kospi_pct = kospi.get("change_pct") if kospi else None
+    kosdaq_pct = kosdaq.get("change_pct") if kosdaq else None
+    if kospi_pct is None and kosdaq_pct is None:
+        return None
+    snap = {
+        "kospi_pct": round(kospi_pct, 2) if kospi_pct is not None else None,
+        "kosdaq_pct": round(kosdaq_pct, 2) if kosdaq_pct is not None else None,
+        "bucket": _market_bucket(kospi_pct, kosdaq_pct),
+        "ts": _now_kst().isoformat(),
+    }
+    _MARKET_SNAPSHOT_CACHE["data"] = snap
+    _MARKET_SNAPSHOT_CACHE["ts"] = now
+    return snap
+
+
+def _engine_similar_case_stats(item, master_result):
+    """[핵심] 현재 뉴스 = ① 재료/기업 + ② 현재 시장환경을 ③ 과거 기록(OUTCOME_TRACKING_DB)의
+    같은 시장환경·비슷한 재료 사례와 매칭해서 ④ 실제 T+5/T+30/T+60 성과를 집계한다.
+
+    매칭 조건(둘 다 필요 - 문서의 '2단계 검증'):
+      1단계) 시장환경 일치: 현재 코스피/코스닥 방향 버킷과 과거 기록의 버킷이 같아야 함.
+      2단계) 뉴스 유사: 관련 기업명이 겹치거나, 강한재료 키워드가 겹치거나,
+             제목 텍스트 유사도가 임계값 이상이어야 함.
+    표본이 2건 미만인 시점(T+5/30/60 각각)은 결과에 넣지 않는다(추정 금지).
+    """
+    result = {"market": None, "horizons": {}, "sample_total": 0}
+    try:
+        snap = _engine_market_snapshot()
+        result["market"] = snap
+        if not snap:
+            return result
+        _engine_load_outcome_tracking()
+        if not _OUTCOME_TRACKING_ROWS:
+            return result
+
+        current_text = _engine_clean(str(item.get("title", "")) + " " + str(item.get("extra", "")))
+        current_norm = re.sub(r"[^0-9a-zA-Z가-힣]", "", current_text.lower())[:260]
+        current_companies = set(c for c in (item.get("companies") or []) if c)
+        if master_result:
+            leader = master_result.get("leader") or {}
+            if leader.get("name"):
+                current_companies.add(str(leader["name"]))
+            for r in master_result.get("related") or []:
+                if r.get("name"):
+                    current_companies.add(str(r["name"]))
+        current_hits = set(str(x).lower() for x in (item.get("market_hits") or []))
+
+        matched_rows = []
+        for row in _OUTCOME_TRACKING_ROWS[-3000:]:
+            row_snap = row.get("market_snapshot") or {}
+            if not row_snap or row_snap.get("bucket") != snap.get("bucket"):
+                continue
+            row_companies = set(row.get("companies") or [])
+            if row.get("leader"):
+                row_companies.add(str(row.get("leader")))
+            company_overlap = bool(current_companies & row_companies)
+            row_hits = set(str(x).lower() for x in (row.get("hits") or []))
+            hits_overlap = bool(current_hits & row_hits)
+            text_ratio = 0.0
+            row_title = str(row.get("title", ""))
+            if row_title and current_norm:
+                row_norm = re.sub(r"[^0-9a-zA-Z가-힣]", "", row_title.lower())[:260]
+                text_ratio = difflib.SequenceMatcher(None, current_norm, row_norm).ratio()
+            if not (company_overlap or hits_overlap or text_ratio >= 0.45):
+                continue
+            matched_rows.append(row)
+
+        result["sample_total"] = len(matched_rows)
+        for m in OUTCOME_HORIZONS_MIN:
+            vals = []
+            for row in matched_rows:
+                h = (row.get("horizons") or {}).get(str(m))
+                if h and h.get("change_pct") is not None:
+                    vals.append(h["change_pct"])
+            if len(vals) >= 2:
+                avg = sum(vals) / len(vals)
+                pos_rate = sum(1 for v in vals if v > 0) / len(vals) * 100.0
+                result["horizons"][str(m)] = {
+                    "count": len(vals),
+                    "avg_pct": round(avg, 2),
+                    "success_rate": round(pos_rate, 1),
+                }
+    except Exception as e:
+        _engine_log("warning", "[유사사례분석] 실패 | %s", str(e)[:160])
+    return result
+
+
+def _engine_similar_case_lines(stats):
+    """_engine_similar_case_stats() 결과를 메시지 줄 목록으로 변환한다.
+    표본(horizons)이 하나도 없으면 빈 리스트를 반환해 섹션 자체를 표시하지 않는다.
+    """
+    if not stats:
+        return []
+    horizons = stats.get("horizons") or {}
+    if not horizons:
+        return []
+    snap = stats.get("market") or {}
+    lines = []
+    kospi_txt = f"{snap.get('kospi_pct'):+.2f}%" if snap.get("kospi_pct") is not None else "미확인"
+    kosdaq_txt = f"{snap.get('kosdaq_pct'):+.2f}%" if snap.get("kosdaq_pct") is not None else "미확인"
+    lines.append("📊 [시장 비교]")
+    lines.append(f"     ✔ 현재 코스피 {kospi_txt} · 코스닥 {kosdaq_txt} ({snap.get('bucket','')})")
+    lines.append(f"     ✔ 유사 시장환경 + 유사 재료 사례 {stats.get('sample_total', 0)}건")
+    lines.append("📈 [과거 성과]")
+    label_map = {"5": "T+5", "30": "T+30", "60": "T+60"}
+    best_verdict_h = None
+    for m in OUTCOME_HORIZONS_MIN:
+        h = horizons.get(str(m))
+        if not h:
+            continue
+        lines.append(
+            f"     ✔ {label_map[str(m)]} 평균 {h['avg_pct']:+.2f}% · 적중률 {h['success_rate']:.0f}% ({h['count']}건)"
+        )
+        best_verdict_h = h  # 가장 긴(뒤쪽) 확정 시점을 판단 기준으로 사용
+    if best_verdict_h is not None:
+        if best_verdict_h["success_rate"] >= 60 and best_verdict_h["avg_pct"] > 0:
+            verdict = "강함"
+        elif best_verdict_h["success_rate"] >= 50 and best_verdict_h["avg_pct"] > 0:
+            verdict = "관심"
+        elif best_verdict_h["avg_pct"] < 0:
+            verdict = "주의"
+        else:
+            verdict = "중립"
+        lines.append(f"🎯 [판단] {verdict} (과거 유사사례 기준)")
+    return lines
+
+
 def _engine_load_extended_state():
     global _engine_historical_cache, _engine_global_briefing_cache, _engine_telegram_counts
     global _engine_sent_fingerprints
@@ -1694,12 +1871,23 @@ def _engine_record_outcome_tracking(item, master_result):
         return
     related = master_result.get("related") or []
     leader = master_result.get("leader") or {}
+    # [데이터 누적형 분석] 이 뉴스가 발생한 순간의 시장환경(코스피/코스닥)과 재료
+    # 키워드/관련기업을 함께 남겨서, 나중에 "같은 시장환경 + 비슷한 재료" 과거
+    # 사례를 찾을 수 있게 한다(조회 실패 시 None으로 남기고 나중에 재시도 안 함 -
+    # 발송 경로를 느리게 만들지 않기 위해 여기서는 캐시된 값만 시도한다).
+    try:
+        market_snapshot = _engine_market_snapshot()
+    except Exception:
+        market_snapshot = None
     row = {
         "ts": _now_kst().isoformat(),
         "source": str(item.get("source", ""))[:80],
         "title": str(master_result.get("title") or item.get("title", ""))[:300],
         "link": str(item.get("link", ""))[:1000],
         "market_state": str(item.get("market_state", ""))[:40],
+        "market_snapshot": market_snapshot,
+        "companies": list(dict.fromkeys(c for c in (item.get("companies") or []) if c))[:6],
+        "hits": [str(x)[:40] for x in (item.get("market_hits") or [])][:8],
         "stage": str(master_result.get("stage", ""))[:80],
         "leader": str(leader.get("name", ""))[:60],
         "leader_code": _resolve_stock_code_for_name(leader.get("name", "")) if ENABLE_OUTCOME_TRACKING else "",
@@ -1715,6 +1903,10 @@ def _engine_record_outcome_tracking(item, master_result):
         "evidence": [str(x)[:120] for x in (master_result.get("evidence") or [])[:8]],
         "baseline_price": None,
         "baseline_failed": False,
+        # [T+5/T+30/T+60] 단일 시점(예전 delay 1회) 대신 3개 시점을 각각 채운다.
+        "horizons": {str(m): None for m in OUTCOME_HORIZONS_MIN},
+        # 호환 필드: T+60(마지막 시점) 확정 여부/결과를 그대로 미러링한다.
+        # (_engine_accumulated_context, _outcome_aggregate_report가 이 필드를 읽는다)
         "checked": False,
         "outcome": None,
     }
@@ -3671,6 +3863,14 @@ def _engine_format_message(item):
         for e in accum_evidence:
             lines.append('     ✔ '+html.escape(e[:220]))
 
+    # [데이터 누적형 분석] 현재 시장환경(코스피/코스닥) + 비슷한 재료의 과거
+    # T+5/T+30/T+60 실제 성과. 표본(2건 이상)이 있는 시점만 표시하며,
+    # 표본이 전혀 없으면 _engine_similar_case_lines()가 빈 리스트를 돌려주므로
+    # 이 섹션 자체가 조용히 생략된다(추정으로 채우지 않음).
+    similar_lines = _engine_similar_case_lines(item.get('_similar_case_stats'))
+    for line in similar_lines:
+        lines.append(line)
+
     # 관련주/테마/BIG ISSUE는 위 master_badge에서 이미 표시했으므로 여기서 중복 출력하지 않는다.
     # (참고: master_badge가 비어있으면 관련주/테마/BIG ISSUE가 없다는 뜻이므로 항목 자체가 비게 된다)
 
@@ -3743,6 +3943,14 @@ def _engine_flush_pending():
             continue
         master_result = _engine_master_result(item)
         item["_master_result"] = master_result
+        # [데이터 누적형 분석] 현재 시장환경 + 재료 기준으로 과거 유사 사례의
+        # T+5/T+30/T+60 실제 성과를 조회한다. 표본이 없으면 빈 결과가 돌아오고,
+        # Formatter는 그 경우 관련 섹션 자체를 표시하지 않는다(추정 금지).
+        try:
+            item["_similar_case_stats"] = _engine_similar_case_stats(item, master_result)
+        except Exception as e:
+            _engine_log("warning", "[유사사례분석] flush 단계 실패 | %s", str(e)[:160])
+            item["_similar_case_stats"] = None
         # [최종 발송 게이트] 시장 영향이 확인되지 않은 뉴스는 발송하지 않는다.
         if not _engine_has_market_impact(item, master_result):
             _engine_log("info", "[제외] 시장영향 없음 | %s", str(item.get("title", ""))[:120])
@@ -4605,6 +4813,16 @@ def _engine_load_outcome_tracking():
     try:
         with open(OUTCOME_TRACKING_DB, "r", encoding="utf-8") as f:
             _OUTCOME_TRACKING_ROWS = [json.loads(x) for x in f if x.strip()][-5000:]
+        # [마이그레이션] T+5/T+30/T+60 도입 이전에 저장된 기록(예전 단일 checked/outcome
+        # 구조)을 새 구조에 맞게 보정한다. 기존에 이미 확정된 값은 절대 지우지 않고
+        # T+60(마지막 시점) 자리에 그대로 옮겨 보존한다.
+        for row in _OUTCOME_TRACKING_ROWS:
+            if "horizons" not in row or not isinstance(row.get("horizons"), dict):
+                legacy_final = row.get("outcome") if row.get("checked") else None
+                row["horizons"] = {"5": None, "30": None, "60": legacy_final}
+            row.setdefault("market_snapshot", None)
+            row.setdefault("companies", [])
+            row.setdefault("hits", [])
         _engine_log("info", "[성과추적] 기존 기록 %d건 로드", len(_OUTCOME_TRACKING_ROWS))
     except Exception as e:
         log_error("성과추적 DB 읽기", e, file=OUTCOME_TRACKING_DB)
@@ -4665,11 +4883,26 @@ def _engine_outcome_tracking_cycle():
                 row["baseline_price"] = q["price"]
                 row["baseline_ts"] = now.isoformat()
                 dirty = True
+                # 기준가를 이제 막 잡았고, 발송 시점에 시장환경 스냅샷을 못 잡았다면
+                # (예: API 순간 실패) 여기서 한 번 더 시도해서 유사사례 매칭용
+                # 데이터가 비지 않게 한다.
+                if not row.get("market_snapshot"):
+                    try:
+                        row["market_snapshot"] = _engine_market_snapshot()
+                    except Exception:
+                        pass
             continue
 
-        # 2) 기준가는 있고 결과 미확정 -> 지연시간 경과 시 결과 확정
-        if row.get("baseline_price") is not None and not row.get("checked"):
-            if age_min < OUTCOME_CHECK_DELAY_MIN:
+        # 2) 기준가는 있고, T+5 -> T+30 -> T+60 순서로 아직 안 채워진 시점을 하나씩 확정한다.
+        if row.get("baseline_price") is not None:
+            horizons = row.get("horizons")
+            if not isinstance(horizons, dict):
+                horizons = {str(m): None for m in OUTCOME_HORIZONS_MIN}
+                row["horizons"] = horizons
+            pending_h = next((m for m in OUTCOME_HORIZONS_MIN if horizons.get(str(m)) is None), None)
+            if pending_h is None:
+                continue  # T+5/T+30/T+60 전부 확정됨
+            if age_min < pending_h:
                 continue
             code = _outcome_row_code(row)
             q = _kr_yahoo_quote(code) if code else None
@@ -4678,18 +4911,21 @@ def _engine_outcome_tracking_cycle():
             if q and q.get("price") is not None:
                 base = float(row["baseline_price"])
                 change_pct = ((q["price"] - base) / base * 100.0) if base else None
-                row["outcome"] = {
+                horizons[str(pending_h)] = {
                     "price": q["price"],
                     "change_pct": round(change_pct, 2) if change_pct is not None else None,
                     "checked_ts": now.isoformat(),
                 }
-                row["checked"] = True
                 dirty = True
-            elif age_min > OUTCOME_CHECK_DELAY_MIN * 4:
-                # 시세 조회가 계속 실패하면(거래정지/상장폐지 등) 무한 재시도하지 않는다.
-                row["checked"] = True
-                row["outcome"] = {"price": None, "change_pct": None, "checked_ts": now.isoformat(), "note": "조회실패"}
+            elif age_min > pending_h * 4:
+                # 시세 조회가 계속 실패하면(거래정지/상장폐지 등) 이 시점은 포기하고 넘어간다.
+                horizons[str(pending_h)] = {"price": None, "change_pct": None, "checked_ts": now.isoformat(), "note": "조회실패"}
                 dirty = True
+            # 마지막 시점(T+60)까지 채워졌다면 호환 필드(checked/outcome)도 동기화한다.
+            last_h = str(OUTCOME_HORIZONS_MIN[-1])
+            if horizons.get(last_h) is not None:
+                row["checked"] = True
+                row["outcome"] = horizons[last_h]
 
     if dirty:
         if len(_OUTCOME_TRACKING_ROWS) > 5000:
