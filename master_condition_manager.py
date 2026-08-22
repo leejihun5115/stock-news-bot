@@ -173,6 +173,8 @@ class MasterResult:
     commercial_stage: str = ""
     commercial_evidence: str = ""
     term_explanations: List[Dict[str, str]] = field(default_factory=list)
+    # 데이터 기반 분석: 기존 65조건 결과를 재판단하지 않고, 실제 기사 근거를 구조화해 표시한다.
+    data_analysis: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self):
         return self.__dict__.copy()
@@ -819,6 +821,44 @@ class MasterConditionManager:
         if score >= 40: return "중간"
         return "낮음"
 
+    def _build_data_analysis(self, state):
+        """기사 원문에서 확인된 사실만 구조화한다. 추정/외부 지식으로 빈칸을 채우지 않는다."""
+        key_points = list(state.get("key_points") or [])
+        related = list(state.get("related") or [])
+        outlook = list(state.get("outlook") or [])
+        terms = list(state.get("term_explanations") or [])
+        leader = state.get("leader") or {}
+
+        analysis = {}
+        if key_points:
+            analysis["핵심근거"] = key_points[:3]
+
+        if leader:
+            reason = self._clean(leader.get("reason"))
+            if reason:
+                analysis["대장주선정근거"] = reason
+
+        related_reasons = []
+        for r in related[:3]:
+            name = self._clean(r.get("name"))
+            reason = self._clean(r.get("reason"))
+            if name and reason:
+                related_reasons.append({"name": name, "reason": reason})
+        if related_reasons:
+            analysis["관련주근거"] = related_reasons
+
+        if outlook:
+            analysis["시장전망근거"] = outlook[:3]
+
+        if terms:
+            analysis["용어근거"] = terms[:5]
+
+        analysis["뉴스가치"] = state.get("news_value") or ""
+        analysis["상용화단계"] = state.get("commercial_stage") or state.get("stage") or ""
+        analysis["근거수"] = len(state.get("evidence") or [])
+
+        return analysis
+
     def _execute_rule(self, order, name, state):
         # 실제 실행 함수. 모든 65 조건을 순차적으로 방문하며 후행 조건은 상태를 override할 수 있다.
         text = state["text"]
@@ -883,6 +923,7 @@ class MasterConditionManager:
                 state["key_points"] and
                 (state["related"] or state["stage"] or len(state["key_points"]) >= 2)
             )
+            state["data_analysis"] = self._build_data_analysis(state)
         elif name == "FINAL_LOCK":
             state["prelock_snapshot"] = {
                 k: state[k] for k in ("title", "key_points", "related", "stage", "schedule", "outlook")
@@ -966,6 +1007,7 @@ class MasterConditionManager:
             commercial_stage=state["commercial_stage"],
             commercial_evidence=state["commercial_evidence"],
             term_explanations=list(state.get("term_explanations") or [])[:5],
+            data_analysis=dict(state.get("data_analysis") or {}),
             schedule=state["schedule"],
             outlook=state["outlook"][:3],
             selection_method=list(self.SELECTION_METHOD),

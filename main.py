@@ -1661,6 +1661,179 @@ def _engine_record_historical_case(item):
             del _engine_historical_cache[:-5000]
 
 
+
+# ============================================================
+# [DATA-BASED ANALYSIS] 현재시장 vs 과거 유사시장
+# 무료 Yahoo 시세 + 기존 outcome DB만 사용. 추정값을 만들지 않는다.
+# ============================================================
+_MARKET_ANALYSIS_CACHE = {"ts": 0.0, "snapshot": None}
+
+def _engine_market_snapshot():
+    now = time.time()
+    if _MARKET_ANALYSIS_CACHE["snapshot"] is not None and now - _MARKET_ANALYSIS_CACHE["ts"] < 120:
+        return _MARKET_ANALYSIS_CACHE["snapshot"]
+
+    snap = {}
+    for symbol, label in (("^KS11", "KOSPI"), ("^KQ11", "KOSDAQ"), ("^VIX", "VIX")):
+        try:
+            q = _engine_index_quote_cached(symbol)
+        except Exception:
+            q = None
+        if q and q.get("change_pct") is not None:
+            snap[label] = round(float(q["change_pct"]), 2)
+
+    if not snap:
+        return None
+
+    if "KOSPI" in snap and "KOSDAQ" in snap:
+        avg = (snap["KOSPI"] + snap["KOSDAQ"]) / 2
+        if avg >= 0.8:
+            regime = "강세"
+        elif avg <= -0.8:
+            regime = "약세"
+        elif avg >= 0.2:
+            regime = "우호"
+        elif avg <= -0.2:
+            regime = "불안"
+        else:
+            regime = "중립"
+        snap["regime"] = regime
+
+    _MARKET_ANALYSIS_CACHE["ts"] = now
+    _MARKET_ANALYSIS_CACHE["snapshot"] = snap
+    return snap
+
+
+def _engine_market_similarity(cur, old):
+    if not cur or not old:
+        return None
+    vals = []
+    for k, tol in (("KOSPI", 1.0), ("KOSDAQ", 1.0), ("VIX", 5.0)):
+        if k in cur and k in old:
+            vals.append(max(0.0, 1.0 - abs(float(cur[k])-float(old[k]))/tol))
+    if not vals:
+        return None
+    return round(sum(vals)/len(vals)*100.0)
+
+
+def _engine_historical_market_analysis(current):
+    if not current:
+        return {"sample_count": 0}
+
+    _engine_load_outcome_tracking()
+    checked = [
+        r for r in _OUTCOME_TRACKING_ROWS
+        if r.get("checked")
+        and isinstance(r.get("outcome"), dict)
+        and r.get("outcome", {}).get("change_pct") is not None
+        and r.get("market_snapshot")
+    ]
+
+    scored=[]
+    for r in checked:
+        sim=_engine_market_similarity(current, r.get("market_snapshot"))
+        if sim is not None and sim >= 60:
+            scored.append((sim,r))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    rows=[r for _,r in scored[:100]]
+    if not rows:
+        return {"sample_count":0}
+
+    changes=[]
+    regimes=[]
+    for r in rows:
+        try:
+            changes.append(float(r["outcome"]["change_pct"]))
+        except Exception:
+            pass
+        rg=(r.get("market_snapshot") or {}).get("regime")
+        if rg:
+            regimes.append(rg)
+
+    avg=(sum(changes)/len(changes)) if changes else None
+    win=(sum(1 for x in changes if x>0)/len(changes)*100) if changes else None
+    median=None
+    if changes:
+        ordered=sorted(changes)
+        n=len(ordered)
+        median=ordered[n//2] if n%2 else (ordered[n//2-1]+ordered[n//2])/2
+
+    from collections import Counter
+    past_regime=Counter(regimes).most_common(1)[0][0] if regimes else None
+    return {
+        "sample_count": len(rows),
+        "win_rate": round(win,1) if win is not None else None,
+        "avg_change": round(avg,2) if avg is not None else None,
+        "median_change": round(median,2) if median is not None else None,
+        "past_regime": past_regime,
+        "similarity": round(sum(x[0] for x in scored[:min(len(scored),20)])/min(len(scored),20),1),
+    }
+
+
+def _engine_data_analysis_lines(item, master_result):
+    """Telegram용 데이터 기반 분석 블록. 값이 없으면 해당 항목을 숨긴다."""
+    lines=[]
+    current=_engine_market_snapshot()
+    hist=_engine_historical_market_analysis(current)
+
+    if current:
+        parts=[]
+        for k in ("KOSPI","KOSDAQ","VIX"):
+            if k in current:
+                parts.append(f"{k} {current[k]:+.2f}%")
+        regime=current.get("regime")
+        if regime:
+            lines.append("📊 <b>[시장 데이터]</b>")
+            lines.append("현재시장: <b>"+html.escape(regime)+"</b> | "+" · ".join(parts))
+        elif parts:
+            lines.append("📊 <b>[시장 데이터]</b>")
+            lines.append("현재: "+" · ".join(parts))
+
+    if hist.get("sample_count",0):
+        lines.append(
+            f"과거 유사시장: <b>{html.escape(str(hist.get('past_regime') or '확인'))}</b>"
+            f" | 유사표본 {hist['sample_count']}건"
+        )
+        if hist.get("similarity") is not None:
+            lines.append(f"시장 유사도: <b>{hist['similarity']:.0f}%</b>")
+        if hist.get("win_rate") is not None or hist.get("avg_change") is not None:
+            p=[]
+            if hist.get("win_rate") is not None: p.append(f"성공률 {hist['win_rate']:.1f}%")
+            if hist.get("avg_change") is not None: p.append(f"평균반응 {hist['avg_change']:+.2f}%")
+            if hist.get("median_change") is not None: p.append(f"중앙값 {hist['median_change']:+.2f}%")
+            lines.append("과거성과: "+" · ".join(p))
+
+    da=(master_result or {}).get("data_analysis") or {}
+    facts=da.get("핵심근거") or []
+    if facts:
+        lines.append("🧠 <b>[데이터 근거]</b>")
+        for x in facts[:3]:
+            lines.append("• "+html.escape(str(x)[:240]))
+
+    rel=da.get("관련주근거") or []
+    if rel:
+        lines.append("🏷️ <b>[관련주 선정근거]</b>")
+        for r in rel[:3]:
+            lines.append(f"• <b>{html.escape(str(r.get('name','')))}</b> — {html.escape(str(r.get('reason',''))[:180])}")
+
+    outlook=da.get("시장전망근거") or []
+    if outlook:
+        lines.append("🎯 <b>[전망 근거]</b>")
+        for x in outlook[:3]:
+            lines.append("• "+html.escape(str(x)[:220]))
+
+    terms=da.get("용어근거") or []
+    if terms:
+        lines.append("💡 <b>[용어 해석]</b>")
+        for t in terms[:5]:
+            term=str(t.get("term","")).strip()
+            desc=str(t.get("description","")).strip()
+            if term and desc:
+                lines.append(f"• {html.escape(term)}: {html.escape(desc)}")
+
+    return lines, current, hist
+
 def _engine_record_outcome_tracking(item, master_result):
     """[성과 피드백 루프 1단계] 실제로 송출된 뉴스의 판정 근거를 기록만 한다.
 
@@ -1679,6 +1852,7 @@ def _engine_record_outcome_tracking(item, master_result):
         "title": str(master_result.get("title") or item.get("title", ""))[:300],
         "link": str(item.get("link", ""))[:1000],
         "market_state": str(item.get("market_state", ""))[:40],
+        "market_snapshot": _engine_market_snapshot() or {},
         "stage": str(master_result.get("stage", ""))[:80],
         "leader": str(leader.get("name", ""))[:60],
         "leader_code": _resolve_stock_code_for_name(leader.get("name", "")) if ENABLE_OUTCOME_TRACKING else "",
@@ -3499,122 +3673,56 @@ def _engine_master_badge(result):
 
 
 def _engine_master_image_path(result, item=None):
-    """MASTER 확정 이미지에 현재/과거 시장상태 비교와 누적 분석값을 표시."""
+    """MASTER 확정 이미지: 현재시장/과거유사시장/성과/근거를 데이터 기반으로 표시."""
     if not result or not result.get("locked"):
         return ""
     related = result.get("related") or []
     leader = result.get("leader") or {}
     if not related or not leader.get("name"):
         return ""
-
     try:
-        base = os.path.dirname(os.path.abspath(__file__))
-        out = MASTER_CONFIRMATION_IMAGE
-        if not os.path.isabs(out):
-            out = os.path.join(base, out)
-        os.makedirs(os.path.dirname(out) or base, exist_ok=True)
+        base=os.path.dirname(os.path.abspath(__file__))
+        out=MASTER_CONFIRMATION_IMAGE
+        if not os.path.isabs(out): out=os.path.join(base,out)
+        current=_engine_market_snapshot()
+        hist=_engine_historical_market_analysis(current)
 
-        # 현재 시장상태
-        current_market = str((item or {}).get("market_state") or "확인중")
+        lines=[f"MASTER | 대장주 {leader.get('name')}"]
+        if result.get("news_value"):
+            lines.append(f"뉴스가치 {result.get('news_value')}")
+        if current:
+            parts=[]
+            for k in ("KOSPI","KOSDAQ"):
+                if k in current: parts.append(f"{k} {current[k]:+.2f}%")
+            if current.get("regime"): parts.append(f"시장 {current['regime']}")
+            if parts: lines.append("현재시장 | "+" · ".join(parts))
+        if hist.get("sample_count"):
+            p=[f"과거유사 {hist['sample_count']}건"]
+            if hist.get("similarity") is not None: p.append(f"유사도 {hist['similarity']:.0f}%")
+            if hist.get("win_rate") is not None: p.append(f"성공률 {hist['win_rate']:.1f}%")
+            if hist.get("avg_change") is not None: p.append(f"평균 {hist['avg_change']:+.2f}%")
+            lines.append("과거시장 | "+" · ".join(p))
+        da=result.get("data_analysis") or {}
+        for x in (da.get("핵심근거") or [])[:2]:
+            lines.append("근거 | "+str(x)[:70])
+        for r in (da.get("관련주근거") or [])[:2]:
+            lines.append(f"관련주 | {r.get('name','')} — {str(r.get('reason',''))[:55]}")
 
-        # 과거시장상태: 성과 DB에 기록된 market_state 중 현재와 같은 상태를 우선 사용.
-        historical_market = "데이터 수집중"
-        sample_count = 0
-        win_rate = None
-
-        try:
-            rows = []
-            if os.path.exists(OUTCOME_TRACKING_DB):
-                with open(OUTCOME_TRACKING_DB, "r", encoding="utf-8") as f:
-                    for line in f:
-                        try:
-                            r = json.loads(line)
-                            if r.get("checked") and (r.get("outcome") or {}).get("change_pct") is not None:
-                                rows.append(r)
-                        except Exception:
-                            continue
-
-            sample_count = len(rows)
-
-            states = []
-            for r in rows:
-                st = str(r.get("market_state") or "").strip()
-                if st:
-                    states.append(st)
-
-            if states:
-                # 가장 많이 나타난 과거 시장상태를 대표값으로 표시
-                from collections import Counter
-                historical_market = Counter(states).most_common(1)[0][0]
-
-            if sample_count:
-                wins = sum(
-                    1 for r in rows
-                    if float((r.get("outcome") or {}).get("change_pct") or 0) > 0
-                )
-                win_rate = wins / sample_count * 100.0
-        except Exception:
-            pass
-
-        # 간단한 시장상태 비교
-        if current_market == "확인중" or historical_market == "데이터 수집중":
-            similarity = "비교중"
-        elif current_market == historical_market:
-            similarity = "유사"
-        else:
-            similarity = "상이"
-
-        score = result.get("score")
-        if score is None:
-            score = result.get("master_score")
-        score_text = f"{float(score):.0f}" if isinstance(score, (int, float)) else "—"
-
-        lines = [
-            f"MASTER {score_text}  |  현재시장 {current_market}",
-            f"과거시장 {historical_market}  |  시장비교 {similarity}",
-            f"대장주 {leader.get('name')}  |  관련주 {len(related)}",
-            (
-                f"누적성과 {sample_count}건  |  성공률 {win_rate:.1f}%"
-                if win_rate is not None
-                else "누적성과 데이터 수집중"
-            ),
-        ]
-
-        img = Image.new("RGB", (1500, 450), (5, 17, 25))
-        draw = ImageDraw.Draw(img)
-        font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
-        font_big = ImageFont.truetype(font_path, 46)
-        font_small = ImageFont.truetype(font_path, 31)
-
-        draw.rounded_rectangle(
-            (18, 18, 1482, 432),
-            radius=28,
-            outline=(65, 235, 45),
-            width=5,
-            fill=(7, 25, 18),
-        )
-
-        draw.ellipse((45, 58, 125, 138), fill=(55, 210, 45),
-                     outline=(180, 255, 150), width=4)
-        draw.ellipse((66, 79, 104, 117), fill=(5, 17, 25))
-
-        draw.text((145, 45), "[MASTER 확정]", font=font_big, fill=(85, 255, 45))
-
-        y = 112
-        for i, line in enumerate(lines):
-            font = font_small
-            draw.text(
-                (145, y),
-                line,
-                font=font,
-                fill=(255, 255, 255) if i < 2 else (225, 245, 230),
-            )
-            y += 70
-
-        img.save(out, format="PNG", optimize=True)
+        img=Image.new("RGB",(1500,560),(5,17,25))
+        draw=ImageDraw.Draw(img)
+        font_path="/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+        big=ImageFont.truetype(font_path,44)
+        small=ImageFont.truetype(font_path,29)
+        draw.rounded_rectangle((18,18,1482,542),radius=28,outline=(65,235,45),width=5,fill=(7,25,18))
+        draw.text((55,45),"👍 MASTER DATA ANALYSIS",font=big,fill=(85,255,45))
+        y=112
+        for i,line in enumerate(lines[:7]):
+            draw.text((55,y),line,font=small,fill=(255,255,255) if i<3 else (225,245,230))
+            y+=60
+        img.save(out,format="PNG",optimize=True)
         return out
     except Exception as e:
-        _engine_log("warning", "[MASTER] 분석 이미지 생성 실패 | 원인=%s", str(e)[:160])
+        _engine_log("warning","[MASTER] 데이터 분석 이미지 생성 실패 | 원인=%s",str(e)[:160])
         return ""
 
 
@@ -3711,6 +3819,11 @@ def _engine_format_message(item):
         lines.append('✅ [시장전망] ==> '+html.escape(str(outlook[0])))
         for o in outlook[1:3]: lines.append('     ✔ '+html.escape(str(o)))
 
+    # 기존 결과를 다시 판단하지 않고, MASTER가 확보한 근거 + 실제 시장/성과 데이터를 노출한다.
+    analysis_lines, _, _ = _engine_data_analysis_lines(item, master_result)
+    if analysis_lines:
+        lines.extend(analysis_lines)
+
     # 관련주/테마/BIG ISSUE는 위 master_badge에서 이미 표시했으므로 여기서 중복 출력하지 않는다.
     # (참고: master_badge가 비어있으면 관련주/테마/BIG ISSUE가 없다는 뜻이므로 항목 자체가 비게 된다)
 
@@ -3720,15 +3833,6 @@ def _engine_format_message(item):
         if dm: lines.append(html.escape(dm.group(1).replace('/','.').replace('-','.')))
         rest=schedule.replace(dm.group(1),'').strip(' -—:·') if dm else schedule
         if rest: lines.append('✔ '+html.escape(rest[:220]))
-    # 용어 설명은 메시지의 가장 아래에만 표시하며, 용어 자체는 강조하지 않는다.
-    terms = (master_result or {}).get('term_explanations') or []
-    if terms:
-        lines.append('💡 [용어 설명]')
-        for t in terms:
-            term = str(t.get('term','')).strip()
-            desc = str(t.get('description','')).strip()
-            if term and desc:
-                lines.append('• '+html.escape(term)+' : '+html.escape(desc))
     if item.get('link'):
         lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문 보기</a>')
     return '\n\n'.join(x for x in lines if str(x).strip())
