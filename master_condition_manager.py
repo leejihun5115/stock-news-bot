@@ -597,6 +597,7 @@ class MasterConditionManager:
         제목은 요약문이나 본문 첫 문장으로 대체하지 않는다. 수집 단계에서
         이미 전달문 메타데이터를 제거했으므로, 정상적인 기사 제목은 원문 그대로
         유지한다. 제목이 비어 있거나 전달문 흔적만 남은 경우에만 안전한 최소 정리를 한다.
+        [수정: 자동제목] 제목이 너무 길면(가독성 기준 초과) 핵심 절만 남기고 축약한다.
         """
         title = self._clean(title)
         if not title:
@@ -607,7 +608,37 @@ class MasterConditionManager:
             cleaned = re.sub(r"^루팡\s*[:：-]?\s*", "", cleaned).strip()
             if cleaned:
                 title = cleaned
-        return title[:220].strip()
+        title = title[:220].strip()
+        return self._auto_shorten_title(title)
+
+    def _auto_shorten_title(self, title, max_len=42):
+        """제목이 max_len(기본 42자)을 넘으면 핵심 절만 남기고 축약한다.
+        쉼표/가운뎃점 등 자연스러운 경계가 있으면 max_len에 가장 가까운 경계에서
+        자르되, 너무 앞쪽(제목의 절반 미만)에서 잘리면 회사명만 남는 등 내용이
+        사라지므로 그 경우는 무시하고 단어 경계 기준으로 잘라 말줄임표(…)를 붙인다.
+        원문 자체를 새로 창작하지 않고 "어디까지 보여줄지"만 결정한다.
+        """
+        title = str(title or "").strip()
+        if len(title) <= max_len:
+            return title
+        min_len = max(10, max_len // 2)
+        best_idx = -1
+        for sep in [", ", "· ", " - ", "…", " · ", "..."]:
+            start = 0
+            while True:
+                idx = title.find(sep, start)
+                if idx == -1:
+                    break
+                if min_len <= idx <= max_len and idx > best_idx:
+                    best_idx = idx
+                start = idx + 1
+        if best_idx >= min_len:
+            return title[:best_idx].strip()
+        cut = title[:max_len]
+        last_space = cut.rfind(" ")
+        if last_space >= min_len:
+            cut = cut[:last_space]
+        return cut.rstrip(" ,.-") + "…"
 
     def _stage(self, text):
         found = []

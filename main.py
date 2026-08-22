@@ -238,7 +238,7 @@ import difflib
 import zipfile
 import io
 import xml.etree.ElementTree as ET
-from collections import defaultdict
+from collections import defaultdict, Counter
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -1667,16 +1667,25 @@ def _engine_record_global_briefing(item):
 
 
 def _engine_record_historical_case(item):
+    """[1원칙: 데이터는 무조건 누적] 강도/조건과 무관하게 실제로 송출된 뉴스는
+    전부 누적 DB에 기록한다. '급등/폭등/상한가/신고가' 같은 강한 재료였는지는
+    is_surge_hit 플래그로만 구분해서 남기고, 기록 자체를 막지 않는다.
+    이 누적 데이터가 이후 모든 뉴스의 관련주/테마 판정, 분석 근거의 기반이 된다.
+    """
     if not ENABLE_HISTORICAL_SURGE_DB:
         return
     strong, hits = _engine_strong_material(item)
     title = item.get("title", "")
-    if not strong or not any(x in _engine_clean(title + " " + item.get("extra", "")).lower() for x in ["급등", "폭등", "상한가", "신고가", "surge", "soar", "rally"]):
-        return
+    text_all = _engine_clean(title + " " + item.get("extra", "")).lower()
+    is_surge_hit = strong and any(
+        x in text_all for x in ["급등", "폭등", "상한가", "신고가", "surge", "soar", "rally"]
+    )
     row = {
         "ts": _now_kst().isoformat(), "text": (title + " " + item.get("extra", ""))[:800],
         "title": title[:500], "link": str(item.get("link", ""))[:1000],
         "companies": item.get("companies", [])[:6], "hits": hits,
+        "market_state": str(item.get("market_state") or "").strip(),
+        "is_surge_hit": is_surge_hit,
     }
     if _engine_atomic_append_jsonl(HISTORICAL_SURGE_DB, row):
         _engine_historical_cache.append(row)
@@ -2023,6 +2032,23 @@ KRX_HOLIDAYS_2026 = {
 US_OPEN = datetime.time(9, 30)
 US_CLOSE = datetime.time(16, 0)
 
+# ============================================================
+# [테스트 모드 / 조건56 테스트분리] 실시간 뉴스가 없는 시간대(장 마감/새벽/휴일 등)에도
+# 파이프라인 전체(수집→MASTER→포맷터→텔레그램)를 눈으로 검증할 수 있도록,
+# 아래 시간 필터들을 환경변수로만 완화한다. 기본값은 OFF(운영 동작 그대로)이며,
+# 코드상 어떤 값도 하드코딩으로 바꾸지 않는다 — 검증이 끝나면 환경변수만 지우면
+# 즉시 원래 동작(최근 60분)으로 복귀한다.
+# ============================================================
+NEWS_BOT_TEST_MODE = _env_flag("NEWS_BOT_TEST_MODE", False)
+NEWS_BOT_TEST_WINDOW_MIN = int(os.environ.get("NEWS_BOT_TEST_WINDOW_MIN", "10080"))  # 기본 7일치까지 허용
+if NEWS_BOT_TEST_MODE:
+    _logger.warning(
+        "[테스트 모드] 시간 필터 완화 ON | 최근 %d분(%.1f일) 이내 뉴스까지 통과 | "
+        "검증이 끝나면 NEWS_BOT_TEST_MODE를 반드시 끌 것(광고성/오래된 뉴스가 실제 채널로 도배될 수 있음)",
+        NEWS_BOT_TEST_WINDOW_MIN, NEWS_BOT_TEST_WINDOW_MIN / 1440,
+    )
+
+
 def _engine_market_state(source, published):
     dt = _engine_parse_datetime(published)
     if dt is None:
@@ -2063,6 +2089,8 @@ def _engine_external_time_gate(source, published, title, extra, market_state, ma
     """텔레그램/유튜브 도배 방지용 시간 관문.
     60분 초과는 원칙적으로 차단하고, 장 마감 후/휴무의 강한 재료만 예외로 통과시킨다.
     """
+    if NEWS_BOT_TEST_MODE:
+        return True, "테스트모드(시간필터 완화)"
     if not (str(source).startswith("텔레그램/") or str(source).startswith("유튜브/")):
         return True, ""
     dt = _engine_parse_datetime(published)
@@ -3466,23 +3494,77 @@ def _engine_master_usable(result):
 
 def _engine_company_history_score(name):
     """[누적 데이터 연동 / 조건25·26 과거급등이력·과거주도이력]
-    과거 급등 이력 DB(HISTORICAL_SURGE_DB)에서 이 종목이 몇 번이나 강한 재료
-    기사에 등장했는지 세어 보조 점수로 변환한다. MasterConditionManager._score()의
-    history_score는 이 값을 받아 최대 8점까지만 반영한다(직접 근거를 넘어서지 않음).
+    과거 누적 DB(HISTORICAL_SURGE_DB)에서 이 종목이 몇 번이나 등장했는지 세어
+    보조 점수로 변환한다. [1원칙: 무조건 누적] 이후로는 강한 재료가 아닌 뉴스도
+    전부 쌓이므로, 실제 급등 이력(is_surge_hit)에는 가중치를 더 주고 단순 언급은
+    약하게 반영해 "많이 언급됐다"와 "실제로 급등했다"를 구분한다.
+    MasterConditionManager._score()의 history_score는 이 값을 받아 최대 8점까지만
+    반영한다(직접 근거를 넘어서지 않음).
     """
     name = str(name or "").strip()
     if not name or not ENABLE_HISTORICAL_SURGE_DB or not _engine_historical_cache:
         return 0.0
-    hits = 0
+    score = 0.0
     for row in _engine_historical_cache[-3000:]:
         companies = [str(c).strip() for c in (row.get("companies") or [])]
-        if name in companies:
-            hits += 1
+        matched = name in companies or (name and name in str(row.get("text", "")))
+        if not matched:
             continue
-        # companies 목록에 안 잡혀도 과거 기사 본문에 종목명이 직접 언급됐다면 인정한다.
-        if name and name in str(row.get("text", "")):
-            hits += 1
-    return float(hits)
+        score += 1.5 if row.get("is_surge_hit") else 0.5
+    return score
+
+
+def _engine_company_history_detail(name):
+    """[누적데이터 분석] 이 종목이 과거 급등 이력 DB에 몇 번, 언제, 어떤 시장상황에서
+    등장했는지 요약한다. 메시지의 '📊 누적데이터' 섹션에서 과거-현재 시장상황 비교에 쓰인다.
+    이력이 전혀 없으면 None을 반환해 해당 섹션 자체를 표시하지 않는다(있는 데이터만 보여줌).
+    """
+    name = str(name or "").strip()
+    if not name or not ENABLE_HISTORICAL_SURGE_DB or not _engine_historical_cache:
+        return None
+    matches = []
+    for row in _engine_historical_cache[-3000:]:
+        companies = [str(c).strip() for c in (row.get("companies") or [])]
+        if name in companies or (name and name in str(row.get("text", ""))):
+            matches.append(row)
+    if not matches:
+        return None
+    matches.sort(key=lambda r: str(r.get("ts", "")))
+    state_counts = Counter(str(r.get("market_state") or "").strip() for r in matches if r.get("market_state"))
+    return {
+        "count": len(matches),
+        "first_ts": matches[0].get("ts", ""),
+        "last_ts": matches[-1].get("ts", ""),
+        "state_counts": state_counts,
+    }
+
+
+def _engine_company_outcome_stats(name):
+    """[누적데이터 분석] 성과추적 DB(OUTCOME_TRACKING_DB)에서 이 종목이 과거에 대장주/관련주로
+    송출됐던 건들의 실제 주가 등락률 평균을 계산한다. 아직 결과가 확정된 건이 없으면 None.
+    """
+    name = str(name or "").strip()
+    if not name or not ENABLE_OUTCOME_TRACKING:
+        return None
+    _engine_load_outcome_tracking()
+    changes = []
+    for row in _OUTCOME_TRACKING_ROWS:
+        names = set()
+        leader = row.get("leader") or {}
+        if leader.get("name"):
+            names.add(str(leader["name"]).strip())
+        for r in row.get("related") or []:
+            if r.get("name"):
+                names.add(str(r["name"]).strip())
+        if name not in names:
+            continue
+        outcome = row.get("outcome") or {}
+        cp = outcome.get("change_pct")
+        if cp is not None:
+            changes.append(float(cp))
+    if not changes:
+        return None
+    return {"count": len(changes), "avg": sum(changes) / len(changes)}
 
 
 def _engine_master_result(item):
@@ -3734,19 +3816,55 @@ def _engine_format_message(item):
         lines.append('🧠 <b>분석</b>')
         lines.append(html.escape(' '.join(analysis_parts)[:650]))
 
-    if related:
-        direct = [r for r in related if r.get('direct')]
-        if direct:
-            names = ' · '.join(str(r.get('name','')).strip() for r in direct[:3] if r.get('name'))
-            if names:
-                lines.append(f'🎯 <b>직접 연결 종목</b> · {html.escape(names)}')
+    direct = [r for r in related if r.get('direct')] if related else []
+    if direct:
+        # [수정] 라벨과 값 사이 구분자를 '·' 대신 ':' 로 표기한다. 같은 종목이 다른
+        # 곳(예: 관련주 배지)에 아이콘과 함께 또 나오는 중복 표시는 만들지 않는다 —
+        # 이 줄이 해당 종목을 대표하는 유일한 표시이며, 다른 배지가 같은 이름을
+        # 다시 보여줄 경우 그쪽에서 생략해야 한다(badge_text 처리부에서 이름을
+        # 별도로 다시 출력하지 않는 것으로 이미 보장됨).
+        names = ' · '.join(str(r.get('name','')).strip() for r in direct[:3] if r.get('name'))
+        if names:
+            lines.append(f'🎯 <b>직접 연결 종목</b> : {html.escape(names)}')
+    else:
+        # [추가/1원칙] 직접 연결된 관련주가 없다면 최소한 어떤 테마인지는 뽑아서 보여준다.
+        # 관련주 없음 자체를 빈 결과로 남기지 않는다.
+        theme_guess = _engine_theme(_engine_clean(f"{raw_title} {item.get('extra','')}"))
+        if theme_guess:
+            lines.append(f'🏷 <b>테마</b> : {html.escape(theme_guess)}')
 
     badge_text = str(_engine_master_badge(master_result) or '')
     # 내용/데이터가 없는 빈 라벨은 절대 표시하지 않는다.
+    # [수정] '💰 돈되는 뉴스' → '💰 진행 과정'으로 라벨을 바꾸고 구분자를 ':' 로 통일한다.
     if '돈되는 뉴스' in badge_text and master_result.get('commercial_evidence'):
-        lines.append('💰 <b>돈되는 뉴스</b> · ' + html.escape(str(master_result.get('commercial_evidence'))[:180]))
+        lines.append('💰 <b>진행 과정</b> : ' + html.escape(str(master_result.get('commercial_evidence'))[:180]))
     if '강한 뉴스' in badge_text and (master_result.get('news_value') == '높음' or master_result.get('historical_evidence')):
         lines.append('🔥 <b>강한 뉴스</b>')
+
+    # [추가] 📊 누적데이터: 이 종목이 과거에 몇 번 등장했고(HISTORICAL_SURGE_DB),
+    # 그때 실제 등락률은 어땠는지(OUTCOME_TRACKING_DB), 과거 등장 시점의 시장상황과
+    # 지금 시장상황이 다른지를 보여준다. 쌓인 데이터가 없으면 섹션 자체를 생략한다.
+    lead_name = ''
+    if related:
+        direct_names = [str(r.get('name', '')).strip() for r in related if r.get('direct') and r.get('name')]
+        lead_name = direct_names[0] if direct_names else str(related[0].get('name', '')).strip()
+    if lead_name:
+        hist = _engine_company_history_detail(lead_name)
+        outc = _engine_company_outcome_stats(lead_name)
+        if hist or outc:
+            parts = []
+            if hist:
+                parts.append(f"과거 유사 재료 이력 {hist['count']}건")
+            if outc:
+                sign = '+' if outc['avg'] >= 0 else ''
+                parts.append(f"과거 판단 이후 평균 등락률 {sign}{outc['avg']:.2f}%({outc['count']}건 기준)")
+            if hist and hist['state_counts']:
+                past_state, _cnt = hist['state_counts'].most_common(1)[0]
+                if market_state and past_state and past_state != market_state:
+                    parts.append(f"과거엔 주로 '{past_state}'였고 이번엔 '{market_state}'")
+            if parts:
+                lines.append('📊 <b>누적데이터</b>')
+                lines.append(html.escape(' · '.join(parts)))
 
     terms = (master_result or {}).get('term_explanations') or []
     if terms:
@@ -3848,7 +3966,11 @@ def _engine_is_relevant(title):
 def _engine_is_within_recent_window(published, window_minutes=60):
     """현재 KST 기준 최근 window_minutes분 이내 뉴스만 실시간 송출 대상으로 허용한다.
     과거 뉴스는 분석/비교 DB에서 활용할 수 있지만 현재 뉴스 송출에서는 제외한다.
+    [테스트 모드] NEWS_BOT_TEST_MODE=1 이면 window_minutes를 NEWS_BOT_TEST_WINDOW_MIN까지
+    강제로 늘려서, 실시간 뉴스가 없는 시간대에도 과거 기사로 파이프라인을 검증할 수 있다.
     """
+    if NEWS_BOT_TEST_MODE:
+        window_minutes = max(int(window_minutes), NEWS_BOT_TEST_WINDOW_MIN)
     if not published:
         return False
     dt = _engine_parse_datetime(published)
