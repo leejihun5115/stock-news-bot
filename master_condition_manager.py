@@ -294,10 +294,20 @@ class MasterConditionManager:
         r"[가-힣]{2,5}\s*(?:기자|특파원|논설위원)?\s*=\s*"
     )
 
+    # [출처 꼬리표 제거] 외신 RSS 요약은 종종 문장 끝에 "... livemint.com"처럼
+    # 출처 도메인이 그대로 붙어 나온다. 이걸 안 떼면 요약/시장전망에 도메인
+    # 문자열이 그대로 노출된다. 문장 맨 끝에 붙은 "단어.tld" 형태만 제거하므로
+    # 본문 중간의 정상적인 내용은 건드리지 않는다.
+    _PUBLISHER_SUFFIX_RE = re.compile(
+        r"\s*[-–—|·]?\s*[A-Za-z0-9][A-Za-z0-9.-]*\.(?:com|net|org|co\.[a-z]{2}|[a-z]{2,3})\s*$",
+        re.I,
+    )
+
     @staticmethod
     def _clean(x):
         s = re.sub(r"\s+", " ", str(x or "")).strip()
         s = MasterConditionManager._BYLINE_RE.sub("", s).strip()
+        s = MasterConditionManager._PUBLISHER_SUFFIX_RE.sub("", s).strip()
         return s
 
     @staticmethod
@@ -703,7 +713,7 @@ class MasterConditionManager:
             return "후보 종목은 있었지만 국내 상장 여부 또는 기사와 직접 연결되는 근거가 부족했습니다."
         return "후보 종목은 있었지만 기사 사건과의 직접 연결·공급망·상용화 근거가 약해 관련주로 확정하지 않았습니다."
 
-    def _outlook(self, text, stage, key_points, body=None):
+    def _outlook(self, text, stage, key_points, body=None, title=""):
         # generic fallback을 없애고, 실제 문장과 매칭된 사건만 전망으로 만든다.
         # [조건41 전망근거 강화] 같은 카테고리(예: 자사주/배당)라도 기사마다 실제 수치·사건이
         # 다르므로, 정형 문구만 반복하지 않고 기사에서 실제로 뽑힌 핵심문장(key_points)을
@@ -713,6 +723,10 @@ class MasterConditionManager:
         # 매칭됐을 때 창(window)이 제목 구간을 그대로 퍼오게 되어 "요약/전망에 제목이
         # 그대로 다시 등장"하는 결과가 나온다.
         body_text = self._clean(body) if body is not None else text
+        title_n = self._norm(title)
+        # [근거 문장 사전 추출] anchor를 포함하는 실제 문장 단위 후보를 미리 뽑아둔다.
+        # 이후 char 슬라이싱 대신 이 문장들에서만 근거를 고른다.
+        body_sentences = self._sentences(body_text)
         matched = []
         for pattern, sentence in self.OUTLOOK_PATTERNS:
             m = re.search(pattern, text, re.I)
@@ -740,12 +754,21 @@ class MasterConditionManager:
             # anchor(예: '자사주')가 실제로 들어있는 기사 핵심문장을 찾아 그대로 근거로 붙인다.
             # 같은 패턴이 여러 기사에 걸려도, 기사마다 실제 문장이 다르므로 출력이 붕어빵처럼
             # 똑같아지지 않고 그 기사의 구체적 수치·주체가 그대로 드러난다.
-            concrete = next((kp for kp in key_points if anchor in kp), None)
+            # [제목 반복 방지] key_points에서 못 찾으면 body 문장 중 anchor를 포함하면서
+            # 제목과 사실상 같지 않은 "완결된 문장"만 근거로 쓴다. 예전처럼 body_text를
+            # 글자 수로 잘라 쓰면 제목과 거의 같은 RSS 요약에서 제목 원문(+출처 도메인)이
+            # 그대로 잘려 들어가는 문제가 있었다.
+            concrete = next(
+                (kp for kp in key_points
+                 if anchor in kp and not self._is_title_near_dup(kp, title_n)),
+                None,
+            )
             if not concrete:
-                idx = body_text.find(anchor)
-                if idx >= 0:
-                    concrete = body_text[max(0, idx - 40): idx + 70].strip(" .,")
-            if concrete:
+                for bs in body_sentences:
+                    if anchor in bs and not self._is_title_near_dup(bs, title_n):
+                        concrete = self._trim_for_readability(bs)
+                        break
+            if concrete and not self._is_title_near_dup(concrete, title_n):
                 result.append(f"{concrete.rstrip('.')} → {sentence}")
             else:
                 result.append(f"{anchor} 관련해서 {sentence}")
@@ -804,7 +827,7 @@ class MasterConditionManager:
         elif name == "시장영향":
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
         elif name in ("전망근거", "후속확인", "지속성"):
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"])
+            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])
         elif name == "시장전망최대3":
             state["outlook"] = state["outlook"][:3]
         elif name == "대장주선정":
@@ -823,7 +846,7 @@ class MasterConditionManager:
             # 현재까지의 모든 조건을 최종 상태로 고정한다.
             state["stage"], state["commercial_evidence"] = self._stage(text)
             state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"])[:3]
+            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])[:3]
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
             state["master_confirmed"] = bool(
                 state["news_value"] in ("높음", "중간") and
