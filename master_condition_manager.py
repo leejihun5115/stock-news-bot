@@ -19,7 +19,7 @@ CONDITION_RULES 안의 "rule" 문구(설명 텍스트)는 실행 코드가 읽�
 
 ▶ 실제로 동작하는 19개 (이름 = _execute_rule의 elif 분기와 1:1 대응):
   원문확보/본문우선/분석입력고정, 증거보존, 제목반복금지, 추정금지, 핵심추출,
-  5W1H우선/사실우선/주제분리, 핵심최대3/요약확정, 일반문구제거, 상용화단계,
+  5W1H우선/사실우선/주제분리, 핵심필요량/요약확정, 일반문구제거, 상용화단계,
   실행신호, 미래일정검증, 시장영향, 전망근거/후속확인/지속성, 시장전망최대3,
   대장주선정, 대장주이유, 관찰후보, 관련주없음, 점수화, 조건중앙관리,
   FINAL_LOCK, Formatter무판단/Telegram무판단, 재호출금지
@@ -56,7 +56,7 @@ IMPLEMENTED_CONDITION_NAMES = frozenset({
     "원문확보", "본문우선", "분석입력고정",
     "증거보존", "제목반복금지", "추정금지", "핵심추출",
     "5W1H우선", "사실우선", "주제분리",
-    "핵심최대3", "요약확정", "일반문구제거",
+    "핵심필요량", "요약확정", "일반문구제거",
     "상용화단계", "실행신호", "미래일정검증", "시장영향",
     "전망근거", "후속확인", "지속성", "시장전망최대3",
     "대장주선정", "대장주이유", "관찰후보", "관련주없음", "점수화",
@@ -80,7 +80,7 @@ CONDITION_RULES = [
 
     {"order": 11, "name": "핵심추출", "rule": "본문의 실제 사건과 변화를 추출한다."},
     {"order": 12, "name": "5W1H우선", "rule": "누가·무엇을·왜·언제·어떻게를 우선한다."},
-    {"order": 13, "name": "핵심최대3", "rule": "핵심 포인트는 최대 3개다."},
+    {"order": 13, "name": "핵심필요량", "rule": "핵심 내용은 중요도에 따라 필요한 만큼 작성하며 개수 제한을 두지 않는다. 같은 내용은 합치고 서로 다른 중요 내용은 다음 줄에 추가한다."},
     {"order": 14, "name": "사실우선", "rule": "해석보다 확인된 사실을 먼저 둔다."},
     {"order": 15, "name": "수치보존", "rule": "중요 수치를 임의로 바꾸지 않는다."},
     {"order": 16, "name": "주제분리", "rule": "서로 다른 사건을 섞지 않는다."},
@@ -177,6 +177,47 @@ class MasterResult:
     def as_dict(self):
         return self.__dict__.copy()
 
+
+
+# ============================================================
+# [불변 최상위 원칙 — 사용자 최종 지시]
+# 빈 항목은 절대 노출하지 않는다. 실제 내용이 없으면 해당 항목의
+# 제목/라벨/아이콘/대체문구까지 생성하지 않는다. 이 원칙은 모든
+# MASTER 결과와 이후 출력 단계에 공통 적용하며, 충돌하는 하위 규칙보다 우선한다.
+# ============================================================
+IMMUTABLE_EMPTY_SECTION_RULE = True
+
+# ============================================================
+# [불변 명령체계] 최신 사용자 지시가 최우선이다.
+# 충돌하는 이전/하위 규칙·Formatter·레거시 출력 명령은 실행하지 않는다.
+# 충돌하지 않는 기존 정상 기능만 유지한다.
+# ============================================================
+COMMAND_PRIORITY_POLICY = (
+    "LATEST_USER_COMMAND",
+    "MASTER_DECISION",
+    "VALIDATOR",
+    "FINAL_LOCK",
+    "FORMATTER_DISPLAY_ONLY",
+    "TELEGRAM_SEND_ONLY",
+)
+LATEST_USER_COMMAND_WINS = True
+
+
+# ============================================================
+# [고정 원칙 / 변경 금지] 외부 콘텐츠·일반뉴스·공시 공통 출력 원칙
+# 1) 블로그/유튜브/텔레그램 등 외부 콘텐츠도 원문을 그대로 노출하지 않고
+#    MASTER가 본문을 읽어 핵심만 짧게 요약한다.
+# 2) 가능한 경우 핵심은 한 줄로 정리하고, 서로 다른 내용이 추가로 확인될 때는 다음 줄에 별도 핵심포인트를 추가한다. 중요한 내용은 개수 제한 없이 작성한다.
+# 3) 요약은 '무슨 일이 있었는가 → 무엇이 핵심인가 → 왜 중요한가/시장 영향이 있는가'
+#    순서를 우선하며, 일반뉴스에도 같은 원칙을 적용한다. 시장 영향이 없으면 억지로
+#    주가·시장 해석을 붙이지 않는다.
+# 4) 기사/원문에 없는 사실·추측·형식적인 문구를 요약에 추가하지 않는다.
+# 5) 공시는 현재 프로젝트에 정의된 공시 노출기준을 통과한 항목만 외부 출력 대상으로 삼고,
+#    단순히 접수된 모든 공시를 노출하지 않는다.
+# 6) 실제 표시할 내용이 없는 항목은 항목 제목·라벨·아이콘까지 출력하지 않는다.
+# 7) 위 원칙과 충돌하는 하위 출력 규칙은 적용하지 않는다.
+# ============================================================
+FIXED_OUTPUT_PRINCIPLE = True
 
 class MasterConditionManager:
     """
@@ -379,9 +420,12 @@ class MasterConditionManager:
         return candidates
 
     def _key_points(self, title, body):
-        """기사 전체를 단순 축약하지 않고 '무슨 일→핵심 의미→영향' 순으로 최대 3개만 고른다.
-        일반뉴스도 같은 원칙을 사용하되, 시장 영향이 본문에 실제로 있을 때만 영향 포인트를 포함한다.
-        서로 다른 내용은 반드시 별도 줄로 유지한다.
+        """[고정 요약 원칙]
+        원문을 그대로 옮기지 않고 핵심 사실을 압축한다. 가능한 경우 한 줄의 핵심으로
+        끝내며, 내용이 서로 다른 경우에만 다음 줄에 별도 포인트를 추가한다.
+        우선순위는 '무슨 일이 발생했는가 → 왜 중요한가 → 시장/주가 영향이 있다면 왜 그런가'이다.
+        일반뉴스에도 동일하게 적용하고, 본문에 근거가 없는 시장 해석은 만들지 않는다.
+        중요한 내용은 개수 제한 없이 반환한다. 같은 내용은 합치고 서로 다른 내용은 별도 줄로 유지한다.
         """
         title_n = self._norm(title)
         sentences = self._event_sentences(title, body)
@@ -427,14 +471,12 @@ class MasterConditionManager:
             pick = max(impact_candidates, key=lambda x: (x[0], -x[1]))
             selected.append(pick[2]); used_idx.add(pick[1])
 
-        # 위 세 역할이 부족하면 가장 중요한 서로 다른 문장을 채운다.
+        # 서로 다른 중요 내용은 개수 제한 없이 추가한다. 반복·중복 문장은 제외한다.
         for item in sorted(scored, key=lambda x: (-x[0], x[1])):
-            if len(selected) >= 3:
-                break
             if item[1] not in used_idx:
                 selected.append(item[2]); used_idx.add(item[1])
 
-        return selected[:3]
+        return selected
 
     def _clause_cut(self, s):
         """접속어(면서/라며/는데/이에 따라/이로 인해) 앞에서 문장을 자연스럽게 끊는다.
@@ -596,18 +638,41 @@ class MasterConditionManager:
                     continue
             if concrete_link:
                 evidence_blob = " ".join(anchors + [reason_evidence])
-                # 후보의 연결 근거가 기사와 전혀 맞지 않으면 탈락.
-                if not any(a and self._norm(a) in self._norm(text) for a in anchors if a):
-                    if c.get("direct") and self._norm(name) in self._norm(text):
-                        pass
-                    else:
-                        continue
+                # 후보의 연결 근거가 기사 본문과 실제로 겹치는지 MASTER가 재검증한다.
+                # 후보명 자체가 기사에 없어도 NAND/계약/공급 등 핵심 근거어가 본문에 있으면 인정한다.
+                evidence_terms = [
+                    t for t in re.findall(r"[A-Za-z가-힣0-9]{2,}", evidence_blob)
+                    if t.lower() not in {"기사", "직접", "사업", "관련", "연관", "후보", "종목", "테마", "국내", "상장"}
+                ]
+                overlap = any(self._norm(t) in self._norm(text) for t in evidence_terms)
+                if not overlap and self._norm(name) not in self._norm(text):
+                    continue
             c["score"] = round(self._score(c), 2)
             if c["score"] >= self.min_score:
                 scored.append(c)
         scored.sort(key=lambda x: (-x["score"], -int(bool(x.get("direct"))), -int(bool(x.get("event_link")))))
         related = scored[:self.max_related]
-        return related, (related[0] if related else None), related[1:]
+        if related:
+            return related, related[0], related[1:]
+
+        # 직접 종목이 없을 때만 MASTER가 본문 전체를 보고 실제 연결 테마를 선택한다.
+        theme_patterns = [
+            ("AI 반도체 테마", r"AI.{0,30}(?:반도체|칩)|반도체.{0,30}AI"),
+            ("원전 테마", r"원전|원자력|SMR"),
+            ("2차전지 테마", r"2차전지|배터리|전기차 배터리"),
+            ("방산 테마", r"방산|무기|미사일|군수"),
+            ("바이오 테마", r"바이오|신약|임상|항체|의약품"),
+            ("3D NAND 테마", r"3D\s*NAND|NAND|낸드"),
+        ]
+        for label, pattern in theme_patterns:
+            if re.search(pattern, text or "", re.I):
+                return [{"name": label, "reason": "기사 본문에서 해당 산업 테마가 확인됨", "score": 70, "direct": False, "theme": True, "domestic_listed": True}], None, []
+
+        # 시장 반응 가능성이 큰 빅이슈도 MASTER가 본문 근거로만 확정한다.
+        big_issue = re.search(r"(?:전쟁|제재|관세|금리|기준금리|대규모 인수|합병|M&A|대규모 계약|대규모 투자|정책 전환|규제 변화|시장 충격)", text or "", re.I)
+        if big_issue and len(text or "") >= 80:
+            return [{"name": "BIG ISSUE", "reason": "본문상 시장 반응 가능성이 큰 사건이 확인됨", "score": 75, "direct": False, "big_issue": True, "domestic_listed": True}], None, []
+        return [], None, []
 
     def _related_none_reason(self, related, text, candidates):
         if related:
@@ -698,8 +763,8 @@ class MasterConditionManager:
             state["key_points"] = self._key_points(state["title"], state["body"])
         elif name in ("5W1H우선", "사실우선", "주제분리"):
             state["key_points"] = self._key_points(state["title"], state["body"])
-        elif name in ("핵심최대3", "요약확정"):
-            state["key_points"] = state["key_points"][:3]
+        elif name in ("핵심필요량", "요약확정"):
+            state["key_points"] = list(state["key_points"])
         elif name == "일반문구제거":
             # [조건19 빈요약허용 보호] 필터링으로 핵심요약이 전부 비면 조건19(억지 요약 금지)와
             # 충돌해 FINAL LOCK이 실패한다. 실제 사건 문장이 있는데도 길이 기준 때문에
@@ -821,7 +886,7 @@ class MasterConditionManager:
         result = MasterResult(
             rule_version=RULE_VERSION + "_EXEC65",
             title=state["title"],
-            key_points=state["key_points"][:3],
+            key_points=list(state["key_points"]),
             related=state["related"][:self.max_related],
             leader=state["leader"],
             observe=state["observe"][:2],
@@ -867,8 +932,6 @@ class MasterConditionManager:
         # 빈 요약을 정상 허용한다(요약칸은 화면에서 자연히 생략됨).
         if any(self._is_title_near_dup(k, title_n) for k in points):
             errors.append("요약이 제목과 동일함")
-        if len(points) > 3:
-            errors.append("핵심요약 3개 초과")
         related = result.get("related") or []
         for stock in related:
             if not self._clean(stock.get("name")):

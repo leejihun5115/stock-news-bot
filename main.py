@@ -198,7 +198,7 @@
 # - 유튜브: 채널 핸들 -> 실제 channel_id 자동 해석/캐시/재시도
 # - 미국장: 정규장 개장~마감까지 30분마다 정기 브리핑
 # - 미장 브리핑: 시간만 표시(개장 30분 문구 제거)
-# - 주요 지수/종목/ADR: 🔺/▼ 아이콘 + 등락률 (한글 상승/하락 문구 없음)
+# - 주요 지수/종목/ADR: 🔺 / ▼ + 등락률 (한글 상승·하락 미표시)
 # - 미국뉴스에서 실제 국내 관심종목으로 연결될 때만 🇰🇷 표시
 # - 기존 대장주/관심종목/공시/재무/일정/최근1시간/과거사례 로직 보존
 # ============================================================
@@ -988,6 +988,10 @@ STRONG_KEYWORDS_2 = UNIQUE_KEYWORDS_2
 DART_WATCH_COMPANIES = set(GLOBAL_AND_DOMESTIC_GIANTS)
 DART_RUMOR_KEYWORDS = ["조회공시", "풍문", "보도", "해명", "설명요구"]
 
+# [불변 명령체계] 최신 사용자 지시가 최우선이며 충돌하는 하위 출력 명령은 실행하지 않는다.
+LATEST_USER_COMMAND_WINS = True
+COMMAND_PRIORITY_POLICY = ("LATEST_USER_COMMAND", "MASTER", "VALIDATOR", "FINAL_LOCK", "FORMATTER", "TELEGRAM")
+
 DART_STRONG_REPORT_KEYWORDS = {
     "유상증자결정", "무상증자결정", "전환사채권발행결정", "신주인수권부사채권발행결정",
     "교환사채권발행결정", "타법인주식및출자증권취득결정", "타법인주식및출자증권처분결정",
@@ -1013,10 +1017,6 @@ DART_STRONG_REPORT_KEYWORDS = {
     "주식등의대량보유상황보고서",
     "양수결정", "양도결정",
     "추가상장",
-    # [재무카드 신규] 정기보고서/잠정실적은 별도 재무카드 포맷으로 처리하되,
-    # 감지 자체는 이 목록으로 하므로 함께 추가한다.
-    "반기보고서", "분기보고서", "사업보고서",
-    "영업(잠정)실적", "잠정실적",
 }
 
 DART_ALWAYS_EXPOSE_KEYWORDS = DART_STRONG_REPORT_KEYWORDS - {
@@ -1423,13 +1423,9 @@ STRONG_MARKET_HITS = {
     "목표가 상향", "목표가 하향", "어닝서프라이즈", "어닝 서프라이즈", "어닝쇼크",
     "자사주 공개매수", "공개매수", "자사주 매입", "자사주 소각", "수혜", "수혜주",
 }
-# [영문 속보/단독/특징주 누락 방지] 외신은 번역을 거쳐 여기 들어오지만, 번역기가
-# "EXCLUSIVE"를 "단독"이 아니라 "독점"으로, "BREAKING"을 "속보"가 아니라
-# "긴급"/"브레이킹뉴스"로 옮기는 경우가 있어 한국어 표지 1개만으로는 놓친다.
-# 번역 전 영문 원표기와, 번역 후 흔히 나오는 동의어를 함께 인정한다.
-BREAKING_WORDS = {"속보", "긴급", "브레이킹", "breaking", "breaking news", "속보:"}
-FEATURE_WORDS = {"특징주", "주목 종목", "관심 종목", "급등 종목", "이슈 종목", "테마주"}
-EXCLUSIVE_WORDS = {"단독", "독점", "단독보도", "exclusive"}
+BREAKING_WORDS = {"속보"}
+FEATURE_WORDS = {"특징주"}
+EXCLUSIVE_WORDS = {"단독"}
 
 _engine_seen = set()
 _engine_lock = threading.Lock()
@@ -1858,23 +1854,7 @@ def _engine_company_direct_context(text, company):
     t = _engine_clean(text)
     contexts = []
     for m in re.finditer(re.escape(company), t, re.I):
-        # [버그수정] 고정폭(±150자) 슬라이스는 단어 중간에서 끊겨 "▶️ 데이터센터는..." 같은
-        # 여러 항목이 뒤섞인 깨진 텍스트를 만든다. 텔레그램 불릿(▶️/•/★)이나 문장부호를
-        # 경계로 우선 잘라내고, 그래도 남으면 공백 경계로 스냅한다.
-        start, end = max(0, m.start() - 150), min(len(t), m.end() + 150)
-        window = t[start:end]
-        rel_start, rel_end = m.start() - start, m.end() - start
-        boundary_re = re.compile(r"[▶►●★☆.!?。！？]")
-        before = window[:rel_start]
-        bm = list(boundary_re.finditer(before))
-        left = bm[-1].end() if bm else 0
-        after = window[rel_end:]
-        am = boundary_re.search(after)
-        right = rel_end + (am.start() if am else len(after))
-        snippet = window[left:right].strip(" -–—.,·")
-        if len(snippet) < 20:
-            snippet = window.strip(" -–—.,·")
-        contexts.append(snippet)
+        contexts.append(t[max(0,m.start()-150):min(len(t),m.end()+150)])
     return contexts
 
 
@@ -2162,34 +2142,10 @@ def _engine_relation_reason(text, companies, market_hits):
     return ""
 
 
-def _engine_theme_context(text, keyword):
-    """[관련테마 이유 강화] 테마 키워드가 본문 어느 문장/구절에서 나왔는지
-    실제 근거 텍스트를 찾아 반환한다. 정형 문구만 붙이지 않고 본문 내용을
-    직접 인용해 왜 이 테마·종목이 연결됐는지 사람이 바로 이해할 수 있게 한다.
-    """
-    t = _engine_clean(text)
-    m = re.search(re.escape(keyword), t, re.I)
-    if not m:
-        return ""
-    start, end = max(0, m.start() - 45), min(len(t), m.end() + 65)
-    # 단어 중간에서 시작/끝나지 않도록 앞뒤 공백 경계로 맞춘다.
-    if start > 0:
-        sp = t.find(" ", start)
-        if 0 <= sp < m.start():
-            start = sp + 1
-    if end < len(t):
-        sp = t.rfind(" ", m.end(), end)
-        if sp > m.end():
-            end = sp
-    ctx = t[start:end].strip(" .,-")
-    ctx = re.sub(r"^[^가-힣A-Za-z0-9]+", "", ctx)
-    return ctx
-
-
 def _engine_domestic_watchlist(item):
     """[50] 국내 관련주 단일 판정기.
     출력용 서열(대장주/관찰/관심)을 절대 생성하지 않는다.
-    직접 관련 > 실제 테마연결 > 간접연결 순으로 최대 3개만 반환한다.
+    직접 관련 > 실제 테마연결 > 간접연결 순으로 필요한 만큼만 반환한다.
     """
     text = _engine_clean(item.get("title", "") + " " + item.get("extra", ""))
     low = text.lower()
@@ -2246,12 +2202,26 @@ def _engine_domestic_watchlist(item):
         rows.sort(key=lambda x:x["score"],reverse=True)
         return rows[:3]
 
-    # [최종사용자지시우선 / MASTER 단일통제]
-    # 테마·간접 관련주를 이 하위 함수에서 생성하지 않는다.
-    # 관련주 판단은 MASTER에서만 수행하며, 이 함수는 기사에 실제 등장하고
-    # 직접 사업연관이 확인되는 국내 상장사 후보만 전달한다.
-    return rows[:3]
-
+    # 50-02~04 테마/간접 연결: 실제 사건이 있는 경우만
+    event_words=["수주","계약","공급","납품","투자","증설","양산","출시","상용화","승인","허가","기술이전","기술수출","임상","지분","실적","매출","수출","정책","규제","관세","수요","가격","데이터센터","AI칩","HBM"]
+    if not any(k.lower() in low for k in event_words): return []
+    theme_keys=[k for k in sorted(STOCK_LINK_MAP,key=len,reverse=True) if k.lower() in low]
+    if not theme_keys:
+        if any(k in low for k in ["h200","hbm","ai칩","ai 반도체","반도체","메모리"]): theme_keys=["HBM"]
+        elif any(k in low for k in ["바이오","신약","임상","fda","키트루다","로열티","마일스톤"]): theme_keys=["바이오"]
+        elif any(k in low for k in ["lng선","lng","조선","선박"]): theme_keys=["조선"]
+        elif any(k in low for k in ["방산","미사일","무기","전투기"]): theme_keys=["방산"]
+    if not theme_keys: return []
+    scored=[]
+    for key in theme_keys[:5]:
+        if not any(k.lower() in low for k in event_words): continue
+        for stock in STOCK_LINK_MAP.get(key,[]):
+            hist,leader,limitup,surge=history(stock)
+            scored.append({"name":stock,"theme":key,"reason":f"{THEME_MAP.get(key,key)} 테마의 실제 사업·수요 변화와 연결","score":300+limitup*30+leader*20+surge*8+hist*2,"direct":False})
+    best={}
+    for r in scored:
+        if r["name"] not in best or r["score"]>best[r["name"]]["score"]: best[r["name"]]=r
+    return sorted(best.values(),key=lambda x:x["score"],reverse=True)[:3]
 
 def _engine_schedule(text):
     """실제 투자 일정만 추출한다.
@@ -2408,11 +2378,7 @@ def _engine_telegram_title(raw_text, channel_name=""):
 
     # 바이라인이 없으면 기존 방식대로 문장 후보 중 첫 기사형 문장을 제목으로 사용.
     raw_for_extra = _engine_clean_telegram_meta(raw)
-    # [버그수정] 텔레그램 게시물은 문장 사이 마침표 없이 "|"나 ▶️/•/★ 같은 불릿
-    # 기호로만 항목을 구분하는 경우가 많다. 이걸 경계로 안 잡으면 "헤드라인 | 기자명
-    # ▶️ 본문..." 전체(최대 240자)가 통째로 제목이 되어, 뒤에서 70자로 자를 때
-    # 기자 이름·불릿 기호가 낀 채로 잘려버린다.
-    parts = re.split(r"(?<=[.!?])\s+|\s{2,}|\n+|\s*\|\s*|▶️?|●|▪️?|►|★|☆", str(raw))
+    parts = re.split(r"(?<=[.!?])\s+|\s{2,}|\n+", str(raw))
     candidates = []
     for part in parts:
         part = _engine_clean(part).strip("-—|")
@@ -2436,8 +2402,8 @@ def _engine_telegram_title(raw_text, channel_name=""):
 
 
 # ============================================================
-# [CORE IMMUTABLE RULE] 국내·외신 공통 🔎 1·2·3 핵심요약
-# 번역 여부와 무관하게 동일한 요약 규칙을 적용한다.
+# [CORE IMMUTABLE RULE] 국내·외신 공통 핵심요약
+# 한 줄 핵심 우선, 서로 다른 중요 내용은 다음 줄에 추가하며 개수 제한 없음.
 # ============================================================
 def _engine_force_numbered_keypoint(title: str, extra: str) -> str:
     title = re.sub(r"\s+", " ", str(title or "")).strip()
@@ -2502,65 +2468,6 @@ def _engine_strip_foreign_publisher_suffix(title: str) -> str:
     t = re.sub(r"\s+[-–—|]\s*(?:AD HOC NEWS|Simplywall\.st|simplywall\.st)\s*$", "", t, flags=re.I)
     return t.strip()
 
-# [매체명 분리] "... 밝혔다 - digittimes" 처럼 제목 끝에 영문 매체명이 " - 이름" 형태로
-# 붙어있으면, 이걸 제목에서 떼어내 헤더 줄(✅ [소스] [신규] _ 매체명)로 옮기기 위해 추출한다.
-# 한글 문장에서 '-'가 접속부호로 쓰인 경우까지 잘못 떼어내지 않도록, 떼어낼 조각이
-# 영문 위주(_engine_is_mostly_english)일 때만 매체명으로 인정한다.
-_PUBLISHER_SUFFIX_RE = re.compile(
-    r"\s[-–—]\s*([A-Za-z][A-Za-z0-9&.,'’\-]{1,30}(?:\s[A-Za-z0-9&.,'’\-]{1,30}){0,3})\s*$"
-)
-
-def _engine_extract_publisher_suffix(title: str):
-    t = str(title or "").strip()
-    m = _PUBLISHER_SUFFIX_RE.search(t)
-    if not m:
-        return t, ""
-    tail = m.group(1).strip()
-    if not tail:
-        return t, ""
-    # [판별 기준] _engine_is_mostly_english는 en>=12 조건이라 "digittimes"(10자) 같은
-    # 짧은 매체명에는 안 맞는다. 여기서는 한글이 섞이지 않고 영문이 최소 2자 이상이면
-    # 매체명으로 인정한다(짧은 접미사 전용 판별).
-    korean = re.findall(r"[가-힣]", tail)
-    latin = re.findall(r"[A-Za-z]", tail)
-    if korean or len(latin) < 2:
-        return t, ""
-    clean = t[: m.start()].rstrip()
-    if len(clean) < 6:
-        return t, ""
-    return clean, tail
-
-# [개조식 변환] 서술형 종결("~했다/~밝혔다/~는지")을 명사형 개조식("~함/~밝힘/~여부")으로
-# 정리한다. 구체적인(긴) 어미부터 먼저 매칭해야 "밝혔다"가 "했다" 규칙에 잘못 걸리지 않는다.
-_GAEJO_EXACT_MAP = {
-    "밝혔다": "밝힘", "전했다": "전함", "전해졌다": "전해짐", "나타났다": "나타남",
-    "드러났다": "드러남", "확인됐다": "확인됨", "알려졌다": "알려짐", "설명했다": "설명함",
-    "덧붙였다": "덧붙임", "밝혀졌다": "밝혀짐", "전망했다": "전망함", "예상했다": "예상함",
-    "관측했다": "관측함", "발표했다": "발표함", "공시했다": "공시함",
-}
-
-def _engine_to_gaejo(text):
-    s = str(text or "").strip()
-    if not s or s.endswith("…") or s.endswith("..."):
-        # 이미 말줄임표로 잘린 문장은 종결어미가 없으므로 건드리지 않는다.
-        return s
-    if s.endswith("."):
-        s = s[:-1]
-    for k in sorted(_GAEJO_EXACT_MAP, key=len, reverse=True):
-        if s.endswith(k):
-            return s[: -len(k)] + _GAEJO_EXACT_MAP[k]
-    m = re.search(r"(?:되는지|하는지|인지|한지)$", s)
-    if m:
-        return s[: m.start()] + " 여부"
-    for pat, rep in (
-        (r"했다$", "함"), (r"됐다$", "됨"), (r"졌다$", "짐"),
-        (r"한다$", "함"), (r"된다$", "됨"), (r"이다$", "임"),
-    ):
-        s2 = re.sub(pat, rep, s)
-        if s2 != s:
-            return s2
-    return s
-
 def _engine_translate_to_korean(text: str) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     if not text:
@@ -2598,42 +2505,6 @@ def _engine_translate_to_korean(text: str) -> str:
 
     # 영문 원문을 그대로 송출하지 않기 위해 실패는 빈 문자열로 처리한다.
     return ""
-
-_ARTICLE_SUMMARY_CACHE = {}
-
-
-def _engine_fetch_short_summary(link: str):
-    """[본문보강-경량] RSS가 본문 없이 제목만 주는 경우("전략인가 광기인가...
-    '치명적 결정'" 처럼 제목만으론 무슨 내용인지 알 수 없는 클릭베이트/사설류),
-    기사 전체를 긁어오는 대신 원문 페이지의 og:description/meta description
-    한 줄만 가볍게 가져와 짧은 요약 재료로 쓴다. 사이트마다 다른 본문 구조를
-    파싱할 필요가 없어 안전하고 빠르며, 실패해도 전체 처리를 막지 않는다.
-    """
-    link = str(link or "").strip()
-    if not link:
-        return ""
-    if link in _ARTICLE_SUMMARY_CACHE:
-        return _ARTICLE_SUMMARY_CACHE[link]
-    summary = ""
-    try:
-        r = requests.get(link, headers={"User-Agent": USER_AGENT}, timeout=6)
-        if r.ok:
-            soup = BeautifulSoup(r.text, "html.parser")
-            tag = (
-                soup.find("meta", attrs={"property": "og:description"})
-                or soup.find("meta", attrs={"name": "description"})
-                or soup.find("meta", attrs={"name": "twitter:description"})
-            )
-            if tag and tag.get("content"):
-                summary = _engine_clean(tag["content"])
-    except Exception as e:
-        _engine_log("debug", "[본문보강 실패] %s | %s", link[:80], str(e)[:100])
-    _ARTICLE_SUMMARY_CACHE[link] = summary
-    if len(_ARTICLE_SUMMARY_CACHE) > 500:
-        for k in list(_ARTICLE_SUMMARY_CACHE.keys())[:200]:
-            del _ARTICLE_SUMMARY_CACHE[k]
-    return summary
-
 
 def _engine_translate_foreign_item(source: str, title: str, extra: str):
     title = _engine_strip_foreign_publisher_suffix(title)
@@ -2770,18 +2641,9 @@ def _engine_clean_telegram_meta(text: str) -> str:
     t = re.sub(r'\b\d+(?:\.\d+)?\s*[Kk]?\s*views?\b', ' ', t, flags=re.I)
     # 조회수 다음에 붙는 게시 시각(예: "23:56")이 본문 맨 앞에 그대로 남는 경우 제거.
     t = re.sub(r'^\s*\d{1,2}:\d{2}\s+', '', t)
-    # 기자 바이라인/데이트라인 제거: 기사 본문에 붙는 통신사 기자 표기를 전체적으로 숨긴다.
-    # 예: "(서울=연합뉴스) 이세원 한지훈 배영경 기자 = "
-    # 예: "(서울=뉴시스) 홍길동 기자 = "
-    # 이름이 여러 명이어도 한 덩어리로 제거해 본문/요약/MASTER/Telegram 어디에도 남기지 않는다.
-    t = re.sub(
-        r'\([^)]{1,60}\)\s*(?:[가-힣]{2,5}\s+){1,8}(?:기자|특파원|앵커)\s*=\s*',
-        ' ', t, flags=re.I,
-    )
-    # 단독 데이트라인도 제거한다.
-    t = re.sub(r'\([가-힣]{1,10}\s*=\s*[가-힣A-Za-z0-9]{1,30}\)\s*', ' ', t)
-    # 남아 있는 단독 기자 바이라인도 제거한다.
-    t = re.sub(r'[가-힣]{2,5}\s*(?:기자|특파원|앵커)\s*=\s*', ' ', t)
+    # 기자 바이라인/데이트라인 제거: "OOO 기자 = ", "(서울=뉴시스)" 등
+    t = re.sub(r'[가-힣]{2,4}\s*(?:기자|특파원|앵커)\s*=\s*', ' ', t)
+    t = re.sub(r'\([가-힣]{1,10}\s*=\s*[가-힣A-Za-z0-9]{1,20}\)\s*', ' ', t)
     # 국내 주요 매체명이 채널명 뒤에 그대로 반복되는 경우 제거 (예: "재야의 고수들 뉴시스 ...")
     t = re.sub(
         r'^(?:뉴시스|연합뉴스|이데일리|조선비즈|한국경제|매일경제|머니투데이|파이낸셜뉴스|'
@@ -2893,32 +2755,11 @@ def _engine_future_schedule(text: str) -> str:
 MASTER_CONFIRMATION_IMAGE = os.environ.get("MASTER_CONFIRMATION_IMAGE", "master_confirmation.png")
 
 
-_PHARMA_KEYWORDS_RE = re.compile(
-    r"제약|바이오|신약|임상\s*[1-31-3]?상|FDA|식약처|백신|항체|치료제|의약품|바이오시밀러|파이프라인",
-    re.I,
-)
-
-
-def _engine_is_pharma_news(title, extra_text=""):
-    """제약/바이오 뉴스인지 판단해 제목 앞에 💊 마커를 붙일지 결정한다."""
-    return bool(_PHARMA_KEYWORDS_RE.search(f"{title} {extra_text}"))
-
-
 _FEATURED_STOCK_HEADLINE_RE = re.compile(
     r"^\s*(?:\[?특징주\]?[:\s]*|코스피\s*특징주[:\s]*|코스닥\s*특징주[:\s]*)?"
     r"(?P<company>[가-힣A-Za-z0-9&]{2,20})\s*,\s*"
     r"(?P<reason>.+?)\s*['\"“]?(?P<reaction>상한가|하한가|급등|급락|강세|약세|신고가|신저가)['\"”]?\s*$"
 )
-
-# [지수명 오인 방지] "코스피, 혼조속 상승 탄력 모색…코스닥 5%대 급락" 같은 헤드라인은
-# 위 정규식 형태(회사, 사유 반응)와 우연히 일치하지만 "코스피"는 실제 상장종목이 아니라
-# 시장 지수 이름이다. 관련주는 반드시 상장종목만 표시해야 하므로, 지수/시장 명칭은
-# _engine_parse_featured_stock_headline()의 종목 후보에서 제외한다.
-_MARKET_INDEX_NAMES = {
-    "코스피", "코스닥", "코스피200", "코스닥150", "나스닥", "다우", "다우존스",
-    "S&P", "S&P500", "니케이", "니케이225", "항셍", "상해종합", "유로스톡스",
-    "DAX", "FTSE", "필라델피아반도체", "필라델피아 반도체", "러셀2000",
-}
 
 
 def _engine_has_jongsung(ch: str) -> bool:
@@ -2954,8 +2795,6 @@ def _engine_parse_featured_stock_headline(title):
     reaction = m.group("reaction").strip()
     if len(company) < 2 or len(reason) < 4:
         return None
-    if company in _MARKET_INDEX_NAMES:
-        return None
     return {"company": company, "reason": reason, "reaction": reaction}
 
 
@@ -2974,16 +2813,32 @@ def _engine_master_result(item):
                 "reason": str(row.get("reason", "")).strip(),
                 "score": float(row.get("score", 0) or 0),
                 "direct": bool(row.get("direct")),
-                "theme_link": not bool(row.get("direct")),
+                "theme_link": False,
                 "domestic_listed": True,
             })
         raw_title = str(item.get("title", "")).strip()
         raw_body = str(item.get("extra", "")).strip()
 
-        # [최종사용자지시우선 / MASTER 단일통제]
-        # 특징주 헤드라인을 이유로 하위 단계에서 관련주를 강제 등록하지 않는다.
-        # 원 제목·원문만 MASTER에 전달하고, 관련주 여부는 MASTER의 직접 사업연관
-        # 검증 결과로만 확정한다.
+        # [특징주 자기종목 보정] "[특징주] 회사, 사유 '반응'" 헤드라인이고, 본문이 제목과
+        # 사실상 동일해 추가 정보가 없는 경우: 제목 안의 사유를 실제 문장으로 풀어서
+        # 본문에 채워 넣고, 헤드라인의 주인공 종목을 관련주 후보 1순위로 강제 등록한다.
+        featured = _engine_parse_featured_stock_headline(raw_title)
+        if featured:
+            body_is_thin = (not raw_body) or (_engine_clean(raw_body) == _engine_clean(raw_title)) \
+                or (len(raw_body) < len(raw_title) + 8)
+            if body_is_thin:
+                comp_josa = _engine_josa(featured['company'], '이', '가')
+                react_josa = _engine_josa(featured['reaction'], '을', '를')
+                synth = f"{featured['company']}{comp_josa} {featured['reason']}에 {featured['reaction']}{react_josa} 기록했다."
+                raw_body = synth
+            candidates.insert(0, {
+                "name": featured["company"],
+                "reason": f"헤드라인상 특징주 본인 종목({featured['reaction']} 사유: {featured['reason']})",
+                "score": 500.0,
+                "direct": True,
+                "theme_link": False,
+                "domestic_listed": True,
+            })
 
         result = master_finalize_news(
             title=raw_title,
@@ -2993,24 +2848,8 @@ def _engine_master_result(item):
             candidates=candidates,
             schedule=_engine_future_schedule(raw_body),
         )
-        # 운영 로그는 최종 확인에 필요한 정보만 남긴다.
-        # 제목은 실제 FINAL LOCK 통과 여부를 사람이 바로 확인할 수 있도록 표시한다.
-        final_title = str(result.get("title") or raw_title).strip()
-        final_title = re.sub(r"\s+", " ", final_title)[:220]
         if result.get("locked"):
-            _engine_log(
-                "info",
-                "[FINAL LOCK 통과] %s | source=%s",
-                final_title,
-                item.get("source", ""),
-            )
-        else:
-            _engine_log(
-                "warning",
-                "[FINAL LOCK 제외] %s | source=%s",
-                final_title,
-                item.get("source", ""),
-            )
+            _engine_log("info", "[FINAL LOCK 통과] %s", str(result.get("title") or item.get("title") or "")[:220])
         return result
     except Exception as e:
         _engine_log("error", "[MASTER] 실패 | source=%s | 원인=%s", item.get("source", ""), str(e)[:180])
@@ -3021,10 +2860,8 @@ def _engine_master_badge(result):
     if not result or not result.get("locked"):
         return ""
     related = result.get("related") or []
-    leader = result.get("leader") or {}
-    if not related or not leader.get("name"):
-        return ""
-    return f"🟢 [MASTER] 관련주 : {html.escape(str(leader.get('name')))}"
+    names = ' · '.join(html.escape(str(r.get('name',''))) for r in related if r.get('name'))
+    return f"🟢 [MASTER] {names}" if names else ""
 
 
 def _engine_master_image_path(result):
@@ -3089,18 +2926,15 @@ def _engine_send_telegram_photo(photo_path, caption=""):
     return False
 
 
-def _engine_safe_trim(text, limit):
-    """[버그수정] 고정 글자수로 그냥 자르면 '9300억 규모…'가 '930…'처럼 숫자/단어
-    중간에서 잘린다. limit을 넘으면 그 안에서 가장 가까운 공백/구두점까지만 남기고
-    말줄임표를 붙인다."""
-    s = str(text or "")
-    if len(s) <= limit:
-        return s
-    head = s[:limit]
-    cut = max(head.rfind(" "), head.rfind(","), head.rfind("·"), head.rfind("—"))
-    if cut > limit * 0.5:
-        head = head[:cut]
-    return head.rstrip(" -–—,·")
+_PHARMA_KEYWORDS_RE = re.compile(
+    r"제약|바이오|신약|임상\s*[1-31-3]?상|FDA|식약처|백신|항체|치료제|의약품|바이오시밀러|파이프라인",
+    re.I,
+)
+
+
+def _engine_is_pharma_news(title, extra_text=""):
+    """제약/바이오 뉴스인지 판단해 제목 앞에 💊 마커를 붙일지 결정한다."""
+    return bool(_PHARMA_KEYWORDS_RE.search(f"{title} {extra_text}"))
 
 
 def _engine_format_message(item):
@@ -3108,16 +2942,6 @@ def _engine_format_message(item):
     [조건51/조건52/조건53 강제] Formatter는 판단하지 않는다.
     MASTER(65조건) -> Validator -> FINAL LOCK 결과(item['_master_result'])만 표시하며,
     제목·요약·관련주·상용화단계·시장전망·일정을 이 함수에서 다시 계산하지 않는다.
-
-    [2026-08-21 포맷 개편]
-      1) 제목 끝의 " - 매체명"(예: "- digittimes")은 제목에서 떼어 헤더 줄로 옮긴다.
-      2) 🔎 요약 섹션은 표시하지 않는다.
-      3) 🟢 MASTER 배지는 "관련주=N | 대장주=X" 대신 "관련주 : {대장주}" 단순 표기로,
-         제목 바로 아래에 표시한다.
-      4) 👀[관련주] 다중 종목 리스트는 표시하지 않는다. 연결 이유는 대장주 1건만 표시.
-      5) 🧭 진행 과정은 "===>" 화살표 없이 표시.
-      6) 📢 시장 전망은 섹션 헤더 없이 핵심 문구 1건만 표시.
-      7) 서술형 종결("~했다/~밝혔다/~는지")은 개조식("~함/~밝힘/~여부")으로 변환.
     """
     source_raw=str(item.get('source',''))
     source_display='🇺🇸' if source_raw=='Google-US' else source_raw
@@ -3128,81 +2952,70 @@ def _engine_format_message(item):
     if master_result and master_result.get('locked'):
         # MASTER FINAL LOCK 값만 사용한다. (조건51 Formatter무판단)
         title=master_result.get('title') or _engine_strip_foreign_publisher_suffix(raw_title)
+        key_points=list(master_result.get('key_points') or [])
         stage=master_result.get('stage') or ''
         outlook=list(master_result.get('outlook') or [])
         related=list(master_result.get('related') or [])
-        leader=master_result.get('leader') or {}
         schedule=master_result.get('schedule') or ''
     else:
         # MASTER가 실패/미확정인 경우에도 Formatter가 재분석하지 않는다.
         # 원문 최소 표시만 하고, 판단이 필요한 항목은 비워둔다.
         _engine_log("warning", "[MASTER] 결과 없음/미확정 | source=%s | Formatter는 재분석하지 않음", source_raw)
         title=_engine_strip_foreign_publisher_suffix(raw_title)
-        stage, outlook, related, leader, schedule = '', [], [], {}, ''
-
-    # [매체명 분리] 제목 끝의 " - 매체명"을 떼어 헤더로 옮긴다.
-    title, publisher = _engine_extract_publisher_suffix(title)
-    # [개조식 변환] 서술형 종결을 명사형으로 정리한다.
-    title = _engine_to_gaejo(title)
+        key_points, stage, outlook, related, schedule = [], '', [], [], ''
 
     companies=item.get('companies',[]) or []
     domestic=_engine_domestic_companies(companies)
     title=_apply_domestic_highlight(title,domestic)
-    if _engine_is_commercial_value(item,title,'') and not title.startswith('🎯'):
+    if _engine_is_commercial_value(item,title,' '.join(key_points)) and not title.startswith('🎯'):
         title='🎯 '+title
     # [제약/바이오 마커] 제목 맨 앞에 💊를 붙인다.
-    if _engine_is_pharma_news(title, '') and not title.startswith('💊'):
+    if _engine_is_pharma_news(title, ' '.join(key_points)) and not title.startswith('💊'):
         title='💊 '+title
     freshness,prev=_engine_freshness(item)
-    header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]'
-    if publisher:
-        header += f' _ {html.escape(publisher)}'
-    header += '</b>'
+    header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
     if time_text: header += f'   🕐 {html.escape(time_text)}'
     lines=[header,f'<b>📌 {html.escape(title)}</b>']
-
-    # [배지 위치] MASTER 배지는 제목 바로 아래에서 관련주 확정 여부를 바로 보여준다.
     master_badge=_engine_master_badge(master_result)
     if master_badge:
         lines.append('<b>'+master_badge+'</b>')
-
     if freshness in ('재탕','업그레이드') and prev:
         lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
 
-    if stage:
-        lines.append('🧭 [진행 과정] '+html.escape(stage))
+    if key_points:
+        lines.append('🔎 [요약]')
+        for kp in key_points:
+            lines.append('     ✔ '+html.escape(str(kp)[:220]))
 
-    # MASTER가 확정한 핵심내용을 실제 송출한다. Formatter에서 재생성하지 않는다.
-    key_points=list(master_result.get('key_points') or []) if master_result and master_result.get('locked') else []
-    for kp in key_points[:3]:
-        kp=_engine_to_gaejo(str(kp).strip())
-        if kp:
-            lines.append('✔️ '+html.escape(kp))
+    if stage:
+        lines.append('🧭 [진행 과정] ===> '+html.escape(stage))
 
     if outlook:
-        # 섹션 헤더 없이 핵심 전망 문구 1건만 개조식으로 표시한다.
-        lines.append(' ✔️ '+html.escape(_engine_to_gaejo(_engine_safe_trim(outlook[0], 90))))
+        lines.append('✅ [시장전망] ==> '+html.escape(str(outlook[0])))
+        for o in outlook[1:3]: lines.append('     ✔ '+html.escape(str(o)))
 
-    # 관련주는 MASTER FINAL LOCK 결과만 사용한다. Formatter 자체 재계산/테마 자동 채우기는 금지.
-    # [관련주 표시 개편] 다중 종목 리스트 대신 대장주 1건의 연결 이유만 표시한다.
-    leader_reason = str(leader.get('reason','')).strip() if leader else ''
-    if leader_reason:
-        leader_reason, _ = _engine_extract_publisher_suffix(leader_reason)
-        lines.append('ㄴ연결 이유 : '+html.escape(_engine_to_gaejo(_engine_safe_trim(leader_reason, 90))))
+    # 관련주/테마/BIG ISSUE는 MASTER 확정값이 있을 때만 노출한다.
+    # 종목·테마·BIG ISSUE가 모두 없으면 항목 자체를 출력하지 않는다.
+    if related:
+        names=' · '.join(html.escape(str(r.get('name',''))) for r in related if r.get('name'))
+        if names:
+            lines.append('<b>🟢 [MASTER] '+names+'</b>')
 
     if schedule:
-        dm = re.search(r'(20\d{2})[./-](\d{1,2})[./-](\d{1,2})|(\d{1,2})월\s*(\d{1,2})일', schedule)
-        date_disp = ""
-        if dm:
-            if dm.group(1):
-                date_disp = f"{dm.group(1)}. {int(dm.group(2))}. {int(dm.group(3)):02d}일"
-                matched_text = dm.group(0)
-            else:
-                date_disp = f"{_now_kst().year}. {int(dm.group(4))}. {int(dm.group(5)):02d}일"
-                matched_text = dm.group(0)
-        lines.append('⏰[일정]  ' + (date_disp if date_disp else ''))
-        rest = schedule.replace(dm.group(0), '').strip(' -—:·') if dm else schedule
-        if rest: lines.append('✔ '+html.escape(_engine_safe_trim(rest, 150)))
+        dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
+        lines.append('📅 일정')
+        if dm: lines.append(html.escape(dm.group(1).replace('/','.').replace('-','.')))
+        rest=schedule.replace(dm.group(1),'').strip(' -—:·') if dm else schedule
+        if rest: lines.append('✔ '+html.escape(rest[:220]))
+    # 용어 설명은 메시지의 가장 아래에만 표시하며, 용어 자체는 강조하지 않는다.
+    terms = (master_result or {}).get('term_explanations') or []
+    if terms:
+        lines.append('💡 [용어 설명]')
+        for t in terms:
+            term = str(t.get('term','')).strip()
+            desc = str(t.get('description','')).strip()
+            if term and desc:
+                lines.append('• '+html.escape(term)+' : '+html.escape(desc))
     if item.get('link'):
         lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문 보기</a>')
     return '\n\n'.join(x for x in lines if str(x).strip())
@@ -3254,10 +3067,9 @@ def _engine_flush_pending():
             _engine_record_historical_case(item)
             sent += 1
             if master_badge and not image_sent:
-                _engine_log("warning", "[Telegram] 텍스트 전송 성공 / MASTER 이미지 전송 실패 | %s", str(item.get("title", "")).strip()[:220])
-            # 어떤 뉴스가 실제 Telegram까지 도착했는지 제목으로 확인할 수 있게 한다.
-            _engine_log("info", "[Telegram 전송 성공] %s", str(item.get("title", "")).strip()[:220])
-    _engine_log("info", "[송출 완료] 전송=%d건 / 후보=%d건", sent, len(_engine_pending))
+                _engine_log("warning", "[MASTER] 텍스트 송출 성공 / 이미지 송출 실패")
+            _engine_log("info", "[Telegram 전송 성공] %s", str(item.get("title") or "")[:220])
+    _engine_log("info", "[송출결과] 후보=%d | 묶음차단=0 | 재탕차단=0 | 전송=%d", len(_engine_pending), sent)
     _engine_pending = []
     return sent
 
@@ -3292,35 +3104,8 @@ def _engine_is_within_recent_window(published, window_minutes=60):
     return 0 <= age_seconds <= window_minutes * 60
 
 
-# [버그수정] "(종합)" 류 기사는 내용이 계속 갱신돼도 RSS pubDate가 최초 게재 시각에 머무는
-# 경우가 흔하다. 60분 창을 그대로 적용하면 하이닉스 +12.7%/삼성전자 +9% 같은 대형
-# 시황뉴스가 순수히 "오래됐다"는 이유만으로 통째로 컷된다. 실제 큰 시세 변동을 담은
-# 기사만 예외적으로 더 넓은 창을 허용한다(무분별한 과거뉴스 유입은 막기 위해 조건을 좁게 유지).
-HIGH_IMPACT_FRESH_WINDOW_MINUTES = 180
-_PCT_MOVE_RE = re.compile(r"([0-9]{1,3}(?:\.[0-9]+)?)\s*%")
-_STRONG_MOVE_WORDS = ("급등", "폭등", "상한가", "급락", "폭락", "신고가", "사상 최대", "서킷브레이커")
-HIGH_IMPACT_PCT_THRESHOLD = 5.0  # 이 수치 이상의 등락률이 헤드라인에 보이면 키워드 없이도 고임팩트로 본다.
-
-
-def _engine_is_high_impact_move(text):
-    text = str(text or "")
-    if any(w in text for w in _STRONG_MOVE_WORDS):
-        return True
-    for m in _PCT_MOVE_RE.findall(text):
-        try:
-            if float(m) >= HIGH_IMPACT_PCT_THRESHOLD:
-                return True
-        except ValueError:
-            continue
-    return False
-
-
 def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
-    # [출력오염 방지] 데이트라인/기자서명은 뉴스 내용이 아니므로 MASTER 입력 전에 제거한다.
-    # 이렇게 해야 핵심요약·전망·Telegram 본문 어느 단계에서도 기자 표기가 재생성되지 않는다.
-    title = _engine_clean_telegram_meta(title)
-    extra = _engine_clean_telegram_meta(extra)
     if not title:
         return False
 
@@ -3332,15 +3117,6 @@ def _engine_process_item(source, title, link, published="", extra=""):
 
     # 원문 전체를 보존한다. 요약문으로 extra를 덮어쓰지 않는다.
 
-    # [본문보강-경량] extra(본문)가 없거나 30자 미만이면, MASTER가 요약을 뽑을
-    # 재료 자체가 없어 "🔎 요약"이 통째로 빈 채로 나간다. 이때만 원문 페이지의
-    # 짧은 meta description(1줄)을 가볍게 가져와 보충한다 - 전체 본문을 긁는
-    # 무거운 크롤링은 하지 않고, 실패해도 기존 흐름을 막지 않는다.
-    if len(extra) < 30 and link:
-        fetched = _engine_fetch_short_summary(link)
-        if fetched:
-            extra = fetched
-
     # 사용자가 원치 않는 [그로쓰리서치] 속보/단독/특징주 채널은 원천 제외.
     growth_block = ("그로쓰리서치" in str(source)) or ("rocket_news1" in link) or ("growth_semi" in link) or ("growthbio" in link) or ("growthresearch" in link)
     if growth_block:
@@ -3349,14 +3125,9 @@ def _engine_process_item(source, title, link, published="", extra=""):
 
     # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
     # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
-    # [버그수정] 단, %급등락처럼 시장 임팩트가 큰 시황 뉴스는 "(종합)" 재게재로 pubDate가
-    # 오래돼 보여도 놓치면 안 되므로 더 넓은 창(HIGH_IMPACT_FRESH_WINDOW_MINUTES)을 허용한다.
     if not _engine_is_within_recent_window(published, 60):
-        if _engine_is_high_impact_move(f"{title} {extra}") and _engine_is_within_recent_window(published, HIGH_IMPACT_FRESH_WINDOW_MINUTES):
-            _engine_log("info", "[예외허용] ⏱️ 고임팩트 시황(%%급등락) - 신선도창 %d분으로 확장 통과 | source=%s | %s", HIGH_IMPACT_FRESH_WINDOW_MINUTES, source, title[:80])
-        else:
-            _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
-            return False
+        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
+        return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
@@ -3384,6 +3155,11 @@ def _engine_process_item(source, title, link, published="", extra=""):
     if dt:
         time_text = dt.strftime("%H:%M")
     _engine_pending.append({"source":source,"title":title,"link":link,"published":published,"extra":extra,"key":key,"category":category,"companies":companies,"k1":k1,"k2":k2,"market_hits":market_hits,"time_text":time_text,"market_state":market_state})
+    # 뉴스 1건을 수집 주기 끝까지 대기시키지 않는다. 등록 즉시 MASTER→포맷→Telegram 송출한다.
+    try:
+        _engine_flush_pending()
+    except Exception as e:
+        log_error("뉴스 즉시 MASTER/송출", e, source=source, title=title[:120])
     try:
         dt_mem = _engine_parse_datetime(published) or _now_kst()
         with _US_BRIEFING_LOCK:
@@ -3411,48 +3187,10 @@ def _engine_entry_published(entry):
                 continue
     return ""
 
-GOOGLE_NEWS_REQUEST_DELAY_SEC = 2.0  # Google 뉴스만 요청 간 최소 간격을 둔다(연속 요청시 503 차단 방지).
-_LAST_GOOGLE_NEWS_REQUEST_AT = [0.0]
-
-
-def _is_google_news_url(url):
-    return "news.google.com" in str(url or "")
-
-
 def _engine_fetch_rss(url, source):
     started = time.time()
-    is_google = _is_google_news_url(url)
     try:
-        # [버그수정] Google 뉴스는 요청이 짧은 시간에 몰리면 503(rate-limit)을 반환한다.
-        # 일정DB 1년 초기검색(약 200회+)과 매 사이클 US_RSS_URLS 조회가 겹치면 실제로
-        # 연쇄 503이 발생하던 걸 확인해서, Google 뉴스 요청 사이에는 최소 간격을 둔다.
-        if is_google:
-            elapsed = time.time() - _LAST_GOOGLE_NEWS_REQUEST_AT[0]
-            if elapsed < GOOGLE_NEWS_REQUEST_DELAY_SEC:
-                time.sleep(GOOGLE_NEWS_REQUEST_DELAY_SEC - elapsed)
-
-        headers = {
-            "User-Agent": USER_AGENT,
-            "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
-            "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
-            "Referer": "https://www.google.com/",
-        }
-
-        attempts = 3 if is_google else 1
-        r = None
-        for attempt in range(attempts):
-            if is_google:
-                _LAST_GOOGLE_NEWS_REQUEST_AT[0] = time.time()
-            r = requests.get(url, headers=headers, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
-            if r.ok:
-                break
-            if is_google and r.status_code == 503 and attempt < attempts - 1:
-                backoff = GOOGLE_NEWS_REQUEST_DELAY_SEC * (attempt + 2)
-                _engine_log("warning", "[RSS 재시도] %s | 503 rate-limit 추정 | %.1f초 후 재시도(%d/%d)", source, backoff, attempt + 1, attempts)
-                time.sleep(backoff)
-                continue
-            break
-
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT, allow_redirects=True)
         if not r.ok:
             _engine_log("error", "[실패] RSS | %s | 원인=%s", source, r.reason)
             return []
@@ -3692,371 +3430,6 @@ def _engine_run_keyword_combinations():
         if not success:
             _engine_log("error", "[실패] 키워드조합 | %s | 모든 NAVER 인증경로 실패", q)
 
-DART_FINANCIAL_REPORT_RE = re.compile(r"반기보고서|분기보고서|사업보고서|영업\(잠정\)실적|잠정실적")
-
-DART_REPRT_CODE_BY_Q = {1: "11013", 2: "11012", 3: "11014", 4: "11011"}
-DART_QUARTER_LABEL = {1: "1분기보고서", 2: "반기보고서", 3: "3분기보고서", 4: "사업보고서"}
-
-
-def _engine_dart_is_financial_report(report_nm: str) -> bool:
-    """반기/분기/사업보고서·영업(잠정)실적 공시인지 판단한다.
-    이런 공시는 '뉴스 판단'이 아니라 '숫자 그대로 표시'가 맞으므로
-    MASTER(65조건 뉴스 판단) 파이프라인을 타지 않고 별도 재무카드로 만든다.
-    """
-    return bool(DART_FINANCIAL_REPORT_RE.search(str(report_nm or "")))
-
-
-def _engine_dart_amount_to_won(amount_str):
-    """DART 금액 문자열(콤마 포함 원단위)을 정수 원 단위로 변환. 실패하면 None."""
-    try:
-        s = str(amount_str).replace(",", "").strip()
-        if not s or s in ("-", "N/A"):
-            return None
-        return int(float(s))
-    except Exception:
-        return None
-
-
-def _engine_format_eok(won, with_sign=False):
-    """원 단위 정수를 '351억' 같은 억 단위 표기로 변환한다."""
-    if won is None:
-        return "N/A"
-    eok = won / 1e8
-    sign = ""
-    if with_sign and eok > 0:
-        sign = "+"
-    elif eok < 0:
-        sign = "-"
-    eok_abs = abs(eok)
-    if eok_abs >= 1:
-        return f"{sign}{eok_abs:,.0f}억"
-    return f"{sign}{abs(won)/1e4:,.0f}만"
-
-
-def _engine_dart_fetch_financials(corp_code, year, reprt_code):
-    """DART 단일회사 전체 재무제표 API로 매출액/영업이익/당기순이익을 조회한다.
-    연결(CFS) 우선, 실패하면 별도(OFS)로 재시도한다. 실패하면 None.
-    """
-    if not DART_API_KEY or not corp_code:
-        return None
-    url = "https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json"
-    for fs_div in ("CFS", "OFS"):
-        try:
-            r = requests.get(url, params={
-                "crtfc_key": DART_API_KEY, "corp_code": corp_code,
-                "bsns_year": str(year), "reprt_code": reprt_code, "fs_div": fs_div,
-            }, timeout=ENGINE_HTTP_TIMEOUT)
-            if not r.ok:
-                continue
-            data = r.json()
-            if data.get("status") != "000":
-                continue
-            rows = data.get("list") or []
-            out = {}
-            for row in rows:
-                nm = str(row.get("account_nm", "")).replace(" ", "")
-                amt = row.get("thstrm_amount", "")
-                if row.get("sj_div") not in ("IS", "CIS", None):
-                    continue
-                if nm in ("매출액", "수익(매출액)", "영업수익") and "매출액" not in out:
-                    out["매출액"] = _engine_dart_amount_to_won(amt)
-                elif nm in ("영업이익", "영업이익(손실)") and "영업이익" not in out:
-                    out["영업이익"] = _engine_dart_amount_to_won(amt)
-                elif nm in ("당기순이익", "당기순이익(손실)", "분기순이익", "분기순이익(손실)") and "당기순이익" not in out:
-                    out["당기순이익"] = _engine_dart_amount_to_won(amt)
-            if out.get("매출액") is not None or out.get("영업이익") is not None:
-                return out
-        except Exception:
-            continue
-    return None
-
-
-def _engine_dart_recent_quarters(corp_code, end_year, end_q, n=5):
-    """최근 n개 분기의 '단독 분기' 매출/영업이익/순이익을 계산한다.
-    DART 정기보고서는 연초부터의 누적치이므로, 단독 분기값은
-    (이번 누적치 - 직전 누적치)로 계산해야 한다(1분기는 누적=단독).
-    최신순으로 반환한다. 값을 못 구하면 None으로 채운다.
-    """
-    raw_cache = {}
-
-    def get_raw(y, q):
-        key = (y, q)
-        if key not in raw_cache:
-            raw_cache[key] = _engine_dart_fetch_financials(corp_code, y, DART_REPRT_CODE_BY_Q[q])
-        return raw_cache[key]
-
-    result = []
-    y, q = end_year, end_q
-    for _ in range(n):
-        cur = get_raw(y, q)
-        vals = {"매출액": None, "영업이익": None, "당기순이익": None}
-        if cur is not None:
-            if q == 1:
-                vals = dict(cur)
-            else:
-                prev = get_raw(y, q - 1)
-                if prev is not None:
-                    for k in vals:
-                        a, b = cur.get(k), prev.get(k)
-                        vals[k] = (a - b) if (a is not None and b is not None) else None
-        result.append({"label": f"{y}.{q}Q", **vals})
-        y, q = (y - 1, 4) if q == 1 else (y, q - 1)
-    return result
-
-
-def _engine_dart_parse_report_period(report_nm, rcept_dt=""):
-    """report_nm에서 '(YYYY.MM)' 기준period를 뽑는다. 잠정실적처럼 괄호가 없으면
-    접수일자(rcept_dt)로 '방금 마감된 분기'를 추정한다(잠정실적은 마감 후 1~2개월 내 발표됨).
-    """
-    m = re.search(r"\((\d{4})\.(\d{1,2})\)", str(report_nm or ""))
-    if m:
-        year, month = int(m.group(1)), int(m.group(2))
-        q = {3: 1, 6: 2, 9: 3, 12: 4}.get(month)
-        if q:
-            return year, q
-    try:
-        d = datetime.datetime.strptime(str(rcept_dt)[:8], "%Y%m%d")
-    except Exception:
-        return None
-    m2 = d.month
-    if m2 in (1, 2, 3):
-        return d.year - 1, 4
-    if m2 in (4, 5, 6):
-        return d.year, 1
-    if m2 in (7, 8, 9):
-        return d.year, 2
-    return d.year, 3
-
-
-def _engine_naver_parse_cap(raw: str):
-    """'3조 4,567' 같은 네이버 시가총액 표기를 억원 단위 정수로 변환한다."""
-    raw = _engine_clean(raw or "")
-    if not raw:
-        return None
-    try:
-        jo_m = re.search(r"([\d,]+)\s*조", raw)
-        jo = int(jo_m.group(1).replace(",", "")) if jo_m else 0
-        rest_part = raw.split("조")[-1] if "조" in raw else raw
-        rest_digits = re.sub(r"[^\d]", "", rest_part)
-        eok = int(rest_digits) if rest_digits else 0
-        total = jo * 10000 + eok
-        return total if total > 0 else None
-    except Exception:
-        return None
-
-
-def _engine_naver_finance_snapshot(stock_code):
-    """네이버금융에서 시가총액/목표주가를 가져온다. 실패해도 예외를 던지지 않고
-    구할 수 있는 값만 채운다 (없는 값을 지어내지 않는다).
-    """
-    out = {"market_cap_eok": None, "target_price": None}
-    if not stock_code:
-        return out
-    try:
-        r = requests.get(
-            f"https://finance.naver.com/item/main.naver?code={stock_code}",
-            headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT,
-        )
-        if not r.ok:
-            return out
-        soup = BeautifulSoup(r.text, "html.parser")
-        cap_el = soup.select_one("#_market_sum")
-        if cap_el:
-            out["market_cap_eok"] = _engine_naver_parse_cap(cap_el.get_text(" "))
-        page_text = soup.get_text(" ")
-        target_m = re.search(r"목표주가[^\d]{0,20}([\d,]{3,})", page_text)
-        if target_m:
-            try:
-                tp = int(target_m.group(1).replace(",", ""))
-                if tp > 0:
-                    out["target_price"] = tp
-            except Exception:
-                pass
-    except Exception as e:
-        _engine_log("warning", "[재무카드] 네이버금융 조회 실패 | code=%s | 원인=%s", stock_code, str(e)[:160])
-    return out
-
-
-def _engine_naver_consensus(stock_code):
-    """네이버금융 '컨센서스' 탭에서 매출액/영업이익 추정치를 가져온다(억원 단위).
-    무료 소스라 구조가 자주 바뀌고 종목별로 컨센서스가 없을 수도 있다.
-    실패/부재 시 빈 dict를 반환하고, 절대 숫자를 지어내지 않는다.
-    """
-    out = {}
-    if not stock_code:
-        return out
-    try:
-        r = requests.get(
-            f"https://finance.naver.com/item/coinfo.naver?code={stock_code}&target=finsum",
-            headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT,
-        )
-        if not r.ok:
-            return out
-        soup = BeautifulSoup(r.text, "html.parser")
-        table = soup.select_one("table.gHead02")
-        if not table:
-            return out
-        for tr in table.select("tr"):
-            th = tr.select_one("th")
-            if not th:
-                continue
-            label = _engine_clean(th.get_text(" "))
-            tds = [_engine_clean(td.get_text(" ")) for td in tr.select("td")]
-            if not tds:
-                continue
-            first_val = next((t for t in tds if re.match(r"^-?[\d,]+(\.\d+)?$", t)), None)
-            if not first_val:
-                continue
-            try:
-                val_eok = float(first_val.replace(",", ""))
-            except Exception:
-                continue
-            if "매출액" in label and "매출액" not in out:
-                out["매출액"] = val_eok
-            elif "영업이익" in label and "영업이익" not in out:
-                out["영업이익"] = val_eok
-    except Exception as e:
-        _engine_log("warning", "[재무카드] 컨센서스 조회 실패 | code=%s | 원인=%s", stock_code, str(e)[:160])
-    return out
-
-
-def _engine_dart_render_quarter_table(quarters):
-    """[최근 실적]을 <pre> 고정폭 표로 렌더링한다."""
-    header = f"{'기간':<8}{'매출':>8}{'영업익':>8}{'순익':>8}"
-    rows = [header, "-" * len(header)]
-    for q in quarters:
-        rows.append(
-            f"{q['label']:<8}"
-            f"{_engine_format_eok(q['매출액']):>8}"
-            f"{_engine_format_eok(q['영업이익']):>8}"
-            f"{_engine_format_eok(q['당기순이익']):>8}"
-        )
-    return "<pre>" + html.escape("\n".join(rows)) + "</pre>"
-
-
-def _engine_dart_build_financial_card(row):
-    """DART 정기보고서/잠정실적 공시 1건을 재무카드 메시지로 조립한다.
-    [설계 원칙] 이 함수는 뉴스 '판단'을 하지 않는다 - MASTER 65조건과 무관하게
-    공시 원문 수치를 그대로 계산·표시만 한다 (조건51 Formatter무판단과 동일한 철학).
-    """
-    corp_name = str(row.get("corp_name", "")).strip()
-    corp_code = str(row.get("corp_code", "")).strip()
-    stock_code = str(row.get("stock_code", "")).strip()
-    report_nm = str(row.get("report_nm", "")).strip()
-    rcept_no = str(row.get("rcept_no", "")).strip()
-    rcept_dt = str(row.get("rcept_dt", "")).strip()
-
-    period = _engine_dart_parse_report_period(report_nm, rcept_dt)
-    if not period or not corp_code:
-        return None
-    year, q = period
-    is_preliminary = "잠정" in report_nm
-
-    quarters = _engine_dart_recent_quarters(corp_code, year, q, n=5)
-    if not quarters or (quarters[0].get("영업이익") is None and quarters[0].get("매출액") is None):
-        # 이번 분기 실제 수치를 못 구하면 재무카드 자체를 만들 근거가 없다.
-        return None
-    cur = quarters[0]
-
-    naver = _engine_naver_finance_snapshot(stock_code)
-    cap_str = f"{naver['market_cap_eok']:,}억" if naver.get("market_cap_eok") else "N/A"
-    target_str = f"{naver['target_price']:,}원" if naver.get("target_price") else ""
-
-    consensus = _engine_naver_consensus(stock_code)
-
-    def _line_with_consensus(label, actual_won, cons_key, qoq_str=""):
-        base = f"{label} : {_engine_format_eok(actual_won)}{qoq_str}"
-        cons_eok = consensus.get(cons_key)
-        if cons_eok is None or actual_won is None:
-            return base, None
-        cons_won = cons_eok * 1e8
-        if cons_won == 0:
-            return base, None
-        diff_pct = (actual_won - cons_won) / abs(cons_won) * 100
-        return f"{base} (예상치 : {cons_eok:,.0f}억/ {diff_pct:+.1f}%)", diff_pct
-
-    prev_row = quarters[1] if len(quarters) > 1 else {}
-
-    def _qoq_change_str(cur_val, prev_val):
-        """[전분기 대비 증감률] 매출액/영업이익/순이익 금액 바로 뒤에
-        '(전분기대비🔺+50.0%)' / '(전분기대비▼30.0%)' 형태로, 어떤 기준으로
-        계산한 비율인지 라벨과 함께 붙인다. 전분기가 적자였어도(적자축소/
-        흑자전환 포함) 개선폭을 그대로 %로 보여준다.
-        """
-        if cur_val is None or prev_val is None or prev_val == 0:
-            return ""
-        pct = (cur_val - prev_val) / abs(prev_val) * 100
-        arrow_pct = f"🔺+{pct:.1f}%" if pct >= 0 else f"▼{abs(pct):.1f}%"
-        return f" (전분기대비{arrow_pct})"
-
-    try:
-        dt_disp = datetime.datetime.strptime(rcept_dt[:8], "%Y%m%d").strftime("%Y.%m.%d")
-    except Exception:
-        dt_disp = rcept_dt
-
-    lines = []
-    lines.append(f"<b>✅ {html.escape(corp_name)} (시총 : {html.escape(cap_str)})</b>   🕐 {html.escape(dt_disp)}")
-    lines.append(f"📁 {html.escape(DART_QUARTER_LABEL.get(q, report_nm))} ({year}.{q*3:02d})")
-    lines.append(f"✔️ 잠정실적 : {'Y' if is_preliminary else 'N'}")
-    sales_line, _ = _line_with_consensus("매출액", cur['매출액'], "매출액", _qoq_change_str(cur.get('매출액'), prev_row.get('매출액')))
-    op_line, op_diff_pct = _line_with_consensus("영업익", cur['영업이익'], "영업이익", _qoq_change_str(cur.get('영업이익'), prev_row.get('영업이익')))
-    lines.append(sales_line)
-    lines.append(op_line)
-    net_qoq = _qoq_change_str(cur.get('당기순이익'), prev_row.get('당기순이익'))
-    lines.append(f"순이익 : {_engine_format_eok(cur['당기순이익'])}{net_qoq}")
-    lines.append(f"목표가 : {target_str}")
-    lines.append("")
-    lines.append("✔️ [최근 실적]")
-    lines.append(_engine_dart_render_quarter_table(quarters))
-
-    # [특이사항 강조] 어닝서프라이즈/어닝쇼크/흑자전환/최근 5개분기 최대 영업익
-    highlights = []
-    if op_diff_pct is not None:
-        if op_diff_pct >= 10:
-            highlights.append(f"🔥어닝 서프라이즈({op_diff_pct:+.1f}%)")
-        elif op_diff_pct <= -10:
-            highlights.append(f"🔥어닝 쇼크({op_diff_pct:+.1f}%)")
-    prev_op = quarters[1].get("영업이익") if len(quarters) > 1 else None
-    prev_net = quarters[1].get("당기순이익") if len(quarters) > 1 else None
-
-    def _turnaround_pct(cur_val, prev_val, cur_sales, prev_sales):
-        """[흑자전환 비율] 적자→흑자 전환폭(swing)을 두 기준으로 계산해서
-        절댓값이 더 큰 쪽을 채택한다 ('크게 나온 비율 기준으로' 요청 반영).
-        - 매출액 대비 : 전환폭이 이번 분기 매출 규모 대비 얼마나 큰지
-        - 영업이익 대비 : 적자였던 전분기 금액 대비 이번에 얼마나 크게 개선됐는지
-        (이번 분기 매출이 N/A면 전분기 매출로 대체하고, 그마저 없으면 그 기준은 건너뛴다.)
-        """
-        swing = cur_val - prev_val
-        candidates = []
-        base_sales = cur_sales if cur_sales else prev_sales
-        if base_sales:
-            candidates.append(swing / base_sales * 100)
-        if prev_val:
-            candidates.append(swing / abs(prev_val) * 100)
-        return max(candidates, key=abs) if candidates else None
-
-    if prev_op is not None and prev_op <= 0 and (cur.get("영업이익") or 0) > 0:
-        # [중복표시 방지] 전환 비율은 위 '영업익 : ... (전분기대비🔺+..%)' 줄에
-        # 이미 표시되므로, 여기서는 흑자전환 태그만 남긴다.
-        highlights.append("🔥흑자전환(영업이익)")
-    if prev_net is not None and prev_net <= 0 and (cur.get("당기순이익") or 0) > 0:
-        highlights.append("🔥흑자전환(순이익)")
-    past_ops = [x.get("영업이익") for x in quarters[1:] if x.get("영업이익") is not None]
-    if cur.get("영업이익") is not None and past_ops and cur["영업이익"] > max(past_ops):
-        highlights.append("✔️ 최근 5개분기 최대 영업이익")
-    if highlights:
-        lines.append("")
-        lines.extend(highlights)
-
-    lines.append("")
-    dart_link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
-    naver_link = f"https://finance.naver.com/item/main.naver?code={stock_code}" if stock_code else ""
-    lines.append(f'공시링크 : <a href="{html.escape(dart_link, quote=True)}">🔗 원문 보기</a>')
-    if naver_link:
-        lines.append(f'회사정보 : <a href="{html.escape(naver_link, quote=True)}">🔗 원문 보기</a>')
-    return "\n".join(lines)
-
-
 def _engine_run_dart():
     if not ENABLE_DART:
         _engine_log("warning", "[DART] ENABLE_DART=OFF")
@@ -4086,30 +3459,9 @@ def _engine_run_dart():
             if not any(k in report for k in DART_STRONG_REPORT_KEYWORDS):
                 continue
             corp = row.get("corp_name", "")
+            title = f"{corp} | {report}"
             link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
             _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""))
-            # [버그수정] 실적공시 재무카드는 일반 뉴스 경로(_engine_process_item)를 안 타서
-            # 중복전송 방지(_engine_seen) 체크가 아예 빠져 있었다. 이 루프는 오늘자 전체
-            # 공시목록(bgn_de=today)을 실행 주기마다 다시 불러오므로, 체크가 없으면 이미
-            # 보낸 같은 공시를 하루종일 매 주기 재전송해서 "몇십 개씩 도배"되는 원인이 된다.
-            # rcept_no(접수번호)는 공시 1건마다 고유하므로 이걸 키로 1회만 전송한다.
-            # (전송이 실제로 성공했을 때만 seen 처리 - 실패 시 다음 주기에 재시도 가능)
-            rcept_no = str(row.get("rcept_no", "")).strip()
-            card_key = f"DART-CARD|{rcept_no}"
-            if _engine_dart_is_financial_report(report):
-                if card_key in _engine_seen:
-                    continue
-                try:
-                    card = _engine_dart_build_financial_card(row)
-                except Exception as e:
-                    card = None
-                    _engine_log("warning", "[재무카드] 생성 실패 | corp=%s | 원인=%s", corp, str(e)[:160])
-                if card:
-                    if _engine_send_telegram(card):
-                        _engine_mark_seen(card_key)
-                        sent += 1
-                    continue
-            title = f"{corp} | {report}"
             if _engine_process_item("DART", title, link, row.get("rcept_dt", "")):
                 sent += 1
         _engine_log("info", "[DART] 후보=%d건", sent)
@@ -4312,7 +3664,7 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     lines.append("<b>📊 주요 지수</b>")
     for s in ("^KS11","^KQ11"):
         q=snapshot.get(s)
-        if q: lines.append(f"• {q['name']} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+        if q: lines.append(f"• {_us_display_name(s, q['name'])} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
     lines += ["", "<b>⚡️ 주요 종목 변화</b>"]
     rows=[]
     for s,q in snapshot.items():
@@ -4430,82 +3782,6 @@ _US_BRIEFING_LAST_POLL = None
 _US_BRIEFING_NEWS_MEMORY = []
 _US_BRIEFING_LOCK = threading.Lock()
 
-# [버그수정] 고정 워치리스트(26종목)만 조회하면 그 목록 밖에서 실제로 급등/급락한
-# 종목(예: 시가총액 큰 종목의 100%+ 급등)은 시스템이 아예 쳐다보지 못한다.
-# Yahoo Finance의 공개 스크리너(day_gainers/day_losers)로 "그날 실제 상위 변동 종목"을
-# 직접 스캔해서 고정 워치리스트에 없는 종목도 브리핑에 잡히게 한다.
-US_MOVER_SCAN_MIN_PCT = 8.0
-US_MOVER_SCAN_MIN_MARKET_CAP = 2_000_000_000  # 시가총액 20억달러 미만 잡주는 노이즈로 제외
-US_MOVER_SCAN_LIMIT = 15
-
-# Yahoo가 주는 영문 업종명은 STOCK_LINK_MAP의 국내 테마 키(한글)와 문자열이 그대로
-# 겹치지 않는다. 실제로 국내 관련주 매칭이 동작하려면 최소한의 영→한 테마 별칭이 필요하다.
-US_SECTOR_THEME_ALIAS = {
-    "semiconductor": "반도체", "semiconductors": "반도체",
-    "biotechnology": "바이오", "drug manufacturer": "바이오", "pharmaceutical": "바이오",
-    "aerospace": "방산", "defense": "방산",
-    "shipbuilding": "조선", "marine shipping": "조선",
-    "solar": "2차전지", "battery": "2차전지", "electric vehicle": "2차전지",
-    "utilities—renewable": "2차전지",
-    "robotics": "로봇", "industrial automation": "로봇",
-    "nuclear": "원전", "uranium": "원전",
-}
-
-
-def _us_industry_theme(industry, sector, name):
-    """Yahoo가 준 영문 업종/이름에서 STOCK_LINK_MAP과 매칭 가능한 국내 테마 키워드를 뽑는다.
-    매칭되는 게 없으면 빈 문자열을 반환한다(추정하지 않음)."""
-    text = f"{industry or ''} {sector or ''} {name or ''}".lower()
-    for key, ko in US_SECTOR_THEME_ALIAS.items():
-        if key in text:
-            return ko
-    return ""
-
-
-def _us_scan_top_movers(limit=US_MOVER_SCAN_LIMIT, min_market_cap=US_MOVER_SCAN_MIN_MARKET_CAP, min_abs_pct=US_MOVER_SCAN_MIN_PCT):
-    """고정 워치리스트 밖에서 실제로 크게 움직인 종목을 직접 스캔한다.
-    [조건19 추정금지] 조회 실패시 그냥 건너뛰고, 값을 지어내지 않는다."""
-    out = []
-    for scr_id, display_theme in (("day_gainers", "급등주"), ("day_losers", "급락주")):
-        try:
-            r = requests.get(
-                "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved",
-                params={"formatted": "false", "lang": "en-US", "region": "US", "scrIds": scr_id, "count": 100},
-                headers={"User-Agent": USER_AGENT},
-                timeout=10,
-            )
-            if not r.ok:
-                _engine_log("warning", "[미장 급등스캔] %s 조회 실패 | status=%s", scr_id, r.status_code)
-                continue
-            payload = r.json() or {}
-            rows = (((payload.get("finance", {}) or {}).get("result", []) or [{}])[0]).get("quotes", []) or []
-            for q in rows:
-                symbol = q.get("symbol")
-                pct = q.get("regularMarketChangePercent")
-                cap = q.get("marketCap")
-                name = q.get("shortName") or q.get("longName") or symbol
-                if not symbol or pct is None:
-                    continue
-                try:
-                    pct = float(pct)
-                except (TypeError, ValueError):
-                    continue
-                if cap is not None and cap < min_market_cap:
-                    continue
-                if abs(pct) < min_abs_pct:
-                    continue
-                industry_theme = _us_industry_theme(q.get("industry"), q.get("sector"), name)
-                out.append({
-                    "symbol": symbol, "name": str(name), "theme": display_theme,
-                    "industry_theme": industry_theme,
-                    "change_pct": pct, "market_cap": cap,
-                })
-        except Exception as e:
-            _engine_log("warning", "[미장 급등스캔] %s 조회 실패 | 원인=%s", scr_id, str(e)[:120])
-            continue
-    out.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
-    return out[:limit]
-
 
 def _us_market_now_et():
     if ZoneInfo is None:
@@ -4618,106 +3894,26 @@ def _us_briefing_fetch_all():
         if q:
             q.update({"name": meta[0], "theme": meta[1]})
             data[symbol] = q
-    # [버그수정] 고정 워치리스트 밖에서 실제로 급등/급락한 종목을 합친다.
-    # 이미 워치리스트에 있는 종목은 실시간 차트 시세(위)를 그대로 우선한다.
-    for mover in _us_scan_top_movers():
-        symbol = mover["symbol"]
-        if symbol in data:
-            continue
-        data[symbol] = {
-            "symbol": symbol, "name": mover["name"], "theme": mover["theme"],
-            "industry_theme": mover.get("industry_theme") or "",
-            "price": None, "previous_close": None, "day_open": None,
-            "change_pct": mover["change_pct"], "open_pct": None,
-            "timestamp": None, "market_cap": mover.get("market_cap"),
-            "dynamic_mover": True,
-        }
     return data
 
 
-# [최종 사용자 지시 우선] 미장 시세 방향은 한글 상승/하락 문구를 사용하지 않고
-# 아이콘만 등락률 바로 앞에 표시한다. 기존 하위 출력 규칙은 이 규칙과 충돌하지 않도록 제거한다.
+US_TICKER_NAME = {
+    "NVDA": "엔비디아", "AMD": "AMD", "AVGO": "브로드컴", "MU": "마이크론",
+    "TSM": "TSMC", "AAPL": "애플", "MSFT": "마이크로소프트", "AMZN": "아마존",
+    "META": "메타", "GOOGL": "알파벳", "TSLA": "테슬라", "PLTR": "팔란티어",
+    "ARM": "암 홀딩스", "INTC": "인텔",
+}
+
+def _us_display_name(symbol, name):
+    base = US_TICKER_NAME.get(symbol, name)
+    if symbol in US_TICKER_NAME:
+        return f"{base} ({symbol})"
+    return name
+
 def _us_direction(pct):
     if pct is None:
         return ""
     return "🔺" if pct >= 0 else "▼"
-
-
-# [최종 사용자 지시] 미국 기업명은 Telegram 미장 브리핑에서 한국어 회사명 +
-# 영문 대문자 티커(약자)로 표시한다. Yahoo의 긴 법인명은 정규화한다.
-_US_COMPANY_KO_NAMES = {
-    "SELLAS Life Sciences Group, Inc": "셀라스 라이프 사이언스",
-    "SELLAS Life Sciences Group, Inc.": "셀라스 라이프 사이언스",
-    "IQM Quantum Computers Oyj": "아이큐엠 퀀텀 컴퓨터스",
-    "Uranium Energy Corp.": "우라늄 에너지",
-    "Uranium Energy Corp": "우라늄 에너지",
-    "Robinhood Markets, Inc.": "로빈후드",
-    "Robinhood Markets, Inc": "로빈후드",
-    "Tesla, Inc.": "테슬라", "Tesla Inc.": "테슬라", "Tesla": "테슬라",
-    "Palantir Technologies Inc.": "팔란티어", "Palantir Technologies": "팔란티어", "Palantir": "팔란티어",
-    "NVIDIA Corporation": "엔비디아", "NVIDIA": "엔비디아",
-    "Microsoft Corporation": "마이크로소프트", "Microsoft": "마이크로소프트",
-    "Amazon.com, Inc.": "아마존", "Amazon.com, Inc": "아마존", "Amazon": "아마존",
-    "Alphabet Inc.": "알파벳", "Alphabet": "알파벳",
-    "Apple Inc.": "애플", "Apple": "애플",
-    "Meta Platforms, Inc.": "메타", "Meta Platforms": "메타", "Meta": "메타",
-    "Advanced Micro Devices, Inc.": "에이엠디", "Advanced Micro Devices": "에이엠디",
-    "Broadcom Inc.": "브로드컴", "Broadcom": "브로드컴",
-    "Micron Technology, Inc.": "마이크론", "Micron Technology": "마이크론", "Micron": "마이크론",
-    "Taiwan Semiconductor Manufacturing Company Limited": "TSMC",
-    "Taiwan Semiconductor Manufacturing Company": "TSMC", "TSMC": "TSMC",
-    "Intel Corporation": "인텔", "Intel": "인텔",
-    "ASML Holding N.V.": "에이에스엠엘", "ASML Holding": "에이에스엠엘", "ASML": "에이에스엠엘",
-}
-
-_US_COMPANY_TICKERS = {
-    "SELLAS Life Sciences Group, Inc": "SLS",
-    "SELLAS Life Sciences Group, Inc.": "SLS",
-    "IQM Quantum Computers Oyj": "IQM",
-    "Uranium Energy Corp.": "UEC",
-    "Uranium Energy Corp": "UEC",
-    "Robinhood Markets, Inc.": "HOOD",
-    "Robinhood Markets, Inc": "HOOD",
-    "Tesla, Inc.": "TSLA", "Tesla Inc.": "TSLA", "Tesla": "TSLA",
-    "Palantir Technologies Inc.": "PLTR", "Palantir Technologies": "PLTR", "Palantir": "PLTR",
-    "NVIDIA Corporation": "NVDA", "NVIDIA": "NVDA",
-    "Microsoft Corporation": "MSFT", "Microsoft": "MSFT",
-    "Amazon.com, Inc.": "AMZN", "Amazon.com, Inc": "AMZN", "Amazon": "AMZN",
-    "Alphabet Inc.": "GOOGL", "Alphabet": "GOOGL",
-    "Apple Inc.": "AAPL", "Apple": "AAPL",
-    "Meta Platforms, Inc.": "META", "Meta Platforms": "META", "Meta": "META",
-    "Advanced Micro Devices, Inc.": "AMD", "Advanced Micro Devices": "AMD",
-    "Broadcom Inc.": "AVGO", "Broadcom": "AVGO",
-    "Micron Technology, Inc.": "MU", "Micron Technology": "MU", "Micron": "MU",
-    "Taiwan Semiconductor Manufacturing Company Limited": "TSM",
-    "Taiwan Semiconductor Manufacturing Company": "TSM", "TSMC": "TSM",
-    "Intel Corporation": "INTC", "Intel": "INTC",
-    "ASML Holding N.V.": "ASML", "ASML Holding": "ASML", "ASML": "ASML",
-}
-
-_US_TICKER_KO_NAMES = {
-    "SLS":"셀라스 라이프 사이언스", "IQM":"아이큐엠 퀀텀 컴퓨터스", "UEC":"우라늄 에너지",
-    "HOOD":"로빈후드", "TSLA":"테슬라", "PLTR":"팔란티어", "NVDA":"엔비디아",
-    "MSFT":"마이크로소프트", "AMZN":"아마존", "GOOGL":"알파벳", "AAPL":"애플",
-    "META":"메타", "AMD":"에이엠디", "AVGO":"브로드컴", "MU":"마이크론",
-    "TSM":"TSMC", "INTC":"인텔", "ASML":"에이에스엠엘",
-}
-
-def _us_display_company_name(q):
-    raw = str((q or {}).get("name", "") or "").strip()
-    symbol = str((q or {}).get("symbol", "") or "").strip().upper()
-    ko = _US_COMPANY_KO_NAMES.get(raw) or _US_TICKER_KO_NAMES.get(symbol)
-    ticker = _US_COMPANY_TICKERS.get(raw) or symbol
-    if ko and ticker and re.fullmatch(r"[A-Z][A-Z0-9.]{1,9}", ticker):
-        return f"{ko} ({ticker})"
-    if ko:
-        return ko
-    # 알려진 영문 법인 접미사만 제거하고, 번역 매핑이 없는 회사는 원문을 보존한다.
-    # 근거 없이 회사명을 임의 음역하지 않는다.
-    cleaned = re.sub(r",?\s*(?:Inc\.?|Corp\.?|Corporation|Company|Co\.?|Ltd\.?|Limited|plc)\s*$", "", raw, flags=re.I).strip()
-    if cleaned and ticker and re.fullmatch(r"[A-Z][A-Z0-9.]{1,9}", ticker):
-        return f"{cleaned} ({ticker})"
-    return cleaned or raw
 
 
 def _us_format_pct(pct):
@@ -4738,7 +3934,7 @@ def _us_open_briefing(snapshot, et):
     for s in indices:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {_us_display_company_name(q)} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+            lines.append(f"• {_us_display_name(s, q['name'])} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
     movers = []
     for s, q in snapshot.items():
         if s in indices or s in macro:
@@ -4747,26 +3943,21 @@ def _us_open_briefing(snapshot, et):
             movers.append(q)
     movers.sort(key=lambda x: abs(x.get("change_pct") or 0), reverse=True)
     lines += ["", "<b>🔥 강한 종목/테마</b>"]
-    for q in movers[:8]:
+    for q in movers[:6]:
         pct = q.get("change_pct")
         if pct is None or abs(pct) < 1.0:
             continue
-        cap_note = ""
-        if q.get("market_cap"):
-            cap_note = " 🐘" if q["market_cap"] >= 100_000_000_000 else ""
         reason = _us_briefing_reason(q["name"], q["theme"])
-        line = f"• {_us_display_company_name(q)}{cap_note} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
+        line = f"• {_us_display_name(s, q['name'])} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
         if reason:
             line += f" · 원인: {html.escape(reason)}"
         lines.append(line)
-        # [최종사용자지시우선 / MASTER 단일통제]
-        # 미장 보조 브리핑에서는 국내 관련주를 생성하지 않는다.
     lines += ["", "<b>🛢️ 환율·원자재</b>"]
     for s in macro:
         q = snapshot.get(s)
         if q:
             pct = q.get("change_pct")
-            lines.append(f"• {_us_display_company_name(q)} {_us_direction(pct)} {_us_format_pct(pct)}")
+            lines.append(f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)}")
 
     # 미국장 개장 30분 브리핑에도 국내 시장 대응용 ADR을 반드시 포함한다.
     lines += ["", "<b>🇰🇷 ADR</b>"]
@@ -4820,18 +4011,11 @@ def _us_intraday_events(snapshot):
             continue
         old = _US_BRIEFING_LAST_SNAPSHOT.get(symbol)
         if not old:
-            # [버그수정] 동적 스캔으로 이번에 처음 잡힌 급등/급락주는 직전 스냅샷이
-            # 없다는 이유로 그냥 건너뛰면 "새로 급등권 진입"이 영영 보고되지 않는다.
-            # 이 경우 현재 등락률 자체를 변화폭으로 취급해 최초 1회는 반드시 보고한다.
-            if q.get("dynamic_mover"):
-                delta = pct
-            else:
-                continue
-        else:
-            old_pct = old.get("change_pct")
-            if old_pct is None:
-                continue
-            delta = pct - old_pct
+            continue
+        old_pct = old.get("change_pct")
+        if old_pct is None:
+            continue
+        delta = pct - old_pct
         if symbol in {"^IXIC", "^GSPC", "^DJI", "^RUT", "^SOX", "^VIX"}:
             threshold = US_INDEX_MOVE_THRESHOLD
         elif symbol in {"USDKRW=X", "CL=F", "GC=F"}:
@@ -4868,13 +4052,13 @@ def _us_intraday_briefing(snapshot, events, et):
     if sector_moves:
         lines.append("<b>📌 시장·테마 변화</b>")
         for _, q, delta in sector_moves[:5]:
-            lines.append(f"• {_us_display_company_name(q)} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% (전일 대비)")
+            lines.append(f"• {q['name']} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}%")
         lines.append("")
     if stock_moves:
         lines.append("<b>📈📉 개별종목 변화</b>")
         for _, symbol, q, delta in [(abs(d), s, q, d) for _, s, q, d in stock_moves[:6]]:
             reason = _us_briefing_reason(q["name"], q["theme"])
-            line = f"• {_us_display_company_name(q)} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% (전일 대비) · {q['theme']}"
+            line = f"• {q['name']} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% · {q['theme']}"
             if reason:
                 line += f" · 원인: {html.escape(reason)}"
             else:
@@ -4884,7 +4068,7 @@ def _us_intraday_briefing(snapshot, events, et):
     if macro_moves:
         lines.append("<b>🛢️ 환율·원자재 변화</b>")
         for _, q, delta in macro_moves:
-            lines.append(f"• {_us_display_company_name(q)} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q['change_pct'])} (전일 대비)")
+            lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q['change_pct'])}")
         lines.append("")
     if not events:
         return ""
@@ -5018,14 +4202,14 @@ def _us_close_briefing(snapshot, et):
     for s in ["^IXIC","^GSPC","^DJI","^RUT","^SOX","^VIX"]:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {html.escape(_us_display_company_name(q))} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
 
     ranked = _us_close_rank_themes(snapshot)
     if ranked:
         lines += ["", "<b>🔥 오늘의 강한 종목군·테마</b>"]
         for _, theme, qs in ranked[:4]:
             members = sorted(qs, key=lambda q: abs(q.get("change_pct") or 0), reverse=True)[:4]
-            member_text = " · ".join(f"{html.escape(_us_display_company_name(q))} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}" for q in members)
+            member_text = " · ".join(f"{html.escape(_us_display_name(next((sym for sym, qq in snapshot.items() if qq is q), ""), q['name']))} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}" for q in members)
             lines.append(f"• <b>{html.escape(theme)}</b> · {member_text}")
 
             lead = members[0] if members else {}
@@ -5036,9 +4220,7 @@ def _us_close_briefing(snapshot, et):
             else:
                 lines.append("  ↳ 움직인 이유: 확인된 뉴스 없음")
 
-            # [최종사용자지시우선 / MASTER 단일통제]
-            # 미장 마감 브리핑의 국내 관련주를 하위 함수에서 생성하지 않는다.
-            # 관련주 판단은 MASTER 뉴스 분석에서만 수행한다.
+            # 관련주/테마 판단은 MASTER에서만 수행한다.
 
             # 유사 과거 사례: 실제 수익률과 링크가 DB에 있을 때만 표시.
             if reason:
@@ -5070,7 +4252,7 @@ def _us_close_briefing(snapshot, et):
     for s in ["USDKRW=X","CL=F","GC=F"]:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {html.escape(_us_display_company_name(q))} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
 
     lines += ["", "<b>🇰🇷 ADR</b>"]
     adr_symbols = ["PKX","LPL","KEP","KB","SHG","SKM"]
@@ -5079,7 +4261,7 @@ def _us_close_briefing(snapshot, et):
         q = snapshot.get(s)
         if q:
             found = True
-            lines.append(f"• {html.escape(_us_display_company_name(q))} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
     if not found:
         lines.append("• ADR 시세 확인불가")
 
@@ -5125,17 +4307,6 @@ def _us_close_briefing(snapshot, et):
             lines.append(f"• {html.escape(tx)}{html.escape(suffix)}")
             if row.get("link"):
                 lines.append(f'<a href="{html.escape(str(row["link"]), quote=True)}">🔗 원문</a>')
-
-    # [용어 설명 최종 위치] 모든 본문 섹션이 끝난 뒤 맨 아래에만 표시한다.
-    # 고유명사 자체는 강조하지 않고 일반 텍스트로 출력한다.
-    term_explanations=list(master_result.get('term_explanations') or []) if master_result and master_result.get('locked') else []
-    if term_explanations:
-        lines += ["", '💡 [용어 설명]']
-        for row in term_explanations[:5]:
-            term=str(row.get('term','')).strip()
-            desc=str(row.get('description','')).strip()
-            if term and desc:
-                lines.append(f'• {html.escape(term)} : {html.escape(desc)}')
 
     return "\n".join(lines)
 
@@ -5202,13 +4373,8 @@ def _engine_cycle():
         _engine_us_market_close_monitor()
     except Exception as e:
         log_error("미장 장마감 브리핑", e)
-    try:
-        _engine_schedule_daily_monitor()
-    except Exception as e:
-        log_error("일정 일일 브리핑", e)
-    sent = _engine_flush_pending()
     _engine_last_cycle_finished = time.time()
-    _engine_log("info", "[주기 완료] %.2f초 | Telegram 신규송출=%d | pending=%d", time.time()-started, sent, len(_engine_pending))
+    _engine_log("info", "[주기 완료] %.2f초 | Telegram 즉시송출 구조", time.time()-started)
 
 
 
@@ -5276,12 +4442,6 @@ if __name__ == "__main__":
         health_thread.start()
         time.sleep(0.3)
 
-        # 1년치 특징주/급등 뉴스에서 미래 일정 DB를 최초 1회 구축한다.
-        schedule_bootstrap_thread = threading.Thread(
-            target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True
-        )
-        schedule_bootstrap_thread.start()
-
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
         _engine_log("info", "[BOOT] NAVER_HUB=%s | NAVER_LEGACY=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
                     bool(NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET),
@@ -5290,7 +4450,7 @@ if __name__ == "__main__":
                     ENABLE_DOMESTIC_NEWS,
                     ENABLE_US_NEWS,
                     ENABLE_TELEGRAM_CHANNELS)
-        _engine_log("info", "[BOOT 완료] 뉴스엔진 시작 | Naver=%s | Google=%s | Telegram=%s", ENABLE_NAVER_NEWS, ENABLE_US_NEWS, bool(BOT_TOKEN and CHAT_ID))
+        _engine_log("info", "[BOOT] 국내장브리핑=%s | 미장30분브리핑=%s | 장중감시=%s | Naver=%s | Google=%s", ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, ENABLE_NAVER_NEWS, ENABLE_US_NEWS)
 
         _engine_main_loop()
     except KeyboardInterrupt:
