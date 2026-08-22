@@ -2799,6 +2799,32 @@ _engine_pending = []
 _engine_sent_fingerprints = []  # {text, source, time_text, published, title}
 
 
+def _engine_freshness_detail(item, prev):
+    """신규/후속/재탕 판정의 근거를 짧게 설명한다. 추정하지 않고 텍스트 차이만 사용."""
+    if not prev:
+        return "이전 유사 보도 없음"
+    cur = str(item.get("title", "")) + " " + str(item.get("extra", ""))
+    old = str(prev.get("text", ""))
+    reasons = []
+    strong = [
+        "계약 체결", "공급계약", "대규모 수주", "신규 수주", "대형 계약", "초대형 계약",
+        "확정", "승인", "허가", "독점", "사상 최대", "세계 최대", "대규모 투자",
+        "자사주 매입", "자사주 소각", "배당", "양산", "출시", "실적"
+    ]
+    new_words = [w for w in strong if w.lower() in cur.lower() and w.lower() not in old.lower()]
+    if new_words:
+        reasons.append("새로운 확정 내용: " + ", ".join(new_words[:2]))
+    amounts_cur = set(re.findall(r"[0-9][0-9,]*(?:\.\d+)?\s*(?:억|조|원|달러|USD|억원|조원|백만|million|billion)", cur, re.I))
+    amounts_old = set(re.findall(r"[0-9][0-9,]*(?:\.\d+)?\s*(?:억|조|원|달러|USD|억원|조원|백만|million|billion)", old, re.I))
+    if amounts_cur - amounts_old:
+        reasons.append("새로운 금액/규모 수치 확인")
+    hits_cur=set(_engine_market_hit(cur)); hits_old=set(_engine_market_hit(old))
+    if hits_cur-hits_old:
+        reasons.append("새로운 시장·산업 키워드 확인")
+    if reasons:
+        return " · ".join(reasons[:2])
+    return "기존 보도와 핵심 내용이 유사하고 확인된 추가 정보가 제한적"
+
 def _engine_freshness(item):
     """시장 반영 가능 여부를 고려한 신규/업그레이드/재탕 판정."""
     full = item["title"] + " " + item.get("extra", "")
@@ -3499,6 +3525,16 @@ def _engine_master_result(item):
             market_context=_engine_build_data_context(item),
         )
         if result.get("locked"):
+            # 신규/후속/재탕은 실제 선행 보도와의 비교 결과를 그대로 기록한다.
+            freshness, prev = _engine_freshness(item)
+            status_label = {"업그레이드": "후속", "재탕": "재탕", "신규": "신규"}.get(freshness, freshness)
+            result["news_status"] = status_label
+            result["news_status_detail"] = _engine_freshness_detail(item, prev)
+            # 분석 첫 문장에 뉴스 신선도를 자연스럽게 녹인다.
+            analysis = list(result.get("analysis") or [])
+            status_line = f"뉴스상태: {status_label} — {result['news_status_detail']}"
+            analysis = [status_line] + [x for x in analysis if not str(x).startswith("뉴스상태:")]
+            result["analysis"] = analysis[:4]
             _engine_log("info", "[FINAL LOCK 통과] %s", str(result.get("title") or item.get("title") or "")[:220])
         return result
     except Exception as e:

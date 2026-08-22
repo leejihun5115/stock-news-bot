@@ -173,6 +173,8 @@ class MasterResult:
     commercial_stage: str = ""
     commercial_evidence: str = ""
     term_explanations: List[Dict[str, str]] = field(default_factory=list)
+    news_status: str = ""
+    news_status_detail: str = ""
 
     def as_dict(self):
         return self.__dict__.copy()
@@ -498,7 +500,8 @@ class MasterConditionManager:
             if item[1] not in used_idx:
                 selected.append(item[2]); used_idx.add(item[1])
 
-        return selected
+        # Telegram용 요약은 최대 3개 핵심 사실만 유지한다. 나머지는 원문/DB에 보존한다.
+        return selected[:3]
 
     def _clause_cut(self, s):
         """접속어(면서/라며/는데/이에 따라/이로 인해) 앞에서 문장을 자연스럽게 끊는다.
@@ -933,6 +936,8 @@ class MasterConditionManager:
             commercial_stage=state["commercial_stage"],
             commercial_evidence=state["commercial_evidence"],
             term_explanations=list(state.get("term_explanations") or [])[:5],
+            news_status="",
+            news_status_detail="",
             schedule=state["schedule"],
             analysis=state["analysis"][:4],
             selection_method=list(self.SELECTION_METHOD),
