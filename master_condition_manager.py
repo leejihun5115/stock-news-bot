@@ -386,6 +386,20 @@ class MasterConditionManager:
         match = difflib.SequenceMatcher(None, n, title_n).find_longest_match(0, len(n), 0, len(title_n))
         return match.size >= max(12, int(len(shorter) * 0.6))
 
+    # 자주 등장하는 글로벌/국내 기업명은 '제품 출시/판매' 같은 문맥 단어가
+    # 주변에 함께 나와도 기업명 자체이므로 항상 '회사명'으로 분류한다.
+    # (예: "Nvidia는 GB200을 출시했다" → Nvidia=회사명, GB200=제품·서비스명)
+    KNOWN_COMPANY_NAMES = {
+        "nvidia", "meta", "amd", "intel", "apple", "google", "alphabet", "microsoft",
+        "amazon", "tesla", "tsmc", "qualcomm", "broadcom", "samsung", "sk hynix",
+        "micron", "openai", "anthropic", "ibm", "oracle", "salesforce", "netflix",
+        "disney", "boeing", "airbus", "toyota", "sony", "panasonic", "lg",
+        "hyundai", "jpmorgan", "goldman sachs", "morgan stanley",
+        "berkshire hathaway", "visa", "mastercard", "paypal", "uber", "lyft",
+        "airbnb", "spotify", "adobe", "sap", "cisco", "dell", "hp", "xiaomi",
+        "huawei", "byd",
+    }
+
     def _term_explanations(self, title, body):
         """기사에 실제 등장한 낯선 영문 고유명사/제품·행사명을 설명용으로 추출한다.
         기사에 없는 정의는 만들지 않고, 본문 문맥으로 확인 가능한 종류만 표시한다.
@@ -402,6 +416,11 @@ class MasterConditionManager:
             if len(term) < 3 or term in stop or (term.isupper() and len(term) <= 4):
                 continue
             if any(term == x["term"] for x in candidates):
+                continue
+            if term.lower() in self.KNOWN_COMPANY_NAMES:
+                candidates.append({"term": term, "description": "기사상 회사명"})
+                if len(candidates) >= 5:
+                    break
                 continue
             left = text[max(0, match.start()-90):match.start()]
             right = text[match.end():min(len(text), match.end()+90)]
