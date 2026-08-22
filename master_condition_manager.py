@@ -6,7 +6,7 @@ Reusable central decision-logic module for news / stock analysis programs.
 핵심:
 - 조건 65개를 CONDITION_RULES 한 곳에서 관리
 - 뉴스 1건 = MASTER 1회 분석
-- 본문 → 핵심요약 → 종목선정 → 실행단계 → 일정 → 통합분석
+- 본문 → 핵심요약 → 종목선정 → 실행단계 → 일정 → 시장전망
 - Validator → FINAL LOCK
 - Formatter / Telegram은 판단하지 않고 결과만 사용
 
@@ -20,7 +20,7 @@ CONDITION_RULES 안의 "rule" 문구(설명 텍스트)는 실행 코드가 읽�
 ▶ 실제로 동작하는 19개 (이름 = _execute_rule의 elif 분기와 1:1 대응):
   원문확보/본문우선/분석입력고정, 증거보존, 제목반복금지, 추정금지, 핵심추출,
   5W1H우선/사실우선/주제분리, 핵심필요량/요약확정, 일반문구제거, 상용화단계,
-  실행신호, 미래일정검증, 시장영향, 데이터사실통합/뉴스신선도검증/과거성과연결/사실추론분리/통합분석확정,
+  실행신호, 미래일정검증, 시장영향, 전망근거/후속확인/지속성, 시장전망최대3,
   대장주선정, 대장주이유, 관찰후보, 관련주없음, 점수화, 조건중앙관리,
   FINAL_LOCK, Formatter무판단/Telegram무판단, 재호출금지
 
@@ -30,7 +30,7 @@ CONDITION_RULES 안의 "rule" 문구(설명 텍스트)는 실행 코드가 읽�
     - 서브제목/요약(핵심포인트) → _key_points(title, body)
     - 관련종목 선정/필터     → _select_related(candidates, text)
       (관련종목 후보는 MASTER가 기사 본문 근거를 검증한 국내 상장사 후보만 사용하며, 하위 테마 매핑은 관련주 확정 근거로 인정하지 않는다)
-    - 통합분석             → _integrated_analysis(state)
+    - 시장전망 문구          → _outlook(text, stage, key_points) / OUTLOOK_PATTERNS
     - 상용화 단계 판정       → _stage(text) / STAGES
 
 나머지 46개(예: 직접사업연관/실제사건연결/과거급등이력/글로벌오인방지 등)는
@@ -58,7 +58,7 @@ IMPLEMENTED_CONDITION_NAMES = frozenset({
     "5W1H우선", "사실우선", "주제분리",
     "핵심필요량", "요약확정", "일반문구제거",
     "상용화단계", "실행신호", "미래일정검증", "시장영향",
-    "데이터사실통합", "뉴스신선도검증", "과거성과연결", "사실추론분리", "통합분석확정",
+    "전망근거", "후속확인", "지속성", "시장전망최대3",
     "대장주선정", "대장주이유", "관찰후보", "관련주없음", "점수화",
     "조건중앙관리", "FINAL_LOCK",
     "Formatter무판단", "Telegram무판단", "재호출금지",
@@ -109,11 +109,11 @@ CONDITION_RULES = [
     {"order": 37, "name": "실행신호", "rule": "실제 실행 신호를 단순 기대보다 높게 평가한다."},
     {"order": 39, "name": "미래일정검증", "rule": "미래 날짜 또는 예정/계획 표현이 있어야 한다."},
     {"order": 40, "name": "시장영향", "rule": "뉴스의 직접적인 시장 영향요인을 정리한다."},
-    {"order": 41, "name": "데이터사실통합", "rule": "원문 사실·시장데이터·과거성과·뉴스신선도를 하나의 분석으로 통합한다."},
-    {"order": 42, "name": "뉴스신선도검증", "rule": "신규·후속·재탕과 새로 추가된 사실을 검증한다."},
-    {"order": 43, "name": "과거성과연결", "rule": "현재 시장과 과거 유사환경의 실제 누적성과를 연결한다."},
-    {"order": 44, "name": "사실추론분리", "rule": "확인된 사실과 데이터 기반 해석을 분리해 과장하지 않는다."},
-    {"order": 45, "name": "통합분석확정", "rule": "별도 통합분석 문구 없이 분석 결과를 하나로 확정한다."},
+    {"order": 41, "name": "전망근거", "rule": "전망은 본문 사실과 연결한다."},
+    {"order": 42, "name": "후속확인", "rule": "후속 발표와 실제 실적 반영 여부를 확인한다."},
+    {"order": 43, "name": "지속성", "rule": "수치의 실제 집행 규모와 지속성을 확인한다."},
+    {"order": 44, "name": "사실추론분리", "rule": "사실과 추론을 섞지 않는다."},
+    {"order": 45, "name": "시장전망최대3", "rule": "시장 전망은 최대 3개다."},
 
     {"order": 46, "name": "단일분석", "rule": "뉴스 1건은 MASTER에서 한 번만 판단한다."},
     {"order": 47, "name": "결과단일화", "rule": "분석 결과를 하나의 result 객체로 확정한다."},
@@ -157,11 +157,7 @@ class MasterResult:
     observe: List[Dict[str, Any]] = field(default_factory=list)
     stage: str = ""
     schedule: str = ""
-    analysis: str = ""
-    freshness: str = ""
-    freshness_evidence: List[str] = field(default_factory=list)
-    historical_stats: Dict[str, Any] = field(default_factory=dict)
-    market_context: Dict[str, Any] = field(default_factory=dict)
+    outlook: List[str] = field(default_factory=list)
     selection_method: List[str] = field(default_factory=list)
     evidence: List[str] = field(default_factory=list)
     source: str = ""
@@ -196,10 +192,17 @@ IMMUTABLE_EMPTY_SECTION_RULE = True
 # 충돌하는 이전/하위 규칙·Formatter·레거시 출력 명령은 실행하지 않는다.
 # 충돌하지 않는 기존 정상 기능만 유지한다.
 # ============================================================
-# 단일 우선순위 원칙: 사용자 지시가 출력 정책의 유일한 최우선 기준이다.
-# MASTER/Validator/Lock은 분석 검증 절차이지 사용자 지시를 덮어쓰는 하위 명령이 아니다.
+COMMAND_PRIORITY_POLICY = (
+    "LATEST_USER_COMMAND",
+    "MASTER_DECISION",
+    "VALIDATOR",
+    "FINAL_LOCK",
+    "FORMATTER_DISPLAY_ONLY",
+    "TELEGRAM_SEND_ONLY",
+)
 LATEST_USER_COMMAND_WINS = True
 COMMAND_PRIORITY_POLICY = ("LATEST_USER_COMMAND",)
+DISABLE_LEGACY_SUBCOMMAND_OVERRIDES = True
 
 
 # ============================================================
@@ -227,7 +230,7 @@ class MasterConditionManager:
       2) 뒤의 조건이 앞의 결과와 충돌하면 뒤의 결과가 override 한다.
       3) Validator/Lock 이후에는 결과를 변경할 수 없다.
       4) Formatter가 판단할 수 있도록 근거/이유를 결과 객체에 포함한다.
-      5) 별도 통합분석 문구를 만들지 않고 데이터 기반 통합분석으로만 연결한다.
+      5) 시장전망은 본문에서 추출한 사건에만 연결하며 generic fallback을 금지한다.
     """
 
     # 실행 진척도는 '먼저 발견된 단계'가 아니라 실제 진행도가 높은 단계가 승리한다.
@@ -261,6 +264,34 @@ class MasterConditionManager:
     def _is_non_commercial_geopolitical(self, text):
         return bool(self._GEO_DIPLOMATIC_RE.search(text or "")) and not bool(self._BIZ_REGULATORY_RE.search(text or ""))
 
+    # 사건별 전망은 고정문구가 아니라 '사실 + 다음 확인할 경제적 연결'로 만든다.
+    OUTLOOK_PATTERNS = [
+        (r"수주|공급계약|계약 체결|본계약|판매계약|장기공급",
+         "계약 규모가 실제 매출·수주잔고로 인식되는 시점과 추가 공급 확대 여부가 핵심이다."),
+        (r"양산|대량생산|출하|납품|공급 확대",
+         "실제 출하량과 생산능력 확대가 매출·마진 개선으로 이어지는지가 핵심이다."),
+        (r"상용화|상업화|출시|구매|실제 도입|채택",
+         "초기 도입이 반복 구매와 매출 증가로 이어지는지가 핵심이다."),
+        (r"임상|허가|승인|인증",
+         "이번 진전이 다음 규제·판매 단계로 이어지는지와 실제 매출화 시점이 핵심이다."),
+        (r"증설|시설투자|투자",
+         "투자 규모가 실제 생산능력과 고객 수요 증가로 연결되는지가 핵심이다."),
+        (r"실적|영업이익|매출|순이익|최대 실적",
+         "실적 개선이 일회성이 아닌지와 다음 분기에도 이익 증가가 이어지는지가 핵심이다."),
+        (r"금리|국채|채권|연준|FOMC|CPI|인플레이션",
+         "금리 변화가 할인율과 위험자산 선호를 얼마나 지속적으로 바꾸는지가 핵심이다."),
+        (r"비트코인|이더리움|가상자산|암호화폐",
+         "가격 상승이 거래량·관련 기업 실적 또는 위험선호 확대로 이어지는지가 핵심이다."),
+        (r"파업|노조|준법투쟁|임금|성과보상|노사",
+         "갈등의 장기화 여부와 생산·영업 차질 또는 비용 증가로 이어지는지가 핵심이다."),
+        (r"소송|규제|제재|조사",
+         "규제·법적 결과의 범위와 실제 비용·사업 제한으로 이어지는지가 핵심이다."),
+        (r"위탁\s*중개|주관사|주선사|자문사|중개 계약",
+         "위탁·중개 역할에 따른 수수료·자문 수익이 얼마나 반복적으로 발생하는지가 핵심이다."),
+        (r"자사주|배당|주주환원",
+         "환원 규모와 실제 현금흐름 대비 지속 가능성이 주주가치에 미치는 영향이 핵심이다."),
+    ]
+
     SELECTION_METHOD = [
         "65조건 순차 실행",
         "후행 조건 override",
@@ -286,7 +317,7 @@ class MasterConditionManager:
     )
 
     # [출처 꼬리표 제거] 외신 RSS 요약은 종종 문장 끝에 "... livemint.com"처럼
-    # 출처 도메인이 그대로 붙어 나온다. 이걸 안 떼면 요약/통합분석에 도메인
+    # 출처 도메인이 그대로 붙어 나온다. 이걸 안 떼면 요약/시장전망에 도메인
     # 문자열이 그대로 노출된다. 문장 맨 끝에 붙은 "단어.tld" 형태만 제거하므로
     # 본문 중간의 정상적인 내용은 건드리지 않는다.
     _PUBLISHER_SUFFIX_RE = re.compile(
@@ -398,35 +429,67 @@ class MasterConditionManager:
         "hyundai", "jpmorgan", "goldman sachs", "morgan stanley",
         "berkshire hathaway", "visa", "mastercard", "paypal", "uber", "lyft",
         "airbnb", "spotify", "adobe", "sap", "cisco", "dell", "hp", "xiaomi",
-        "huawei", "byd", "vanguard", "blackrock", "state street", "fidelity",
-        "goldman sachs", "morgan stanley", "citigroup", "citi", "jpmorgan chase",
-    }
-
-    TERM_GLOSSARY = {
-        "ETF": "상장지수펀드. 특정 지수나 자산의 움직임을 따라가도록 만든 거래소 상장 펀드",
-        "VIX": "미국 S&P 500 옵션 가격을 바탕으로 시장의 예상 변동성을 나타내는 지수",
-        "HBM": "고대역폭 메모리. 여러 메모리 층을 쌓아 데이터 처리 대역폭을 높인 고성능 메모리",
-        "IPO": "기업공개. 비상장 기업이 주식을 공개해 거래소에 상장하는 과정",
-        "M&A": "인수·합병. 기업이 다른 기업을 인수하거나 두 기업이 하나로 결합하는 거래",
-        "PER": "주가수익비율. 주가를 주당순이익(EPS)으로 나눈 값",
-        "PBR": "주가순자산비율. 주가를 주당순자산가치로 나눈 값",
-        "ROE": "자기자본이익률. 자기자본으로 얼마의 이익을 냈는지 나타내는 지표",
-        "EPS": "주당순이익. 기업의 순이익을 발행주식 수로 나눈 값",
+        "huawei", "byd",
     }
 
     def _term_explanations(self, title, body):
-        """실제 금융·기술 전문용어만 정확히 설명한다.
-        회사명/기관명/고유명사를 용어로 만들지 않으며, 일반적인 문장을 설명값으로 재사용하지 않는다.
-        기사에 전문용어가 없거나 사전 정의가 없으면 빈 목록을 반환한다.
+        """문맥이 실제로 설명해 주는 용어만 반환한다.
+
+        단순 고유명사/회사명을 '용어'라고 부르지 않는다. 기사 안에
+        'A는 B', 'A(=B)', 'B(A)'처럼 의미가 확인되는 경우만 설명한다.
+        의미를 확인할 수 없으면 항목 자체를 만들지 않는다.
         """
         text = self._clean(f"{title} {body}")
         if not text:
             return []
-        found = []
-        for term, desc in self.TERM_GLOSSARY.items():
-            if re.search(rf"(?<![A-Za-z]){re.escape(term)}(?![A-Za-z])", text):
-                found.append({"term": term, "description": desc})
-        return found[:3]
+        out=[]; seen=set()
+
+        # 일반적으로 쓰이는 금융/산업 약어는 정확한 사전 정의를 사용한다.
+        # 회사·기관명은 용어가 아니므로 설명하지 않는다.
+        COMMON_TERM_GLOSSARY = {
+            "etf": "여러 자산을 하나의 상품으로 묶어 주식처럼 거래할 수 있는 상장지수펀드",
+            "hbm": "여러 개의 메모리 칩을 수직으로 연결해 높은 데이터 처리 대역폭을 제공하는 고대역폭 메모리",
+            "vix": "미국 주식시장의 예상 변동성을 보여주는 대표적인 변동성 지수",
+            "per": "주가가 기업의 주당순이익의 몇 배인지 나타내는 주가수익비율",
+            "pbr": "주가가 기업의 주당순자산가치의 몇 배인지 나타내는 주가순자산비율",
+            "roe": "기업이 자기자본을 활용해 어느 정도의 이익을 내는지 보여주는 자기자본이익률",
+            "eps": "기업의 순이익을 발행주식 수로 나눈 주당순이익",
+            "ipo": "기업이 주식을 일반 투자자에게 처음 공개하고 거래소에 상장하는 과정",
+            "m&a": "기업의 인수와 합병을 뜻하는 표현",
+        }
+        for m in re.finditer(r"(?<![A-Za-z])([A-Za-z]{2,6})(?![A-Za-z])", text):
+            term=m.group(1).strip(); key=term.lower()
+            if key in COMMON_TERM_GLOSSARY and key not in seen:
+                out.append({'term':term.upper(), 'description':COMMON_TERM_GLOSSARY[key]})
+                seen.add(key)
+                if len(out)>=3: return out
+
+        patterns = [
+            # 현장(On-Site), 인공지능(AI)처럼 괄호 바로 앞의 한국어 표현을 우선 사용한다.
+            re.compile(r"(?P<ko>[가-힣]{2,14})\s*\((?P<term>[A-Za-z][A-Za-z0-9&' -]{1,30})\)"),
+            # 고대역폭 메모리(HBM)처럼 띄어쓴 용어는 최대 3개 단어까지 허용한다.
+            re.compile(r"(?P<ko>[가-힣]{2,10}(?:\s+[가-힣]{1,10}){1,2})\s*\((?P<term>[A-Za-z][A-Za-z0-9&' -]{1,30})\)"),
+        ]
+        for pat in patterns:
+            for m in pat.finditer(text):
+                ko=m.group('ko').strip(); term=m.group('term').strip()
+                if not term or term.lower() in seen or len(term)<2: continue
+                # 괄호 안이 회사/출처 약칭이면 용어로 만들지 않는다.
+                if term.lower() in self.KNOWN_COMPANY_NAMES: continue
+                desc=f"기사에서 '{ko}'를 뜻하는 표현"
+                out.append({'term':term,'description':desc})
+                seen.add(term.lower())
+                if len(out)>=3: return out
+
+        # 'HBM은 고대역폭 메모리' / 'On-Site는 현장'처럼 본문이 직접 정의하는 경우
+        for m in re.finditer(r"(?P<term>[A-Za-z][A-Za-z0-9&-]{1,20})\s*(?:은|는|이란|의미한다|뜻한다)\s*(?P<desc>[가-힣A-Za-z][^.!?\n]{2,80})", text):
+            term=m.group('term').strip(); desc=re.sub(r"\s+"," ",m.group('desc')).strip(' ,:;')
+            if term.lower() in seen or term.lower() in self.KNOWN_COMPANY_NAMES: continue
+            if len(desc)<3 or re.search(r'향후에|더 나은 위치|좋을 수 있습니다|가능성이 있습니다|고유명사', desc): continue
+            out.append({'term':term,'description':desc})
+            seen.add(term.lower())
+            if len(out)>=3: break
+        return out
 
     def _key_points(self, title, body):
         """[고정 요약 원칙]
@@ -459,6 +522,8 @@ class MasterConditionManager:
                 score += 6
             if impact_pat.search(sentence):
                 score += 5
+            if re.search(r"다룬다|소개한다|살펴본다|설명한다|전한다|분석한다", sentence):
+                score -= 10
             scored.append((score, idx, trimmed, bool(impact_pat.search(sentence))))
 
         if not scored:
@@ -544,43 +609,22 @@ class MasterConditionManager:
         return False
 
     def _synthesize_title(self, title, body):
+        """원문 제목 보존을 최우선으로 한다.
+
+        제목은 요약문이나 본문 첫 문장으로 대체하지 않는다. 수집 단계에서
+        이미 전달문 메타데이터를 제거했으므로, 정상적인 기사 제목은 원문 그대로
+        유지한다. 제목이 비어 있거나 전달문 흔적만 남은 경우에만 안전한 최소 정리를 한다.
+        """
         title = self._clean(title)
-        pts = self._key_points(title, body)
-        # 원 제목이 충분히 구체적인 '헤드라인'이면 그대로 보존한다.
-        # 단순 브리핑 제목/유튜브 제목/서술형 클릭베이트/장황한 번역 제목이면 재구성한다.
-        generic = re.search(r"모닝|브리핑|뉴스모음|오늘의|종합|프리뷰|시황|경제브리핑", title, re.I)
-        noisy = bool(re.search(r"▶|➡|→|🔎|📌|📊|⚡|🎯|💊|텔레그램|유튜브|블로그|\[[^\]]+\]", title, re.I))
-        too_long = len(title) > 60
-        narrative = self._is_narrative_title(title)
-        if not generic and not noisy and not too_long and not narrative and len(title) >= 18:
-            return title
-        # [요약칸 보존] 본문에 핵심문장이 2개 이상 있을 때만 그중 하나를 제목으로 쓴다.
-        # 문장이 1개뿐이면 그걸 제목으로 써버리는 순간 요약(key_points)이 통째로
-        # 비게 되므로, 이 경우엔 원제목을 절 단위로만 다듬어 남겨 요약칸을 살린다.
-        if len(pts) >= 2:
-            p = pts[0]
-            p = re.sub(r"\s*(?:-|\|)\s*(?:[^-_|]{2,20})$", "", p).strip()
-            # 핵심 문장이 이미 _key_points()에서 절 단위로 정리됐지만, 제목 용도로는
-            # 80자 제한이 더 짧으므로 필요하면 한 번 더 절 경계에서 자른다.
-            if len(p) > 80:
-                cut = self._clause_cut(p)
-                p = cut if cut else p
-            return p[:80]
-        # 핵심문장을 못 뽑았고 원제목만 서술형인 경우, 원제목이라도 앞 절만 잘라 간결화
-        if narrative:
-            cut = self._clause_cut(title)
-            if cut:
-                return cut[:80]
-        # [본문 없이도 자동요약] 본문이 짧아 핵심문장을 못 뽑았어도, 제목이 60자를
-        # 넘으면 단어 경계에서 자연스럽게 잘라 짧게 만든다. 문자수로 그냥 자르면
-        # 단어 중간이 잘려 어색해지므로, 뒤에서부터 가장 가까운 공백/구두점을 찾는다.
-        if too_long or narrative:
-            head = title[:70]
-            cut_at = max(head.rfind(" "), head.rfind(","), head.rfind("·"), head.rfind("-"))
-            if cut_at > 25:
-                return head[:cut_at].rstrip(" -–—,·")
-            return head.rstrip()
-        return title[:110]
+        if not title:
+            return ""
+        # 제목처럼 보이지 않는 전달문 흔적만 제거. 본문에서 새 제목을 만들지 않는다.
+        if re.search(r"Forwarded from|^루팡\b", title, re.I):
+            cleaned = re.sub(r"Forwarded from\s+[^:：]+[:：]?", "", title, flags=re.I).strip()
+            cleaned = re.sub(r"^루팡\s*[:：-]?\s*", "", cleaned).strip()
+            if cleaned:
+                title = cleaned
+        return title[:220].strip()
 
     def _stage(self, text):
         found = []
@@ -699,54 +743,73 @@ class MasterConditionManager:
             return "후보 종목은 있었지만 국내 상장 여부 또는 기사와 직접 연결되는 근거가 부족했습니다."
         return "후보 종목은 있었지만 기사 사건과의 직접 연결·공급망·상용화 근거가 약해 관련주로 확정하지 않았습니다."
 
-    def _integrated_analysis(self, state):
-        """통합분석을 별도 항목으로 만들지 않고, 사실+데이터+신선도를 한 문단으로 통합한다.
-        근거가 없는 내용은 생략한다.
-        """
-        pts = [self._clean(x) for x in (state.get("key_points") or []) if self._clean(x)]
-        if not pts:
-            return ""
-        parts = []
-        # 1) 사실: 첫 1~2개의 핵심 사실만 사용
-        parts.append(". ".join(pts[:2]).rstrip("."))
-        # 2) 실행 단계: 별도 진행과정 라벨 없이 자연스럽게 연결
-        stage = self._clean(state.get("stage"))
-        if stage:
-            parts.append(f"현재 확인된 단계는 {stage} 수준이다")
-        # 3) 신선도: 실제 비교 결과가 전달된 경우에만 표시
-        freshness = self._clean(state.get("freshness"))
-        fresh_ev = [self._clean(x) for x in state.get("freshness_evidence", []) if self._clean(x)]
-        if freshness:
-            label = {"신규":"새로운 내용이 확인됐다", "후속":"이전 보도 이후 추가 내용이 확인됐다", "재탕":"기존 보도와 핵심 내용이 대부분 겹치며 새로운 확정 정보가 제한적이다"}.get(freshness, freshness)
-            parts.append(label)
-            if fresh_ev:
-                parts.append("추가 확인: " + ", ".join(fresh_ev[:2]))
-        # 4) 현재/과거 시장 및 실제 성과. 데이터가 있을 때만.
-        mc = state.get("market_context") or {}
-        hs = state.get("historical_stats") or {}
-        current = self._clean(mc.get("current"))
-        past = self._clean(mc.get("historical"))
-        similarity = mc.get("similarity")
-        if current and past:
-            tail = f"현재 시장은 {current}, 과거 유사환경은 {past}"
-            if similarity is not None:
-                tail += f"이며 유사도 {float(similarity):.0f}%"
-            parts.append(tail)
-        n = hs.get("sample_count")
-        wr = hs.get("win_rate")
-        t30 = hs.get("t30_avg")
-        if n:
-            perf = f"과거 유사신호 {int(n)}건"
-            if wr is not None: perf += f", 성공률 {float(wr):.1f}%"
-            if t30 is not None: perf += f", T+30 평균 {float(t30):+.2f}%"
-            parts.append(perf)
-        # 5) 관련주 근거는 실제 근거가 있는 경우만 짧게 연결
-        rel = state.get("related") or []
-        if rel:
-            names = [self._clean(x.get("name")) for x in rel[:3] if self._clean(x.get("name"))]
-            if names:
-                parts.append("직접 연결 근거가 확인된 관련주는 " + "·".join(names))
-        return ". ".join(x.strip().rstrip(".") for x in parts if x.strip()) + "."
+    def _outlook(self, text, stage, key_points, body=None, title=""):
+        # generic fallback을 없애고, 실제 문장과 매칭된 사건만 전망으로 만든다.
+        # [조건41 전망근거 강화] 같은 카테고리(예: 자사주/배당)라도 기사마다 실제 수치·사건이
+        # 다르므로, 정형 문구만 반복하지 않고 기사에서 실제로 뽑힌 핵심문장(key_points)을
+        # 근거로 함께 연결해 기사 내용을 반영한 전망 문장을 만든다.
+        # [제목 반복 방지] anchor 주변 문맥을 못 찾을 때의 안전장치는 title+body 전체가
+        # 아니라 body만 뒤진다. text(title+body 합본)를 쓰면 anchor가 제목 쪽에서
+        # 매칭됐을 때 창(window)이 제목 구간을 그대로 퍼오게 되어 "요약/전망에 제목이
+        # 그대로 다시 등장"하는 결과가 나온다.
+        body_text = self._clean(body) if body is not None else text
+        title_n = self._norm(title)
+        # [근거 문장 사전 추출] anchor를 포함하는 실제 문장 단위 후보를 미리 뽑아둔다.
+        # 이후 char 슬라이싱 대신 이 문장들에서만 근거를 고른다.
+        body_sentences = self._sentences(body_text)
+        geo_gate = self._is_non_commercial_geopolitical(text)
+        matched = []
+        for pattern, sentence in self.OUTLOOK_PATTERNS:
+            # [지정학/외교 오탐 방지] "임상|허가|승인|인증" 패턴은 기업 규제승인용이므로,
+            # 외교·지정학적 허가/승인(기업 맥락 없음)에는 시장전망을 억지로 붙이지 않는다.
+            if pattern == r"임상|허가|승인|인증" and geo_gate:
+                continue
+            m = re.search(pattern, text, re.I)
+            if m:
+                matched.append((m.start(), sentence, m.group(0)))
+        # [위탁·중개 우선] "OO증권이 XX의 자사주 매입을 위탁 중개해 상한가"처럼 자기 자신이
+        # 아니라 대리·중개 역할을 한 기사에서, "자사주/배당" 패턴(발행사 본인의 환원 관점)이
+        # 위탁·중개 패턴과 함께 잡히면 실제 그림과 다른 전망이 섞여 나간다.
+        # 이런 경우 더 구체적이고 사실에 맞는 위탁·중개 관점만 남긴다.
+        if any("위탁" in a or "중개" in a or "주관" in a or "주선" in a for _, _, a in matched):
+            matched = [m for m in matched if not ("자사주" in m[2] or "배당" in m[2] or "주주환원" in m[2])]
+        if not matched:
+            # [조건19 빈요약허용 원칙과 동일 적용] 매칭되는 패턴이 없으면 억지 전망 문구를
+            # 만들지 않고 빈 리스트를 반환한다. 관련주가 없을 때 '無'로 정상 처리하는 것과 같다.
+            # (예전엔 여기서 fallback 문구를 만들었는데, validate()가 바로 그 문구를 범용
+            # 문구라며 거부해서 FINAL LOCK이 무조건 실패하는 자기모순이 있었다.)
+            return []
+        matched.sort(key=lambda x: x[0])
+        result = []
+        seen = set()
+        for _, sentence, anchor in matched:
+            if sentence in seen:
+                continue
+            seen.add(sentence)
+            # anchor(예: '자사주')가 실제로 들어있는 기사 핵심문장을 찾아 그대로 근거로 붙인다.
+            # 같은 패턴이 여러 기사에 걸려도, 기사마다 실제 문장이 다르므로 출력이 붕어빵처럼
+            # 똑같아지지 않고 그 기사의 구체적 수치·주체가 그대로 드러난다.
+            # [제목 반복 방지] key_points에서 못 찾으면 body 문장 중 anchor를 포함하면서
+            # 제목과 사실상 같지 않은 "완결된 문장"만 근거로 쓴다. 예전처럼 body_text를
+            # 글자 수로 잘라 쓰면 제목과 거의 같은 RSS 요약에서 제목 원문(+출처 도메인)이
+            # 그대로 잘려 들어가는 문제가 있었다.
+            concrete = next(
+                (kp for kp in key_points
+                 if anchor in kp and not self._is_title_near_dup(kp, title_n)),
+                None,
+            )
+            if not concrete:
+                for bs in body_sentences:
+                    if anchor in bs and not self._is_title_near_dup(bs, title_n):
+                        concrete = self._trim_for_readability(bs)
+                        break
+            if concrete and not self._is_title_near_dup(concrete, title_n):
+                result.append(f"{concrete.rstrip('.')} → {sentence}")
+            else:
+                result.append(f"{anchor} 관련해서 {sentence}")
+            if len(result) >= 3:
+                break
+        return result
 
     def _news_value(self, text, key_points, related, stage):
         score = 0
@@ -769,10 +832,9 @@ class MasterConditionManager:
         elif name == "증거보존":
             state["evidence"] = list(dict.fromkeys(state["evidence"] + state["key_points"]))
         elif name == "제목반복금지":
-            # 제목은 원문 보존. 제목과 요약이 겹치면 요약을 비우는 쪽으로 처리하고
-            # 제목을 본문 문장으로 바꾸지 않는다.
-            if self._norm(state["title"]) == self._norm(state["key_points"][0] if state["key_points"] else ""):
-                state["key_points"] = [x for x in state["key_points"] if self._norm(x) != self._norm(state["title"])]
+            # 제목은 원문을 보존한다. 요약과 같아도 본문에서 새 제목을 만들지 않는다.
+            # 대신 같은 문장은 요약 단계에서 제외한다.
+            pass
         elif name == "추정금지":
             state["schedule"] = self._future_schedule(state["schedule"], state["body"])
         elif name == "핵심추출":
@@ -800,8 +862,10 @@ class MasterConditionManager:
             state["schedule"] = self._future_schedule(state["schedule"], state["body"])
         elif name == "시장영향":
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
-        elif name in ("데이터사실통합", "뉴스신선도검증", "과거성과연결", "사실추론분리", "통합분석확정"):
-            state["analysis"] = self._integrated_analysis(state)
+        elif name in ("전망근거", "후속확인", "지속성"):
+            state["outlook"] = []
+        elif name == "시장전망최대3":
+            state["outlook"] = state["outlook"][:3]
         elif name == "대장주선정":
             state["leader"] = state["related"][0] if state["related"] else None
         elif name == "대장주이유" and state["leader"]:
@@ -818,7 +882,7 @@ class MasterConditionManager:
             # 현재까지의 모든 조건을 최종 상태로 고정한다.
             state["stage"], state["commercial_evidence"] = self._stage(text)
             state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
-            state["analysis"] = self._integrated_analysis(state)
+            state["outlook"] = [][:3]
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
             state["master_confirmed"] = bool(
                 state["news_value"] in ("높음", "중간") and
@@ -827,7 +891,7 @@ class MasterConditionManager:
             )
         elif name == "FINAL_LOCK":
             state["prelock_snapshot"] = {
-                k: state[k] for k in ("title", "key_points", "related", "stage", "schedule", "analysis")
+                k: state[k] for k in ("title", "key_points", "related", "stage", "schedule", "outlook")
             }
         elif name == "Formatter무판단" or name == "Telegram무판단":
             state["display_only"] = True
@@ -836,13 +900,12 @@ class MasterConditionManager:
         # 나머지 조건도 '방문 완료' 자체가 실행 증거가 된다.
         state["executed_orders"].append(order)
 
-    def analyze(self, title, body, source="", link="", candidates=None, schedule="", evidence=None, freshness="", freshness_evidence=None, historical_stats=None, market_context=None):
+    def analyze(self, title, body, source="", link="", candidates=None, schedule="", evidence=None):
         title = self._clean(title)
         body = self._clean(body)
         text = self._clean(f"{title} {body}")
         state = {
-            # 제목은 원문 제목을 우선 보존한다. 본문 문장을 제목으로 승격하지 않는다.
-            "title": title,
+            "title": self._synthesize_title(title, body),
             "body": body,
             "text": text,
             "source": self._clean(source),
@@ -857,11 +920,7 @@ class MasterConditionManager:
             "commercial_stage": "",
             "commercial_evidence": "",
             "schedule": self._future_schedule(schedule, body),
-            "analysis": "",
-            "freshness": self._clean(freshness),
-            "freshness_evidence": list(freshness_evidence or []),
-            "historical_stats": dict(historical_stats or {}),
-            "market_context": dict(market_context or {}),
+            "outlook": [],
             "evidence": [self._clean(x) for x in (evidence or []) if self._clean(x)],
             "related_none_reason": "",
             "news_value": "",
@@ -881,33 +940,31 @@ class MasterConditionManager:
             before = {
                 "title": state["title"], "stage": state["stage"],
                 "related_count": len(state["related"]),
-                "analysis_len": len(state.get("analysis", "")),
+                "outlook_count": len(state["outlook"]),
             }
             self._execute_rule(order, name, state)
             after = {
                 "title": state["title"], "stage": state["stage"],
                 "related_count": len(state["related"]),
-                "analysis_len": len(state.get("analysis", "")),
+                "outlook_count": len(state["outlook"]),
             }
             if before != after or order in (1, 31, 36, 41, 50, 53, 65):
                 self._record(state, order, name, "EXECUTE/OVERRIDE", before=before, after=after)
 
         # [조건53/조건65 강제] 65번(조건중앙관리) 실행이 최종 판단이다.
-        # 여기서 related/analysis/news_value/master_confirmed를 다시 계산하면
+        # 여기서 related/outlook/news_value/master_confirmed를 다시 계산하면
         # 65번 이후 재호출이 되어 조건53(재호출금지)·조건65(조건중앙관리)를 위반한다.
-        # related/leader/observe는 order 31~35에서, stage/analysis/news_value/master_confirmed는
+        # related/leader/observe는 order 31~35에서, stage/outlook/news_value/master_confirmed는
         # order 65("조건중앙관리")에서 이미 최종 확정되었으므로 그대로 사용한다.
         expected_orders = {int(r["order"]) for r in CONDITION_RULES}
         missing = sorted(expected_orders - set(state["executed_orders"]))
         if missing:
             raise RuntimeError(f"MASTER 65조건 미실행: {missing}")
 
-        # FINAL_LOCK 이후에는 판단값을 다시 계산하지 않는다.
-
         result = MasterResult(
             rule_version=RULE_VERSION + "_EXEC65",
             title=state["title"],
-            key_points=list(state["key_points"])[:3],
+            key_points=list(state["key_points"]),
             related=state["related"][:self.max_related],
             leader=state["leader"],
             observe=state["observe"][:2],
@@ -916,11 +973,7 @@ class MasterConditionManager:
             commercial_evidence=state["commercial_evidence"],
             term_explanations=list(state.get("term_explanations") or [])[:5],
             schedule=state["schedule"],
-            analysis=state.get("analysis", ""),
-            freshness=state.get("freshness", ""),
-            freshness_evidence=list(state.get("freshness_evidence") or [])[:4],
-            historical_stats=dict(state.get("historical_stats") or {}),
-            market_context=dict(state.get("market_context") or {}),
+            outlook=state["outlook"][:3],
             selection_method=list(self.SELECTION_METHOD),
             evidence=list(dict.fromkeys(state["evidence"]))[:8],
             source=state["source"],
@@ -953,7 +1006,7 @@ class MasterConditionManager:
             errors.append("제목 없음")
         # [조건19 빈요약허용 확장] 본문이 짧은 외신/속보성 기사는 제목과 겹치지 않는
         # 핵심문장을 뽑을 수 없는 경우가 있다. 이때 억지로 요약을 만들거나 MASTER
-        # 분석 자체를 실패시키지 않고, 관련주 無 / 분석 無와 같은 원칙으로
+        # 분석 자체를 실패시키지 않고, 관련주 無 / 시장전망 無와 같은 원칙으로
         # 빈 요약을 정상 허용한다(요약칸은 화면에서 자연히 생략됨).
         if any(self._is_title_near_dup(k, title_n) for k in points):
             errors.append("요약이 제목과 동일함")
@@ -967,8 +1020,18 @@ class MasterConditionManager:
             errors.append("관련주 최대 개수 초과")
         if not related and not self._clean(result.get("related_none_reason")):
             errors.append("관련주 없음 이유 없음")
-        if result.get("analysis") and len(self._clean(result.get("analysis"))) > 1200:
-            errors.append("통합분석이 지나치게 김")
+        outlook = [self._clean(x) for x in (result.get("outlook") or []) if self._clean(x)]
+        # [조건19 빈요약허용] 시장전망은 패턴이 실제로 매칭됐을 때만 채워진다.
+        # 매칭되는 사건이 없으면 억지로 만들지 않고 빈 상태를 정상으로 허용한다.
+        # (관련주가 없을 때 '無'로 정상 처리하는 것과 동일한 원칙.)
+        if len(outlook) > 3:
+            errors.append("시장전망 3개 초과")
+        # generic fallback 흔적 차단 (안전장치로 유지 — 다른 경로로 범용 문구가 섞여도 차단)
+        generic = (
+            "기사에서 확인된 사건이 실제 기업 실적·수급으로 연결되는 경로를 추가 확인할 필요가 있습니다.",
+        )
+        if any(x in " ".join(outlook) for x in generic):
+            errors.append("범용 시장전망 문구 사용")
         if result.get("master_confirmed") and result.get("news_value") == "낮음":
             errors.append("뉴스가치 낮은데 MASTER 확정")
         result["validation_errors"] = errors
@@ -985,8 +1048,7 @@ class MasterConditionManager:
                 *result.get("key_points",[]),
                 *[self._clean(x.get("name")) for x in result.get("related",[])],
                 result.get("stage",""),
-                result.get("analysis", ""),
-                result.get("freshness", ""),
+                *result.get("outlook",[]),
             ])
         )
         return result
