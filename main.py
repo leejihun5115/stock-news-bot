@@ -519,6 +519,17 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 CHAT_ID_OVERSEAS = os.environ.get("CHAT_ID_OVERSEAS", "") or CHAT_ID
 
+# ============================================================
+# 관리자 최우선 명령 통제소 (Top-Level Control Tower)
+# MASTER가 개별 뉴스 판정의 최종 두뇌라면, 이 통제소는 엔진 전체 동작을
+# 관리자가 텔레그램으로 내린 '마지막 명령' 기준으로 즉시 제어하는 최상위 계층이다.
+# 뉴스 수집 사이클과 완전히 분리된 별도 스레드에서 짧은 주기로 명령을 감시하므로,
+# 데이터 수집 중이라도 명령 실행이 지연되지 않는다.
+# ============================================================
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "") or CHAT_ID
+ADMIN_COMMAND_PREFIX = "/"
+ADMIN_COMMAND_POLL_INTERVAL = float(os.environ.get("ADMIN_COMMAND_POLL_INTERVAL", "2"))
+
 
 def _env_flag(name, default=True):
     val = os.environ.get(name)
@@ -1430,6 +1441,15 @@ EXCLUSIVE_WORDS = {"단독"}
 _engine_seen = set()
 _engine_lock = threading.Lock()
 
+# --- 관리자 최우선 명령 통제소 전역 상태 ---
+_admin_lock = threading.Lock()
+_admin_last_update_id = 0
+_admin_pending_command = None      # 아직 실행되지 않은 '가장 최신' 명령만 보관 (덮어쓰기 방식)
+_admin_command_event = threading.Event()   # 새 명령 도착 시 실행 스레드를 즉시 깨움
+_engine_wake_event = threading.Event()     # 메인 루프의 대기(sleep)를 즉시 깨움
+_engine_cycle_lock = threading.Lock()      # /run 즉시실행과 정규 사이클이 동시에 돌지 않도록 보호
+_engine_paused = False
+
 
 def _engine_log(level, message, *args):
     try:
@@ -1670,6 +1690,156 @@ def _engine_send_telegram(text):
     return False
 
 
+# ============================================================
+# 관리자 최우선 명령 통제소 - 감시/실행 로직
+# 흐름: (감시 스레드) 텔레그램 폴링 → 명령 감지 → 최신값으로 덮어쓰기 → 이벤트 set
+#      (실행 스레드) 이벤트 대기 → 즉시 실행 → 관리자에게 결과 회신
+# 두 스레드 모두 뉴스 수집 사이클과 독립적으로 동작하므로,
+# 수집 작업이 진행 중이어도 관리자 명령은 대기하지 않고 처리된다.
+# ============================================================
+def _admin_reply(text):
+    """명령 처리 결과를 관리자 채팅방으로 즉시 회신한다."""
+    if not BOT_TOKEN or not ADMIN_CHAT_ID:
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    try:
+        r = requests.post(url, data={"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}, timeout=ENGINE_HTTP_TIMEOUT)
+        return bool(r.ok)
+    except Exception as e:
+        _engine_log("error", "[관리자 명령] 회신 실패 | 원인=%s", str(e)[:160])
+        return False
+
+
+def _admin_fetch_updates():
+    """Telegram getUpdates로 새 메시지만 가져온다(이미 읽은 update_id는 제외)."""
+    global _admin_last_update_id
+    if not BOT_TOKEN:
+        return []
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    params = {"timeout": 0, "offset": _admin_last_update_id + 1}
+    try:
+        r = requests.get(url, params=params, timeout=ENGINE_HTTP_TIMEOUT)
+        data = r.json() if r.ok else {}
+        results = data.get("result", []) if data.get("ok") else []
+    except Exception as e:
+        _engine_log("error", "[관리자 명령] getUpdates 실패 | 원인=%s", str(e)[:160])
+        return []
+    updates = []
+    for u in results:
+        _admin_last_update_id = max(_admin_last_update_id, int(u.get("update_id", 0)))
+        msg = u.get("message") or u.get("edited_message") or {}
+        chat_id = str((msg.get("chat") or {}).get("id", ""))
+        text = str(msg.get("text", "") or "").strip()
+        if chat_id and text:
+            updates.append((chat_id, text))
+    return updates
+
+
+def _admin_command_listener():
+    """관리자 채팅방을 짧은 주기(기본 2초)로 감시한다.
+    새 명령이 오면 이전에 처리되지 않은 명령이 남아있어도 무조건 최신 명령으로 덮어쓴다.
+    → '마지막으로 내린 명령'만 실행 대상이 된다."""
+    global _admin_pending_command
+    _engine_log("info", "[관리자 명령] 통제소 감시 시작 | ADMIN_CHAT_ID=%s", ADMIN_CHAT_ID)
+    while True:
+        try:
+            for chat_id, text in _admin_fetch_updates():
+                if not ADMIN_CHAT_ID or chat_id != str(ADMIN_CHAT_ID):
+                    continue
+                if not text.startswith(ADMIN_COMMAND_PREFIX):
+                    continue
+                with _admin_lock:
+                    _admin_pending_command = text
+                _admin_command_event.set()
+                _engine_wake_event.set()  # 메인 루프가 sleep 중이어도 즉시 깨운다.
+                _engine_log("info", "[관리자 명령] 수신 | %s", text[:120])
+        except Exception as e:
+            _engine_log("error", "[관리자 명령] 감시 루프 오류 | 원인=%s", str(e)[:160])
+        time.sleep(ADMIN_COMMAND_POLL_INTERVAL)
+
+
+def _admin_cmd_status(arg=""):
+    state = "⏸ 일시정지" if _engine_paused else "▶️ 정상 가동"
+    last = _now_kst().strftime("%Y-%m-%d %H:%M:%S") if _engine_last_cycle_finished else "없음"
+    return f"🟢 [통제소] 엔진 상태: {state}\n최근 주기 완료 시각: {last}"
+
+
+def _admin_cmd_pause(arg=""):
+    global _engine_paused
+    _engine_paused = True
+    return "⏸ [통제소] 뉴스 수집·송출을 일시정지했습니다."
+
+
+def _admin_cmd_resume(arg=""):
+    global _engine_paused
+    _engine_paused = False
+    _engine_wake_event.set()
+    return "▶️ [통제소] 뉴스 수집·송출을 재개했습니다."
+
+
+def _admin_cmd_run(arg=""):
+    """정규 주기(최대 60초)를 기다리지 않고 지금 즉시 한 사이클을 강제 실행한다."""
+    def _worker():
+        with _engine_cycle_lock:
+            _engine_log("info", "[관리자 명령] /run 즉시 사이클 실행 시작")
+            was_paused = _engine_paused
+            try:
+                _engine_cycle()
+            except Exception as e:
+                log_error("관리자 /run 즉시 사이클", e)
+        _admin_reply("✅ [통제소] 즉시 실행 완료." + ("  (참고: 현재 일시정지 상태였습니다)" if was_paused else ""))
+    threading.Thread(target=_worker, name="admin-run", daemon=True).start()
+    return "⏳ [통제소] 즉시 실행을 시작했습니다."
+
+
+def _admin_cmd_help(arg=""):
+    lines = ["🟢 [통제소] 사용 가능한 명령", "/status : 엔진 상태 확인", "/pause : 일시정지",
+              "/resume : 재개", "/run : 지금 즉시 1회 사이클 강제 실행", "/help : 이 목록 표시"]
+    return "\n".join(lines)
+
+
+# 새 관리자 명령을 추가하려면 아래 딕셔너리에 "/명령어": 핸들러함수(arg) 형태로 등록만 하면 된다.
+# 핸들러는 문자열을 반환하면 그대로 관리자에게 회신된다.
+_ADMIN_COMMANDS = {
+    "/status": _admin_cmd_status,
+    "/pause": _admin_cmd_pause,
+    "/resume": _admin_cmd_resume,
+    "/run": _admin_cmd_run,
+    "/help": _admin_cmd_help,
+}
+
+
+def _admin_execute_command(raw_text):
+    parts = raw_text.strip().split(maxsplit=1)
+    cmd = parts[0].lower() if parts else ""
+    arg = parts[1] if len(parts) > 1 else ""
+    handler = _ADMIN_COMMANDS.get(cmd)
+    if not handler:
+        return f"❓ [통제소] 알 수 없는 명령입니다: {html.escape(cmd)}\n/help 로 사용 가능한 명령을 확인하세요."
+    try:
+        return handler(arg)
+    except Exception as e:
+        _engine_log("error", "[관리자 명령] 실행 실패 | 명령=%s | 원인=%s", cmd, str(e)[:160])
+        return f"⚠️ [통제소] 명령 실행 중 오류가 발생했습니다: {html.escape(cmd)}"
+
+
+def _admin_command_executor():
+    """감지된 '마지막 명령'을 즉시 실행하는 최상위 통제 스레드.
+    뉴스 수집 사이클, 대기(sleep) 상태와 완전히 무관하게 최우선으로 실행된다."""
+    global _admin_pending_command
+    while True:
+        _admin_command_event.wait()
+        with _admin_lock:
+            command = _admin_pending_command
+            _admin_pending_command = None
+            _admin_command_event.clear()
+        if not command:
+            continue
+        _engine_log("info", "[관리자 명령] 즉시 실행 | %s", command[:120])
+        result = _admin_execute_command(command)
+        _admin_reply(result)
+
+
 def _engine_parse_datetime(value):
     if not value:
         return None
@@ -1895,6 +2065,35 @@ def _engine_market_hit(text):
     return [x for x in MARKET_IMPACT_KEYWORDS if x.lower() in t]
 
 
+def _engine_is_lagging_interpretive_news(text):
+    """이미 벌어진 주가 움직임을 사후적으로 설명·평가하는 후행적/해석성 뉴스 차단.
+    예: '~이후 주가가 안정되었다', '~만큼 가치가 있다', '~돌파한 후' 등은
+    새로운 시세 재료가 아니라 지나간 결과에 대한 해설이므로 실시간 송출 대상에서 제외한다.
+    단, 계약/실적/승인 등 실제 강한 재료가 함께 있으면 통과시킨다(오버라이드)."""
+    low = _engine_clean(text).lower()
+    # 순수 사후 해설/평가성 표현: 강한 재료 단어가 같이 있어도(과거 계약 언급 등)
+    # 제목 자체가 결과에 대한 해석일 뿐이므로 오버라이드 없이 무조건 차단한다.
+    hard_lagging_patterns = [
+        "안정되었습니다", "안정세", "안정적으로", "안정을 되찾",
+        "만큼 가치가 있", "가치가 있다는", "가치 있다는",
+        "돌파한 후", "돌파하며", "돌파한 이후",
+        "소매 신뢰도", "투자자 심리", "투심 개선", "투심 회복",
+    ]
+    # 상승/회복 흐름 서술: 실제 새 재료(계약/실적/승인 등)와 함께 나오면 통과시킨다.
+    soft_lagging_patterns = [
+        "회복세를 보이", "회복하고 있", "반등하고 있",
+        "상승세를 이어가", "상승세를 보이", "하락세를 보이",
+    ]
+    strong_override = [
+        "계약", "공급", "수주", "실적", "어닝", "승인", "허가",
+        "인수", "합병", "특허", "목표가", "공개매수", "임상",
+        "신제품", "출시", "증설", "제재", "규제", "소송",
+    ]
+    if any(x in low for x in hard_lagging_patterns):
+        return True
+    return any(x in low for x in soft_lagging_patterns) and not any(x in low for x in strong_override)
+
+
 def _engine_is_weak_nonstock_news(text):
     """주가와 직접 연결되지 않는 사회공헌/캠페인/일반 홍보성 뉴스 차단."""
     low = _engine_clean(text).lower()
@@ -1946,6 +2145,10 @@ def _engine_classify(source, title, extra=""):
     # 사회공헌/캠페인 등 주가와 무관한 뉴스는 기업명이 있어도 원천 차단.
     if _engine_is_weak_nonstock_news(text):
         return False, "주가재료 미충족", [], k1, k2, []
+
+    # 이미 벌어진 주가 움직임을 사후적으로 설명·평가하는 후행적/해석성 뉴스 차단.
+    if _engine_is_lagging_interpretive_news(text):
+        return False, "후행적 해석성 뉴스", [], k1, k2, []
 
     # 관련주 연결은 '국내 상장기업'이 실제로 존재하거나,
     # 국내 테마 연결을 별도 검증한 경우에만 허용한다.
@@ -2506,6 +2709,66 @@ def _engine_translate_to_korean(text: str) -> str:
     # 영문 원문을 그대로 송출하지 않기 위해 실패는 빈 문자열로 처리한다.
     return ""
 
+
+# ============================================================
+# 지수 포인트 변동 → 등락률(%) 자동 환산
+# "다우지수가 518포인트 상승" 처럼 포인트 단위만 표기되면 비교 기준이 없어
+# 변동폭 체감이 어렵다. 알려진 주요 지수명 뒤에 포인트 변동 표현이 나오면
+# 실시간 시세로 등락률을 조회해 "(약 X.XX%)"를 자동으로 덧붙인다.
+# 시세 조회에 실패하면(네트워크 오류 등) 원문을 그대로 두고 조용히 넘어간다.
+# ============================================================
+INDEX_POINT_TO_PCT_SYMBOLS = {
+    "다우존스": "^DJI", "다우지수": "^DJI", "다우": "^DJI",
+    "나스닥종합": "^IXIC", "나스닥지수": "^IXIC", "나스닥": "^IXIC",
+    "s&p500": "^GSPC", "에스앤피500": "^GSPC", "s&p": "^GSPC",
+    "코스피지수": "^KS11", "코스피": "^KS11",
+    "코스닥지수": "^KQ11", "코스닥": "^KQ11",
+}
+
+_INDEX_POINT_PATTERN = re.compile(
+    r'(다우존스|다우지수|다우|나스닥종합|나스닥지수|나스닥|S&P\s?500|코스피지수|코스피|코스닥지수|코스닥)'
+    r'[^.]{0,20}?([\d,]+(?:\.\d+)?)\s*(?:포인트|p|pt)\s*(상승|하락|급등|급락|올랐|내렸|올라|내려)',
+    re.IGNORECASE
+)
+
+_INDEX_PCT_CACHE = {}
+INDEX_PCT_CACHE_TTL = 120  # 초 - 같은 지수를 반복 조회하지 않도록 짧게 캐시
+
+
+def _engine_index_quote_cached(symbol):
+    now = time.time()
+    cached = _INDEX_PCT_CACHE.get(symbol)
+    if cached and (now - cached[0]) < INDEX_PCT_CACHE_TTL:
+        return cached[1]
+    q = _yahoo_chart_quote(symbol)
+    _INDEX_PCT_CACHE[symbol] = (now, q)
+    return q
+
+
+def _engine_annotate_index_points_with_pct(title, extra):
+    """포인트 단위 지수 변동 표현 뒤에 실시간 등락률(%)을 덧붙인다."""
+    def _sub(m):
+        idx_name = m.group(1)
+        symbol = INDEX_POINT_TO_PCT_SYMBOLS.get(idx_name.lower().replace(" ", ""))
+        if not symbol:
+            return m.group(0)
+        try:
+            q = _engine_index_quote_cached(symbol)
+        except Exception as e:
+            _engine_log("warning", "[포인트→%% 환산] 시세 조회 실패 | %s | 원인=%s", symbol, str(e)[:100])
+            return m.group(0)
+        if not q or q.get("change_pct") is None:
+            return m.group(0)
+        return f"{m.group(0)} (약 {abs(q['change_pct']):.2f}%)"
+
+    def _annotate(text):
+        if not text:
+            return text
+        return _INDEX_POINT_PATTERN.sub(_sub, text)
+
+    return _annotate(title), _annotate(extra)
+
+
 def _engine_translate_foreign_item(source: str, title: str, extra: str):
     title = _engine_strip_foreign_publisher_suffix(title)
     extra = str(extra or "").strip()
@@ -2516,6 +2779,7 @@ def _engine_translate_foreign_item(source: str, title: str, extra: str):
         or _engine_is_mostly_english(extra)
     )
     if not needs_translation:
+        title, extra = _engine_annotate_index_points_with_pct(title, extra)
         return title, extra, True
 
     ko_title = _engine_translate_to_korean(title)
@@ -2529,6 +2793,7 @@ def _engine_translate_foreign_item(source: str, title: str, extra: str):
         if translated_extra:
             ko_extra = translated_extra
 
+    ko_title, ko_extra = _engine_annotate_index_points_with_pct(ko_title, ko_extra)
     return ko_title, ko_extra, True
 
 
@@ -2994,12 +3259,8 @@ def _engine_format_message(item):
         lines.append('✅ [시장전망] ==> '+html.escape(str(outlook[0])))
         for o in outlook[1:3]: lines.append('     ✔ '+html.escape(str(o)))
 
-    # 관련주/테마/BIG ISSUE는 MASTER 확정값이 있을 때만 노출한다.
-    # 종목·테마·BIG ISSUE가 모두 없으면 항목 자체를 출력하지 않는다.
-    if related:
-        names=' · '.join(html.escape(str(r.get('name',''))) for r in related if r.get('name'))
-        if names:
-            lines.append('<b>🟢 [MASTER] '+names+'</b>')
+    # 관련주/테마/BIG ISSUE는 위 master_badge에서 이미 표시했으므로 여기서 중복 출력하지 않는다.
+    # (참고: master_badge가 비어있으면 관련주/테마/BIG ISSUE가 없다는 뜻이므로 항목 자체가 비게 된다)
 
     if schedule:
         dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
@@ -4333,6 +4594,9 @@ def _engine_us_market_close_monitor():
 
 def _engine_cycle():
     global _engine_last_cycle_started, _engine_last_cycle_finished
+    if _engine_paused:
+        _engine_log("info", "[주기 건너뜀] 관리자 명령으로 일시정지 상태")
+        return
     started = time.time()
     _engine_last_cycle_started = started
     _engine_log("info", "[주기 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
@@ -4419,13 +4683,17 @@ def _engine_main_loop():
     while True:
         cycle_start = time.time()
         try:
-            _engine_cycle()
+            with _engine_cycle_lock:
+                _engine_cycle()
         except Exception as e:
             log_error("메인 사이클 치명적 오류", e)
         wait = max(1, ENGINE_INTERVAL - (time.time() - cycle_start))
         _engine_watchdog_alert()
         _engine_log("debug", "[대기] %.1f초", wait)
-        time.sleep(min(wait, 5))
+        # 관리자 명령이 도착하면(_engine_wake_event.set()) 대기를 즉시 종료하고
+        # 다음 루프에서 바로 반영한다(예: /resume 직후 곧바로 정상 사이클 재개).
+        _engine_wake_event.wait(timeout=min(wait, 5))
+        _engine_wake_event.clear()
         _engine_watchdog_alert()
 
 
@@ -4441,6 +4709,24 @@ if __name__ == "__main__":
         )
         health_thread.start()
         time.sleep(0.3)
+
+        # 관리자 최우선 명령 통제소: 감시 스레드 + 즉시실행 스레드.
+        # 뉴스 수집 메인 루프와 완전히 분리되어 있어, 어떤 상황에서도
+        # 관리자의 마지막 명령이 지연 없이 즉시 처리된다.
+        admin_listener_thread = threading.Thread(
+            target=_admin_command_listener,
+            name="admin-command-listener",
+            daemon=True
+        )
+        admin_listener_thread.start()
+        admin_executor_thread = threading.Thread(
+            target=_admin_command_executor,
+            name="admin-command-executor",
+            daemon=True
+        )
+        admin_executor_thread.start()
+        _engine_log("info", "[BOOT] 관리자 최우선 명령 통제소 가동 | ADMIN_CHAT_ID=%s | 폴링주기=%s초",
+                    ADMIN_CHAT_ID, ADMIN_COMMAND_POLL_INTERVAL)
 
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
         _engine_log("info", "[BOOT] NAVER_HUB=%s | NAVER_LEGACY=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",

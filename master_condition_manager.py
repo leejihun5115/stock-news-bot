@@ -671,7 +671,7 @@ class MasterConditionManager:
         # 시장 반응 가능성이 큰 빅이슈도 MASTER가 본문 근거로만 확정한다.
         big_issue = re.search(r"(?:전쟁|제재|관세|금리|기준금리|대규모 인수|합병|M&A|대규모 계약|대규모 투자|정책 전환|규제 변화|시장 충격)", text or "", re.I)
         if big_issue and len(text or "") >= 80:
-            return [{"name": "BIG ISSUE", "reason": "본문상 시장 반응 가능성이 큰 사건이 확인됨", "score": 75, "direct": False, "big_issue": True, "domestic_listed": True}], None, []
+            return [{"name": "Big issue", "reason": "본문상 시장 반응 가능성이 큰 사건이 확인됨", "score": 75, "direct": False, "big_issue": True, "domestic_listed": True}], None, []
         return [], None, []
 
     def _related_none_reason(self, related, text, candidates):
