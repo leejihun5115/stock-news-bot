@@ -3696,7 +3696,7 @@ def _engine_format_message(item):
         for t in terms[:2]:
             term = str(t.get('term','')).strip()
             desc = str(t.get('description','')).strip()
-            if term and desc and not re.search(r'고유명사|향후에 더 나은 위치|더 나은 위치에 있을 수|기사상 기사에 등장', desc):
+            if term and desc:
                 shown.append(f'{term}: {desc}')
         if shown:
             lines.append('💡 <b>용어</b>')

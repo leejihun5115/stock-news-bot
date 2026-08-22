@@ -444,26 +444,6 @@ class MasterConditionManager:
             return []
         out=[]; seen=set()
 
-        # 일반적으로 쓰이는 금융/산업 약어는 정확한 사전 정의를 사용한다.
-        # 회사·기관명은 용어가 아니므로 설명하지 않는다.
-        COMMON_TERM_GLOSSARY = {
-            "etf": "여러 자산을 하나의 상품으로 묶어 주식처럼 거래할 수 있는 상장지수펀드",
-            "hbm": "여러 개의 메모리 칩을 수직으로 연결해 높은 데이터 처리 대역폭을 제공하는 고대역폭 메모리",
-            "vix": "미국 주식시장의 예상 변동성을 보여주는 대표적인 변동성 지수",
-            "per": "주가가 기업의 주당순이익의 몇 배인지 나타내는 주가수익비율",
-            "pbr": "주가가 기업의 주당순자산가치의 몇 배인지 나타내는 주가순자산비율",
-            "roe": "기업이 자기자본을 활용해 어느 정도의 이익을 내는지 보여주는 자기자본이익률",
-            "eps": "기업의 순이익을 발행주식 수로 나눈 주당순이익",
-            "ipo": "기업이 주식을 일반 투자자에게 처음 공개하고 거래소에 상장하는 과정",
-            "m&a": "기업의 인수와 합병을 뜻하는 표현",
-        }
-        for m in re.finditer(r"(?<![A-Za-z])([A-Za-z]{2,6})(?![A-Za-z])", text):
-            term=m.group(1).strip(); key=term.lower()
-            if key in COMMON_TERM_GLOSSARY and key not in seen:
-                out.append({'term':term.upper(), 'description':COMMON_TERM_GLOSSARY[key]})
-                seen.add(key)
-                if len(out)>=3: return out
-
         patterns = [
             # 현장(On-Site), 인공지능(AI)처럼 괄호 바로 앞의 한국어 표현을 우선 사용한다.
             re.compile(r"(?P<ko>[가-힣]{2,14})\s*\((?P<term>[A-Za-z][A-Za-z0-9&' -]{1,30})\)"),
@@ -485,7 +465,7 @@ class MasterConditionManager:
         for m in re.finditer(r"(?P<term>[A-Za-z][A-Za-z0-9&-]{1,20})\s*(?:은|는|이란|의미한다|뜻한다)\s*(?P<desc>[가-힣A-Za-z][^.!?\n]{2,80})", text):
             term=m.group('term').strip(); desc=re.sub(r"\s+"," ",m.group('desc')).strip(' ,:;')
             if term.lower() in seen or term.lower() in self.KNOWN_COMPANY_NAMES: continue
-            if len(desc)<3 or re.search(r'향후에|더 나은 위치|좋을 수 있습니다|가능성이 있습니다|고유명사', desc): continue
+            if len(desc)<3: continue
             out.append({'term':term,'description':desc})
             seen.add(term.lower())
             if len(out)>=3: break
