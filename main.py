@@ -3499,6 +3499,11 @@ def _engine_master_result(item):
             candidates=candidates,
             schedule=_engine_future_schedule(raw_body),
         )
+        # 과거 실제 사례가 있을 때만 '강한 뉴스' 배지를 허용한다.
+        hist = _engine_historical_match(item)
+        if result and hist:
+            result["historical_evidence"] = True
+            result["historical_match_ratio"] = round(float(hist[0]), 3)
         if result.get("locked"):
             _engine_log("info", "[FINAL LOCK 통과] %s", str(result.get("title") or item.get("title") or "")[:220])
         return result
@@ -3523,15 +3528,17 @@ def _engine_master_badge(result):
         labels.append("🎯 직접 연결 종목")
     else:
         labels.append("🎯 관련 종목")
-    if commercial or value == "높음":
+    if commercial and str(result.get("commercial_evidence") or "").strip():
         labels.append("💰 돈되는 뉴스")
-    if value == "높음":
+    if value == "높음" and (result.get("historical_evidence") or result.get("news_value_evidence")):
         labels.append("🔥 강한 뉴스")
     return " | ".join(labels) + "\n" + names
 
 
 def _engine_master_image_path(result):
-    """MASTER 확정 배지 PNG를 동적으로 생성한다. 확정 뉴스에만 사용."""
+    """구버전 이미지 출력 호환용. 현재 최우선 출력 정책에서는 이미지를 생성하지 않는다."""
+    return ""
+    # legacy implementation intentionally unreachable
     if not result or not result.get("locked"):
         return ""
     related = result.get("related") or []
@@ -3630,35 +3637,26 @@ def _engine_format_message(item):
         key_points, stage, outlook, related, schedule, analysis = [], '', [], [], '', ''
         freshness, _ = _engine_freshness(item)
 
-    # 제목 규칙: 일반 뉴스만 📌. 상장종목/제약 마커는 제목 앞에 붙이지 않는다.
+    # 화면 표식은 사용자 지정 위치에만 사용한다.
     companies = item.get('companies', []) or []
     domestic = _engine_domestic_companies(companies)
-    title = _apply_domestic_highlight(title, domestic)
     is_pharma = _engine_is_pharma_news(title, ' '.join(key_points))
     is_listed = bool(domestic)
 
-    # 출처 + 신규성은 한 줄. 장식 아이콘은 최소화.
+    # 일반 뉴스 제목에만 📌. 상장종목/제약뉴스는 별도 라벨에서 표시한다.
     header = f'<b>📰 [{html.escape(source_display)}] {html.escape(freshness or "신규")}</b>'
     if time_text:
         header += f'  🕐 {html.escape(time_text)}'
-    title_prefix = '📌 '
-    if is_listed:
-        title_prefix = ''
-    if is_pharma:
-        title_prefix = ''
+    title_prefix = '' if (is_listed or is_pharma) else '📌 '
     lines = [header, f'<b>{title_prefix}{html.escape(title)}</b>']
 
-    # 사용자가 요청한 표식은 종목/제약 라벨 위치에만 사용.
     if is_listed:
         names = ' · '.join(str(x) for x in domestic[:3])
         lines.append(f'⚡️ <b>상장종목</b> · {html.escape(names)}')
     elif is_pharma:
         lines.append('💊 <b>제약뉴스</b>')
 
-    if freshness == '업그레이드':
-        lines.append('🔄 <b>후속</b> · 기존 보도에 새로운 확정 내용이 추가됨')
-    elif freshness == '재탕':
-        lines.append('♻️ <b>재탕</b> · 기존 보도와 비교해 새로운 핵심 정보가 제한적')
+    # 신규/후속/재탕은 header의 상태 하나로만 표시한다. 같은 뜻을 다시 설명하지 않는다.
 
     if key_points:
         lines.append('🔎 <b>핵심</b>')
@@ -3671,13 +3669,9 @@ def _engine_format_message(item):
     analysis_parts = []
     if analysis:
         analysis_parts.append(analysis)
-    elif outlook:
-        analysis_parts.append(str(outlook[0]))
-    if stage:
-        analysis_parts.append(f'현재 단계는 {stage}이다.')
     market_state = str(item.get('market_state') or '').strip()
-    if market_state:
-        analysis_parts.append(f'현재 시장은 {market_state} 상태다.')
+    if market_state and analysis:
+        analysis_parts.append(f'현재 시장: {market_state}.')
     if analysis_parts:
         lines.append('🧠 <b>분석</b>')
         lines.append(html.escape(' '.join(analysis_parts)[:650]))
@@ -3690,9 +3684,10 @@ def _engine_format_message(item):
                 lines.append(f'🎯 <b>직접 연결 종목</b> · {html.escape(names)}')
 
     badge_text = str(_engine_master_badge(master_result) or '')
-    if '돈되는 뉴스' in badge_text:
-        lines.append('💰 <b>돈되는 뉴스</b>')
-    if '강한 뉴스' in badge_text:
+    # 내용/데이터가 없는 빈 라벨은 절대 표시하지 않는다.
+    if '돈되는 뉴스' in badge_text and master_result.get('commercial_evidence'):
+        lines.append('💰 <b>돈되는 뉴스</b> · ' + html.escape(str(master_result.get('commercial_evidence'))[:180]))
+    if '강한 뉴스' in badge_text and (master_result.get('news_value') == '높음' or master_result.get('historical_evidence')):
         lines.append('🔥 <b>강한 뉴스</b>')
 
     terms = (master_result or {}).get('term_explanations') or []

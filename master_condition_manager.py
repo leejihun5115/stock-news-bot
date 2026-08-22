@@ -433,42 +433,43 @@ class MasterConditionManager:
     }
 
     def _term_explanations(self, title, body):
-        """기사에 실제 등장한 낯선 영문 고유명사/제품·행사명을 설명용으로 추출한다.
-        기사에 없는 정의는 만들지 않고, 본문 문맥으로 확인 가능한 종류만 표시한다.
+        """문맥이 실제로 설명해 주는 용어만 반환한다.
+
+        단순 고유명사/회사명을 '용어'라고 부르지 않는다. 기사 안에
+        'A는 B', 'A(=B)', 'B(A)'처럼 의미가 확인되는 경우만 설명한다.
+        의미를 확인할 수 없으면 항목 자체를 만들지 않는다.
         """
         text = self._clean(f"{title} {body}")
         if not text:
             return []
-        candidates = []
-        pat = re.compile(r"\b[A-Z][A-Za-z0-9&\'-]*(?:\s+[A-Z][A-Za-z0-9&\'-]*){0,4}\b")
-        stop = {"The","This","That","And","For","With","From","New","Today","Market",
-                "United States","New York","Wall Street","Federal Reserve","Google News"}
-        for match in pat.finditer(text):
-            term = match.group(0).strip()
-            if len(term) < 3 or term in stop or (term.isupper() and len(term) <= 4):
-                continue
-            if any(term == x["term"] for x in candidates):
-                continue
-            if term.lower() in self.KNOWN_COMPANY_NAMES:
-                candidates.append({"term": term, "description": "기사상 회사명"})
-                if len(candidates) >= 5:
-                    break
-                continue
-            left = text[max(0, match.start()-90):match.start()]
-            right = text[match.end():min(len(text), match.end()+90)]
-            ctx = left + term + right
-            if re.search(r"출시|제품|서비스|플랫폼|앱|솔루션|판매|구매|도입", ctx, re.I):
-                kind = "제품·서비스명"
-            elif re.search(r"시상|수상|행사|라디오|프로그램|어워드|honors?|award", ctx, re.I):
-                kind = "행사·프로그램명"
-            elif re.search(rf"{re.escape(term)}\s*(?:의|가|은|는)", ctx):
-                kind = "인물·기관명"
-            else:
-                kind = "기사에 등장한 고유명사"
-            candidates.append({"term": term, "description": f"기사상 {kind}"})
-            if len(candidates) >= 5:
-                break
-        return candidates
+        out=[]; seen=set()
+
+        patterns = [
+            # 현장(On-Site), 인공지능(AI)처럼 괄호 바로 앞의 한국어 표현을 우선 사용한다.
+            re.compile(r"(?P<ko>[가-힣]{2,14})\s*\((?P<term>[A-Za-z][A-Za-z0-9&' -]{1,30})\)"),
+            # 고대역폭 메모리(HBM)처럼 띄어쓴 용어는 최대 3개 단어까지 허용한다.
+            re.compile(r"(?P<ko>[가-힣]{2,10}(?:\s+[가-힣]{1,10}){1,2})\s*\((?P<term>[A-Za-z][A-Za-z0-9&' -]{1,30})\)"),
+        ]
+        for pat in patterns:
+            for m in pat.finditer(text):
+                ko=m.group('ko').strip(); term=m.group('term').strip()
+                if not term or term.lower() in seen or len(term)<2: continue
+                # 괄호 안이 회사/출처 약칭이면 용어로 만들지 않는다.
+                if term.lower() in self.KNOWN_COMPANY_NAMES: continue
+                desc=f"기사에서 '{ko}'를 뜻하는 표현"
+                out.append({'term':term,'description':desc})
+                seen.add(term.lower())
+                if len(out)>=3: return out
+
+        # 'HBM은 고대역폭 메모리' / 'On-Site는 현장'처럼 본문이 직접 정의하는 경우
+        for m in re.finditer(r"(?P<term>[A-Za-z][A-Za-z0-9&-]{1,20})\s*(?:은|는|이란|의미한다|뜻한다)\s*(?P<desc>[가-힣A-Za-z][^.!?\n]{2,80})", text):
+            term=m.group('term').strip(); desc=re.sub(r"\s+"," ",m.group('desc')).strip(' ,:;')
+            if term.lower() in seen or term.lower() in self.KNOWN_COMPANY_NAMES: continue
+            if len(desc)<3: continue
+            out.append({'term':term,'description':desc})
+            seen.add(term.lower())
+            if len(out)>=3: break
+        return out
 
     def _key_points(self, title, body):
         """[고정 요약 원칙]
@@ -501,6 +502,8 @@ class MasterConditionManager:
                 score += 6
             if impact_pat.search(sentence):
                 score += 5
+            if re.search(r"다룬다|소개한다|살펴본다|설명한다|전한다|분석한다", sentence):
+                score -= 10
             scored.append((score, idx, trimmed, bool(impact_pat.search(sentence))))
 
         if not scored:
@@ -586,42 +589,22 @@ class MasterConditionManager:
         return False
 
     def _synthesize_title(self, title, body):
+        """원문 제목 보존을 최우선으로 한다.
+
+        제목은 요약문이나 본문 첫 문장으로 대체하지 않는다. 수집 단계에서
+        이미 전달문 메타데이터를 제거했으므로, 정상적인 기사 제목은 원문 그대로
+        유지한다. 제목이 비어 있거나 전달문 흔적만 남은 경우에만 안전한 최소 정리를 한다.
+        """
         title = self._clean(title)
-        pts = self._key_points(title, body)
-        # 원 제목이 충분히 구체적인 '헤드라인'이면 그대로 보존한다.
-        # 단순 브리핑 제목/유튜브 제목/서술형 클릭베이트/장황한 번역 제목이면 재구성한다.
-        generic = re.search(r"모닝|브리핑|뉴스모음|오늘의|종합|프리뷰|시황|경제브리핑", title, re.I)
-        too_long = len(title) > 60
-        narrative = self._is_narrative_title(title)
-        if not generic and not too_long and not narrative and len(title) >= 18:
-            return title
-        # [요약칸 보존] 본문에 핵심문장이 2개 이상 있을 때만 그중 하나를 제목으로 쓴다.
-        # 문장이 1개뿐이면 그걸 제목으로 써버리는 순간 요약(key_points)이 통째로
-        # 비게 되므로, 이 경우엔 원제목을 절 단위로만 다듬어 남겨 요약칸을 살린다.
-        if len(pts) >= 2:
-            p = pts[0]
-            p = re.sub(r"\s*(?:-|\|)\s*(?:[^-_|]{2,20})$", "", p).strip()
-            # 핵심 문장이 이미 _key_points()에서 절 단위로 정리됐지만, 제목 용도로는
-            # 80자 제한이 더 짧으므로 필요하면 한 번 더 절 경계에서 자른다.
-            if len(p) > 80:
-                cut = self._clause_cut(p)
-                p = cut if cut else p
-            return p[:80]
-        # 핵심문장을 못 뽑았고 원제목만 서술형인 경우, 원제목이라도 앞 절만 잘라 간결화
-        if narrative:
-            cut = self._clause_cut(title)
-            if cut:
-                return cut[:80]
-        # [본문 없이도 자동요약] 본문이 짧아 핵심문장을 못 뽑았어도, 제목이 60자를
-        # 넘으면 단어 경계에서 자연스럽게 잘라 짧게 만든다. 문자수로 그냥 자르면
-        # 단어 중간이 잘려 어색해지므로, 뒤에서부터 가장 가까운 공백/구두점을 찾는다.
-        if too_long or narrative:
-            head = title[:70]
-            cut_at = max(head.rfind(" "), head.rfind(","), head.rfind("·"), head.rfind("-"))
-            if cut_at > 25:
-                return head[:cut_at].rstrip(" -–—,·")
-            return head.rstrip()
-        return title[:110]
+        if not title:
+            return ""
+        # 제목처럼 보이지 않는 전달문 흔적만 제거. 본문에서 새 제목을 만들지 않는다.
+        if re.search(r"Forwarded from|^루팡\b", title, re.I):
+            cleaned = re.sub(r"Forwarded from\s+[^:：]+[:：]?", "", title, flags=re.I).strip()
+            cleaned = re.sub(r"^루팡\s*[:：-]?\s*", "", cleaned).strip()
+            if cleaned:
+                title = cleaned
+        return title[:220].strip()
 
     def _stage(self, text):
         found = []
@@ -829,8 +812,9 @@ class MasterConditionManager:
         elif name == "증거보존":
             state["evidence"] = list(dict.fromkeys(state["evidence"] + state["key_points"]))
         elif name == "제목반복금지":
-            if self._norm(state["title"]) == self._norm(state["key_points"][0] if state["key_points"] else ""):
-                state["title"] = self._synthesize_title(state["title"], state["body"])
+            # 제목은 원문을 보존한다. 요약과 같아도 본문에서 새 제목을 만들지 않는다.
+            # 대신 같은 문장은 요약 단계에서 제외한다.
+            pass
         elif name == "추정금지":
             state["schedule"] = self._future_schedule(state["schedule"], state["body"])
         elif name == "핵심추출":
@@ -859,7 +843,7 @@ class MasterConditionManager:
         elif name == "시장영향":
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
         elif name in ("전망근거", "후속확인", "지속성"):
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])
+            state["outlook"] = []
         elif name == "시장전망최대3":
             state["outlook"] = state["outlook"][:3]
         elif name == "대장주선정":
@@ -878,7 +862,7 @@ class MasterConditionManager:
             # 현재까지의 모든 조건을 최종 상태로 고정한다.
             state["stage"], state["commercial_evidence"] = self._stage(text)
             state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])[:3]
+            state["outlook"] = [][:3]
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
             state["master_confirmed"] = bool(
                 state["news_value"] in ("높음", "중간") and
