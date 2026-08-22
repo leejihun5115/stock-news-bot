@@ -1391,6 +1391,13 @@ ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
 HISTORICAL_SURGE_DB = os.environ.get("NEWS_BOT_HISTORICAL_DB", "news_bot_historical_surge.jsonl")
 GLOBAL_BRIEFING_DB = os.environ.get("NEWS_BOT_GLOBAL_BRIEFING_DB", "news_bot_global_briefing.jsonl")
 TELEGRAM_SPAM_STATE = os.environ.get("NEWS_BOT_TELEGRAM_SPAM_STATE", "news_bot_telegram_spam.json")
+# [도배 차단] 최근 송출한 기사의 핑거프린트(제목+본문)를 디스크에 남겨, 서버가
+# 재시작돼도 "몇 분 전에 이미 보낸 기사"를 다시 신규로 착각해 재전송하지 않게 한다.
+SENT_FINGERPRINT_DB = os.environ.get("NEWS_BOT_SENT_FINGERPRINT_DB", "news_bot_sent_fingerprints.jsonl")
+# 제목+본문 유사도가 이 값 이상이면 "같은 뉴스"로 보고 도배 차단 대상으로 삼는다.
+DUPLICATE_BLOCK_SIMILARITY = float(os.environ.get("NEWS_BOT_DUPLICATE_BLOCK_SIMILARITY", "0.80"))
+# 이 시간(분)보다 오래된 과거 송출 기록과는 비교하지 않는다(며칠 뒤 동일 사건 재조명 기사는 허용).
+DUPLICATE_BLOCK_WINDOW_MIN = int(os.environ.get("NEWS_BOT_DUPLICATE_BLOCK_WINDOW_MIN", "720"))
 WATCHDOG_TIMEOUT = max(120, int(os.environ.get("NEWS_BOT_WATCHDOG_TIMEOUT", "300")))
 WATCHDOG_ALERT_INTERVAL = max(300, int(os.environ.get("NEWS_BOT_WATCHDOG_ALERT_INTERVAL", "900")))
 TELEGRAM_MAX_PER_SOURCE_HOUR = max(1, int(os.environ.get("NEWS_BOT_TELEGRAM_MAX_PER_SOURCE_HOUR", "6")))
@@ -1537,6 +1544,7 @@ def _engine_historical_match(item):
 
 def _engine_load_extended_state():
     global _engine_historical_cache, _engine_global_briefing_cache, _engine_telegram_counts
+    global _engine_sent_fingerprints
     if ENABLE_HISTORICAL_SURGE_DB and os.path.exists(HISTORICAL_SURGE_DB):
         try:
             with open(HISTORICAL_SURGE_DB, "r", encoding="utf-8") as f:
@@ -1555,6 +1563,14 @@ def _engine_load_extended_state():
                 _engine_telegram_counts = json.load(f) or {}
         except Exception:
             _engine_telegram_counts = {}
+    # [도배 차단] 서버 재시작 후에도 "방금 보낸 기사" 기록을 이어받는다.
+    if os.path.exists(SENT_FINGERPRINT_DB):
+        try:
+            with open(SENT_FINGERPRINT_DB, "r", encoding="utf-8") as f:
+                _engine_sent_fingerprints = [json.loads(x) for x in f if x.strip()][-3000:]
+            _engine_log("info", "[상태] 최근 송출 핑거프린트=%d건 복원", len(_engine_sent_fingerprints))
+        except Exception as e:
+            log_error("송출 핑거프린트 DB 읽기", e, file=SENT_FINGERPRINT_DB)
 
 
 def _engine_record_global_briefing(item):
@@ -2530,6 +2546,63 @@ def _engine_similar(a, b):
     return bool(ca & cb) and bool(ma & mb) and difflib.SequenceMatcher(None, ta[:180], tb[:180]).ratio() >= 0.52
 
 
+# ============================================================
+# [도배 차단] 유사도 80%+ 동일 뉴스 재송출 차단
+# ------------------------------------------------------------
+# _engine_freshness()는 "재탕"이라고 라벨만 붙이고 그대로 내보내지만,
+# 이 함수는 실제로 송출 자체를 막는다. 새로운 확정적 사실(금액/승인/체결 등)이
+# 없이 제목·본문 유사도가 DUPLICATE_BLOCK_SIMILARITY 이상이면 같은 뉴스로 보고
+# 차단한다. 링크가 달라도(다른 소스가 같은 사건을 재보도) 잡아낸다.
+# DUPLICATE_BLOCK_WINDOW_MIN보다 오래된 과거 송출과는 비교하지 않아, 며칠 뒤
+# 같은 사건을 재조명하는 기사까지 막지는 않는다.
+# ============================================================
+_DUPLICATE_STRONG_NEW_WORDS = [
+    "계약 체결", "공급계약", "대규모 수주", "신규 수주", "대형 계약", "초대형 계약",
+    "확정", "확정 계약", "수주 확정", "공급 확정", "인수 확정", "승인", "허가",
+    "독점", "사상 최대", "세계최대", "세계 최대", "대규모 투자",
+]
+_AMOUNT_RE = re.compile(r"(?:[0-9][0-9,]*\s*(?:억|조|만|달러|원|USD|억원|조원|백만|million|billion))", re.I)
+
+
+def _engine_is_duplicate_spam(item):
+    """제목+본문 유사도 80%+ 인 기사가 최근에 이미 송출됐다면 True를 반환한다.
+    (실제 새 정보 없는 순수 재전송/도배만 차단하며, 정당한 후속 보도는 통과시킨다.)
+    """
+    full = _engine_clean(str(item.get("title", "")) + " " + str(item.get("extra", "")))
+    if not full:
+        return False, None
+    now = _now_kst()
+    cur_hits = set(_engine_market_hit(full))
+    has_amount = bool(_AMOUNT_RE.search(full))
+    for prev in reversed(_engine_sent_fingerprints[-500:]):
+        prev_text = str(prev.get("text", "")) if isinstance(prev, dict) else str(prev)
+        if not prev_text:
+            continue
+        prev_ts = (prev.get("ts") or prev.get("published") or "") if isinstance(prev, dict) else ""
+        prev_dt = _engine_parse_datetime(prev_ts) if prev_ts else None
+        if prev_dt:
+            # _engine_parse_datetime()/_now_kst() 둘 다 tzinfo 없는 KST 기준 시간을
+            # 반환하므로 그대로 뺄셈한다(다른 타임존으로 변환하지 않는다).
+            age_min = (now - prev_dt).total_seconds() / 60
+            if age_min > DUPLICATE_BLOCK_WINDOW_MIN:
+                continue
+        ta = re.sub(r"[^0-9a-zA-Z가-힣]", "", full.lower())
+        tb = re.sub(r"[^0-9a-zA-Z가-힣]", "", prev_text.lower())
+        ratio = difflib.SequenceMatcher(None, ta[:240], tb[:240]).ratio()
+        if ratio < DUPLICATE_BLOCK_SIMILARITY:
+            continue
+        # [업그레이드 예외] 새로운 확정 정보/새 시장영향/새 금액이 추가됐으면
+        # 도배가 아니라 정당한 후속 보도이므로 차단하지 않는다.
+        prev_hits = set(_engine_market_hit(prev_text))
+        new_strong = any(w.lower() in full.lower() and w.lower() not in prev_text.lower() for w in _DUPLICATE_STRONG_NEW_WORDS)
+        new_hit = bool(cur_hits - prev_hits)
+        prev_has_amount = bool(_AMOUNT_RE.search(prev_text))
+        if new_strong or new_hit or (has_amount and not prev_has_amount):
+            continue
+        return True, prev
+    return False, None
+
+
 COMMERCIAL_VALUE_WORDS = {
     "상용화", "상업화", "양산", "출시", "판매개시", "판매 개시", "공급계약", "공급 계약",
     "수주", "대규모 수주", "계약 체결", "본계약", "독점계약", "기술수출", "기술이전",
@@ -3282,8 +3355,10 @@ def _engine_format_message(item):
     return '\n\n'.join(x for x in lines if str(x).strip())
 
 def _engine_flush_pending():
-    """대기 뉴스는 유사기사라도 묶거나 재탕 차단하지 않는다.
-    각 기사를 그대로 송출하되 _engine_freshness()가 [신규]/[업그레이드]/[재탕]을 표시한다.
+    """대기 뉴스는 유사기사라도 묶어서 요약하지 않고 각 기사를 그대로 판단한다.
+    단, 유사도 DUPLICATE_BLOCK_SIMILARITY(기본 80%) 이상인 '사실상 동일 뉴스'가
+    최근에 이미 송출됐고 새로운 확정 정보가 없다면 도배로 보고 송출 자체를 막는다.
+    (_engine_freshness()의 [신규]/[업그레이드]/[재탕] 라벨은 통과한 기사 표시용으로 유지.)
     동일 URL은 같은 폴링에서만 1회 처리하여 1분 주기 무한도배만 막는다.
     """
     global _engine_pending
@@ -3292,6 +3367,7 @@ def _engine_flush_pending():
     candidates = list(_engine_pending)
     candidates.sort(key=_engine_score, reverse=True)
     sent = 0
+    dup_blocked = 0
     cycle_keys = set()
     for item in candidates[:ENGINE_MAX_SEND_PER_CYCLE]:
         key = item["key"]
@@ -3300,9 +3376,17 @@ def _engine_flush_pending():
         cycle_keys.add(key)
         if not _engine_telegram_spam_allowed(item):
             continue
-        # 기존 상태파일에 이미 저장된 URL은 같은 기사의 무한 반복만 방지한다.
-        # 서로 다른 보도 링크/재보도는 차단하지 않고 반드시 [재탕]으로 송출한다.
+        # 기존 상태파일에 이미 저장된 URL(동일 링크)은 재전송하지 않는다.
         if key in _engine_seen:
+            continue
+        # [도배 차단] 링크가 다르더라도 제목+본문 유사도 80%+ 인 '사실상 동일 뉴스'가
+        # 최근에 이미 송출됐다면(그리고 새로운 확정 정보가 없다면) 여기서 차단한다.
+        is_dup, dup_prev = _engine_is_duplicate_spam(item)
+        if is_dup:
+            dup_blocked += 1
+            prev_title = str((dup_prev or {}).get("title", ""))[:80] if isinstance(dup_prev, dict) else ""
+            _engine_log("info", "[제외] 유사도 80%%+ 도배 차단 | %s | 선행=%s", item.get("title", "")[:80], prev_title)
+            _engine_mark_seen(key)
             continue
         master_result = _engine_master_result(item)
         item["_master_result"] = master_result
@@ -3317,12 +3401,17 @@ def _engine_flush_pending():
         if text_sent:
             _engine_mark_seen(key)
             full_text = item["title"] + " " + item["extra"]
-            _engine_sent_fingerprints.append({
+            fingerprint = {
                 "text": full_text, "source": item["source"],
                 "time_text": item.get("time_text", ""),
                 "published": item.get("published", ""),
-                "title": item["title"], "market_state": item.get("market_state", "")
-            })
+                "title": item["title"], "market_state": item.get("market_state", ""),
+                "ts": _now_kst().isoformat(),
+            }
+            _engine_sent_fingerprints.append(fingerprint)
+            if len(_engine_sent_fingerprints) > 3000:
+                del _engine_sent_fingerprints[:-3000]
+            _engine_atomic_append_jsonl(SENT_FINGERPRINT_DB, fingerprint)
             _engine_telegram_mark_sent(item)
             _engine_record_global_briefing(item)
             _engine_record_historical_case(item)
@@ -3330,7 +3419,7 @@ def _engine_flush_pending():
             if master_badge and not image_sent:
                 _engine_log("warning", "[MASTER] 텍스트 송출 성공 / 이미지 송출 실패")
             _engine_log("info", "[Telegram 전송 성공] %s", str(item.get("title") or "")[:220])
-    _engine_log("info", "[송출결과] 후보=%d | 묶음차단=0 | 재탕차단=0 | 전송=%d", len(_engine_pending), sent)
+    _engine_log("info", "[송출결과] 후보=%d | 묶음차단=0 | 도배차단=%d | 전송=%d", len(_engine_pending), dup_blocked, sent)
     _engine_pending = []
     return sent
 
