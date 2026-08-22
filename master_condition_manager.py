@@ -242,6 +242,26 @@ class MasterConditionManager:
     ]
     STAGE_RANK = {label: i for i, (label, _) in enumerate(STAGES, 1)}
 
+    # [지정학/외교 오탐 방지] "허가/승인/인증"은 원래 규제당국의 제품·기업 승인
+    # (FDA, 식약처 등)을 노리고 만든 패턴인데, "이란이 유조선 통과를 허가",
+    # "정상회담 개최 승인"처럼 외교·지정학 뉴스의 일반적인 "허용/승인" 표현에도
+    # 똑같이 걸려서 "매출화 시점" 같은 엉뚱한 기업 재무 해설이 붙는 문제가 있었다.
+    # 외교/영토/군사 신호가 있으면서 기업·규제당국 승인 맥락이 전혀 없을 때만
+    # 이 패턴의 발동을 막는다(진짜 제품 승인 기사는 그대로 통과).
+    _GEO_DIPLOMATIC_RE = re.compile(
+        r"대통령|총리|외교부|주권|영해|영공|해협|국경\s*통과|유엔|안보리|정상회담|"
+        r"휴전|제재\s*해제|파병|군사\s*작전|쿠데타|계엄|입국\s*허가|통과\s*허용|통과하도록",
+        re.I,
+    )
+    _BIZ_REGULATORY_RE = re.compile(
+        r"기업|회사|매출|주가|증시|수주|계약|실적|출시|제품|서비스|양산|배당|자사주|투자|"
+        r"공급|상장|의약품|신약|특허|식약처|FDA|당국\s*승인|규제\s*당국|허가\s*신청",
+        re.I,
+    )
+
+    def _is_non_commercial_geopolitical(self, text):
+        return bool(self._GEO_DIPLOMATIC_RE.search(text or "")) and not bool(self._BIZ_REGULATORY_RE.search(text or ""))
+
     # 사건별 전망은 고정문구가 아니라 '사실 + 다음 확인할 경제적 연결'로 만든다.
     OUTLOOK_PATTERNS = [
         (r"수주|공급계약|계약 체결|본계약|판매계약|장기공급",
@@ -603,9 +623,14 @@ class MasterConditionManager:
 
     def _stage(self, text):
         found = []
+        geo_gate = self._is_non_commercial_geopolitical(text)
         for label, pattern in self.STAGES:
             m = re.search(pattern, text or "", re.I)
             if m:
+                # "검증·승인" 단계는 승인/허가 단어에만 의존하므로, 외교·지정학적
+                # 허가/승인(기업 맥락 없음)에는 상용화 단계로 붙이지 않는다.
+                if label == "검증·승인" and geo_gate:
+                    continue
                 found.append((self.STAGE_RANK[label], label, m.group(0)))
         if not found:
             return "", ""
@@ -727,8 +752,13 @@ class MasterConditionManager:
         # [근거 문장 사전 추출] anchor를 포함하는 실제 문장 단위 후보를 미리 뽑아둔다.
         # 이후 char 슬라이싱 대신 이 문장들에서만 근거를 고른다.
         body_sentences = self._sentences(body_text)
+        geo_gate = self._is_non_commercial_geopolitical(text)
         matched = []
         for pattern, sentence in self.OUTLOOK_PATTERNS:
+            # [지정학/외교 오탐 방지] "임상|허가|승인|인증" 패턴은 기업 규제승인용이므로,
+            # 외교·지정학적 허가/승인(기업 맥락 없음)에는 시장전망을 억지로 붙이지 않는다.
+            if pattern == r"임상|허가|승인|인증" and geo_gate:
+                continue
             m = re.search(pattern, text, re.I)
             if m:
                 matched.append((m.start(), sentence, m.group(0)))
