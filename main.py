@@ -206,17 +206,26 @@
 
 
 import os
-# 반드시 같은 배포 폴더의 master_condition_manager(7).py를 직접 로드한다.
-# 오래된 master_condition_manager.py가 PYTHONPATH/작업폴더에 있어도 절대 끼어들지 못한다.
+# 반드시 같은 배포 폴더의 master_condition_manager.py를 직접 로드한다.
+# [수정 2026-08-23] 실제 배포 파일명이 "master_condition_manager.py"(버전 번호 없음)로
+# 확인되어, 존재하지도 않는 "master_condition_manager(7).py"를 찾던 이전 경로를 고쳤다.
+# 오래된/다른 경로의 동일 파일명이 PYTHONPATH에 있어도 절대 끼어들지 못하도록
+# 여전히 같은 폴더의 파일을 절대경로로 직접 로드한다.
 import importlib.util as _importlib_util
-_MASTER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "master_condition_manager(7).py") if "os" in globals() else None
+_MASTER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "master_condition_manager.py") if "os" in globals() else None
 if not _MASTER_FILE or not os.path.exists(_MASTER_FILE):
     import pathlib as _pathlib
-    _MASTER_FILE = str(_pathlib.Path(__file__).with_name("master_condition_manager(7).py"))
+    _MASTER_FILE = str(_pathlib.Path(__file__).with_name("master_condition_manager.py"))
 _spec = _importlib_util.spec_from_file_location("_master_condition_manager_active", _MASTER_FILE)
 if _spec is None or _spec.loader is None:
     raise ImportError(f"최우선 MASTER 모듈을 찾을 수 없습니다: {_MASTER_FILE}")
 _mod = _importlib_util.module_from_spec(_spec)
+# [수정 2026-08-23] sys.modules에 등록하지 않고 exec_module()만 호출하면,
+# master_condition_manager.py 안의 @dataclass(MasterResult 등)가 자기 모듈을
+# sys.modules에서 못 찾아 "'NoneType' object has no attribute '__dict__'"로
+# 즉시 크래시할 수 있다(Python 3.12 확인됨). 표준 관례대로 exec 전에 등록한다.
+import sys as _sys
+_sys.modules["_master_condition_manager_active"] = _mod
 _spec.loader.exec_module(_mod)
 MasterConditionManager = _mod.MasterConditionManager
 import sys
@@ -825,92 +834,16 @@ KEYWORDS_2 = [
     "핵심기술", "국내최초", "최대투자", "주문폭주", "역대급", "공급부족", "세계최초", "표대결",
 ]
 
-EXCLUSIVE_KEYWORDS = [
-    "더벨", "레이더M", "마켓인", "마켓인사이트",
-    "마켓파워", "인베스트조선", "[핫!종목]", "핫!종목",
-    "[SP단독]", "[단독]", "단독", "풍문",
-]
+# [삭제 2026-08-23] EXCLUSIVE_KEYWORDS(더벨/레이더M 등 언론사·코너명 기반 "단독" 판별
+# 목록)도 어디서도 참조되지 않던 죽은 하위 로직이었다. 실제 "단독" 판별은
+# EXCLUSIVE_WORDS = {"단독"} 하나로 이미 이루어지고 있어 이 목록은 제거한다.
 
-BLOCKED_KEYWORDS_BY_CATEGORY = {
-    "🧹 광고성": ["스탁론"],
-    "🧹 사진·생활정보": ["포토", "화보", "날씨", "운세"],
-    "🧹 부고·인사": ["부고", "별세", "인사", "동정", "취임", "퇴직", "승진", "조문", "만찬", "영입", "선임", "위촉", "임명", "발탁", "조직개편"],
-    "🧹 시상·행사": ["수상", "기념", "축제", "콘서트", "전시", "간담회", "워크숍"],
-    "🧹 스포츠": ["야구", "축구", "농구", "배구", "골프", "올림픽", "월드컵", "홈런", "승리", "패배", "우승", "득점", "실점", "연패", "연승"],
-    "🧹 연예·문화": ["연예인", "영화", "드라마", "뮤지컬", "음원", "시사회", "팬미팅"],
-    "🧹 사건·사고": ["사건", "사고", "붕괴", "화재", "음주운전", "구속", "징역", "폭행", "스캔들", "이혼", "결혼", "출산"],
-    "🧹 부동산·생활경제": ["낙찰", "분양", "출시", "예산", "청약", "접수", "대표팀", "화제", "논란", "논쟁", "비판"],
-    "🧹 행정·일반": ["교육", "주민", "점검", "의원", "채용", "업무", "의견", "정비", "임원", "현장", "응찰"],
-    "🧹 블로그 잡담성": ["홧팅", "화이팅", "가즈아", "월욜", "화욜", "수욜", "목욜", "금욜", "불금"],
-    "🧹 답글·댓글성": ["답글", "댓글", "리플", "re:", "RE:", "Re:", "댓글창"],
-    "🧹 찌라시·홍보성 클릭베이트": [
-        "수혜株!", "급등예고!", "관련株!", "극비재료주", "오늘의추천株", "잡아라!!", "잡아라!", "폭등임박!", "황제주!", "황제주!!", "급등임박", "급등임박!",
-        "알짜매물", "오늘의", "오늘장", "코넥스", "[장외주식]", "[장외주식시황]", "[종합시황]", "테마동향", "위클리", "비결", "주간결산", "투자자의",
-        "추천", "추천종목", "추천주", "주간추천종목", "주간추천주", "장마감후종목뉴스", "증권거래현황", "증권사별", "주간업종등락률", "투자記", "투자자별", "투자주체",
-        "투자주체를", "현재가", "꺾고", "'上'진입", "놓치면", "즐기세요", "아듀", "시황", "증시일정",
-    ],
-    "🧹 지역·지자체 행정": [
-        "화순군", "경남", "경기", "경기도", "광주", "인천서", "예천군", "울산", "강릉", "수원시", "재난지원금", "희망재단",
-        "취약계층", "거리두기", "접종", "건보공단", "검진", "예방접종", "가뭄피해", "국감", "국감서", "국정감사", "국정원", "관세청",
-        "교역", "강진군", "경남도", "고양시", "공주시", "광양시", "광주시", "광주전남", "남양주", "남양주시", "대구경북", "무안",
-        "무안군", "무안서", "밀양시", "보성군", "봉화군", "서대문구", "순천시", "아산시", "안산시", "양산시", "양산신도시", "양양군",
-        "영광군", "영덕군", "영등포구", "영암군", "용인시", "울릉서", "음성군", "익산시", "인천시", "장흥군", "전남", "전남도",
-        "전북", "전북도", "전주시", "정읍시", "진주시", "창원시", "천안시", "청송군", "청주시", "충남도", "충주시", "태백시",
-        "통영시", "파주시", "판교", "평택시", "함평군", "해남군", "호남선", "경기도의회", "원주시의회", "잠실", "장마철", "장맛비",
-        "재산세", "저소득층", "서민", "서민층",
-    ],
-    "🧹 대학·병원·기관명": [
-        "삼육대", "목포대", "호남대", "단국대", "영남대", "연세대", "한국폴리텍대학", "폴리텍대학", "광주대", "성신여대", "계명대", "원광대",
-        "대구한의대", "한남대", "영남대병원", "전남대병원", "화순전남대병원", "전북대병원", "광주은행", "부산농협", "의료원", "LH", "SK행복나눔재단",
-    ],
-    "🧹 언론사 코너·연재물 태그": [
-        "[표]", "[경기인터뷰]", "[공감]", "[기자가만난세상]", "[기획]", "[김능구의정국진단]", "[녹색세상]", "[단상]", "[디지털산책]", "[롤드컵]", "뉴스&분석", "뉴스브리핑",
-        "뉴스해설", "뉴욕마켓워치", "[fn★성적표]", "[GOAL]", "[LPGA]", "ML사이트]", "[PGA]", "[SS스타기상청]", "[SS영상]", "[SS위클리토크]", "[SS프리즘]", "[TD영상]",
-        "[TV예감]", "[WCS]", "[WTKL]", "[WT논평]", "[y스페셜]", "[답변공시]", "[종목상담]", "DT광장", "ET단상", "fn사설", "HD영상", "K팝스타",
-        "MISS출장대행", "SK전", "SS다시보기", "SS인턴수첩", "SS탐사보도", "S스토리", "TV신문고", "TV줌인", "TV프로그램", "TV하이라이트", "US여자오픈", "US오픈",
-        "V라이브", "Why", "y피플", "[美친box]", "[美친차트]", "[美친시청률]", "[창간특집]", "[e2BOT]", "[생생건강]", "[스포츠투데이]", "[와글와글]", "[연예]",
-        "[투데이]", "ET투자뉴스", "경인만평", "경인포터", "경향NIE", "뉴스파이터", "모닝와이드", "오프닝", "헤드라인", "전체뉴스", "MVP", "SHOT",
-        "HOLD(유지)", "UFC", "다시보기", "해설",
-    ],
-    "🧹 거시지표·환율(루틴 발표)": [
-        "고시환율", "기준환율", "달러/위안", "달러/환율", "원•달러", "환율", "고용동향", "고용지표", "실업률", "실업률은", "성장률", "소비자물가",
-        "저금리", "재정난", "재정증권", "수출액", "수출입은행", "무역", "소득공제", "도매재고", "물동량", "상하이지수", "생산자물가", "생산자물가지수",
-        "수주액", "수입물가", "신규주택", "산업생산", "산업생산도", "소매판매", "증가폭", "전월비", "전월比", "제조업생산", "주택착공실적", "최저임금",
-        "가계대출", "주택담보대출", "기업재고", "경기침체", "경매시장", "법원경매", "입주", "입주아파트", "입주예정", "주택금융", "주택금융공사",
-    ],
-    "🧹 기업·행정 잡무 일반": [
-        "강소기업", "강좌", "개강", "개관", "개막식", "개선", "개장", "개최", "개통", "결산", "공동캠퍼스",
-        "개설", "경력사원", "과징금", "관리우수기업", "우수기업", "우수기관", "우수사업단", "우수인증기관", "우수기관으로", "유네스코",
-        "중소기업", "중소기업청", "中企", "중기중앙회", "사옥", "신제품", "신축공사", "준공", "준공식", "참가자", "창단", "출연",
-        "취업난", "취재", "취재수첩", "축소", "총력", "철회", "창출", "창출에", "캠페인", "캠퍼스", "품질향상", "한정판",
-        "한정판매", "할인", "할인판매", "할인행사", "행사", "홈페이지", "홈플러스", "크리스마스", "어린이", "어린이날", "앨범", "나눔",
-        "행복나눔", "열린광장", "열린마당", "열린세상", "전당대회", "헌법", "한국인", "한은", "특가상품", "교통정보", "가족캠프", "모집",
-    ],
-    "🧹 잡담·일반 표현": [
-        "미안", "미안하다", "눈길", "뇌물", "노출", "노조", "반발", "방송", "불공정", "부결", "부과", "불발",
-        "불투명", "불안감", "불법자금", "방산비리", "감독", "감소", "간부", "경험", "기록", "기고", "기자수첩", "기획전",
-        "기업분석리포트", "금융단신", "금융사", "리포트", "브리핑", "논평", "대표연설", "동영상", "녹화", "달성", "둘째주", "셋째주",
-        "디지털세상", "이시각", "인덱스", "인터뷰", "임금", "연속", "연임", "유출", "열정", "일반공모", "증권사", "재무리스크",
-        "적정수준", "전망", "전일대비", "제공", "주의보", "준수해야", "지표", "직장인", "집중취재", "조회공시", "공시", "기업공시",
-        "e공시", "대파", "소폭", "선보여", "선봬", "선수단", "선도", "선보인다", "이벤트", "영상", "예방수칙", "운전자",
-        "운행", "유가증권", "유가증권시장", "음주", "투표", "페스티벌", "포럼", "피해액만", "파문", "현황", "토마토",
-        "파라다이스", "기자들의", "사진", "사설", "상담회", "상생경영", "소개", "평생", "폐쇄", "침묵", "진통",
-        "저축", "종료", "증발", "중단", "전일", "정정", "가려움증", "버스회사", "보험", "보험금", "보험사", "신년사",
-        "제동", "증상들", "키워드", "펀드",
-    ],
-    "🧹 달력·숫자 패턴": ["주년", "루수", "호선", "01월", "02월", "03월", "04월", "05월", "06월", "07월", "08월", "09월"],
-}
-
-BLOCKED_KEYWORDS = set()
-for _category, _words in BLOCKED_KEYWORDS_BY_CATEGORY.items():
-    BLOCKED_KEYWORDS |= set(_words)
-
-
-def is_blocked_title(title):
-    if not title:
-        return False
-    return any(word in title for word in BLOCKED_KEYWORDS)
-
+# [삭제 2026-08-23] BLOCKED_KEYWORDS_BY_CATEGORY / BLOCKED_KEYWORDS / is_blocked_title()
+# 어디서도 호출되지 않아 실제 필터링에 아무 영향이 없던 죽은 하위 로직이었다.
+# 최우선 판단 경로(_engine_classify / _engine_external_time_gate 등)와 연결돼 있지
+# 않았고, 조용히 방치하면 나중에 또 "연결됐다고 착각"하는 혼선을 만들 수 있어 제거한다.
+# 노이즈성 뉴스(스포츠/부고/지역행정 등) 차단이 다시 필요해지면, 새 리스트를 만들지
+# 말고 _engine_classify() 안에서 최종 통과 조건에 명시적으로 연결해야 한다.
 
 GLOBAL_AND_DOMESTIC_GIANTS = [
     "삼성", "SK", "LG", "현대", "기아", "포스코", "에코프로", "셀트리온", "한미반도체",
@@ -928,7 +861,6 @@ NAVER_EXTRA_THEME_QUERIES = [
 
 UNIQUE_KEYWORDS_1 = set(KEYWORDS_1)
 UNIQUE_KEYWORDS_2 = set(KEYWORDS_2)
-UNIQUE_EXCLUSIVE = set(EXCLUSIVE_KEYWORDS)
 UNIQUE_TARGET = set(TARGET_KEYWORDS)
 UNIQUE_GIANTS = set(GLOBAL_AND_DOMESTIC_GIANTS)
 UNIQUE_CELEBS = {
@@ -1606,6 +1538,82 @@ def _engine_historical_match(item):
         if ratio >= HISTORICAL_MATCH_THRESHOLD and (best is None or ratio > best[0]):
             best = (ratio, row)
     return best
+
+
+def _engine_accumulated_context(item):
+    """[누적데이터 기반 분석] 이번 기사에 등장한 종목이 과거에 실제로 어떻게
+    움직였는지를 두 누적 DB에서 조회해, MASTER가 쓸 수 있는 두 가지 결과로 만든다.
+
+    1) history_score_map: {종목명: 점수보정치} - candidate의 history_score로 넘겨
+       MASTER._score()가 이미 갖고 있는 "min(history_score, 8)" 가중치에 반영된다.
+    2) evidence_lines: 사람이 읽는 근거 문장. "[누적DB] " 접두어를 붙여 MASTER
+       evidence로 전달하고, Formatter가 이 접두어로 골라내 메시지에 실제로 표시한다.
+
+    조회 대상:
+    - HISTORICAL_SURGE_DB(_engine_historical_cache): 같은 종목이 과거 급등/신고가 등
+      강한 재료로 몇 번 등장했는지(사례 수).
+    - OUTCOME_TRACKING_DB(_OUTCOME_TRACKING_ROWS, checked=True): 같은 종목이 과거에
+      대장주/관련주로 확정된 뒤 실제 등락률이 얼마였는지(평균 등락률 · 적중률).
+
+    실패해도 예외를 던지지 않고 빈 결과로 조용히 넘어간다(기존 판정/송출 경로에
+    영향을 주지 않는다 - 조건64 문제국소수정 원칙과 동일하게 국소적으로만 동작).
+    """
+    result = {"history_score_map": {}, "evidence_lines": []}
+    try:
+        companies = list(dict.fromkeys(c for c in (item.get("companies") or []) if c))
+        if not companies:
+            return result
+        try:
+            _engine_load_outcome_tracking()
+        except Exception:
+            pass
+
+        surge_counts = defaultdict(int)
+        for row in _engine_historical_cache[-3000:]:
+            row_companies = set(row.get("companies") or [])
+            for c in companies:
+                if c in row_companies:
+                    surge_counts[c] += 1
+
+        outcome_stats = defaultdict(list)
+        for row in _OUTCOME_TRACKING_ROWS:
+            if not row.get("checked"):
+                continue
+            pct = (row.get("outcome") or {}).get("change_pct")
+            if pct is None:
+                continue
+            names = {str(row.get("leader", "") or "")} | {str(r.get("name", "") or "") for r in (row.get("related") or [])}
+            for c in companies:
+                if c in names:
+                    outcome_stats[c].append(pct)
+
+        for c in companies:
+            boost = 0.0
+            n_surge = surge_counts.get(c, 0)
+            if n_surge > 0:
+                boost += min(float(n_surge), 4.0)
+                result["evidence_lines"].append(
+                    f"[누적DB] {c}: 과거 급등재료 DB에 유사 사례 {n_surge}건 존재"
+                )
+            vals = outcome_stats.get(c, [])
+            if len(vals) >= 2:
+                avg = sum(vals) / len(vals)
+                pos_rate = sum(1 for v in vals if v > 0) / len(vals) * 100.0
+                if avg > 0 and pos_rate >= 50:
+                    boost += min(4.0, avg / 2.0)
+                elif avg < 0:
+                    boost -= min(4.0, abs(avg) / 2.0)
+                result["evidence_lines"].append(
+                    f"[누적DB] {c}: 과거 관련주 확정 후 실제 평균 등락률 {avg:+.2f}% "
+                    f"(적중률 {pos_rate:.0f}%, {len(vals)}건)"
+                )
+            if boost:
+                result["history_score_map"][c] = round(boost, 2)
+
+        result["evidence_lines"] = result["evidence_lines"][:8]
+    except Exception as e:
+        _engine_log("warning", "[누적데이터 분석] 실패 | %s", str(e)[:160])
+    return result
 
 
 def _engine_load_extended_state():
@@ -3463,6 +3471,14 @@ def _engine_master_result(item):
                 "theme_link": False,
                 "domestic_listed": True,
             })
+        # [누적데이터 기반 분석] 과거 급등재료 DB + 성과추적 DB를 조회해
+        # candidate 점수 보정(history_score)과 MASTER용 근거 문장(evidence)을 만든다.
+        accumulated = _engine_accumulated_context(item)
+        for c in candidates:
+            hs = accumulated["history_score_map"].get(c.get("name"))
+            if hs:
+                c["history_score"] = hs
+
         raw_title = str(item.get("title", "")).strip()
         raw_body = str(item.get("extra", "")).strip()
 
@@ -3494,6 +3510,7 @@ def _engine_master_result(item):
             link=str(item.get("link", "")),
             candidates=candidates,
             schedule=_engine_future_schedule(raw_body),
+            evidence=accumulated["evidence_lines"],
         )
         if result.get("locked"):
             _engine_log("info", "[FINAL LOCK 통과] %s", str(result.get("title") or item.get("title") or "")[:220])
@@ -3640,6 +3657,19 @@ def _engine_format_message(item):
     if outlook:
         lines.append('✅ [시장전망] ==> '+html.escape(str(outlook[0])))
         for o in outlook[1:3]: lines.append('     ✔ '+html.escape(str(o)))
+
+    # [누적데이터 기반 분석] _engine_accumulated_context()가 만든 "[누적DB] " 접두어
+    # 근거만 골라서 보여준다. 이 접두어가 없는 evidence(핵심요약과 병합된 값 등)는
+    # 위 [요약] 섹션과 중복되므로 여기서 다시 표시하지 않는다.
+    accum_evidence = [
+        str(e)[len('[누적DB] '):].strip()
+        for e in (master_result or {}).get('evidence') or []
+        if str(e).startswith('[누적DB]')
+    ]
+    if accum_evidence:
+        lines.append('📊 [누적데이터 근거]')
+        for e in accum_evidence:
+            lines.append('     ✔ '+html.escape(e[:220]))
 
     # 관련주/테마/BIG ISSUE는 위 master_badge에서 이미 표시했으므로 여기서 중복 출력하지 않는다.
     # (참고: master_badge가 비어있으면 관련주/테마/BIG ISSUE가 없다는 뜻이므로 항목 자체가 비게 된다)
@@ -3797,11 +3827,15 @@ def _engine_process_item(source, title, link, published="", extra=""):
         _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
         return False
 
-    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
-    # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
-    if not _engine_is_within_recent_window(published, 60):
-        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
-        return False
+    # [수정 2026-08-23] 소스 공통 60분 필터를 제거했다.
+    # 과거에는 여기서 모든 소스(국내RSS/DART/네이버/미국뉴스/텔레그램/유튜브)를
+    # 예외 없이 "최근 60분 이내 발행"으로 걸렀기 때문에, 국내뉴스·DART·네이버처럼
+    # 시간 제한이 없어야 하는 소스까지 텔레그램/유튜브와 똑같이 차단되고 있었다.
+    # 텔레그램/유튜브에 대한 60분 기본 제한(+ 장마감후·휴무 강한 재료 예외)은
+    # 아래 _engine_external_time_gate()가 소스별로 이미 올바르게 처리하므로,
+    # 여기서는 중복으로 막지 않는다. 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB
+    # 용도로만 활용하고 신규 뉴스로 재송출하지 않는다는 원칙은
+    # _engine_external_time_gate()와 신규/재탕 판단(중복 DB) 쪽에서 유지된다.
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
