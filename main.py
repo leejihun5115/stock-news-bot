@@ -256,7 +256,16 @@ def master_finalize_news(
     schedule="",
     evidence=None,
 ):
-    """뉴스 1건을 MASTER -> Validator -> FINAL LOCK 순으로 확정."""
+    """뉴스 1건을 MASTER -> Validator -> FINAL LOCK 순으로 확정.
+
+    [수정] 기존에는 Validator에서 오류가 하나라도 나오면 여기서 예외를 던졌고,
+    호출부(_engine_master_result)의 try/except가 이를 통째로 삼켜 None을
+    반환했다. 그 결과 MASTER가 이미 계산해 둔 제목/핵심요약/용어설명/관련종목이
+    사소한 검증 오류 하나 때문에 전부 사라지고 원본 제목만 나가는 문제가 있었다.
+    이제 검증 오류가 있어도 예외를 던지지 않고, locked=False 상태로 계산된
+    내용을 그대로 반환한다. 오직 검증을 완전히 통과했을 때만 FINAL LOCK(locked=True)
+    처리한다. Formatter 쪽은 locked 여부와 무관하게 사용 가능한 내용을 그대로 쓴다.
+    """
     result = _MASTER_MANAGER.analyze(
         title=title,
         body=body,
@@ -268,10 +277,7 @@ def master_finalize_news(
     )
     result = _MASTER_MANAGER.validate(result)
     if result.get("validation_errors"):
-        raise ValueError(
-            "MASTER VALIDATOR 실패: "
-            + " / ".join(result["validation_errors"])
-        )
+        return result
     return _MASTER_MANAGER.lock(result)
 
 # ============================================================
@@ -3506,6 +3512,14 @@ def _engine_master_result(item):
             result["historical_match_ratio"] = round(float(hist[0]), 3)
         if result.get("locked"):
             _engine_log("info", "[FINAL LOCK 통과] %s", str(result.get("title") or item.get("title") or "")[:220])
+        elif result.get("validation_errors"):
+            # [수정] 검증 오류가 있어도 결과 자체는 버리지 않고 그대로 반환한다.
+            # 원인 추적을 위해 어떤 조건이 걸렸는지만 로그로 남긴다.
+            _engine_log(
+                "warning", "[MASTER 검증 경고] %s | 오류=%s",
+                str(result.get("title") or item.get("title") or "")[:220],
+                " / ".join(result.get("validation_errors") or []),
+            )
         return result
     except Exception as e:
         _engine_log("error", "[MASTER] 실패 | source=%s | 원인=%s", item.get("source", ""), str(e)[:180])
@@ -3514,7 +3528,9 @@ def _engine_master_result(item):
 
 def _engine_master_badge(result):
     """관련 종목 라벨만 출력한다. 제목에는 아이콘을 붙이지 않는다."""
-    if not result or not result.get("locked"):
+    # [수정] locked(=검증 완전 통과)만 허용하면, 사소한 검증 오류로 locked=False가 된
+    # 경우 이미 확정된 관련종목 배지까지 사라진다. related가 실제로 있으면 표시한다.
+    if not result or not (result.get("related") or []):
         return ""
     related = result.get("related") or []
     names = " · ".join(html.escape(str(r.get("name", ""))) for r in related if r.get("name"))
@@ -3621,7 +3637,15 @@ def _engine_format_message(item):
     raw_title = str(item.get('title','')).strip()
     master_result = item.get('_master_result') or {}
 
-    if master_result.get('locked'):
+    # [수정] 기존에는 master_result.get('locked')(=검증 완전 통과)일 때만 MASTER
+    # 결과를 사용했다. 그 결과 사소한 검증 오류 하나로 locked=False가 되면 이미
+    # 계산된 제목/핵심/용어설명/관련종목까지 전부 버려지고 원본 제목만 나갔다.
+    # 이제 locked 여부와 무관하게, MASTER가 실제로 뭔가 만들어낸 경우(제목 재구성
+    # 결과나 핵심요약이 존재하는 경우)에는 그 내용을 그대로 사용한다.
+    master_usable = bool(master_result) and bool(
+        master_result.get('title') or master_result.get('key_points')
+    )
+    if master_usable:
         title = master_result.get('title') or _engine_strip_foreign_publisher_suffix(raw_title)
         key_points = list(master_result.get('key_points') or [])[:3]
         stage = str(master_result.get('stage') or '').strip()

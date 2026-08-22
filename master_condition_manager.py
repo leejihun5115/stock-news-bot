@@ -173,6 +173,9 @@ class MasterResult:
     commercial_stage: str = ""
     commercial_evidence: str = ""
     term_explanations: List[Dict[str, str]] = field(default_factory=list)
+    # [수정] Formatter(main.py)가 '🧠 분석' 섹션에 사용하는 필드인데 기존에는
+    # MasterResult에 정의조차 되어 있지 않아 항상 빈 값으로만 읽혔다.
+    analysis: str = ""
 
     def as_dict(self):
         return self.__dict__.copy()
@@ -843,7 +846,13 @@ class MasterConditionManager:
         elif name == "시장영향":
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
         elif name in ("전망근거", "후속확인", "지속성"):
-            state["outlook"] = []
+            # [수정] 기존에는 여기서 무조건 빈 리스트로 초기화해 _outlook()의
+            # 실제 로직이 한 번도 실행되지 못했다. 이제 실제로 _outlook()을 호출해
+            # 본문 근거 기반 시장전망을 계산한다.
+            state["outlook"] = self._outlook(
+                text, state["stage"], state["key_points"],
+                body=state["body"], title=state["title"],
+            )
         elif name == "시장전망최대3":
             state["outlook"] = state["outlook"][:3]
         elif name == "대장주선정":
@@ -862,7 +871,10 @@ class MasterConditionManager:
             # 현재까지의 모든 조건을 최종 상태로 고정한다.
             state["stage"], state["commercial_evidence"] = self._stage(text)
             state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
-            state["outlook"] = [][:3]
+            # [수정] 기존에는 여기서 outlook을 무조건 빈 리스트로 덮어써서, 41~43번에서
+            # 계산한 결과가 최종 단계 직전에 항상 삭제됐다. 주석의 의도("앞선 중간 결과를
+            # 다시 덮어쓰지 않는다")대로 이미 계산된 값을 그대로 유지(최대 3개로만 재확인)한다.
+            state["outlook"] = state["outlook"][:3]
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
             state["master_confirmed"] = bool(
                 state["news_value"] in ("높음", "중간") and
@@ -941,6 +953,11 @@ class MasterConditionManager:
         if missing:
             raise RuntimeError(f"MASTER 65조건 미실행: {missing}")
 
+        # [수정] outlook(시장전망) 문장을 그대로 '분석' 텍스트로도 사용한다.
+        # Formatter는 outlook이 아니라 analysis 필드를 읽으므로, 이 연결이 없으면
+        # outlook을 아무리 잘 계산해도 화면에는 절대 나타나지 않는다.
+        analysis_text = " ".join(state["outlook"][:2]).strip()
+
         result = MasterResult(
             rule_version=RULE_VERSION + "_EXEC65",
             title=state["title"],
@@ -954,6 +971,7 @@ class MasterConditionManager:
             term_explanations=list(state.get("term_explanations") or [])[:5],
             schedule=state["schedule"],
             outlook=state["outlook"][:3],
+            analysis=analysis_text,
             selection_method=list(self.SELECTION_METHOD),
             evidence=list(dict.fromkeys(state["evidence"]))[:8],
             source=state["source"],
@@ -1035,9 +1053,14 @@ class MasterConditionManager:
 
 
 def analyze_news(**kwargs):
+    """[수정] 검증 오류가 있어도 예외로 결과를 날리지 않고, 계산된 내용을
+    locked=False 상태로 그대로 반환한다. (main.py의 master_finalize_news와 동일한 정책)
+    """
     manager = MasterConditionManager()
     result = manager.analyze(**kwargs)
     result = manager.validate(result)
+    if result.get("validation_errors"):
+        return result
     return manager.lock(result)
 
 
