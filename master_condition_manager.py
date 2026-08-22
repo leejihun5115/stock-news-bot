@@ -435,43 +435,90 @@ class MasterConditionManager:
         "huawei", "byd",
     }
 
-    def _term_explanations(self, title, body):
-        """문맥이 실제로 설명해 주는 용어만 반환한다.
+    # [용어설명] 기사 이해에 꼭 필요한 경제/증시 용어만 짧게 설명한다.
+    # 사전에 없는 단어는 절대 임의로 설명을 만들지 않는다(추측성 설명 금지).
+    ECONOMIC_TERM_GLOSSARY = {
+        # 밸류에이션/재무
+        "PER": "주가를 주당순이익으로 나눈 값, 낮을수록 저평가로 본다",
+        "PBR": "주가를 주당순자산으로 나눈 값, 1보다 낮으면 자산가치보다 싸다는 뜻",
+        "EPS": "1주당 벌어들인 순이익",
+        "ROE": "자기자본으로 얼마나 이익을 냈는지 보여주는 지표",
+        "ROA": "전체 자산으로 얼마나 이익을 냈는지 보여주는 지표",
+        "EBITDA": "이자·세금·감가상각을 빼기 전 영업이익",
+        # 실적/공시
+        "어닝서프라이즈": "시장 예상치를 크게 웃도는 실적 발표",
+        "어닝쇼크": "시장 예상치를 크게 밑도는 실적 발표",
+        "흑자전환": "적자였던 실적이 이익으로 돌아서는 것",
+        "적자전환": "이익이었던 실적이 손실로 돌아서는 것",
+        # 자본거래
+        "유상증자": "회사가 새 주식을 팔아 자금을 조달하는 것",
+        "무상증자": "주주에게 대가 없이 새 주식을 나눠주는 것",
+        "자사주 매입": "회사가 자기 회사 주식을 사들이는 것",
+        "자사주 소각": "회사가 사들인 자기 주식을 없애는 것",
+        "액면분할": "주식 1주를 여러 주로 쪼개 주당 가격을 낮추는 것",
+        "액면병합": "여러 주를 하나로 합쳐 주당 가격을 높이는 것",
+        "감자": "회사의 자본금을 줄이는 것",
+        "블록딜": "대량 주식을 장 시작 전후 시간외거래로 사고파는 것",
+        "공개매수": "정해진 가격에 주식을 대량으로 사들이겠다고 제안하는 것",
+        "락업": "상장 후 일정 기간 대주주 등의 주식 매도를 금지하는 것",
+        # 시장 제도
+        "상한가": "하루 오를 수 있는 최대 가격(전일 대비 +30%)",
+        "하한가": "하루 내릴 수 있는 최대 가격(전일 대비 -30%)",
+        "서킷브레이커": "주가 급락 시 거래를 일시 중단시키는 제도",
+        "사이드카": "선물 가격 급변동 시 프로그램 매매를 일시 중단하는 제도",
+        "공매도": "주식을 빌려 먼저 팔고 나중에 사서 갚는 거래",
+        "숏커버링": "공매도한 주식을 다시 사들여 갚는 것",
+        # 거시경제
+        "FOMC": "미국 기준금리를 결정하는 연방공개시장위원회",
+        "CPI": "소비자물가지수, 물가 상승률을 나타내는 대표 지표",
+        "PPI": "생산자물가지수",
+        "GDP": "한 나라가 일정 기간 만들어낸 재화·서비스의 총액",
+        "DXY": "달러의 전반적인 강약을 나타내는 달러인덱스",
+        "WTI": "미국 서부텍사스산 원유, 대표 유가 지표",
+        # 시장/지수
+        "IPO": "기업이 처음 증시에 상장해 주식을 파는 것",
+        "MSCI": "해외 투자자금 흐름의 기준이 되는 글로벌 주가지수",
+        "ADR": "해외 주식을 미국 증시에서 거래할 수 있게 만든 예탁증서",
+        "코스피": "국내 대형주 중심의 종합주가지수",
+        "코스닥": "국내 중소·벤처기업 중심의 주식시장",
+        "시가총액": "주가에 발행주식 수를 곱한 회사 전체 가치",
+        # 반도체/기술(뉴스 빈출 용어)
+        "HBM": "여러 층을 쌓아 처리 속도를 높인 고성능 메모리",
+        "파운드리": "다른 회사가 설계한 반도체를 위탁 생산하는 사업",
+        "팹리스": "생산 설비 없이 반도체 설계만 하는 회사",
+    }
 
-        단순 고유명사/회사명을 '용어'라고 부르지 않는다. 기사 안에
-        'A는 B', 'A(=B)', 'B(A)'처럼 의미가 확인되는 경우만 설명한다.
-        의미를 확인할 수 없으면 항목 자체를 만들지 않는다.
+    def _term_explanations(self, title, body):
+        """기사 이해에 꼭 필요한 경제용어만, 정해진 사전 설명으로 짧게 반환한다.
+
+        사전(ECONOMIC_TERM_GLOSSARY)에 없는 단어는 설명을 만들지 않는다.
+        의미가 불확실한 임의 추론 설명은 만들지 않는다(추측 금지).
         """
         text = self._clean(f"{title} {body}")
         if not text:
             return []
-        out=[]; seen=set()
-
-        patterns = [
-            # 현장(On-Site), 인공지능(AI)처럼 괄호 바로 앞의 한국어 표현을 우선 사용한다.
-            re.compile(r"(?P<ko>[가-힣]{2,14})\s*\((?P<term>[A-Za-z][A-Za-z0-9&' -]{1,30})\)"),
-            # 고대역폭 메모리(HBM)처럼 띄어쓴 용어는 최대 3개 단어까지 허용한다.
-            re.compile(r"(?P<ko>[가-힣]{2,10}(?:\s+[가-힣]{1,10}){1,2})\s*\((?P<term>[A-Za-z][A-Za-z0-9&' -]{1,30})\)"),
-        ]
-        for pat in patterns:
-            for m in pat.finditer(text):
-                ko=m.group('ko').strip(); term=m.group('term').strip()
-                if not term or term.lower() in seen or len(term)<2: continue
-                # 괄호 안이 회사/출처 약칭이면 용어로 만들지 않는다.
-                if term.lower() in self.KNOWN_COMPANY_NAMES: continue
-                desc=f"기사에서 '{ko}'를 뜻하는 표현"
-                out.append({'term':term,'description':desc})
-                seen.add(term.lower())
-                if len(out)>=3: return out
-
-        # 'HBM은 고대역폭 메모리' / 'On-Site는 현장'처럼 본문이 직접 정의하는 경우
-        for m in re.finditer(r"(?P<term>[A-Za-z][A-Za-z0-9&-]{1,20})\s*(?:은|는|이란|의미한다|뜻한다)\s*(?P<desc>[가-힣A-Za-z][^.!?\n]{2,80})", text):
-            term=m.group('term').strip(); desc=re.sub(r"\s+"," ",m.group('desc')).strip(' ,:;')
-            if term.lower() in seen or term.lower() in self.KNOWN_COMPANY_NAMES: continue
-            if len(desc)<3: continue
-            out.append({'term':term,'description':desc})
+        hits = []  # (position, term, description)
+        for term, desc in self.ECONOMIC_TERM_GLOSSARY.items():
+            if re.search(r"[A-Za-z]", term):
+                pat = r"(?<![A-Za-z0-9])" + re.escape(term) + r"(?![A-Za-z0-9])"
+                m = re.search(pat, text, re.I)
+            else:
+                idx = text.find(term)
+                m = None
+                if idx >= 0:
+                    m = type("M", (), {"start": lambda self, i=idx: i})()
+            if m:
+                hits.append((m.start(), term, desc))
+        hits.sort(key=lambda x: x[0])
+        out = []
+        seen = set()
+        for _pos, term, desc in hits:
+            if term.lower() in seen:
+                continue
+            out.append({"term": term, "description": desc})
             seen.add(term.lower())
-            if len(out)>=3: break
+            if len(out) >= 3:
+                break
         return out
 
     def _key_points(self, title, body):
