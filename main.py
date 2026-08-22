@@ -205,29 +205,17 @@
 
 
 
-import os
-# 반드시 같은 배포 폴더의 master_condition_manager.py를 직접 로드한다.
-# [수정 2026-08-23] 실제 배포 파일명이 "master_condition_manager.py"(버전 번호 없음)로
-# 확인되어, 존재하지도 않는 "master_condition_manager(7).py"를 찾던 이전 경로를 고쳤다.
-# 오래된/다른 경로의 동일 파일명이 PYTHONPATH에 있어도 절대 끼어들지 못하도록
-# 여전히 같은 폴더의 파일을 절대경로로 직접 로드한다.
+# 원본 파일명이 master_condition_manager(7).py이므로 이름 기반 import를 사용하지 않는다.
+# 같은 폴더의 오래된 master_condition_manager.py가 끼어드는 shadow import를 차단한다.
 import importlib.util as _importlib_util
-_MASTER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "master_condition_manager.py") if "os" in globals() else None
-if not _MASTER_FILE or not os.path.exists(_MASTER_FILE):
-    import pathlib as _pathlib
-    _MASTER_FILE = str(_pathlib.Path(__file__).with_name("master_condition_manager.py"))
-_spec = _importlib_util.spec_from_file_location("_master_condition_manager_active", _MASTER_FILE)
-if _spec is None or _spec.loader is None:
-    raise ImportError(f"최우선 MASTER 모듈을 찾을 수 없습니다: {_MASTER_FILE}")
-_mod = _importlib_util.module_from_spec(_spec)
-# [수정 2026-08-23] sys.modules에 등록하지 않고 exec_module()만 호출하면,
-# master_condition_manager.py 안의 @dataclass(MasterResult 등)가 자기 모듈을
-# sys.modules에서 못 찾아 "'NoneType' object has no attribute '__dict__'"로
-# 즉시 크래시할 수 있다(Python 3.12 확인됨). 표준 관례대로 exec 전에 등록한다.
-import sys as _sys
-_sys.modules["_master_condition_manager_active"] = _mod
-_spec.loader.exec_module(_mod)
-MasterConditionManager = _mod.MasterConditionManager
+from pathlib import Path as _Path
+_mgr_path = _Path(__file__).with_name("master_condition_manager(7).py")
+_mgr_spec = _importlib_util.spec_from_file_location("master_condition_manager_authoritative", _mgr_path)
+_mgr_module = _importlib_util.module_from_spec(_mgr_spec)
+sys_modules = __import__("sys").modules
+sys_modules[_mgr_spec.name] = _mgr_module
+_mgr_spec.loader.exec_module(_mgr_module)
+MasterConditionManager = _mgr_module.MasterConditionManager
 import sys
 import time
 import datetime
@@ -245,6 +233,8 @@ import difflib
 import zipfile
 import io
 import xml.etree.ElementTree as ET
+import io
+import zipfile
 from collections import defaultdict
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
@@ -262,6 +252,10 @@ def master_finalize_news(
     candidates=None,
     schedule="",
     evidence=None,
+    freshness="",
+    freshness_evidence=None,
+    historical_stats=None,
+    market_context=None,
 ):
     """뉴스 1건을 MASTER -> Validator -> FINAL LOCK 순으로 확정."""
     result = _MASTER_MANAGER.analyze(
@@ -272,6 +266,10 @@ def master_finalize_news(
         candidates=candidates or [],
         schedule=schedule,
         evidence=evidence or [],
+        freshness=freshness,
+        freshness_evidence=freshness_evidence or [],
+        historical_stats=historical_stats or {},
+        market_context=market_context or {},
     )
     result = _MASTER_MANAGER.validate(result)
     if result.get("validation_errors"):
@@ -834,16 +832,92 @@ KEYWORDS_2 = [
     "핵심기술", "국내최초", "최대투자", "주문폭주", "역대급", "공급부족", "세계최초", "표대결",
 ]
 
-# [삭제 2026-08-23] EXCLUSIVE_KEYWORDS(더벨/레이더M 등 언론사·코너명 기반 "단독" 판별
-# 목록)도 어디서도 참조되지 않던 죽은 하위 로직이었다. 실제 "단독" 판별은
-# EXCLUSIVE_WORDS = {"단독"} 하나로 이미 이루어지고 있어 이 목록은 제거한다.
+EXCLUSIVE_KEYWORDS = [
+    "더벨", "레이더M", "마켓인", "마켓인사이트",
+    "마켓파워", "인베스트조선", "[핫!종목]", "핫!종목",
+    "[SP단독]", "[단독]", "단독", "풍문",
+]
 
-# [삭제 2026-08-23] BLOCKED_KEYWORDS_BY_CATEGORY / BLOCKED_KEYWORDS / is_blocked_title()
-# 어디서도 호출되지 않아 실제 필터링에 아무 영향이 없던 죽은 하위 로직이었다.
-# 최우선 판단 경로(_engine_classify / _engine_external_time_gate 등)와 연결돼 있지
-# 않았고, 조용히 방치하면 나중에 또 "연결됐다고 착각"하는 혼선을 만들 수 있어 제거한다.
-# 노이즈성 뉴스(스포츠/부고/지역행정 등) 차단이 다시 필요해지면, 새 리스트를 만들지
-# 말고 _engine_classify() 안에서 최종 통과 조건에 명시적으로 연결해야 한다.
+BLOCKED_KEYWORDS_BY_CATEGORY = {
+    "🧹 광고성": ["스탁론"],
+    "🧹 사진·생활정보": ["포토", "화보", "날씨", "운세"],
+    "🧹 부고·인사": ["부고", "별세", "인사", "동정", "취임", "퇴직", "승진", "조문", "만찬", "영입", "선임", "위촉", "임명", "발탁", "조직개편"],
+    "🧹 시상·행사": ["수상", "기념", "축제", "콘서트", "전시", "간담회", "워크숍"],
+    "🧹 스포츠": ["야구", "축구", "농구", "배구", "골프", "올림픽", "월드컵", "홈런", "승리", "패배", "우승", "득점", "실점", "연패", "연승"],
+    "🧹 연예·문화": ["연예인", "영화", "드라마", "뮤지컬", "음원", "시사회", "팬미팅"],
+    "🧹 사건·사고": ["사건", "사고", "붕괴", "화재", "음주운전", "구속", "징역", "폭행", "스캔들", "이혼", "결혼", "출산"],
+    "🧹 부동산·생활경제": ["낙찰", "분양", "출시", "예산", "청약", "접수", "대표팀", "화제", "논란", "논쟁", "비판"],
+    "🧹 행정·일반": ["교육", "주민", "점검", "의원", "채용", "업무", "의견", "정비", "임원", "현장", "응찰"],
+    "🧹 블로그 잡담성": ["홧팅", "화이팅", "가즈아", "월욜", "화욜", "수욜", "목욜", "금욜", "불금"],
+    "🧹 답글·댓글성": ["답글", "댓글", "리플", "re:", "RE:", "Re:", "댓글창"],
+    "🧹 찌라시·홍보성 클릭베이트": [
+        "수혜株!", "급등예고!", "관련株!", "극비재료주", "오늘의추천株", "잡아라!!", "잡아라!", "폭등임박!", "황제주!", "황제주!!", "급등임박", "급등임박!",
+        "알짜매물", "오늘의", "오늘장", "코넥스", "[장외주식]", "[장외주식시황]", "[종합시황]", "테마동향", "위클리", "비결", "주간결산", "투자자의",
+        "추천", "추천종목", "추천주", "주간추천종목", "주간추천주", "장마감후종목뉴스", "증권거래현황", "증권사별", "주간업종등락률", "투자記", "투자자별", "투자주체",
+        "투자주체를", "현재가", "꺾고", "'上'진입", "놓치면", "즐기세요", "아듀", "시황", "증시일정",
+    ],
+    "🧹 지역·지자체 행정": [
+        "화순군", "경남", "경기", "경기도", "광주", "인천서", "예천군", "울산", "강릉", "수원시", "재난지원금", "희망재단",
+        "취약계층", "거리두기", "접종", "건보공단", "검진", "예방접종", "가뭄피해", "국감", "국감서", "국정감사", "국정원", "관세청",
+        "교역", "강진군", "경남도", "고양시", "공주시", "광양시", "광주시", "광주전남", "남양주", "남양주시", "대구경북", "무안",
+        "무안군", "무안서", "밀양시", "보성군", "봉화군", "서대문구", "순천시", "아산시", "안산시", "양산시", "양산신도시", "양양군",
+        "영광군", "영덕군", "영등포구", "영암군", "용인시", "울릉서", "음성군", "익산시", "인천시", "장흥군", "전남", "전남도",
+        "전북", "전북도", "전주시", "정읍시", "진주시", "창원시", "천안시", "청송군", "청주시", "충남도", "충주시", "태백시",
+        "통영시", "파주시", "판교", "평택시", "함평군", "해남군", "호남선", "경기도의회", "원주시의회", "잠실", "장마철", "장맛비",
+        "재산세", "저소득층", "서민", "서민층",
+    ],
+    "🧹 대학·병원·기관명": [
+        "삼육대", "목포대", "호남대", "단국대", "영남대", "연세대", "한국폴리텍대학", "폴리텍대학", "광주대", "성신여대", "계명대", "원광대",
+        "대구한의대", "한남대", "영남대병원", "전남대병원", "화순전남대병원", "전북대병원", "광주은행", "부산농협", "의료원", "LH", "SK행복나눔재단",
+    ],
+    "🧹 언론사 코너·연재물 태그": [
+        "[표]", "[경기인터뷰]", "[공감]", "[기자가만난세상]", "[기획]", "[김능구의정국진단]", "[녹색세상]", "[단상]", "[디지털산책]", "[롤드컵]", "뉴스&분석", "뉴스브리핑",
+        "뉴스해설", "뉴욕마켓워치", "[fn★성적표]", "[GOAL]", "[LPGA]", "ML사이트]", "[PGA]", "[SS스타기상청]", "[SS영상]", "[SS위클리토크]", "[SS프리즘]", "[TD영상]",
+        "[TV예감]", "[WCS]", "[WTKL]", "[WT논평]", "[y스페셜]", "[답변공시]", "[종목상담]", "DT광장", "ET단상", "fn사설", "HD영상", "K팝스타",
+        "MISS출장대행", "SK전", "SS다시보기", "SS인턴수첩", "SS탐사보도", "S스토리", "TV신문고", "TV줌인", "TV프로그램", "TV하이라이트", "US여자오픈", "US오픈",
+        "V라이브", "Why", "y피플", "[美친box]", "[美친차트]", "[美친시청률]", "[창간특집]", "[e2BOT]", "[생생건강]", "[스포츠투데이]", "[와글와글]", "[연예]",
+        "[투데이]", "ET투자뉴스", "경인만평", "경인포터", "경향NIE", "뉴스파이터", "모닝와이드", "오프닝", "헤드라인", "전체뉴스", "MVP", "SHOT",
+        "HOLD(유지)", "UFC", "다시보기", "해설",
+    ],
+    "🧹 거시지표·환율(루틴 발표)": [
+        "고시환율", "기준환율", "달러/위안", "달러/환율", "원•달러", "환율", "고용동향", "고용지표", "실업률", "실업률은", "성장률", "소비자물가",
+        "저금리", "재정난", "재정증권", "수출액", "수출입은행", "무역", "소득공제", "도매재고", "물동량", "상하이지수", "생산자물가", "생산자물가지수",
+        "수주액", "수입물가", "신규주택", "산업생산", "산업생산도", "소매판매", "증가폭", "전월비", "전월比", "제조업생산", "주택착공실적", "최저임금",
+        "가계대출", "주택담보대출", "기업재고", "경기침체", "경매시장", "법원경매", "입주", "입주아파트", "입주예정", "주택금융", "주택금융공사",
+    ],
+    "🧹 기업·행정 잡무 일반": [
+        "강소기업", "강좌", "개강", "개관", "개막식", "개선", "개장", "개최", "개통", "결산", "공동캠퍼스",
+        "개설", "경력사원", "과징금", "관리우수기업", "우수기업", "우수기관", "우수사업단", "우수인증기관", "우수기관으로", "유네스코",
+        "중소기업", "중소기업청", "中企", "중기중앙회", "사옥", "신제품", "신축공사", "준공", "준공식", "참가자", "창단", "출연",
+        "취업난", "취재", "취재수첩", "축소", "총력", "철회", "창출", "창출에", "캠페인", "캠퍼스", "품질향상", "한정판",
+        "한정판매", "할인", "할인판매", "할인행사", "행사", "홈페이지", "홈플러스", "크리스마스", "어린이", "어린이날", "앨범", "나눔",
+        "행복나눔", "열린광장", "열린마당", "열린세상", "전당대회", "헌법", "한국인", "한은", "특가상품", "교통정보", "가족캠프", "모집",
+    ],
+    "🧹 잡담·일반 표현": [
+        "미안", "미안하다", "눈길", "뇌물", "노출", "노조", "반발", "방송", "불공정", "부결", "부과", "불발",
+        "불투명", "불안감", "불법자금", "방산비리", "감독", "감소", "간부", "경험", "기록", "기고", "기자수첩", "기획전",
+        "기업분석리포트", "금융단신", "금융사", "리포트", "브리핑", "논평", "대표연설", "동영상", "녹화", "달성", "둘째주", "셋째주",
+        "디지털세상", "이시각", "인덱스", "인터뷰", "임금", "연속", "연임", "유출", "열정", "일반공모", "증권사", "재무리스크",
+        "적정수준", "전망", "전일대비", "제공", "주의보", "준수해야", "지표", "직장인", "집중취재", "조회공시", "공시", "기업공시",
+        "e공시", "대파", "소폭", "선보여", "선봬", "선수단", "선도", "선보인다", "이벤트", "영상", "예방수칙", "운전자",
+        "운행", "유가증권", "유가증권시장", "음주", "투표", "페스티벌", "포럼", "피해액만", "파문", "현황", "토마토",
+        "파라다이스", "기자들의", "사진", "사설", "상담회", "상생경영", "소개", "평생", "폐쇄", "침묵", "진통",
+        "저축", "종료", "증발", "중단", "전일", "정정", "가려움증", "버스회사", "보험", "보험금", "보험사", "신년사",
+        "제동", "증상들", "키워드", "펀드",
+    ],
+    "🧹 달력·숫자 패턴": ["주년", "루수", "호선", "01월", "02월", "03월", "04월", "05월", "06월", "07월", "08월", "09월"],
+}
+
+BLOCKED_KEYWORDS = set()
+for _category, _words in BLOCKED_KEYWORDS_BY_CATEGORY.items():
+    BLOCKED_KEYWORDS |= set(_words)
+
+
+def is_blocked_title(title):
+    if not title:
+        return False
+    return any(word in title for word in BLOCKED_KEYWORDS)
+
 
 GLOBAL_AND_DOMESTIC_GIANTS = [
     "삼성", "SK", "LG", "현대", "기아", "포스코", "에코프로", "셀트리온", "한미반도체",
@@ -861,6 +935,7 @@ NAVER_EXTRA_THEME_QUERIES = [
 
 UNIQUE_KEYWORDS_1 = set(KEYWORDS_1)
 UNIQUE_KEYWORDS_2 = set(KEYWORDS_2)
+UNIQUE_EXCLUSIVE = set(EXCLUSIVE_KEYWORDS)
 UNIQUE_TARGET = set(TARGET_KEYWORDS)
 UNIQUE_GIANTS = set(GLOBAL_AND_DOMESTIC_GIANTS)
 UNIQUE_CELEBS = {
@@ -950,7 +1025,7 @@ DART_RUMOR_KEYWORDS = ["조회공시", "풍문", "보도", "해명", "설명요�
 
 # [불변 명령체계] 최신 사용자 지시가 최우선이며 충돌하는 하위 출력 명령은 실행하지 않는다.
 LATEST_USER_COMMAND_WINS = True
-COMMAND_PRIORITY_POLICY = ("LATEST_USER_COMMAND", "MASTER", "VALIDATOR", "FINAL_LOCK", "FORMATTER", "TELEGRAM")
+COMMAND_PRIORITY_POLICY = ("LATEST_USER_COMMAND",)
 
 DART_STRONG_REPORT_KEYWORDS = {
     "유상증자결정", "무상증자결정", "전환사채권발행결정", "신주인수권부사채권발행결정",
@@ -1371,11 +1446,6 @@ OUTCOME_CHECK_DELAY_MIN = max(5, int(os.environ.get("NEWS_BOT_OUTCOME_CHECK_DELA
 OUTCOME_CYCLE_INTERVAL_SEC = max(60, int(os.environ.get("NEWS_BOT_OUTCOME_CYCLE_INTERVAL_SEC", "300")))
 # 한 번의 루프에서 처리할 최대 건수(시세 API 순간 폭주 방지).
 OUTCOME_CYCLE_MAX_PER_RUN = max(5, int(os.environ.get("NEWS_BOT_OUTCOME_CYCLE_MAX_PER_RUN", "30")))
-# [데이터 누적형 분석] 단일 시점(T+60 1회) 확인이 아니라 T+5/T+30/T+60 3개 시점을
-# 순서대로 확인한다. 각 값은 baseline_price 확보 시각 기준 경과 분(分)이다.
-OUTCOME_HORIZONS_MIN = [5, 30, 60]
-# 현재 시장환경(코스피/코스닥 등락률) 스냅샷을 매번 재조회하지 않고 재사용할 캐시 시간(초).
-MARKET_SNAPSHOT_CACHE_SEC = 60
 
 _engine_last_cycle_started = 0.0
 _engine_last_cycle_finished = 0.0
@@ -1545,254 +1615,6 @@ def _engine_historical_match(item):
     return best
 
 
-def _engine_accumulated_context(item):
-    """[누적데이터 기반 분석] 이번 기사에 등장한 종목이 과거에 실제로 어떻게
-    움직였는지를 두 누적 DB에서 조회해, MASTER가 쓸 수 있는 두 가지 결과로 만든다.
-
-    1) history_score_map: {종목명: 점수보정치} - candidate의 history_score로 넘겨
-       MASTER._score()가 이미 갖고 있는 "min(history_score, 8)" 가중치에 반영된다.
-    2) evidence_lines: 사람이 읽는 근거 문장. "[누적DB] " 접두어를 붙여 MASTER
-       evidence로 전달하고, Formatter가 이 접두어로 골라내 메시지에 실제로 표시한다.
-
-    조회 대상:
-    - HISTORICAL_SURGE_DB(_engine_historical_cache): 같은 종목이 과거 급등/신고가 등
-      강한 재료로 몇 번 등장했는지(사례 수).
-    - OUTCOME_TRACKING_DB(_OUTCOME_TRACKING_ROWS, checked=True): 같은 종목이 과거에
-      대장주/관련주로 확정된 뒤 실제 등락률이 얼마였는지(평균 등락률 · 적중률).
-
-    실패해도 예외를 던지지 않고 빈 결과로 조용히 넘어간다(기존 판정/송출 경로에
-    영향을 주지 않는다 - 조건64 문제국소수정 원칙과 동일하게 국소적으로만 동작).
-    """
-    result = {"history_score_map": {}, "evidence_lines": []}
-    try:
-        companies = list(dict.fromkeys(c for c in (item.get("companies") or []) if c))
-        if not companies:
-            return result
-        try:
-            _engine_load_outcome_tracking()
-        except Exception:
-            pass
-
-        surge_counts = defaultdict(int)
-        for row in _engine_historical_cache[-3000:]:
-            row_companies = set(row.get("companies") or [])
-            for c in companies:
-                if c in row_companies:
-                    surge_counts[c] += 1
-
-        outcome_stats = defaultdict(list)
-        for row in _OUTCOME_TRACKING_ROWS:
-            if not row.get("checked"):
-                continue
-            pct = (row.get("outcome") or {}).get("change_pct")
-            if pct is None:
-                continue
-            names = {str(row.get("leader", "") or "")} | {str(r.get("name", "") or "") for r in (row.get("related") or [])}
-            for c in companies:
-                if c in names:
-                    outcome_stats[c].append(pct)
-
-        for c in companies:
-            boost = 0.0
-            n_surge = surge_counts.get(c, 0)
-            if n_surge > 0:
-                boost += min(float(n_surge), 4.0)
-                result["evidence_lines"].append(
-                    f"[누적DB] {c}: 과거 급등재료 DB에 유사 사례 {n_surge}건 존재"
-                )
-            vals = outcome_stats.get(c, [])
-            if len(vals) >= 2:
-                avg = sum(vals) / len(vals)
-                pos_rate = sum(1 for v in vals if v > 0) / len(vals) * 100.0
-                if avg > 0 and pos_rate >= 50:
-                    boost += min(4.0, avg / 2.0)
-                elif avg < 0:
-                    boost -= min(4.0, abs(avg) / 2.0)
-                result["evidence_lines"].append(
-                    f"[누적DB] {c}: 과거 관련주 확정 후 실제 평균 등락률 {avg:+.2f}% "
-                    f"(적중률 {pos_rate:.0f}%, {len(vals)}건)"
-                )
-            if boost:
-                result["history_score_map"][c] = round(boost, 2)
-
-        result["evidence_lines"] = result["evidence_lines"][:8]
-    except Exception as e:
-        _engine_log("warning", "[누적데이터 분석] 실패 | %s", str(e)[:160])
-    return result
-
-
-# ============================================================
-# [데이터 누적형 시장·뉴스 분석 시스템]
-# ------------------------------------------------------------
-# "이 뉴스가 좋은가"를 직접 판단하지 않는다. 대신
-#   ① 뉴스의 실제 내용(재료/기업) → ② 현재 시장상황(코스피/코스닥) →
-#   ③ 과거 유사 시장상황에서 ④ 실제로 발생한 결과(T+5/T+30/T+60)
-# 를 하나의 기록으로 연결해서, 근거가 있을 때만 표시한다.
-# 근거(표본)가 없으면 절대 만들어내지 않는다(추정 금지) - 이 섹션 전체가
-# _OUTCOME_TRACKING_ROWS에 실제로 쌓인 데이터가 있을 때만 값을 채운다.
-# ============================================================
-_MARKET_SNAPSHOT_CACHE = {"ts": 0.0, "data": None}
-
-
-def _market_dir(pct, strong=1.0, mild=0.15):
-    """등락률을 '강세/상승/보합/하락/약세'로 범주화한다(유사 시장환경 매칭용)."""
-    if pct is None:
-        return "미확인"
-    if pct >= strong:
-        return "강세"
-    if pct >= mild:
-        return "상승"
-    if pct <= -strong:
-        return "약세"
-    if pct <= -mild:
-        return "하락"
-    return "보합"
-
-
-def _market_bucket(kospi_pct, kosdaq_pct):
-    return f"코스피{_market_dir(kospi_pct)}_코스닥{_market_dir(kosdaq_pct)}"
-
-
-def _engine_market_snapshot():
-    """현재 KOSPI/KOSDAQ 등락률 스냅샷. 두 지수 모두 조회 실패하면 None을 반환하고,
-    호출부는 시장비교/유사사례 섹션을 그냥 표시하지 않는다(추정으로 채우지 않음)."""
-    now = time.time()
-    cached = _MARKET_SNAPSHOT_CACHE.get("data")
-    if cached and now - _MARKET_SNAPSHOT_CACHE.get("ts", 0) < MARKET_SNAPSHOT_CACHE_SEC:
-        return cached
-    try:
-        kospi = _yahoo_chart_quote("^KS11")
-        kosdaq = _yahoo_chart_quote("^KQ11")
-    except Exception as e:
-        _engine_log("warning", "[시장스냅샷] 조회 실패 | %s", str(e)[:120])
-        return None
-    kospi_pct = kospi.get("change_pct") if kospi else None
-    kosdaq_pct = kosdaq.get("change_pct") if kosdaq else None
-    if kospi_pct is None and kosdaq_pct is None:
-        return None
-    snap = {
-        "kospi_pct": round(kospi_pct, 2) if kospi_pct is not None else None,
-        "kosdaq_pct": round(kosdaq_pct, 2) if kosdaq_pct is not None else None,
-        "bucket": _market_bucket(kospi_pct, kosdaq_pct),
-        "ts": _now_kst().isoformat(),
-    }
-    _MARKET_SNAPSHOT_CACHE["data"] = snap
-    _MARKET_SNAPSHOT_CACHE["ts"] = now
-    return snap
-
-
-def _engine_similar_case_stats(item, master_result):
-    """[핵심] 현재 뉴스 = ① 재료/기업 + ② 현재 시장환경을 ③ 과거 기록(OUTCOME_TRACKING_DB)의
-    같은 시장환경·비슷한 재료 사례와 매칭해서 ④ 실제 T+5/T+30/T+60 성과를 집계한다.
-
-    매칭 조건(둘 다 필요 - 문서의 '2단계 검증'):
-      1단계) 시장환경 일치: 현재 코스피/코스닥 방향 버킷과 과거 기록의 버킷이 같아야 함.
-      2단계) 뉴스 유사: 관련 기업명이 겹치거나, 강한재료 키워드가 겹치거나,
-             제목 텍스트 유사도가 임계값 이상이어야 함.
-    표본이 2건 미만인 시점(T+5/30/60 각각)은 결과에 넣지 않는다(추정 금지).
-    """
-    result = {"market": None, "horizons": {}, "sample_total": 0}
-    try:
-        snap = _engine_market_snapshot()
-        result["market"] = snap
-        if not snap:
-            return result
-        _engine_load_outcome_tracking()
-        if not _OUTCOME_TRACKING_ROWS:
-            return result
-
-        current_text = _engine_clean(str(item.get("title", "")) + " " + str(item.get("extra", "")))
-        current_norm = re.sub(r"[^0-9a-zA-Z가-힣]", "", current_text.lower())[:260]
-        current_companies = set(c for c in (item.get("companies") or []) if c)
-        if master_result:
-            leader = master_result.get("leader") or {}
-            if leader.get("name"):
-                current_companies.add(str(leader["name"]))
-            for r in master_result.get("related") or []:
-                if r.get("name"):
-                    current_companies.add(str(r["name"]))
-        current_hits = set(str(x).lower() for x in (item.get("market_hits") or []))
-
-        matched_rows = []
-        for row in _OUTCOME_TRACKING_ROWS[-3000:]:
-            row_snap = row.get("market_snapshot") or {}
-            if not row_snap or row_snap.get("bucket") != snap.get("bucket"):
-                continue
-            row_companies = set(row.get("companies") or [])
-            if row.get("leader"):
-                row_companies.add(str(row.get("leader")))
-            company_overlap = bool(current_companies & row_companies)
-            row_hits = set(str(x).lower() for x in (row.get("hits") or []))
-            hits_overlap = bool(current_hits & row_hits)
-            text_ratio = 0.0
-            row_title = str(row.get("title", ""))
-            if row_title and current_norm:
-                row_norm = re.sub(r"[^0-9a-zA-Z가-힣]", "", row_title.lower())[:260]
-                text_ratio = difflib.SequenceMatcher(None, current_norm, row_norm).ratio()
-            if not (company_overlap or hits_overlap or text_ratio >= 0.45):
-                continue
-            matched_rows.append(row)
-
-        result["sample_total"] = len(matched_rows)
-        for m in OUTCOME_HORIZONS_MIN:
-            vals = []
-            for row in matched_rows:
-                h = (row.get("horizons") or {}).get(str(m))
-                if h and h.get("change_pct") is not None:
-                    vals.append(h["change_pct"])
-            if len(vals) >= 2:
-                avg = sum(vals) / len(vals)
-                pos_rate = sum(1 for v in vals if v > 0) / len(vals) * 100.0
-                result["horizons"][str(m)] = {
-                    "count": len(vals),
-                    "avg_pct": round(avg, 2),
-                    "success_rate": round(pos_rate, 1),
-                }
-    except Exception as e:
-        _engine_log("warning", "[유사사례분석] 실패 | %s", str(e)[:160])
-    return result
-
-
-def _engine_similar_case_lines(stats):
-    """_engine_similar_case_stats() 결과를 메시지 줄 목록으로 변환한다.
-    표본(horizons)이 하나도 없으면 빈 리스트를 반환해 섹션 자체를 표시하지 않는다.
-    """
-    if not stats:
-        return []
-    horizons = stats.get("horizons") or {}
-    if not horizons:
-        return []
-    snap = stats.get("market") or {}
-    lines = []
-    kospi_txt = f"{snap.get('kospi_pct'):+.2f}%" if snap.get("kospi_pct") is not None else "미확인"
-    kosdaq_txt = f"{snap.get('kosdaq_pct'):+.2f}%" if snap.get("kosdaq_pct") is not None else "미확인"
-    lines.append("📊 [시장 비교]")
-    lines.append(f"     ✔ 현재 코스피 {kospi_txt} · 코스닥 {kosdaq_txt} ({snap.get('bucket','')})")
-    lines.append(f"     ✔ 유사 시장환경 + 유사 재료 사례 {stats.get('sample_total', 0)}건")
-    lines.append("📈 [과거 성과]")
-    label_map = {"5": "T+5", "30": "T+30", "60": "T+60"}
-    best_verdict_h = None
-    for m in OUTCOME_HORIZONS_MIN:
-        h = horizons.get(str(m))
-        if not h:
-            continue
-        lines.append(
-            f"     ✔ {label_map[str(m)]} 평균 {h['avg_pct']:+.2f}% · 적중률 {h['success_rate']:.0f}% ({h['count']}건)"
-        )
-        best_verdict_h = h  # 가장 긴(뒤쪽) 확정 시점을 판단 기준으로 사용
-    if best_verdict_h is not None:
-        if best_verdict_h["success_rate"] >= 60 and best_verdict_h["avg_pct"] > 0:
-            verdict = "강함"
-        elif best_verdict_h["success_rate"] >= 50 and best_verdict_h["avg_pct"] > 0:
-            verdict = "관심"
-        elif best_verdict_h["avg_pct"] < 0:
-            verdict = "주의"
-        else:
-            verdict = "중립"
-        lines.append(f"🎯 [판단] {verdict} (과거 유사사례 기준)")
-    return lines
-
-
 def _engine_load_extended_state():
     global _engine_historical_cache, _engine_global_briefing_cache, _engine_telegram_counts
     global _engine_sent_fingerprints
@@ -1871,23 +1693,16 @@ def _engine_record_outcome_tracking(item, master_result):
         return
     related = master_result.get("related") or []
     leader = master_result.get("leader") or {}
-    # [데이터 누적형 분석] 이 뉴스가 발생한 순간의 시장환경(코스피/코스닥)과 재료
-    # 키워드/관련기업을 함께 남겨서, 나중에 "같은 시장환경 + 비슷한 재료" 과거
-    # 사례를 찾을 수 있게 한다(조회 실패 시 None으로 남기고 나중에 재시도 안 함 -
-    # 발송 경로를 느리게 만들지 않기 위해 여기서는 캐시된 값만 시도한다).
-    try:
-        market_snapshot = _engine_market_snapshot()
-    except Exception:
-        market_snapshot = None
     row = {
         "ts": _now_kst().isoformat(),
         "source": str(item.get("source", ""))[:80],
+        "source_type": ("DART" if str(item.get("source", "")).startswith("DART") else "YouTube" if str(item.get("source", "")).startswith("유튜브/") else "Telegram" if str(item.get("source", "")).startswith("텔레그램/") else "Blog" if str(item.get("source", "")).startswith("블로그/") else "News"),
+        "freshness": str(item.get("_freshness", ""))[:20],
         "title": str(master_result.get("title") or item.get("title", ""))[:300],
         "link": str(item.get("link", ""))[:1000],
         "market_state": str(item.get("market_state", ""))[:40],
-        "market_snapshot": market_snapshot,
-        "companies": list(dict.fromkeys(c for c in (item.get("companies") or []) if c))[:6],
-        "hits": [str(x)[:40] for x in (item.get("market_hits") or [])][:8],
+        "market_snapshot": dict((item.get("_market_context") or {}).get("snapshot") or {}),
+        "market_regime": _engine_market_regime(dict((item.get("_market_context") or {}).get("snapshot") or {})),
         "stage": str(master_result.get("stage", ""))[:80],
         "leader": str(leader.get("name", ""))[:60],
         "leader_code": _resolve_stock_code_for_name(leader.get("name", "")) if ENABLE_OUTCOME_TRACKING else "",
@@ -1903,10 +1718,6 @@ def _engine_record_outcome_tracking(item, master_result):
         "evidence": [str(x)[:120] for x in (master_result.get("evidence") or [])[:8]],
         "baseline_price": None,
         "baseline_failed": False,
-        # [T+5/T+30/T+60] 단일 시점(예전 delay 1회) 대신 3개 시점을 각각 채운다.
-        "horizons": {str(m): None for m in OUTCOME_HORIZONS_MIN},
-        # 호환 필드: T+60(마지막 시점) 확정 여부/결과를 그대로 미러링한다.
-        # (_engine_accumulated_context, _outcome_aggregate_report가 이 필드를 읽는다)
         "checked": False,
         "outcome": None,
     }
@@ -3253,6 +3064,22 @@ def _engine_strip_foreign_publisher_suffix(title: str) -> str:
     t = re.sub(r"\s+[-–—|]\s*(?:AD HOC NEWS|Simplywall\.st|simplywall\.st)\s*$", "", t, flags=re.I)
     return t.strip()
 
+def _engine_normalize_foreign_headline(title: str) -> str:
+    """외신 제목은 '번역문'이 아니라 한국어 뉴스 헤드라인으로 정리한다.
+    원칙: 편집용 접두어 제거, 본문 첫 문장 승격 금지, 과장/추정 금지,
+    숫자·기업·사건 등 원문 핵심 사실 보존. 번역은 한 번만 수행한다.
+    """
+    t = _engine_strip_foreign_publisher_suffix(title)
+    # 해외 매체의 편집용 라벨/섹션명 제거
+    t = re.sub(r"^\s*(?:Weekly Review|Daily Brief|Morning Brief|Market Update|Breaking|Just In|Analysis|Opinion|Explainer|Watch|Live)\s*\|\s*", "", t, flags=re.I)
+    t = re.sub(r"^\s*\[[^\]]{1,30}\]\s*", "", t) if t.lower().startswith("[breaking]") else t
+    # 한국어 제목 끝의 불필요한 영어 매체 꼬리표
+    t = re.sub(r"\s*[-–—|]\s*(?:The New Indian Express|Reuters|Bloomberg|CNBC|Yahoo Finance|MarketWatch|The Motley Fool|Investing\.com)\s*$", "", t, flags=re.I)
+    t = re.sub(r"\s+", " ", t).strip(" -–—|:")
+    # 번역 결과가 완전한 서술문이면 핵심 헤드라인 형태로만 다듬는다.
+    t = re.sub(r"(?:했습니다|했습니다만|있습니다|있다|이다|된다|전했다|밝혔다|나타났다)\s*[.!。]?$", "", t).strip()
+    return t
+
 def _engine_translate_to_korean(text: str) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     if not text:
@@ -3282,6 +3109,7 @@ def _engine_translate_to_korean(text: str) -> str:
             translated = "".join(
                 str(x[0]) for x in (data[0] or []) if isinstance(x, list) and x and x[0]
             ).strip()
+            translated = _engine_normalize_foreign_headline(translated)
             if translated and not _engine_is_mostly_english(translated):
                 _TRANSLATION_CACHE[text] = translated
                 return translated
@@ -3520,68 +3348,6 @@ def _engine_extract_title(title: str, extra: str) -> str:
     return raw[:180].strip()
 
 
-def _engine_news_insight(title: str, body: str, source: str = "") -> dict:
-    """[DEPRECATED] 더 이상 MASTER 입력이나 Formatter 표시에 사용되지 않는다.
-    제목/요약/상용화단계/시장전망/관련주 판단은 반드시 master_condition_manager의
-    MasterConditionManager(65조건) -> Validator -> FINAL LOCK 결과만 사용한다.
-    (조건1 원문확보 / 조건51 Formatter무판단 / 조건53 재호출금지)
-    이 함수는 하위호환을 위해서만 남겨둔다. 새 코드에서 호출하지 말 것.
-    """
-    t = _engine_clean_telegram_meta(body)
-    title = _engine_extract_title(title, t)
-    # 제목 반복/출처 반복 제거
-    t = re.sub(re.escape(title), ' ', t, count=1, flags=re.I) if title else t
-    t = re.sub(r'\s+', ' ', t).strip()
-    sentences = [x.strip(' -•') for x in re.split(r'(?<=[.!?。！？])\s+|\s+•\s+|\s+▶️\s+', t) if x.strip()]
-    sentences = [x for x in sentences if len(re.sub(r'[^0-9A-Za-z가-힣]', '', x)) >= 12]
-    event_terms = ['수주','계약','공급','투자','증설','양산','출시','상용화','승인','허가','임상','기술이전','기술수출','실적','매출','영업이익','배당','자사주','주주환원','정책','관세','금리','수요','가격','생산','판매','구매','도입','발표','FCF']
-    change_terms = ['확대','증가','감소','강화','약화','전환','개선','악화','본격','가속','확정','신설','도입','재개','중단','상승','하락']
-    scored=[]
-    for i,x in enumerate(sentences):
-        score=sum(5 for k in event_terms if k in x)+sum(3 for k in change_terms if k in x)+(4 if re.search(r'\d|%|억|조|원|달러',x) else 0)+min(len(x),180)/100
-        scored.append((score,i,x))
-    scored.sort(reverse=True)
-    picked=[]
-    for _,_,x in scored:
-        if any(_engine_similar(x,y) for y in picked): continue
-        picked.append(x)
-        if len(picked)>=3: break
-    # 원문이 짧으면 제목이 아닌 실제 본문 한 줄을 사용
-    if not picked and sentences: picked=sentences[:1]
-
-    low=(title+' '+t).lower()
-    commercial=[]
-    stage_map=[
-        ('양산·판매/공급','양산|대량생산|판매개시|판매 개시|공급 확대'),
-        ('수주·계약','수주|공급계약|계약 체결|본계약|판매계약'),
-        ('상용화·구매','상용화|상업화|구매|실제 도입|현장 도입'),
-        ('검증·승인','승인|허가|인증|테스트 완료|검증'),
-        ('개발·투자','개발|연구|투자|증설|시설투자'),
-    ]
-    for label,pat in stage_map:
-        if re.search(pat, low, re.I): commercial.append(label)
-    stage=commercial[0] if commercial else ''
-
-    outlook=[]
-    if any(k in low for k in ['자사주','주주환원','배당','fcf']):
-        outlook.append('주주환원 강화가 주가의 실적 외 지지 요인으로 작용할 가능성')
-    elif any(k in low for k in ['수주','공급계약','계약 체결','판매계약']):
-        outlook.append('계약·수주가 실제 매출과 수주잔고로 이어지는지 확인하는 구간')
-    elif any(k in low for k in ['양산','상용화','실제 도입','구매']):
-        outlook.append('기술·테마 단계에서 실제 매출과 생산으로 넘어가는지 여부가 핵심')
-    elif any(k in low for k in ['증설','투자','생산']):
-        outlook.append('투자·생산 확대가 공급능력과 관련 밸류체인 수요 증가로 이어질 가능성')
-    elif any(k in low for k in ['승인','허가','임상']):
-        outlook.append('규제·임상 진전 이후 실제 상업화와 매출 전환 여부가 핵심')
-    else:
-        outlook.append('후속 발표와 실제 실적 반영 여부가 시장 영향의 핵심 확인 포인트')
-    if stage:
-        outlook.append(f'현재 뉴스는 {stage} 신호가 확인돼 단순 기대보다 실행 단계의 진전 여부가 중요')
-    if re.search(r'\d+\s*(?:억|조|원|%)', low):
-        outlook.append('제시된 수치의 실제 집행 규모와 지속성이 주가 반응을 좌우할 가능성')
-    return {'title':title,'key_points':picked,'stage':stage,'outlook':outlook[:3]}
-
-
 def _engine_future_schedule(text: str) -> str:
     """오늘 이전/당일 발생 사실은 일정으로 내보내지 않고 미래 이벤트만 반환."""
     s=_engine_schedule(text)
@@ -3645,6 +3411,97 @@ def _engine_parse_featured_stock_headline(title):
     return {"company": company, "reason": reason, "reaction": reaction}
 
 
+_MARKET_ANALYSIS_CACHE = {"ts": 0.0, "data": {}}
+
+def _engine_current_market_snapshot():
+    """현재 KOSPI/KOSDAQ/VIX를 60초 캐시로 읽는다. 실패하면 빈 값으로 둔다."""
+    now = time.time()
+    if now - float(_MARKET_ANALYSIS_CACHE.get("ts", 0)) < 60:
+        return dict(_MARKET_ANALYSIS_CACHE.get("data") or {})
+    data = {}
+    try:
+        for symbol, label in (("^KS11", "KOSPI"), ("^KQ11", "KOSDAQ"), ("^VIX", "VIX")):
+            q = _yahoo_chart_quote(symbol)
+            if q and q.get("change_pct") is not None:
+                data[label] = round(float(q.get("change_pct")), 2)
+    except Exception:
+        pass
+    _MARKET_ANALYSIS_CACHE["ts"] = now
+    _MARKET_ANALYSIS_CACHE["data"] = data
+    return dict(data)
+
+
+def _engine_market_regime(snapshot):
+    if not snapshot: return ""
+    vals=[float(snapshot[k]) for k in ("KOSPI","KOSDAQ") if k in snapshot]
+    if not vals: return ""
+    avg=sum(vals)/len(vals)
+    if avg >= 0.7: return "강세"
+    if avg <= -0.7: return "약세"
+    return "혼조"
+
+def _engine_analysis_context(item, freshness, previous=None):
+    """누적 데이터 기반 분석 컨텍스트.
+    없는 수치는 만들지 않는다. 현재/과거 시장은 현재 저장된 market_state와
+    실제 성과 DB를 연결하고, 동일 시장상태 표본만 성과통계에 사용한다.
+    """
+    current_state = str(item.get("market_state", "")).strip()
+    snap = _engine_current_market_snapshot()
+    current_regime = _engine_market_regime(snap)
+    rows = []
+    try:
+        for r in _OUTCOME_TRACKING_ROWS[-5000:]:
+            if not r.get("checked"):
+                continue
+            outcome = r.get("outcome") or {}
+            change = outcome.get("change_pct")
+            if change is None:
+                continue
+            old_regime = str(r.get("market_regime", "")).strip()
+            same = (current_regime and old_regime == current_regime) or (not current_regime and current_state and str(r.get("market_state", "")).strip() == current_state)
+            if same:
+                rows.append(r)
+    except Exception:
+        rows = []
+
+    stats = {"sample_count": len(rows)}
+    if rows:
+        vals = [float((r.get("outcome") or {}).get("change_pct")) for r in rows]
+        stats["win_rate"] = round(sum(v > 0 for v in vals) / len(vals) * 100.0, 2)
+        stats["avg_change"] = round(sum(vals) / len(vals), 2)
+        stats["median_change"] = round(sorted(vals)[len(vals)//2], 2)
+
+    historical = current_regime if rows and current_regime else (current_state if rows else "데이터 부족")
+    snap = _engine_current_market_snapshot()
+    market_label = current_state or "확인중"
+    if snap:
+        parts = []
+        for k in ("KOSPI", "KOSDAQ", "VIX"):
+            if k in snap: parts.append(f"{k} {snap[k]:+.2f}%")
+        if parts: market_label = market_label + " | " + " · ".join(parts)
+    market_context = {
+        "current": market_label,
+        "historical": historical,
+        "match_count": len(rows),
+        "snapshot": snap,
+    }
+    fresh_evidence = []
+    if previous:
+        prev_text = str(previous.get("text", ""))
+        full = _engine_clean(str(item.get("title", "")) + " " + str(item.get("extra", "")))
+        # 새로 추가된 확정 수치/사건만 간단히 근거로 남긴다.
+        for pat in [r"\d+(?:\.\d+)?\s*(?:%|억|조|억원|조원|달러|USD|million|billion)",
+                    r"(?:계약|수주|공급|승인|허가|소각|배당|양산|출시|투자)[^,.。]{0,35}"]:
+            for m in re.findall(pat, full, re.I):
+                if m and m.lower() not in prev_text.lower() and m not in fresh_evidence:
+                    fresh_evidence.append(m[:80])
+                if len(fresh_evidence) >= 3:
+                    break
+            if len(fresh_evidence) >= 3:
+                break
+    return market_context, stats, fresh_evidence
+
+
 def _engine_master_result(item):
     """뉴스 1건을 MASTER -> Validator -> FINAL LOCK으로 확정한다.
     [조건1/조건10 강제] MASTER는 반드시 원 제목 + 원문 본문을 직접 입력받는다.
@@ -3663,14 +3520,6 @@ def _engine_master_result(item):
                 "theme_link": False,
                 "domestic_listed": True,
             })
-        # [누적데이터 기반 분석] 과거 급등재료 DB + 성과추적 DB를 조회해
-        # candidate 점수 보정(history_score)과 MASTER용 근거 문장(evidence)을 만든다.
-        accumulated = _engine_accumulated_context(item)
-        for c in candidates:
-            hs = accumulated["history_score_map"].get(c.get("name"))
-            if hs:
-                c["history_score"] = hs
-
         raw_title = str(item.get("title", "")).strip()
         raw_body = str(item.get("extra", "")).strip()
 
@@ -3702,7 +3551,10 @@ def _engine_master_result(item):
             link=str(item.get("link", "")),
             candidates=candidates,
             schedule=_engine_future_schedule(raw_body),
-            evidence=accumulated["evidence_lines"],
+            freshness=str(item.get("_freshness", "")),
+            freshness_evidence=item.get("_freshness_evidence", []),
+            historical_stats=item.get("_historical_stats", {}),
+            market_context=item.get("_market_context", {}),
         )
         if result.get("locked"):
             _engine_log("info", "[FINAL LOCK 통과] %s", str(result.get("title") or item.get("title") or "")[:220])
@@ -3720,8 +3572,8 @@ def _engine_master_badge(result):
     return f"🟢 [MASTER] {names}" if names else ""
 
 
-def _engine_master_image_path(result):
-    """MASTER 확정 배지 PNG를 동적으로 생성한다. 확정 뉴스에만 사용."""
+def _engine_master_image_path(result, item=None):
+    """MASTER 확정 이미지에 분석 핵심값을 표시한다."""
     if not result or not result.get("locked"):
         return ""
     related = result.get("related") or []
@@ -3731,30 +3583,31 @@ def _engine_master_image_path(result):
     try:
         base = os.path.dirname(os.path.abspath(__file__))
         out = MASTER_CONFIRMATION_IMAGE
-        if not os.path.isabs(out):
-            out = os.path.join(base, out)
+        if not os.path.isabs(out): out = os.path.join(base, out)
         os.makedirs(os.path.dirname(out) or base, exist_ok=True)
-        img = Image.new("RGB", (1500, 260), (5, 17, 25))
-        draw = ImageDraw.Draw(img)
-        font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
-        font_big = ImageFont.truetype(font_path, 54)
-        font_small = ImageFont.truetype(font_path, 42)
-        # Green confirmation frame
-        draw.rounded_rectangle((18, 18, 1482, 242), radius=28, outline=(65, 235, 45), width=5, fill=(7, 25, 18))
-        # Target + green indicator
-        draw.ellipse((45, 75, 125, 155), fill=(55, 210, 45), outline=(180, 255, 150), width=4)
-        draw.ellipse((66, 96, 104, 134), fill=(5, 17, 25))
-        text = f"[MASTER 확정] 관련주={len(related)} | 대장주={leader.get('name')} | stage={result.get('stage') or '없음'}"
-        # Fit text to width.
-        font = font_big
-        while draw.textbbox((0,0), text, font=font)[2] > 1310 and font.size > 28:
-            font = ImageFont.truetype(font_path, font.size - 2)
-        draw.text((145, 82), text, font=font, fill=(85, 255, 45))
-        img.save(out, format="PNG", optimize=True)
-        return out
+        fresh = str(result.get("freshness") or (item or {}).get("_freshness") or "")
+        stats = result.get("historical_stats") or (item or {}).get("_historical_stats") or {}
+        market = result.get("market_context") or (item or {}).get("_market_context") or {}
+        score = result.get("score") or result.get("master_score")
+        score_text = f"MASTER {float(score):.0f}" if isinstance(score,(int,float)) else "MASTER"
+        perf = f"성과 {int(stats.get('sample_count',0))}건" if stats.get("sample_count") else "성과 데이터 수집중"
+        if stats.get("win_rate") is not None: perf += f" · 성공률 {float(stats['win_rate']):.1f}%"
+        market_text = f"현재 {market.get('current','확인중')} · 과거 {market.get('historical','데이터 부족')}"
+        text_lines = [f"[MASTER 확정] {score_text} · {fresh or '분석'}", market_text, perf, f"대장주 {leader.get('name')}"]
+        img = Image.new("RGB", (1500, 430), (5,17,25)); draw=ImageDraw.Draw(img)
+        font_path="/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+        font_big=ImageFont.truetype(font_path,48); font=ImageFont.truetype(font_path,32)
+        draw.rounded_rectangle((18,18,1482,412),radius=28,outline=(65,235,45),width=5,fill=(7,25,18))
+        draw.ellipse((45,58,125,138),fill=(55,210,45),outline=(180,255,150),width=4); draw.ellipse((66,79,104,117),fill=(5,17,25))
+        y=48
+        for i,line in enumerate(text_lines):
+            f=font_big if i==0 else font
+            while draw.textbbox((0,0),line,font=f)[2]>1300 and f.size>24:
+                f=ImageFont.truetype(font_path,f.size-2)
+            draw.text((145,y),line,font=f,fill=(85,255,45) if i==0 else (235,245,235)); y+=75
+        img.save(out,format="PNG",optimize=True); return out
     except Exception as e:
-        _engine_log("warning", "[MASTER] 이미지 생성 실패 | 원인=%s", str(e)[:160])
-        return ""
+        _engine_log("warning","[MASTER] 이미지 생성 실패 | 원인=%s",str(e)[:160]); return ""
 
 
 def _engine_send_telegram_photo(photo_path, caption=""):
@@ -3794,118 +3647,120 @@ def _engine_is_pharma_news(title, extra_text=""):
 
 
 def _engine_format_message(item):
-    """최종 뉴스 카드.
-    [조건51/조건52/조건53 강제] Formatter는 판단하지 않는다.
-    MASTER(65조건) -> Validator -> FINAL LOCK 결과(item['_master_result'])만 표시하며,
-    제목·요약·관련주·상용화단계·시장전망·일정을 이 함수에서 다시 계산하지 않는다.
+    """모든 소스 공통의 간결한 데이터 기반 카드.
+    Formatter는 재분석하지 않고 FINAL LOCK 결과만 표시한다.
     """
-    source_raw=str(item.get('source',''))
-    source_display='🇺🇸' if source_raw=='Google-US' else source_raw
-    time_text=str(item.get('time_text','')).strip()
-    raw_title=str(item.get('title','')).strip()
+    source_raw = str(item.get("source", ""))
+    source_display = "🇺🇸" if source_raw == "Google-US" else source_raw
+    time_text = str(item.get("time_text", "")).strip()
+    raw_title = str(item.get("title", "")).strip()
+    result = item.get("_master_result") or {}
 
-    master_result=item.get('_master_result')
-    if master_result and master_result.get('locked'):
-        # MASTER FINAL LOCK 값만 사용한다. (조건51 Formatter무판단)
-        title=master_result.get('title') or _engine_strip_foreign_publisher_suffix(raw_title)
-        key_points=list(master_result.get('key_points') or [])
-        stage=master_result.get('stage') or ''
-        outlook=list(master_result.get('outlook') or [])
-        related=list(master_result.get('related') or [])
-        schedule=master_result.get('schedule') or ''
+    if result.get("locked"):
+        title = result.get("title") or _engine_strip_foreign_publisher_suffix(raw_title)
+        key_points = list(result.get("key_points") or [])[:3]
+        analysis = str(result.get("analysis") or "").strip()
+        related = list(result.get("related") or [])
+        freshness = str(result.get("freshness") or item.get("_freshness") or "").strip()
+        fresh_evidence = list(result.get("freshness_evidence") or item.get("_freshness_evidence") or [])[:3]
+        schedule = str(result.get("schedule") or "").strip()
+        stats = result.get("historical_stats") or item.get("_historical_stats") or {}
+        market = result.get("market_context") or item.get("_market_context") or {}
     else:
-        # MASTER가 실패/미확정인 경우에도 Formatter가 재분석하지 않는다.
-        # 원문 최소 표시만 하고, 판단이 필요한 항목은 비워둔다.
-        _engine_log("warning", "[MASTER] 결과 없음/미확정 | source=%s | Formatter는 재분석하지 않음", source_raw)
-        title=_engine_strip_foreign_publisher_suffix(raw_title)
-        key_points, stage, outlook, related, schedule = [], '', [], [], ''
+        _engine_log("warning", "[MASTER] 결과 없음/미확정 | source=%s", source_raw)
+        title = _engine_strip_foreign_publisher_suffix(raw_title)
+        key_points, analysis, related, freshness, fresh_evidence, schedule = [], "", [], "", [], ""
+        stats, market = {}, {}
 
-    companies=item.get('companies',[]) or []
-    domestic=_engine_domestic_companies(companies)
-    title=_apply_domestic_highlight(title,domestic)
-    if _engine_is_commercial_value(item,title,' '.join(key_points)) and not title.startswith('🎯'):
-        title='🎯 '+title
-    # [제약/바이오 마커] 제목 맨 앞에 💊를 붙인다.
-    if _engine_is_pharma_news(title, ' '.join(key_points)) and not title.startswith('💊'):
-        title='💊 '+title
-    freshness,prev=_engine_freshness(item)
-    header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
-    if time_text: header += f'   🕐 {html.escape(time_text)}'
-    lines=[header,f'<b>📌 {html.escape(title)}</b>']
-    master_badge=_engine_master_badge(master_result)
-    if master_badge:
-        lines.append('<b>'+master_badge+'</b>')
-    if freshness in ('재탕','업그레이드') and prev:
-        lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
+    companies = item.get("companies", []) or []
+    domestic = _engine_domestic_companies(companies)
+    title = _apply_domestic_highlight(title, domestic)
+    header = f'<b>📰 [{html.escape(source_display)}]</b>'
+    if freshness:
+        icon = {"신규":"🆕", "후속":"🔄", "재탕":"♻️"}.get(freshness, "")
+        header += f'  {icon} <b>{html.escape(freshness)}</b>'
+    if time_text:
+        header += f'  🕐 {html.escape(time_text)}'
+
+    lines = [header, f'<b>📌 {html.escape(title)}</b>']
+
+    if freshness == "후속" and fresh_evidence:
+        lines.append("↳ 추가 확인: " + " · ".join(html.escape(x) for x in fresh_evidence[:2]))
+    elif freshness == "재탕":
+        lines.append("↳ 기존 보도와 핵심 내용이 겹치며 새로운 확정 정보가 제한적")
 
     if key_points:
-        lines.append('🔎 [요약]')
+        lines.append("🔎 <b>핵심</b>")
         for kp in key_points:
-            lines.append('     ✔ '+html.escape(str(kp)[:220]))
+            lines.append("• " + html.escape(str(kp)[:220]))
 
-    if stage:
-        lines.append('🧭 [진행 과정] ===> '+html.escape(stage))
+    if analysis:
+        lines.append("🧠 <b>데이터 기반 분석</b>")
+        lines.append(html.escape(analysis[:1100]))
 
-    if outlook:
-        lines.append('✅ [시장전망] ==> '+html.escape(str(outlook[0])))
-        for o in outlook[1:3]: lines.append('     ✔ '+html.escape(str(o)))
+    if market.get("current") and market.get("historical") and market.get("historical") != "데이터 부족":
+        lines.append(f'📊 시장 비교: 현재 <b>{html.escape(str(market.get("current")))}</b> · 과거 유사환경 <b>{html.escape(str(market.get("historical")))}</b> · 표본 {int(market.get("match_count",0))}건')
 
-    # [누적데이터 기반 분석] _engine_accumulated_context()가 만든 "[누적DB] " 접두어
-    # 근거만 골라서 보여준다. 이 접두어가 없는 evidence(핵심요약과 병합된 값 등)는
-    # 위 [요약] 섹션과 중복되므로 여기서 다시 표시하지 않는다.
-    accum_evidence = [
-        str(e)[len('[누적DB] '):].strip()
-        for e in (master_result or {}).get('evidence') or []
-        if str(e).startswith('[누적DB]')
-    ]
-    if accum_evidence:
-        lines.append('📊 [누적데이터 근거]')
-        for e in accum_evidence:
-            lines.append('     ✔ '+html.escape(e[:220]))
+    if stats.get("sample_count"):
+        perf = f'📈 누적성과 {int(stats["sample_count"])}건'
+        if stats.get("win_rate") is not None: perf += f' · 성공률 {float(stats["win_rate"]):.1f}%'
+        if stats.get("avg_change") is not None: perf += f' · 평균 {float(stats["avg_change"]):+.2f}%'
+        lines.append(perf)
 
-    # [데이터 누적형 분석] 현재 시장환경(코스피/코스닥) + 비슷한 재료의 과거
-    # T+5/T+30/T+60 실제 성과. 표본(2건 이상)이 있는 시점만 표시하며,
-    # 표본이 전혀 없으면 _engine_similar_case_lines()가 빈 리스트를 돌려주므로
-    # 이 섹션 자체가 조용히 생략된다(추정으로 채우지 않음).
-    similar_lines = _engine_similar_case_lines(item.get('_similar_case_stats'))
-    for line in similar_lines:
-        lines.append(line)
+    if _engine_is_pharma_news(raw_title, " ".join(key_points)):
+        lines.append("💊 <b>제약뉴스</b>")
 
-    # 관련주/테마/BIG ISSUE는 위 master_badge에서 이미 표시했으므로 여기서 중복 출력하지 않는다.
-    # (참고: master_badge가 비어있으면 관련주/테마/BIG ISSUE가 없다는 뜻이므로 항목 자체가 비게 된다)
+    if related:
+        concrete = [r for r in related if r.get("name")]
+        if concrete:
+            lines.append("🎯 <b>직접 연결 종목</b>")
+            for r in concrete[:3]:
+                reason = str(r.get("reason", "")).strip()
+                text = html.escape(str(r.get("name")))
+                if reason:
+                    text += " — " + html.escape(reason[:130])
+                lines.append("• " + text)
 
     if schedule:
-        dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
-        lines.append('📅 일정')
-        if dm: lines.append(html.escape(dm.group(1).replace('/','.').replace('-','.')))
-        rest=schedule.replace(dm.group(1),'').strip(' -—:·') if dm else schedule
-        if rest: lines.append('✔ '+html.escape(rest[:220]))
-    # 용어 설명은 메시지의 가장 아래에만 표시하며, 용어 자체는 강조하지 않는다.
-    terms = (master_result or {}).get('term_explanations') or []
+        lines.append("📅 " + html.escape(schedule[:180]))
+
+    terms = (result or {}).get("term_explanations") or []
     if terms:
-        lines.append('💡 [용어 설명]')
-        for t in terms:
-            term = str(t.get('term','')).strip()
-            desc = str(t.get('description','')).strip()
-            if term and desc:
-                lines.append('• '+html.escape(term)+' : '+html.escape(desc))
-    if item.get('link'):
-        lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문 보기</a>')
-    return '\n\n'.join(x for x in lines if str(x).strip())
+        pairs = []
+        for t in terms[:3]:
+            term = str(t.get("term", "")).strip(); desc = str(t.get("description", "")).strip()
+            if term and desc: pairs.append(f"{html.escape(term)}: {html.escape(desc)}")
+        if pairs:
+            lines.append("💡 " + " · ".join(pairs))
+
+    if item.get("link"):
+        lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문</a>')
+    return "\n\n".join(x for x in lines if str(x).strip())
+
+_MARKET_IMPACT_EVENT_RE = re.compile(
+    r"주가|증시|나스닥|다우|S&P|코스피|코스닥|선물|금리|연준|FOMC|CPI|PCE|고용|실업|관세|제재|유가|원유|금값|국채|환율|달러|실적|어닝|매출|영업이익|수주|공급계약|계약|인수|합병|자사주|배당|소각|승인|허가|임상|출시|판매|납품|양산|파산|상장|IPO|급등|급락|폭등|폭락|신고가|신저가|surge|soar|rally|plunge|earnings|revenue|guidance|Fed|tariff|sanction|rate|inflation|jobs|oil|gold|Treasury|Nasdaq|Dow|S&P",
+    re.I,
+)
+_MARKET_IMPACT_ACTION_RE = re.compile(
+    r"발표|결정|확정|체결|수주|공급|승인|허가|출시|판매|인수|합병|소각|배당|실적|전망|가이던스|급등|급락|돌파|하회|상회|변경|인상|인하|동결|surge|soar|rally|plunge|beats|misses|raises|cuts|hikes|cuts|approved|acquire|merger",
+    re.I,
+)
 
 def _engine_has_market_impact(item, master_result):
-    """시장/종목에 실질적 영향을 줄 근거가 있을 때만 발송 허용."""
-    t = _engine_clean(str(item.get("title", "")) + " " + str(item.get("extra", "")))
-    if not t:
-        return False
-    direct = bool((master_result or {}).get("related")) or bool((master_result or {}).get("leader"))
-    impact_terms = re.compile(r"실적|매출|영업이익|순이익|EPS|가이던스|계약|수주|공급|납품|승인|허가|임상|FDA|금리|연준|FOMC|CPI|PCE|고용|실업|관세|제재|유가|원유|금값|국채|달러|환율|증시|지수|급등|급락|신고가|신저가|배당|자사주|소각|인수|합병|M&A|IPO|파산|상장|반도체|AI", re.I)
-    if direct and impact_terms.search(t):
+    """시장/주가에 실제 연결되는 뉴스만 외부 발송한다.
+    단순 산업 소개·전망·인터뷰·일반 트렌드는 시장 영향 근거가 없으면 차단한다.
+    """
+    text = _engine_clean(f"{item.get('title','')} {item.get('extra','')}")
+    related = master_result.get('related') or []
+    if related:
         return True
-    # 직접 종목 연결이 없어도 미국/글로벌 금융시장 핵심 거시변수는 허용
-    macro = re.compile(r"연준|Federal Reserve|FOMC|CPI|PCE|payroll|jobs report|unemployment|Treasury|bond yield|oil price|gold price|S&P 500|Nasdaq|Dow Jones|tariff|sanction", re.I)
-    return bool(macro.search(t))
-
+    if not _MARKET_IMPACT_EVENT_RE.search(text):
+        return False
+    # 이벤트/수치/실제 가격 움직임 중 하나가 함께 있어야 한다.
+    has_action = bool(_MARKET_IMPACT_ACTION_RE.search(text))
+    has_number = bool(re.search(r"\d+(?:\.\d+)?\s*(?:%|억|조|원|달러|million|billion|trillion|bp)", text, re.I))
+    has_move = bool(re.search(r"[+-]?\d+(?:\.\d+)?\s*%|급등|급락|폭등|폭락|surge|soar|rally|plunge", text, re.I))
+    return has_action and (has_number or has_move)
 
 def _engine_flush_pending():
     """대기 뉴스는 유사기사라도 묶어서 요약하지 않고 각 기사를 그대로 판단한다.
@@ -3941,23 +3796,27 @@ def _engine_flush_pending():
             _engine_log("info", "[제외] 유사도 80%%+ 도배 차단 | %s | 선행=%s", item.get("title", "")[:80], prev_title)
             _engine_mark_seen(key)
             continue
+        freshness, freshness_prev = _engine_freshness(item)
+        market_context, historical_stats, freshness_evidence = _engine_analysis_context(item, freshness, freshness_prev)
+        item["_freshness"] = freshness
+        item["_freshness_prev"] = freshness_prev
+        item["_historical_stats"] = historical_stats
+        item["_market_context"] = market_context
+        item["_freshness_evidence"] = freshness_evidence
         master_result = _engine_master_result(item)
         item["_master_result"] = master_result
-        # [데이터 누적형 분석] 현재 시장환경 + 재료 기준으로 과거 유사 사례의
-        # T+5/T+30/T+60 실제 성과를 조회한다. 표본이 없으면 빈 결과가 돌아오고,
-        # Formatter는 그 경우 관련 섹션 자체를 표시하지 않는다(추정 금지).
-        try:
-            item["_similar_case_stats"] = _engine_similar_case_stats(item, master_result)
-        except Exception as e:
-            _engine_log("warning", "[유사사례분석] flush 단계 실패 | %s", str(e)[:160])
-            item["_similar_case_stats"] = None
-        # [최종 발송 게이트] 시장 영향이 확인되지 않은 뉴스는 발송하지 않는다.
+        # [최우선 발송 게이트] 시장 영향 근거가 없는 일반 기사/트렌드 기사는 발송하지 않는다.
         if not _engine_has_market_impact(item, master_result):
-            _engine_log("info", "[제외] 시장영향 없음 | %s", str(item.get("title", ""))[:120])
+            _engine_log("info", "[제외] 시장영향 근거 없음 | %s", item.get("title", "")[:100])
             _engine_mark_seen(key)
             continue
         message = _engine_format_message(item)
-        # MASTER 이미지는 자동 송출하지 않는다. 사용자가 정한 텍스트 메시지만 발송한다.
+        master_badge = _engine_master_badge(master_result)
+        image_sent = False
+        if master_badge:
+            image_path = _engine_master_image_path(master_result, item=item)
+            if image_path:
+                image_sent = _engine_send_telegram_photo(image_path, caption=master_badge)
         text_sent = _engine_send_telegram(message)
         if text_sent:
             _engine_mark_seen(key)
@@ -4035,15 +3894,11 @@ def _engine_process_item(source, title, link, published="", extra=""):
         _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
         return False
 
-    # [수정 2026-08-23] 소스 공통 60분 필터를 제거했다.
-    # 과거에는 여기서 모든 소스(국내RSS/DART/네이버/미국뉴스/텔레그램/유튜브)를
-    # 예외 없이 "최근 60분 이내 발행"으로 걸렀기 때문에, 국내뉴스·DART·네이버처럼
-    # 시간 제한이 없어야 하는 소스까지 텔레그램/유튜브와 똑같이 차단되고 있었다.
-    # 텔레그램/유튜브에 대한 60분 기본 제한(+ 장마감후·휴무 강한 재료 예외)은
-    # 아래 _engine_external_time_gate()가 소스별로 이미 올바르게 처리하므로,
-    # 여기서는 중복으로 막지 않는다. 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB
-    # 용도로만 활용하고 신규 뉴스로 재송출하지 않는다는 원칙은
-    # _engine_external_time_gate()와 신규/재탕 판단(중복 DB) 쪽에서 유지된다.
+    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
+    # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
+    if not _engine_is_within_recent_window(published, 60):
+        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
+        return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
@@ -4346,6 +4201,35 @@ def _engine_run_keyword_combinations():
         if not success:
             _engine_log("error", "[실패] 키워드조합 | %s | 모든 NAVER 인증경로 실패", q)
 
+def _engine_fetch_dart_detail(rcept_no):
+    """중요 공시는 제목만 보내지 않고 DART 원문 일부를 확보해 MASTER가 사실 기반으로 요약하도록 한다."""
+    if not DART_API_KEY or not rcept_no:
+        return ""
+    try:
+        url = "https://opendart.fss.or.kr/api/document.xml"
+        r = requests.get(url, params={"crtfc_key": DART_API_KEY, "rcept_no": str(rcept_no)}, timeout=ENGINE_HTTP_TIMEOUT)
+        if not r.ok or not r.content:
+            return ""
+        raw = r.content
+        texts = []
+        if raw[:2] == b"PK":
+            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                for name in z.namelist()[:20]:
+                    if name.lower().endswith(('.xml','.txt','.html','.htm')):
+                        data = z.read(name)
+                        try: txt = data.decode('utf-8', errors='ignore')
+                        except Exception: txt = str(data)
+                        texts.append(BeautifulSoup(txt, 'html.parser').get_text(' ', strip=True))
+        else:
+            texts.append(BeautifulSoup(raw, 'html.parser').get_text(' ', strip=True))
+        text = _engine_clean(' '.join(texts))
+        # 공시 전체를 Telegram으로 보내지 않고 분석용으로만 앞부분을 제한한다.
+        return text[:12000]
+    except Exception as e:
+        _engine_log('warning', '[DART 원문] 확보 실패 | %s', str(e)[:160])
+        return ""
+
+
 def _engine_run_dart():
     if not ENABLE_DART:
         _engine_log("warning", "[DART] ENABLE_DART=OFF")
@@ -4378,7 +4262,8 @@ def _engine_run_dart():
             title = f"{corp} | {report}"
             link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
             _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""))
-            if _engine_process_item("DART", title, link, row.get("rcept_dt", "")):
+            dart_body = _engine_fetch_dart_detail(row.get("rcept_no", ""))
+            if _engine_process_item("DART", title, link, row.get("rcept_dt", ""), dart_body):
                 sent += 1
         _engine_log("info", "[DART] 후보=%d건", sent)
     except Exception as e:
@@ -4504,6 +4389,25 @@ def _engine_youtube_channel_id(handle):
         except Exception:
             continue
     return ""
+
+
+def _engine_run_blog():
+    if not ENABLE_BLOG:
+        return
+    total = 0
+    for name, url in ANALYSIS_BLOG_RSS_URLS:
+        try:
+            entries = _engine_fetch_rss(url, f"블로그/{name}")
+            for e in entries[:10]:
+                title = _engine_clean(e.get("title", ""))
+                extra = _engine_clean(e.get("summary", "") or e.get("description", ""))
+                published = _engine_entry_published(e)
+                link = e.get("link", "")
+                if _engine_process_item(f"블로그/{name}", title, link, published, extra):
+                    total += 1
+        except Exception as e:
+            _engine_log("warning", "[블로그 실패] %s | %s", name, str(e)[:120])
+    _engine_log("info", "[블로그] 통합분석 후보=%d건", total)
 
 
 def _engine_run_youtube():
@@ -4813,16 +4717,6 @@ def _engine_load_outcome_tracking():
     try:
         with open(OUTCOME_TRACKING_DB, "r", encoding="utf-8") as f:
             _OUTCOME_TRACKING_ROWS = [json.loads(x) for x in f if x.strip()][-5000:]
-        # [마이그레이션] T+5/T+30/T+60 도입 이전에 저장된 기록(예전 단일 checked/outcome
-        # 구조)을 새 구조에 맞게 보정한다. 기존에 이미 확정된 값은 절대 지우지 않고
-        # T+60(마지막 시점) 자리에 그대로 옮겨 보존한다.
-        for row in _OUTCOME_TRACKING_ROWS:
-            if "horizons" not in row or not isinstance(row.get("horizons"), dict):
-                legacy_final = row.get("outcome") if row.get("checked") else None
-                row["horizons"] = {"5": None, "30": None, "60": legacy_final}
-            row.setdefault("market_snapshot", None)
-            row.setdefault("companies", [])
-            row.setdefault("hits", [])
         _engine_log("info", "[성과추적] 기존 기록 %d건 로드", len(_OUTCOME_TRACKING_ROWS))
     except Exception as e:
         log_error("성과추적 DB 읽기", e, file=OUTCOME_TRACKING_DB)
@@ -4883,26 +4777,11 @@ def _engine_outcome_tracking_cycle():
                 row["baseline_price"] = q["price"]
                 row["baseline_ts"] = now.isoformat()
                 dirty = True
-                # 기준가를 이제 막 잡았고, 발송 시점에 시장환경 스냅샷을 못 잡았다면
-                # (예: API 순간 실패) 여기서 한 번 더 시도해서 유사사례 매칭용
-                # 데이터가 비지 않게 한다.
-                if not row.get("market_snapshot"):
-                    try:
-                        row["market_snapshot"] = _engine_market_snapshot()
-                    except Exception:
-                        pass
             continue
 
-        # 2) 기준가는 있고, T+5 -> T+30 -> T+60 순서로 아직 안 채워진 시점을 하나씩 확정한다.
-        if row.get("baseline_price") is not None:
-            horizons = row.get("horizons")
-            if not isinstance(horizons, dict):
-                horizons = {str(m): None for m in OUTCOME_HORIZONS_MIN}
-                row["horizons"] = horizons
-            pending_h = next((m for m in OUTCOME_HORIZONS_MIN if horizons.get(str(m)) is None), None)
-            if pending_h is None:
-                continue  # T+5/T+30/T+60 전부 확정됨
-            if age_min < pending_h:
+        # 2) 기준가는 있고 결과 미확정 -> 지연시간 경과 시 결과 확정
+        if row.get("baseline_price") is not None and not row.get("checked"):
+            if age_min < OUTCOME_CHECK_DELAY_MIN:
                 continue
             code = _outcome_row_code(row)
             q = _kr_yahoo_quote(code) if code else None
@@ -4911,21 +4790,18 @@ def _engine_outcome_tracking_cycle():
             if q and q.get("price") is not None:
                 base = float(row["baseline_price"])
                 change_pct = ((q["price"] - base) / base * 100.0) if base else None
-                horizons[str(pending_h)] = {
+                row["outcome"] = {
                     "price": q["price"],
                     "change_pct": round(change_pct, 2) if change_pct is not None else None,
                     "checked_ts": now.isoformat(),
                 }
-                dirty = True
-            elif age_min > pending_h * 4:
-                # 시세 조회가 계속 실패하면(거래정지/상장폐지 등) 이 시점은 포기하고 넘어간다.
-                horizons[str(pending_h)] = {"price": None, "change_pct": None, "checked_ts": now.isoformat(), "note": "조회실패"}
-                dirty = True
-            # 마지막 시점(T+60)까지 채워졌다면 호환 필드(checked/outcome)도 동기화한다.
-            last_h = str(OUTCOME_HORIZONS_MIN[-1])
-            if horizons.get(last_h) is not None:
                 row["checked"] = True
-                row["outcome"] = horizons[last_h]
+                dirty = True
+            elif age_min > OUTCOME_CHECK_DELAY_MIN * 4:
+                # 시세 조회가 계속 실패하면(거래정지/상장폐지 등) 무한 재시도하지 않는다.
+                row["checked"] = True
+                row["outcome"] = {"price": None, "change_pct": None, "checked_ts": now.isoformat(), "note": "조회실패"}
+                dirty = True
 
     if dirty:
         if len(_OUTCOME_TRACKING_ROWS) > 5000:
@@ -5491,6 +5367,10 @@ def _engine_cycle():
         _engine_run_telegram_channels()
     except Exception as e:
         log_error("텔레그램 채널 전체", e)
+    try:
+        _engine_run_blog()
+    except Exception as e:
+        log_error("블로그 전체", e)
     try:
         _engine_run_youtube()
     except Exception as e:
