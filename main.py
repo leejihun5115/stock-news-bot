@@ -815,9 +815,21 @@ UNIQUE_CELEBS = {
 }
 
 GLOBAL_COMPANY_KEYWORDS = {
-    "엔비디아", "테슬라", "애플", "마이크로소프트", "구글", "아마존", "메타",
-    "AMD", "ASML", "TSMC", "인텔", "마이크론", "넷플릭스", "오픈AI",
-    "팔란티어", "브로드컴", "퀄컴",
+    # 한글 표기 (번역 후 본문에서 매칭)
+    "엔비디아", "테슬라", "애플", "마이크로소프트", "구글", "알파벳", "아마존", "메타",
+    "인텔", "마이크론", "넷플릭스", "오픈AI", "팔란티어", "브로드컴", "퀄컴",
+    "슈퍼마이크로", "AMD", "ASML", "TSMC",
+    "코스트코", "월마트", "스타벅스", "디즈니", "보잉", "포드", "제너럴모터스",
+    "JP모건", "골드만삭스", "버크셔해서웨이", "비자", "마스터카드", "페이팔",
+    "어도비", "세일즈포스", "오라클", "IBM", "시스코", "퀄컴", "리비안", "루시드",
+    "코인베이스", "마이크로스트래티지", "스트래티지",
+    # 영문 원문(번역 실패/일부 미번역 대비 fallback)
+    "Nvidia", "Tesla", "Apple", "Microsoft", "Google", "Alphabet", "Amazon", "Meta",
+    "Intel", "Micron", "Netflix", "OpenAI", "Palantir", "Broadcom", "Qualcomm",
+    "Super Micro", "SMCI", "Costco", "Walmart", "Starbucks", "Disney", "Boeing",
+    "Ford", "General Motors", "JPMorgan", "Goldman Sachs", "Berkshire Hathaway",
+    "Visa", "Mastercard", "PayPal", "Adobe", "Salesforce", "Oracle", "IBM", "Cisco",
+    "Rivian", "Lucid", "Coinbase", "MicroStrategy", "Strategy",
 }
 
 KOREAN_GROUP_NAMES = {
@@ -961,7 +973,13 @@ DOMESTIC_RSS_SOURCE_NAMES = {
 
 def _google_news_rss_url(query, korean=False):
     from urllib.parse import quote_plus
-    encoded = quote_plus(query + " when:1h")
+    # [수정] "when:1h"를 검색어에 직접 넣으면 Google News가 복잡한 boolean 쿼리와
+    # 결합될 때 결과를 0건으로 반환하는 경우가 잦다(불리언+시간창 동시 파싱 신뢰도 낮음).
+    # 실시간성 보장은 어차피 _engine_process_item()의 "최근 60분" 게이트가 이미
+    # 담당하고 있으므로, 수집 단계에서는 시간 제약 없이 넓게 가져오고 필터링은
+    # 다운스트림(발행시각 기준)에서 정확하게 처리한다. → 이중 시간필터로 후보가
+    # 과도하게 희박해지는 문제를 해소한다.
+    encoded = quote_plus(query)
     if korean:
         return f"https://news.google.com/rss/search?q={encoded}&hl=ko&gl=KR&ceid=KR:ko"
     return f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
@@ -2085,6 +2103,10 @@ LISTED_COMPANY_ALIASES = {
     "HD현대일렉트릭", "효성중공업", "LS ELECTRIC", "LIG넥스원", "현대로템", "한전기술",
     "한전KPS", "LG에너지솔루션", "삼성SDI", "SK스퀘어", "NAVER", "카카오", "KB금융",
     "하나금융지주", "신한지주", "우리금융지주", "HMM", "S-Oil",
+    # [수정] 그룹 지주사/모회사 자체도 실제 코스피 상장사인데 빠져 있었다.
+    # (예: "한화 건설부문" 뉴스가 계열사명이 아니라 "한화" 자체로만 언급되는 경우)
+    "한화", "삼성물산", "포스코홀딩스", "두산", "GS건설", "DL이앤씨", "현대건설",
+    "롯데케미칼", "CJ제일제당", "카카오뱅크", "네이버", "LG",
     "엔비디아", "테슬라", "애플", "마이크로소프트", "구글", "아마존", "메타", "AMD",
     "ASML", "TSMC", "인텔", "마이크론", "넷플릭스", "팔란티어", "브로드컴", "퀄컴",
 }
@@ -2299,6 +2321,10 @@ def _engine_company_mentions(text):
         "상용화", "승인", "허가", "특허", "임상", "기술이전", "기술수출",
         "로열티", "마일스톤", "제품", "생산", "수출", "수입", "판매", "공급계약",
         "수혜", "피해", "주가", "주식", "지분율", "보유", "취득", "신규 공시",
+        # [수정] 건설/정비사업 관련 뉴스(예: "한화 건설부문, 도시정비사업 공략")가
+        # 위 목록에 없는 표현이라 회사 후보로 아예 잡히지 않던 문제를 보완.
+        "정비사업", "도시정비", "재건축", "재개발", "컨소시엄", "시공권",
+        "수주전", "일감", "분양", "착공", "준공",
     ]
 
     # (000000) 형태의 종목코드 바로 앞 회사명은 강한 직접기업 신호로 사용한다.
@@ -2447,7 +2473,10 @@ def _engine_classify(source, title, extra=""):
     k1, k2 = _engine_has_keyword_pair(text)
     market_hits = _engine_market_hit(text)
     low = text.lower()
-    is_breaking = any(x in low for x in BREAKING_WORDS)
+    # [수정] 외신은 _engine_process_item()에서 이미 한국어로 번역된 뒤 넘어오지만,
+    # 번역이 일부만 되거나(예: "Breaking: ..."가 그대로 남는 경우) 대비해
+    # 영문 속보 표지도 함께 인정한다(BREAKING_WORDS는 원래 한글 전용이라 죽은 코드였음).
+    is_breaking = any(x in low for x in BREAKING_WORDS) or any(x in low for x in US_BREAKING_WORDS)
     is_feature = any(x in low for x in FEATURE_WORDS)
     is_exclusive = any(x in low for x in EXCLUSIVE_WORDS)
     is_external = source.startswith("텔레그램/") or source.startswith("유튜브/")
@@ -2610,6 +2639,34 @@ THEME_MAP = {
     "전력기기": "전력기기·전력망", "변압기": "전력기기·전력망",
     "바이오": "바이오·헬스케어", "AI": "AI",
 }
+
+def _engine_ambiguous_group_mentions(text):
+    """'삼성', 'SK', 'LG' 같은 그룹명이 실제 사업 이벤트 문맥과 함께 언급됐는지 확인한다.
+    특정 상장 계열사를 단정하지 않고, 어떤 그룹이 언급됐는지만 사실 그대로 반환한다.
+    (AMBIGUOUS_COMPANY_TERMS는 이전까지 정의만 되고 실제로 쓰이는 곳이 없었다.)"""
+    t = _engine_clean(text)
+    low = t.lower()
+    event_words = [
+        "수주", "계약", "공급", "투자", "지분", "매수", "매각", "인수", "합병",
+        "실적", "매출", "영업이익", "증설", "양산", "출시", "승인", "허가",
+        "특허", "임상", "주가", "주식", "공시", "채용", "구조조정",
+    ]
+    hits = []
+    for g in sorted(AMBIGUOUS_COMPANY_TERMS, key=len, reverse=True):
+        if g.lower() not in low or g in hits:
+            continue
+        # 이미 같은 그룹의 구체적 상장 계열사명이 텍스트에 있으면(예: "SK하이닉스")
+        # 그룹명 단독 언급으로 보지 않는다 - 구체적 종목 배지가 이미 따로 표시된다.
+        if any(alias != g and alias.startswith(g) and alias.lower() in low for alias in LISTED_COMPANY_ALIASES):
+            continue
+        for m in re.finditer(re.escape(g), t, re.I):
+            a, b = max(0, m.start()-60), min(len(t), m.end()+60)
+            ctx = t[a:b].lower()
+            if any(w.lower() in ctx for w in event_words):
+                hits.append(g)
+                break
+    return hits[:3]
+
 
 def _engine_theme(text):
     low = text.lower()
@@ -3861,6 +3918,18 @@ def _engine_format_message(item):
     lines = [header, f'<b>{title_prefix}{html.escape(title)}</b>']
 
     market_state = str(item.get('market_state') or '').strip()
+    # [수정] 예전엔 이 문장이 "🧠 분석_전망"의 유일한 내용일 때도 그대로
+    # 들어가서, MASTER가 실제 분석을 못 만든 뉴스마다 매번 똑같은 문장이
+    # "분석"인 척 반복 노출됐다(사용자 신고: "똑같은 문구의 같은 대답").
+    # 이제 헤더 옆에 짧은 상태 태그로만 붙이고, 🧠 분석_전망에는 실제
+    # analysis/outlook 내용이 있을 때만 보조 문장으로 덧붙인다.
+    _market_tag = {
+        '시장 휴무로 미반영': '💤 휴무 미반영',
+        '시장 마감 후 뉴스': '⏳ 마감후',
+    }.get(market_state)
+    if _market_tag:
+        header += f'  {_market_tag}'
+        lines[0] = header
 
     # ============================================================
     # 👀/🎯 [관련주] 통합
@@ -3884,6 +3953,13 @@ def _engine_format_message(item):
         theme_guess = _engine_theme(_engine_clean(f"{raw_title} {item.get('extra','')}"))
         if theme_guess:
             lines.append(f'🏷 <b>테마</b> : {html.escape(theme_guess)}')
+        # [수정] "삼성", "SK", "LG" 같은 그룹명만 언급되고 구체적 상장계열사가
+        # 특정되지 않는 경우, 예전엔 그냥 조용히 사라졌다(AMBIGUOUS_COMPANY_TERMS는
+        # 정의만 되고 미사용 상태였음). 특정 종목을 단정하지 않고 "그룹명이 언급됐다"는
+        # 사실만 정확히 알려서, 무엇을 놓쳤는지는 최소한 보이게 한다.
+        group_hits = _engine_ambiguous_group_mentions(_engine_clean(f"{raw_title} {item.get('extra','')}"))
+        if group_hits and not theme_guess:
+            lines.append(f'🏷 <b>그룹 언급</b> : {html.escape(" · ".join(group_hits))} (계열사 미특정)')
 
     # 신규/후속/재탕은 header의 상태 하나로만 표시한다. 같은 뜻을 다시 설명하지 않는다.
 
@@ -3914,7 +3990,10 @@ def _engine_format_message(item):
             analysis_lines.append(candidate)
             shown_texts.append(candidate)
     market_sentence = _engine_market_state_sentence(market_state)
-    if market_sentence and not _engine_line_is_duplicate(market_sentence, shown_texts):
+    # [수정] 실제 analysis/outlook 내용이 하나도 없는데 이 문장 혼자만 들어가면
+    # "매 뉴스마다 똑같은 답"으로 보인다. 이제 실제 내용이 있을 때만 보조로 붙이고,
+    # 없으면 헤더의 상태 태그(💤/⏳)로만 표시하고 🧠 분석_전망 섹션 자체를 생략한다.
+    if market_sentence and analysis_lines and not _engine_line_is_duplicate(market_sentence, shown_texts):
         analysis_lines.append(market_sentence)
     if analysis_lines:
         lines.append('🧠 <b>분석_전망</b>')
@@ -3987,6 +4066,27 @@ def _engine_format_message(item):
             lines.append('🧠 <b>데이터 값</b>')
             for dl in data_lines:
                 lines.append('     ✔ ' + html.escape(dl))
+
+    # ------------------------------------------------------------
+    # 📊 [실적 정보] - 번역 전 원문에서 추출한 beat/miss, 매출, EPS.
+    # 관련주 매칭(lead_name) 성공 여부와 무관하게, 실적 수치가 실제로
+    # 추출된 경우에만 표시한다(형식적 기록 없음).
+    # ------------------------------------------------------------
+    earnings_info = item.get('earnings_info')
+    if earnings_info and earnings_info[0]:
+        _, beat_or_miss, revenue, eps = earnings_info
+        earn_parts = []
+        if beat_or_miss == 'beat':
+            earn_parts.append('컨센서스 상회(어닝서프라이즈)')
+        elif beat_or_miss == 'miss':
+            earn_parts.append('컨센서스 하회(어닝쇼크)')
+        if revenue:
+            earn_parts.append(f"매출 {revenue}")
+        if eps:
+            earn_parts.append(f"EPS {eps}")
+        if earn_parts:
+            lines.append('📊 <b>실적 정보</b>')
+            lines.append('     ✔ ' + html.escape(' · '.join(earn_parts)))
 
     # ============================================================
     # 💡 [용어]
@@ -4137,6 +4237,14 @@ def _engine_process_item(source, title, link, published="", extra=""):
         return False
     _engine_clear_translation_retry(link, _orig_title_for_retry, source)
 
+    # [수정] 실적(어닝) 관련 수치(beat/miss, 매출액 등)는 번역 과정에서 부정확해지거나
+    # 손실되기 쉬우므로, 번역 전 원문(영문/한글 모두 가능)에서 직접 추출해 둔다.
+    # (_extract_earnings_info는 정의만 되어 있고 그동안 호출되는 곳이 없던 죽은 코드였음)
+    try:
+        earnings_info = _extract_earnings_info(_orig_title_for_retry)
+    except Exception:
+        earnings_info = (False, None, None, None)
+
     # 원문 전체를 보존한다. 요약문으로 extra를 덮어쓰지 않는다.
 
     # 사용자가 원치 않는 [그로쓰리서치] 속보/단독/특징주 채널은 원천 제외.
@@ -4194,7 +4302,7 @@ def _engine_process_item(source, title, link, published="", extra=""):
     dt = _engine_parse_datetime(published)
     if dt:
         time_text = dt.strftime("%H:%M")
-    _engine_pending.append({"source":source,"title":title,"link":link,"published":published,"extra":extra,"key":key,"category":category,"companies":companies,"k1":k1,"k2":k2,"market_hits":market_hits,"time_text":time_text,"market_state":market_state})
+    _engine_pending.append({"source":source,"title":title,"link":link,"published":published,"extra":extra,"key":key,"category":category,"companies":companies,"k1":k1,"k2":k2,"market_hits":market_hits,"time_text":time_text,"market_state":market_state,"earnings_info":earnings_info})
     # 뉴스 1건을 수집 주기 끝까지 대기시키지 않는다. 등록 즉시 MASTER→포맷→Telegram 송출한다.
     try:
         _engine_flush_pending()
