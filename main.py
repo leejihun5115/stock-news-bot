@@ -3815,9 +3815,30 @@ def _engine_format_message(item):
         title_prefix = '📌 '
     lines = [header, f'<b>{title_prefix}{html.escape(title)}</b>']
 
-    if is_listed:
+    market_state = str(item.get('market_state') or '').strip()
+
+    # ============================================================
+    # 👀/🎯 [관련주] 통합
+    # ------------------------------------------------------------
+    # MASTER가 '유기적으로 실제 사업·실적에 영향'을 준다고 직접 확정한 종목
+    # (related[].direct=True)이 있으면 🎯 [관련주]로 표시하고, 그 정도의
+    # 직접 확정 없이 본문/제목에서 단순히 확인만 된 상장종목이면 👀 [관련주]로
+    # 표시한다. 둘 다 없으면 최소한 어떤 테마인지 🏷 [테마]로 보여준다.
+    # 같은 종목을 두 배지에서 중복 표시하지 않는다.
+    # ============================================================
+    direct = [r for r in related if r.get('direct')] if related else []
+    direct_names = [str(r.get('name', '')).strip() for r in direct[:3] if r.get('name')]
+    if direct_names:
+        lines.append(f'🎯 <b>관련주</b> : {html.escape(" · ".join(direct_names))}')
+    elif is_listed:
         names = ' · '.join(str(x) for x in domestic[:3])
         lines.append(f'👀 <b>관련주</b> : {html.escape(names)}')
+    else:
+        # [1원칙] 직접 연결된 관련주가 없다면 최소한 어떤 테마인지는 뽑아서 보여준다.
+        # 관련주 없음 자체를 빈 결과로 남기지 않는다.
+        theme_guess = _engine_theme(_engine_clean(f"{raw_title} {item.get('extra','')}"))
+        if theme_guess:
+            lines.append(f'🏷 <b>테마</b> : {html.escape(theme_guess)}')
 
     # 신규/후속/재탕은 header의 상태 하나로만 표시한다. 같은 뜻을 다시 설명하지 않는다.
 
@@ -3826,35 +3847,27 @@ def _engine_format_message(item):
         for kp in key_points:
             clean = re.sub(r'^[▶️•✔️\s]+', '', str(kp)).strip()
             if clean:
-                lines.append('• ' + html.escape(clean[:180]))
+                lines.append('     ✔ ' + html.escape(clean[:180]))
 
-    # 분석은 별도 전망 항목 없이 자연어 한 덩어리로만 표시한다.
+    # ============================================================
+    # 🧠 [분석_전망]
+    # ------------------------------------------------------------
+    # 본문 사실 기반 분석(analysis)과 향후 전망(outlook)을 한 섹션으로 합쳐
+    # 보여준다. 시장이 현재 휴장/마감 상태라 실시간으로 반영되지 않았다면
+    # market_state를 통해 그 상황도 함께 설명한다(예: '시장 휴무로 미반영').
+    # ============================================================
     analysis_parts = []
     if analysis:
         analysis_parts.append(analysis)
-    market_state = str(item.get('market_state') or '').strip()
-    if market_state and analysis:
+    for ol in outlook:
+        ol_clean = str(ol).strip()
+        if ol_clean and ol_clean not in analysis_parts and ol_clean not in analysis:
+            analysis_parts.append(ol_clean)
+    if market_state:
         analysis_parts.append(f'현재 시장: {market_state}.')
     if analysis_parts:
-        lines.append('🧠 <b>분석</b>')
+        lines.append('🧠 <b>분석_전망</b>')
         lines.append(html.escape(' '.join(analysis_parts)[:650]))
-
-    direct = [r for r in related if r.get('direct')] if related else []
-    if direct:
-        # [수정] 라벨과 값 사이 구분자를 '·' 대신 ':' 로 표기한다. 같은 종목이 다른
-        # 곳(예: 관련주 배지)에 아이콘과 함께 또 나오는 중복 표시는 만들지 않는다 —
-        # 이 줄이 해당 종목을 대표하는 유일한 표시이며, 다른 배지가 같은 이름을
-        # 다시 보여줄 경우 그쪽에서 생략해야 한다(badge_text 처리부에서 이름을
-        # 별도로 다시 출력하지 않는 것으로 이미 보장됨).
-        names = ' · '.join(str(r.get('name','')).strip() for r in direct[:3] if r.get('name'))
-        if names:
-            lines.append(f'🎯 <b>직접 연결 종목</b> : {html.escape(names)}')
-    else:
-        # [추가/1원칙] 직접 연결된 관련주가 없다면 최소한 어떤 테마인지는 뽑아서 보여준다.
-        # 관련주 없음 자체를 빈 결과로 남기지 않는다.
-        theme_guess = _engine_theme(_engine_clean(f"{raw_title} {item.get('extra','')}"))
-        if theme_guess:
-            lines.append(f'🏷 <b>테마</b> : {html.escape(theme_guess)}')
 
     badge_text = str(_engine_master_badge(master_result) or '')
     # 내용/데이터가 없는 빈 라벨은 절대 표시하지 않는다.
@@ -3864,12 +3877,16 @@ def _engine_format_message(item):
     if '강한 뉴스' in badge_text and (master_result.get('news_value') == '높음' or master_result.get('historical_evidence')):
         lines.append('🔥 <b>강한 뉴스</b>')
 
-    # [추가] 📊 누적데이터: 이 종목이 과거에 몇 번 등장했고(HISTORICAL_SURGE_DB),
-    # 그때 실제 등락률은 어땠는지(OUTCOME_TRACKING_DB), 과거 등장 시점의 시장상황과
-    # 지금 시장상황이 다른지를 보여준다. 쌓인 데이터가 없으면 섹션 자체를 생략한다.
+    # ============================================================
+    # 🧠 [데이터 값]
+    # ------------------------------------------------------------
+    # 이 종목이 과거에 몇 번 등장했고(HISTORICAL_SURGE_DB), 그때 실제
+    # 등락률은 어땠는지(OUTCOME_TRACKING_DB), 과거 등장 시점의 시장상황과
+    # 지금 시장상황이 다른지를 누적값 기준으로 한 섹션에 모아 보여준다.
+    # 쌓인 데이터가 없으면 섹션 자체를 생략한다(형식적 기록 없음).
+    # ============================================================
     lead_name = ''
     if related:
-        direct_names = [str(r.get('name', '')).strip() for r in related if r.get('direct') and r.get('name')]
         lead_name = direct_names[0] if direct_names else str(related[0].get('name', '')).strip()
     if not lead_name and domestic:
         # MASTER가 관련주를 별도로 확정하지 못했어도, 본문에서 직접 추출된
@@ -3880,6 +3897,7 @@ def _engine_format_message(item):
     if lead_name:
         hist = _engine_company_history_detail(lead_name)
         outc = _engine_company_outcome_stats(lead_name)
+        data_lines = []
 
         if hist:
             compare_parts = [f"과거 유사 재료 이력 {hist['count']}건"]
@@ -3892,17 +3910,15 @@ def _engine_format_message(item):
                     compare_parts.append(f"그중 동일 시장상황({market_state}) {same_state_count}건")
                 elif market_state and past_state and past_state != market_state:
                     compare_parts.append(f"과거엔 주로 '{past_state}'였고 이번엔 '{market_state}'")
-            lines.append('📊 <b>시장 비교</b>')
-            lines.append(html.escape(' · '.join(compare_parts)))
+            data_lines.append(' · '.join(compare_parts))
 
         if outc:
             sign = '+' if outc['avg'] >= 0 else ''
-            lines.append('📈 <b>과거 성과</b>')
-            lines.append(html.escape(
+            data_lines.append(
                 f"표본 {outc['count']}건 · 상승비율 {outc['success_rate']:.0f}% · "
                 f"평균 등락률 {sign}{outc['avg']:.2f}%"
-            ))
-            # 🎯 판단: 표본이 충분할 때만 강함/관심/주의를 매긴다.
+            )
+            # 판단: 표본이 충분할 때만 강함/관심/주의를 매긴다.
             # 표본이 적으면 데이터를 근거로 단정하지 않고 '데이터 부족'으로만 표시한다.
             if outc['count'] >= 5:
                 if outc['success_rate'] >= 60 and outc['avg'] > 0:
@@ -3913,8 +3929,19 @@ def _engine_format_message(item):
                     verdict = '주의'
             else:
                 verdict = f"관심 (표본 {outc['count']}건, 판단하기엔 부족)"
-            lines.append(f"🎯 <b>판단</b> : {verdict}")
+            data_lines.append(f"판단 : {verdict}")
 
+        if data_lines:
+            lines.append('🧠 <b>데이터 값</b>')
+            for dl in data_lines:
+                lines.append('     ✔ ' + html.escape(dl))
+
+    # ============================================================
+    # 💡 [용어]
+    # ------------------------------------------------------------
+    # 경제/전문 용어 설명만 사실 기반으로 간단히 정리한다. 형식적인 항목은
+    # 채워 넣지 않고, 실제 설명이 있는 용어만 표시한다.
+    # ============================================================
     terms = (master_result or {}).get('term_explanations') or []
     if terms:
         shown = []
