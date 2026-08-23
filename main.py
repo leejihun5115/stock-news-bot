@@ -3913,19 +3913,12 @@ def _engine_format_message(item):
         for kp in key_points:
             lines.append('     ✔ '+html.escape(str(kp)[:220]))
 
-    if stage:
-        lines.append('🧭 [진행 과정] ===> '+html.escape(stage))
-
-    if outlook:
-        lines.append('✅ [시장전망] ==> '+html.escape(str(outlook[0])))
-        for o in outlook[1:3]: lines.append('     ✔ '+html.escape(str(o)))
-
     # ========================================================
     # 데이터 누적형 시장·뉴스 분석: Formatter는 저장된 값만 표시한다.
     # ========================================================
     data_lines = _market_analysis_summary_for_message(item)
     if data_lines:
-        lines.append('🧠 [데이터 기반 분석]')
+        lines.append('📊 [데이터 값]')
         for dl in data_lines:
             lines.append('     '+html.escape(str(dl)))
 

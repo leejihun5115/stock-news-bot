@@ -56,7 +56,6 @@ IMPLEMENTED_CONDITION_NAMES = frozenset({
     "5W1H우선", "사실우선", "주제분리",
     "핵심필요량", "요약확정", "일반문구제거",
     "상용화단계", "실행신호", "미래일정검증", "시장영향",
-    "전망근거", "후속확인", "지속성", "시장전망최대3",
     "대장주선정", "대장주이유", "관찰후보", "관련주없음", "점수화",
     "직접사업연관", "실제사건연결", "공급망연결", "테마연결",
     "과거급등이력", "과거주도이력", "수급탄력", "글로벌오인방지", "근거필수", "근거품질",
@@ -109,11 +108,7 @@ CONDITION_RULES = [
     {"order": 37, "name": "실행신호", "rule": "실제 실행 신호를 단순 기대보다 높게 평가한다."},
     {"order": 39, "name": "미래일정검증", "rule": "미래 날짜 또는 예정/계획 표현이 있어야 한다."},
     {"order": 40, "name": "시장영향", "rule": "뉴스의 직접적인 시장 영향요인을 정리한다."},
-    {"order": 41, "name": "전망근거", "rule": "전망은 본문 사실과 연결한다."},
-    {"order": 42, "name": "후속확인", "rule": "후속 발표와 실제 실적 반영 여부를 확인한다."},
-    {"order": 43, "name": "지속성", "rule": "수치의 실제 집행 규모와 지속성을 확인한다."},
     {"order": 44, "name": "사실추론분리", "rule": "사실과 추론을 섞지 않는다."},
-    {"order": 45, "name": "시장전망최대3", "rule": "시장 전망은 최대 3개다."},
 
     {"order": 46, "name": "단일분석", "rule": "뉴스 1건은 MASTER에서 한 번만 판단한다."},
     {"order": 47, "name": "결과단일화", "rule": "분석 결과를 하나의 result 객체로 확정한다."},
@@ -263,32 +258,7 @@ class MasterConditionManager:
         return bool(self._GEO_DIPLOMATIC_RE.search(text or "")) and not bool(self._BIZ_REGULATORY_RE.search(text or ""))
 
     # 사건별 전망은 고정문구가 아니라 '사실 + 다음 확인할 경제적 연결'로 만든다.
-    OUTLOOK_PATTERNS = [
-        (r"수주|공급계약|계약 체결|본계약|판매계약|장기공급",
-         "계약 규모가 실제 매출·수주잔고로 인식되는 시점과 추가 공급 확대 여부가 핵심이다."),
-        (r"양산|대량생산|출하|납품|공급 확대",
-         "실제 출하량과 생산능력 확대가 매출·마진 개선으로 이어지는지가 핵심이다."),
-        (r"상용화|상업화|출시|구매|실제 도입|채택",
-         "초기 도입이 반복 구매와 매출 증가로 이어지는지가 핵심이다."),
-        (r"임상|허가|승인|인증",
-         "이번 진전이 다음 규제·판매 단계로 이어지는지와 실제 매출화 시점이 핵심이다."),
-        (r"증설|시설투자|투자",
-         "투자 규모가 실제 생산능력과 고객 수요 증가로 연결되는지가 핵심이다."),
-        (r"실적|영업이익|매출|순이익|최대 실적",
-         "실적 개선이 일회성이 아닌지와 다음 분기에도 이익 증가가 이어지는지가 핵심이다."),
-        (r"금리|국채|채권|연준|FOMC|CPI|인플레이션",
-         "금리 변화가 할인율과 위험자산 선호를 얼마나 지속적으로 바꾸는지가 핵심이다."),
-        (r"비트코인|이더리움|가상자산|암호화폐",
-         "가격 상승이 거래량·관련 기업 실적 또는 위험선호 확대로 이어지는지가 핵심이다."),
-        (r"파업|노조|준법투쟁|임금|성과보상|노사",
-         "갈등의 장기화 여부와 생산·영업 차질 또는 비용 증가로 이어지는지가 핵심이다."),
-        (r"소송|규제|제재|조사",
-         "규제·법적 결과의 범위와 실제 비용·사업 제한으로 이어지는지가 핵심이다."),
-        (r"위탁\s*중개|주관사|주선사|자문사|중개 계약",
-         "위탁·중개 역할에 따른 수수료·자문 수익이 얼마나 반복적으로 발생하는지가 핵심이다."),
-        (r"자사주|배당|주주환원",
-         "환원 규모와 실제 현금흐름 대비 지속 가능성이 주주가치에 미치는 영향이 핵심이다."),
-    ]
+
 
     SELECTION_METHOD = [
         "65조건 순차 실행",
@@ -747,73 +717,6 @@ class MasterConditionManager:
             return "후보 종목은 있었지만 국내 상장 여부 또는 기사와 직접 연결되는 근거가 부족했습니다."
         return "후보 종목은 있었지만 기사 사건과의 직접 연결·공급망·상용화 근거가 약해 관련주로 확정하지 않았습니다."
 
-    def _outlook(self, text, stage, key_points, body=None, title=""):
-        # generic fallback을 없애고, 실제 문장과 매칭된 사건만 전망으로 만든다.
-        # [조건41 전망근거 강화] 같은 카테고리(예: 자사주/배당)라도 기사마다 실제 수치·사건이
-        # 다르므로, 정형 문구만 반복하지 않고 기사에서 실제로 뽑힌 핵심문장(key_points)을
-        # 근거로 함께 연결해 기사 내용을 반영한 전망 문장을 만든다.
-        # [제목 반복 방지] anchor 주변 문맥을 못 찾을 때의 안전장치는 title+body 전체가
-        # 아니라 body만 뒤진다. text(title+body 합본)를 쓰면 anchor가 제목 쪽에서
-        # 매칭됐을 때 창(window)이 제목 구간을 그대로 퍼오게 되어 "요약/전망에 제목이
-        # 그대로 다시 등장"하는 결과가 나온다.
-        body_text = self._clean(body) if body is not None else text
-        title_n = self._norm(title)
-        # [근거 문장 사전 추출] anchor를 포함하는 실제 문장 단위 후보를 미리 뽑아둔다.
-        # 이후 char 슬라이싱 대신 이 문장들에서만 근거를 고른다.
-        body_sentences = self._sentences(body_text)
-        geo_gate = self._is_non_commercial_geopolitical(text)
-        matched = []
-        for pattern, sentence in self.OUTLOOK_PATTERNS:
-            # [지정학/외교 오탐 방지] "임상|허가|승인|인증" 패턴은 기업 규제승인용이므로,
-            # 외교·지정학적 허가/승인(기업 맥락 없음)에는 시장전망을 억지로 붙이지 않는다.
-            if pattern == r"임상|허가|승인|인증" and geo_gate:
-                continue
-            m = re.search(pattern, text, re.I)
-            if m:
-                matched.append((m.start(), sentence, m.group(0)))
-        # [위탁·중개 우선] "OO증권이 XX의 자사주 매입을 위탁 중개해 상한가"처럼 자기 자신이
-        # 아니라 대리·중개 역할을 한 기사에서, "자사주/배당" 패턴(발행사 본인의 환원 관점)이
-        # 위탁·중개 패턴과 함께 잡히면 실제 그림과 다른 전망이 섞여 나간다.
-        # 이런 경우 더 구체적이고 사실에 맞는 위탁·중개 관점만 남긴다.
-        if any("위탁" in a or "중개" in a or "주관" in a or "주선" in a for _, _, a in matched):
-            matched = [m for m in matched if not ("자사주" in m[2] or "배당" in m[2] or "주주환원" in m[2])]
-        if not matched:
-            # [조건19 빈요약허용 원칙과 동일 적용] 매칭되는 패턴이 없으면 억지 전망 문구를
-            # 만들지 않고 빈 리스트를 반환한다. 관련주가 없을 때 '無'로 정상 처리하는 것과 같다.
-            # (예전엔 여기서 fallback 문구를 만들었는데, validate()가 바로 그 문구를 범용
-            # 문구라며 거부해서 FINAL LOCK이 무조건 실패하는 자기모순이 있었다.)
-            return []
-        matched.sort(key=lambda x: x[0])
-        result = []
-        seen = set()
-        for _, sentence, anchor in matched:
-            if sentence in seen:
-                continue
-            seen.add(sentence)
-            # anchor(예: '자사주')가 실제로 들어있는 기사 핵심문장을 찾아 그대로 근거로 붙인다.
-            # 같은 패턴이 여러 기사에 걸려도, 기사마다 실제 문장이 다르므로 출력이 붕어빵처럼
-            # 똑같아지지 않고 그 기사의 구체적 수치·주체가 그대로 드러난다.
-            # [제목 반복 방지] key_points에서 못 찾으면 body 문장 중 anchor를 포함하면서
-            # 제목과 사실상 같지 않은 "완결된 문장"만 근거로 쓴다. 예전처럼 body_text를
-            # 글자 수로 잘라 쓰면 제목과 거의 같은 RSS 요약에서 제목 원문(+출처 도메인)이
-            # 그대로 잘려 들어가는 문제가 있었다.
-            concrete = next(
-                (kp for kp in key_points
-                 if anchor in kp and not self._is_title_near_dup(kp, title_n)),
-                None,
-            )
-            if not concrete:
-                for bs in body_sentences:
-                    if anchor in bs and not self._is_title_near_dup(bs, title_n):
-                        concrete = self._trim_for_readability(bs)
-                        break
-            if concrete and not self._is_title_near_dup(concrete, title_n):
-                result.append(f"{concrete.rstrip('.')} → {sentence}")
-            else:
-                result.append(f"{anchor} 관련해서 {sentence}")
-            if len(result) >= 3:
-                break
-        return result
 
     def _news_value(self, text, key_points, related, stage):
         score = 0
@@ -865,10 +768,6 @@ class MasterConditionManager:
             state["schedule"] = self._future_schedule(state["schedule"], state["body"])
         elif name == "시장영향":
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
-        elif name in ("전망근거", "후속확인", "지속성"):
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])
-        elif name == "시장전망최대3":
-            state["outlook"] = state["outlook"][:3]
         elif name == "대장주선정":
             state["leader"] = state["related"][0] if state["related"] else None
         elif name == "대장주이유" and state["leader"]:
@@ -1023,18 +922,6 @@ class MasterConditionManager:
             errors.append("관련주 최대 개수 초과")
         if not related and not self._clean(result.get("related_none_reason")):
             errors.append("관련주 없음 이유 없음")
-        outlook = [self._clean(x) for x in (result.get("outlook") or []) if self._clean(x)]
-        # [조건19 빈요약허용] 시장전망은 패턴이 실제로 매칭됐을 때만 채워진다.
-        # 매칭되는 사건이 없으면 억지로 만들지 않고 빈 상태를 정상으로 허용한다.
-        # (관련주가 없을 때 '無'로 정상 처리하는 것과 동일한 원칙.)
-        if len(outlook) > 3:
-            errors.append("시장전망 3개 초과")
-        # generic fallback 흔적 차단 (안전장치로 유지 — 다른 경로로 범용 문구가 섞여도 차단)
-        generic = (
-            "기사에서 확인된 사건이 실제 기업 실적·수급으로 연결되는 경로를 추가 확인할 필요가 있습니다.",
-        )
-        if any(x in " ".join(outlook) for x in generic):
-            errors.append("범용 시장전망 문구 사용")
         if result.get("master_confirmed") and result.get("news_value") == "낮음":
             errors.append("뉴스가치 낮은데 MASTER 확정")
         result["validation_errors"] = errors
