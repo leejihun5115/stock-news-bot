@@ -3704,10 +3704,23 @@ def _engine_company_history_detail(name):
         return None
     matches.sort(key=lambda r: str(r.get("ts", "")))
     state_counts = Counter(str(r.get("market_state") or "").strip() for r in matches if r.get("market_state"))
+    # [강화] 단순 등장 횟수만으로는 투자판단에 쓸모가 적다. '끼/탄력'의 확인
+    # 근거(핵심원칙: 과거 상한가/급등 이력)로 실제 얼마나 자주 상한가/급등까지
+    # 갔었는지를 별도로 세어, 데이터 값 섹션에서 바로 보여줄 수 있게 한다.
+    surge_count = sum(1 for r in matches if r.get("is_surge_hit"))
+    last_date = ""
+    last_ts = matches[-1].get("ts", "")
+    if last_ts:
+        try:
+            last_date = datetime.datetime.fromisoformat(str(last_ts)).strftime("%Y-%m-%d")
+        except Exception:
+            last_date = str(last_ts)[:10]
     return {
         "count": len(matches),
+        "surge_count": surge_count,
         "first_ts": matches[0].get("ts", ""),
-        "last_ts": matches[-1].get("ts", ""),
+        "last_ts": last_ts,
+        "last_date": last_date,
         "state_counts": state_counts,
     }
 
@@ -3742,7 +3755,32 @@ def _engine_company_outcome_stats(name):
         "count": len(changes),
         "avg": sum(changes) / len(changes),
         "success_rate": (wins / len(changes)) * 100.0,
+        # [강화] 평균만 보여주면 변동폭(리스크)이 감춰진다. 실제 투자판단에는
+        # "최고 얼마까지 갔었고 최악은 얼마였는지" 범위가 평균보다 더 중요하다.
+        "best": max(changes),
+        "worst": min(changes),
     }
+
+
+def _engine_rank_companies_by_track_record(names):
+    """[강화: 관련주도 데이터 값에 근거해 도출] 후보 종목들을 실제 성과
+    데이터(OUTCOME_TRACKING_DB에 쌓인 과거 등락률)로 재정렬한다.
+    - 표본이 2건 이상 쌓여 실제 상승비율/평균 등락률을 계산할 수 있는 종목을
+      데이터가 없는 종목보다 우선 앞으로 배치한다.
+    - 데이터가 있는 종목끼리는 상승비율 → 평균 등락률 순으로 좋은 쪽을 먼저 보여준다.
+    - 데이터가 아예 없는 종목들끼리는 원래 추출 순서를 그대로 유지한다
+      (근거 없이 임의로 순서를 뒤섞지 않는다).
+    """
+    scored = []
+    for idx, name in enumerate(names):
+        stats = _engine_company_outcome_stats(name)
+        if stats and stats.get("count", 0) >= 2:
+            score = (1, stats["success_rate"], stats["avg"])
+        else:
+            score = (0, 0.0, 0.0)
+        scored.append((score, idx, name))
+    scored.sort(key=lambda x: (-x[0][0], -x[0][1], -x[0][2], x[1]))
+    return [name for _, _, name in scored]
 
 
 def _engine_master_result(item):
@@ -3989,6 +4027,11 @@ def _engine_format_message(item):
     # 화면 표식은 사용자 지정 위치에만 사용한다.
     companies = item.get('companies', []) or []
     domestic = _engine_domestic_companies(companies)
+    # [강화] 관련주 노출 순서 자체를 데이터 값(과거 실제 등락률 성과)에 근거해
+    # 정한다. 사업연관으로 이미 직접 확정된 🎯(direct)는 원칙상 최우선이므로
+    # 건드리지 않고, 👀 관련주 후보(domestic)만 실적 데이터 기준으로 재정렬한다.
+    if len(domestic) > 1:
+        domestic = _engine_rank_companies_by_track_record(domestic)
     is_pharma = _engine_is_pharma_news(title, ' '.join(key_points))
     is_listed = bool(domestic)
 
@@ -4055,7 +4098,7 @@ def _engine_format_message(item):
     # 같은 내용을 그대로 반복하지 않도록 뒤에서 이 목록과 대조한다.
     shown_texts = []
     if key_points:
-        lines.append('🔎 <b>핵심</b>')
+        lines.append('🔎 <b>요약</b>')
         for kp in key_points:
             clean = re.sub(r'^[▶️•✔️\s]+', '', str(kp)).strip()
             if clean and not _engine_line_is_duplicate(clean, shown_texts):
@@ -4084,7 +4127,7 @@ def _engine_format_message(item):
     if market_sentence and analysis_lines and not _engine_line_is_duplicate(market_sentence, shown_texts):
         analysis_lines.append(market_sentence)
     if analysis_lines:
-        lines.append('🧠 <b>분석_전망</b>')
+        lines.append('🧠 <b>분석</b>')
         for al in analysis_lines:
             lines.append('     ✔ ' + html.escape(al[:220]))
 
@@ -4099,9 +4142,15 @@ def _engine_format_message(item):
     # ============================================================
     # 🧠 [데이터 값]
     # ------------------------------------------------------------
-    # 이 종목이 과거에 몇 번 등장했고(HISTORICAL_SURGE_DB), 그때 실제
-    # 등락률은 어땠는지(OUTCOME_TRACKING_DB), 과거 등장 시점의 시장상황과
-    # 지금 시장상황이 다른지를 누적값 기준으로 한 섹션에 모아 보여준다.
+    # [강화] 단순 등장 건수·평균 등락률 나열은 투자판단에 실질적 도움이
+    # 적다는 피드백에 따라, 아래 원칙으로 다시 구성한다.
+    # 1) 어느 종목 기준 데이터인지 헤더에 명시한다(👀/🎯 관련주 산출 근거와
+    #    동일한 종목이어야 함 — 관련주 자체도 이 데이터 값을 근거로 도출한다.
+    #    자세한 정렬 로직은 _engine_rank_companies_by_track_record 참고).
+    # 2) 단순 등장 횟수보다 "실제 상한가/급등까지 간 이력이 몇 번인지"와
+    #    "가장 최근이 언제인지"가 끼/탄력 판단에 더 중요하므로 그것만 남긴다.
+    # 3) 평균 등락률 하나만으로는 리스크(변동폭)가 가려지므로 최고/최저 범위를
+    #    함께 보여준다.
     # 쌓인 데이터가 없으면 섹션 자체를 생략한다(형식적 기록 없음).
     # ============================================================
     lead_name = ''
@@ -4110,6 +4159,8 @@ def _engine_format_message(item):
     if not lead_name and domestic:
         # MASTER가 관련주를 별도로 확정하지 못했어도, 본문에서 직접 추출된
         # 상장종목(👀관련주 배지)이 있으면 그 종목 기준으로 과거 데이터를 조회한다.
+        # domestic은 이미 실제 성과 데이터 기준으로 재정렬돼 있으므로, 여기서
+        # 고르는 domestic[0]은 곧 '데이터 값 근거로 뽑힌 관련주'가 된다.
         lead_name = str(domestic[0]).strip()
     # [데이터 누적형 분석] 현재 뉴스 → 현재 시장 → 과거 유사시장 → 실제 과거성과를
     # 순서대로 비교해서 보여준다. 데이터가 없는 항목은 절대 만들어내지 않고 생략한다.
@@ -4119,23 +4170,28 @@ def _engine_format_message(item):
         data_lines = []
 
         if hist:
-            compare_parts = [f"과거 유사 재료 이력 {hist['count']}건"]
-            if market_state:
-                compare_parts.append(f"현재 시장: {market_state}")
-            if hist.get('state_counts'):
-                same_state_count = hist['state_counts'].get(market_state, 0) if market_state else 0
+            hist_parts = [f"과거 등장 {hist['count']}건"]
+            if hist.get('surge_count'):
+                hist_parts.append(f"그중 상한가/급등 이력 {hist['surge_count']}건")
+            if hist.get('last_date'):
+                hist_parts.append(f"최근 {hist['last_date']}")
+            data_lines.append(' · '.join(hist_parts))
+
+            if hist.get('state_counts') and market_state:
+                same_state_count = hist['state_counts'].get(market_state, 0)
                 past_state, _cnt = hist['state_counts'].most_common(1)[0]
-                if market_state and same_state_count:
-                    compare_parts.append(f"그중 동일 시장상황({market_state}) {same_state_count}건")
-                elif market_state and past_state and past_state != market_state:
-                    compare_parts.append(f"과거엔 주로 '{past_state}'였고 이번엔 '{market_state}'")
-            data_lines.append(' · '.join(compare_parts))
+                if same_state_count:
+                    data_lines.append(f"동일 시장상황({market_state}) 사례 {same_state_count}건")
+                elif past_state and past_state != market_state:
+                    data_lines.append(f"과거엔 주로 '{past_state}'였고 이번엔 '{market_state}'로 다름")
 
         if outc:
             sign = '+' if outc['avg'] >= 0 else ''
+            best_sign = '+' if outc['best'] >= 0 else ''
+            worst_sign = '+' if outc['worst'] >= 0 else ''
             data_lines.append(
-                f"표본 {outc['count']}건 · 상승비율 {outc['success_rate']:.0f}% · "
-                f"평균 등락률 {sign}{outc['avg']:.2f}%"
+                f"실제 등락 표본 {outc['count']}건 · 상승비율 {outc['success_rate']:.0f}% · "
+                f"평균 {sign}{outc['avg']:.2f}% (최고 {best_sign}{outc['best']:.2f}% · 최저 {worst_sign}{outc['worst']:.2f}%)"
             )
             # 판단: 표본이 충분할 때만 강함/관심/주의를 매긴다.
             # 표본이 적으면 데이터를 근거로 단정하지 않고 '데이터 부족'으로만 표시한다.
@@ -4151,7 +4207,7 @@ def _engine_format_message(item):
             data_lines.append(f"판단 : {verdict}")
 
         if data_lines:
-            lines.append('🧠 <b>데이터 값</b>')
+            lines.append(f'🧠 <b>데이터 값</b> · {html.escape(lead_name)} 기준')
             for dl in data_lines:
                 lines.append('     ✔ ' + html.escape(dl))
 
@@ -4600,6 +4656,19 @@ def _naver_request(mode, query, display):
         params["format"] = "json"
     response = requests.get(endpoint, headers=headers, params=params, timeout=ENGINE_HTTP_TIMEOUT)
     return response, actual_mode
+
+
+def _naver_extract_items(response):
+    """네이버 검색 API 응답(requests.Response)에서 뉴스 항목 리스트를 추출한다.
+    [버그 수정] 이 함수가 정의되어 있지 않아 호출부(_engine_run_naver,
+    _engine_run_keyword_combinations)에서 매번 NameError가 발생했고, 그
+    예외가 각 호출부의 try/except Exception에 조용히 삼켜지면서 네이버
+    뉴스/키워드 조합 검색이 항상 0건으로 실패하고 있었다."""
+    try:
+        return response.json().get("items", []) or []
+    except Exception as e:
+        log_error("네이버 응답 파싱", e)
+        return []
 
 
 def _engine_run_naver():
