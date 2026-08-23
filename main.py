@@ -1,211 +1,83 @@
-# ============================================================
+# -*- coding: utf-8 -*-
+"""
+AI 주식 브리핑 엔진 — 국내/해외 뉴스·공시·텔레그램 채널을 수집해
+조건 기반으로 검증한 뒤 Telegram으로 송출하는 봇.
 
 # ============================================================
-# FINAL AGREED BEHAVIOR
+# 핵심 원칙 (FINAL AGREED BEHAVIOR)
 # ============================================================
 # 국내 관련주:
-# - 직접 사업연관을 최우선.
-# - 직접연관이 없더라도 실제 시장에서 동일 테마로 움직인 근거가 있으면 연결.
+# - 직접 사업연관을 최우선으로 연결한다.
+# - 직접연관이 없더라도 실제 시장에서 동일 테마로 움직인 근거가 있으면 연결한다.
 # - 과거 상한가/급등 이력 + 과거 테마 주도 이력 + 반복적인 강한 수급 반응을
-#   '끼/탄력'의 확인 근거로 사용.
-# - 대장주를 선정하면 반드시 선정 이유를 함께 표시.
-# - 이후 약한 순으로 약 3개까지 관찰 후보를 제시.
-# - 글로벌 기업을 국내 상장기업으로 오인 연결하지 않음.
+#   '끼/탄력'의 확인 근거로 사용한다.
+# - 대장주를 선정하면 반드시 선정 이유를 함께 표시한다.
+# - 이후 약한 순으로 약 3개까지 관찰 후보를 제시한다.
+# - 글로벌 기업을 국내 상장기업으로 오인 연결하지 않는다.
+# - 카테고리(분류 결과)가 없는 뉴스는 절대 노출하지 않는다.
 #
 # 미국장:
 # - 미국 선물 급등/급락 시 별도 브리핑.
-# - 개장 약 30분 후 개장 브리핑.
-# - 장중 구조적 변화/급등/급락/테마 변화/환율/유가 등 큰 변동 시 브리핑.
-# - 장마감 후 전체 시장흐름 + 강한 종목군 + 원인 + 한국 관련주 +
-#   MSCI + ADR을 정리.
-# - 국내 관련주가 없어도 글로벌 시황은 보존하고 글로벌 외신을 DB에 축적.
+# - 개장 후 정기 브리핑, 장중 구조적 변화/환율/유가 등 큰 변동 시 브리핑.
+# - 장마감 후 전체 시장흐름 + 강한 종목군 + 원인 + 한국 관련주 + MSCI + ADR 정리.
+# - 국내 관련주가 없어도 글로벌 시황은 보존하고 글로벌 외신을 DB에 축적한다.
 #
 # 강한 재료:
-# - '👍 강한 재료 · 급등/급락' 같은 표현은 사용하지 않음.
-# - 👍는 재료 강도만 표시.
-# - 수주라면 수주 이유/금액/기간 등 확인 가능한 사실을 표시.
-# - 과거 동일/유사 재료가 있으면 당시 주가 상승률과 원문 하이퍼링크를 연결.
-# - 확인되지 않은 금액/수익률은 추정하지 않음.
+# - 수주라면 수주 이유/금액/기간 등 확인 가능한 사실만 표시한다.
+# - 과거 동일/유사 재료가 있으면 당시 주가 상승률과 원문 하이퍼링크를 연결한다.
+# - 확인되지 않은 금액/수익률은 추정하지 않는다.
 #
 # 뉴스 품질:
-# - 신규 사건 / 업그레이드 / 중복 사건 / 미확인 뉴스 구분.
-# - Telegram 도배 방지.
-# - 과거 상한가·급등 재료 DB 및 유사 사례 DB 활용.
-# - 봇 미활동/장시간 무응답 감시 및 알림.
+# - 신규 사건 / 업그레이드 / 중복 사건 / 미확인 뉴스를 구분한다.
+# - Telegram 도배를 방지한다(동일/유사 뉴스 재전송 차단).
+# - 과거 상한가·급등 재료 DB 및 유사 사례 DB를 활용해 데이터 기반 비교를 제공한다.
+# - 봇 미활동/장시간 무응답을 감시하고 알림을 보낸다.
+#
 # ============================================================
-
-# 원본 복구 기반 조건 반영 검증본 (2026-08-16)
-# 기존 수집 구조 보존 + 시장반영형 시간판정 + 소스별 필터 + 분류/재확인/중복통합
+# 🔒 데이터 누적 절대 원칙 (2026-08-23 확정 / 임의 변경·롤백 금지)
+# ------------------------------------------------------------
+# - 과거DB(HISTORICAL_SURGE_DB) 적재는 "카테고리(분류)가 확정"되는 즉시,
+#   텔레그램 실시간 송출 성공 여부·시간창(최근 60분 등)·시장시간 게이트와
+#   완전히 무관하게 이루어진다. 시간/송출 게이트는 오직 "지금 당장 텔레그램에
+#   내보낼지"만 결정할 뿐, "데이터를 쌓을지"를 결정해서는 절대 안 된다.
+# - 즉, _engine_process_item()에서 분류(_engine_classify)가 ok=True이고
+#   category가 있으면 _engine_record_historical_case(...)를 무조건 먼저
+#   호출한 뒤에, 그 다음 단계로 실시간 송출 여부(시간창/게이트)를 판단하는
+#   순서를 반드시 지킨다. 이 순서를 바꾸거나, 시간창 체크를 분류보다 앞에
+#   두거나, "송출 성공(text_sent) 시에만 기록"하는 과거 구조로 되돌리면
+#   시장비교/과거성과 분석 DB가 다시 비어버리는 원래 문제가 재발한다.
+# - DART 등 기간 조회가 되는 소스는 /백필 명령으로 과거 데이터를 소급 적재하고,
+#   그 외 실시간 수집분은 시간 경과에 따라 자연스럽게 누적된다.
+# - [보완] 외신(영문) 뉴스는 번역이 분류보다 먼저 실행되는데, 번역 API가
+#   429(Too Many Requests) 등으로 실패하면 그 즉시 뉴스를 버리지 않고
+#   _engine_translate_retry_queue에 남겨 다음 주기(들)에 번역을 재시도한다.
+#   번역이 성공하는 순간에만 이 원칙(분류→과거DB 무조건 누적)이 정상 적용되므로,
+#   번역 재시도 큐 자체를 삭제하거나 "1회 실패 시 완전 폐기"로 되돌리지 않는다.
+# - 이 절은 이후 어떤 리팩터링에서도 삭제/약화되지 않아야 하며, 관련 함수
+#   (_engine_process_item, _engine_record_historical_case,
+#   _engine_queue_translation_retry/_engine_retry_translation_queue)를
+#   수정할 때는 이 원칙을 먼저 재확인한다.
 # ============================================================
-
-# ============================================================
-# AI 주식 브리핑 엔진 - Commercial Edition V1
-# 두 원본(news_bot_버그수정12.py + news_bot_1.py)의 검증된 기능을 보존하고
-# RSS 진단 + 상용화 점수 엔진을 추가한 통합본
-# ============================================================
-
-# -*- coding: utf-8 -*-
-"""
-# 버그수정12 (2026-08-15) — 🔥🔥[매우 중대] DART 원문 조회가 거의 전부
-#    실패하던 진짜 원인 발견 - 반기보고서 같은 큰 문서뿐 아니라 대표이사변경/
-#    임원소유상황 같은 작은 공시까지도 전부 실패하고 있었음(로그에서 확인).
-#    재시도 로직은 있었는데, "여러 공시를 훑는 반복문 자체"에는 요청 사이
-#    간격이 전혀 없어서 공시가 몰리는 날(반기보고서 시즌, 하루 300건+) 수십
-#    ~수백 건을 순식간에 두드리다가 DART 서버 속도제한에 걸렸을 가능성이
-#    높음. 요청 사이 0.4초 간격 추가(check_dart_disclosures + check_ipo_listings
-#    양쪽 다) + 정상 운영에도 훑는 건수 상한(150건, 예전엔 테스트모드에만
-#    있었음) 추가해서 한 사이클이 너무 오래 걸리지 않게 함. 실제 요청 간격
-#    적용 검증 완료.
-#
-# 버그수정11 (2026-08-14) — 약한 DART 공시 노출 차단:
-#    D등급이면서 강한 신호(단독/속보/특징주/흑자전환/빅이슈/20%+ 비율변동)가
-#    하나도 없는 공시는 조용히 억제해서 안 보냄 - "금액 적거나 일반적인
-#    내용"이 너무 많이 온다는 요청 반영. 강한 신호가 있으면 D등급이어도
-#    그대로 보냄(과도하게 막지 않기 위함). 일반뉴스는 이 필터 영향 안 받음
-#    (원래 자체 필터가 있어서). 3가지 시나리오(약한공시 차단/흑자전환은
-#    통과/일반뉴스는 무관) 전부 검증 완료.
-#
-# 버그수정10 (2026-08-14) — 이번 요청 중 "지금 가능한" 것들 처리:
-#    1. [Key Point]가 제목을 그대로 반복하던 문제 - 일반뉴스에서는 아예 제거
-#       (본문 전체를 안 읽는 이상 제목과 다른 진짜 요약을 만들 수 없어서,
-#       억지로 만드는 것보다 정직하게 안 보여주는 게 낫다는 판단). DART는
-#       원문 기반 실질정보(거래상대방/배당/지분율)를 계속 보여줌.
-#    2. 등급 표시 형식 변경: "뉴스등급 : D등급 (38/100)", "재무등급 : 관심(흑자전환) (38/100)"
-#    3. 흑자전환인데 다른 데이터(ROE 등) 부족으로 "주의"등급 나오던 문제 -
-#       흑자전환 감지시 최소 "관심(흑자전환)" 등급 보장.
-#    4. 판정근거에서 이유 불명확한 "강한키워드 N개" 제거.
-#    5. 🔥[중대] 한글 회사명 하이라이트가 단어경계 없이 부분일치라서 "테스트"
-#       안에 짧은 회사명이 우연히 들어있으면 오탐하던 버그 - (?<![가-힣])...
-#       (?![가-힣]) 패턴으로 수정 (4곳 전부). 재현+수정 검증 완료.
-#    6. 텔레그램 채널 추가: newszzang, stockdartalert (상장기업 언급시만 노출.
-#       rocket_news1/라르고TV는 이미 있었음 - 라르고TV 미노출은 다른 원인으로 추정).
-#    7. 브리핑 끝에 "— 타이밍 —" 서명 추가.
-#    8. 해외지수에 원/달러 환율, WTI 유가 추가.
-#
-#    ⚠️[중요] 요청하신 것 중 아래는 "새로운 유료 실시간 데이터"가 있어야 가능해서
-#    이번엔 손 못 댔습니다 - 실제 나스닥/코스피200 선물, 채권금리, DXY, 외국인
-#    선물수급, 실시간 대장주 등락률/거래대금 추적, 예측성 시나리오 종목 추천.
-#    지금 쓰는 무료 소스(DART/Yahoo지수/네이버금융)로는 안 됩니다.
-#
-# 버그수정9 (2026-08-14) — 배당결정 공시 + Key Point 문장 개선:
-#    1. 배당결정 공시도 대량보유상황보고서와 같은 원인(짧은 타임아웃 15초→30초)
-#       이었을 가능성이 높아 같이 상향. 배당금액뿐 아니라 배당기준일("언제")도
-#       같이 추출하도록 확장. 원문 조회/파싱 실패해도 조용히 안 넘어가고
-#       "⚠️ 원문 조회 실패로 배당금액 확인 불가..." 안내 표시.
-#    2. 🔥[중대] [Key Point] 요약 방식 전면 교체 - 예전엔 "누가·무엇을" 키워드만
-#       뽑아 조사만 붙인 밋밋한 문장("SK·SK하이닉스가 생산·AI 관련 소식")을
-#       억지로 만들었는데, 실제 내용이 안 담겨서 계속 지적받음. 제목 자체가
-#       이미 기자가 쓴 완성된 문장(진짜 5W1H 포함)이라는 걸 활용 - 이제 출처
-#       접미사만 떼고 제목 그대로 [Key Point]로 보여줌. 훨씬 정확하고 내용도
-#       풍부해짐(지어낼 위험도 없음). 실제 예시로 검증 완료.
-#
-# 버그수정8 (2026-08-14) — 🔥[중대] 대량보유상황보고서 "누가 몇% 보유" 요약이
-#    실제로 안 나왔던 문제 원인 파악 및 수정:
-#    1. 대량보유상황보고서가 다른 소스보다 짧은 타임아웃(15초)만 받고 있어서
-#       원문 조회가 자주 자주 실패했음 - 반기/사업/분기보고서와 동급(30초)으로 상향.
-#    2. 지분율 검색 키워드 확장 - "보유주식등의비율", "발행주식총수에 대한"
-#       등 실제 DART 문서에서 쓰이는 다른 표기도 잡히게 함 (검증: 새 키워드로
-#       예전엔 놓쳤을 문구도 정상 추출됨 확인).
-#    3. 🩺[핵심] 원문 조회/파싱이 실패해도 조용히 넘어가지 않고, "⚠️ 원문
-#       조회 실패로 지분율 상세 확인 불가 - 아래 링크에서 직접 확인해주세요"
-#       처럼 사용자에게 명확히 상태를 알려주도록 변경. 실제 메시지 조립까지
-#       통합 테스트로 검증 완료.
-#
-# 버그수정7 (2026-08-14) — 브리핑 스케줄 확장 + 휴장일 안내 신설:
-#    1. 아침브리핑을 7시/7시30분 2번, 오후브리핑을 15시/15시30분 2번으로 확장
-#       (기존 8시/15시 각 1번 → 각 2번). 시/분 슬롯 리스트 기반으로 재설계.
-#    2. 🔔미국장 개장 브리핑 신설 - 22시30분(서머타임 기준, 겨울엔 23시30분으로
-#       직접 조정 필요)에 개장 직후 지수/주요종목 현황을 정리해서 발송.
-#       기존 아침브리핑 로직을 재사용(header만 다르게).
-#    3. 📅휴장일 안내 신설 - 국경일로 증시가 며칠 쉬면 "언제부터 언제까지
-#       쉬는지" 미리 알려줌. 신정/삼일절/어린이날/현충일/광복절/개천절/한글날/
-#       성탄절처럼 날짜 고정된 공휴일은 미리 채워뒀음. 설날/추석/대체공휴일은
-#       음력 기준이라 정확한 날짜를 지어내는 대신 직접 추가하도록 안내 주석을
-#       남김(KRX_MARKET_HOLIDAYS_2026 참고). 광복절(8/15, 토) 사례로 실제
-#       검증 완료 - "08월 15일(토) ~ 08월 16일(일)" 정확히 감지됨.
-#
-# 버그수정6 (2026-08-14) — 판정근거/DART 요점 개선:
-#    1. 판정근거에서 거의 항상 참인 무의미한 "상장기업 언급" 제거. 실제로
-#       주가에 영향 줄 실질적 이유(단독/속보/특징주/비율변동/빅이슈)만 남김 -
-#       전부 없으면 줄 자체를 안 보여줌(과장 안 함).
-#    2. 🤝거래상대방 라벨 신설 - DART 계약/공급/양수도 공시 원문에 공시
-#       제출기업이 아닌 "다른 상장기업"이 거래상대방으로 언급되면, 그 회사명과
-#       계약금액을 자동으로 뽑아서 "🤝주성엔지니어링 (계약 500억)"처럼 보여줌
-#       (예: 삼성전자 공시에 반도체장비업체 주성엔지니어링이 상대방으로
-#       나오면 자동 추출). 실제 텍스트로 검증 완료.
-#    3. 대량보유상황보고서의 "누가 몇% 보유"는 이미 있던 로직(_dart_shareholding_label)인데,
-#       최근 사례처럼 안 나온 건 DART 원문 조회 자체가 실패했을 가능성이 높음
-#       (별도 이슈로 계속 추적 중).
-#
-# 버그수정5 (2026-08-14) — 줄간격 + 목표가 표시:
-#    1. 메시지 섹션(본문/등급/회사정보) 사이에 여백 한 줄씩 추가해서 덜
-#       답답하게 개선.
-#    2. "🎯목표가" 줄 신설 - 네이버금융에 실제 애널리스트 목표주가가 있으면
-#       "목표가: 🔺85,000원 (+21.4%)" 형태로 표시(🔺=상향/🔻=하향, 텔레그램은
-#       글자색 미지원이라 색깔 대신 이모지로 구분). 실제 목표가가 없고 EPS·PER만
-#       있으면 "(추정)" 표시를 붙여서 진짜 애널리스트 수치와 구분되게 계산해서
-#       보여줌 (숫자를 진짜처럼 지어내지 않기 위함). 기존 "🎯괴리율" 표시를
-#       이걸로 통합(내용이 겹쳐서). 밑줄강조 정규식도 새 이름에 맞게 같이 수정.
-#    4가지 시나리오(상향/하향/추정치/데이터없음) 전부 검증 완료.
-#
-# 버그수정4 (2026-08-14) — 요청하신 6가지 개선사항:
-#    1. "제목요약"(누가:X·무엇을:Y 나열식)을 자연스럽게 연결된 문장으로 변경.
-#       [Key Point] "한화투자증권이 본격화·투자 관련 소식" 형태.
-#    2. 한국 대기업 그룹명 앞 👍 이모지 제거 (굵게만 표시).
-#    3. 유튜브 태그 중복 체크마크(✅[유튜브 _ ✅채널명]) 수정 →
-#       ✅[유튜브 _ 채널명]으로 정리.
-#    4. "중요도"→"뉴스등급", "재무점수"→"재무등급"으로 명칭 통일, 한 줄로 압축.
-#    5. DART 재무카드에 "💡특이사항" 줄 신설 - 매출/영업이익/순이익이 20%
-#       이상 증가하면(시장이 좋게 반응할 만한 수준) 자동으로 강조 표시.
-#    6. Google 출처 표시 통일은 이미 완료(버그수정2) - 재확인만 남음.
-#       전부 실제 메시지 조립까지 통합 테스트로 검증 완료.
-#
-# 버그수정3 (2026-08-14) — 🔥[중대] SOLO_MODE에 잘못된 형식(한글 이름을
-#    슬래시로 나열)을 넣으면, "일단 전부 끄고" 시작했는데 아무것도 못 알아들어서
-#    전체 소스가 다 꺼져버리는 사고가 있었음 (실제로 뉴스가 하나도 안 오던
-#    원인). 이제 ①콤마/슬래시 둘 다 구분자로 인식, ②한글 이름도 별칭으로
-#    인식(국내RSS/해외RSS/DART/텔레그램/약업전자/네이버/블로그/유튜브),
-#    ③그래도 하나도 못 알아들으면 안전하게 "전체 켜짐" 기본상태 유지하도록
-#    수정. 실제 문제됐던 값으로 재현 테스트 + 안전장치 + 기존방식 호환성
-#    전부 검증 완료.
-#
-# 버그수정2 (2026-08-14) — 국내RSS의 구글뉴스 검색피드 출처 표시가
-#    "구글뉴스"로 하드코딩되어 있던 걸 "Google"로 통일 (해외RSS/네이버 쪽은
-#    이미 통일돼있었는데 이 한 곳만 놓쳤었음). 자기참조로 잘못 써진 주석
-#    (_now_kst 설명 부분)도 같이 정리.
-#
-# 버그수정1 (2026-08-14) — KRX 상장법인 목록 조회 방식을 DART API로 전환.
-#    KRX 사이트가 클라우드 서버 IP를 차단(403)해서 계속 실패하던 문제를,
-#    DART corpCode.xml(항상 정상 작동하던 API)로 대체해서 해결. KRX 직접
-#    조회는 예비 백업으로만 남겨둠. 검증: 가짜 XML로 상장/비상장 구분,
-#    DART 실패시 KRX 백업 전환, 둘 다 실패해도 크래시 없음 - 전부 확인함.
-#
-주식/공시 및 외부 텔레그램 채널 수신/중계 알림 봇 (최종 완성본)
-
-반영 사항:
-  1. 국내외 RSS, 약업신문/전자신문, DART, 네이버 뉴스 및 외부 텔레그램 채널 연동 전체 포함.
-  2. 기업명, 타겟 키워드 이름 앞에 번개 표시(⚡) 고정 적용.
-  3. 외부 텔레그램 채널(`goddessTTF`, `gaoshoukorea`) 키워드 필터 없이 무조건 수신 및 `[텔레그램]` 소스명 적용.
-  4. 텔레그램 채널 메시지 전송 시 본문의 초록색 네모 기호 제거 및 원문 링크 버튼에 연두색 체크 표시(✅) 적용.
 """
 
-# ============================================================
-# 이지훈 | 2026-08-18 | 최종 통합 기준파일 수정본
-# ============================================================
-# 원칙: 이 파일을 기준으로 기존 구조/기능을 보존하고 요청된 기능만 수정.
-# 추가 통합:
-# - 네이버 뉴스: NAVER API HUB 우선 + 기존 Search API 호환
-# - 유튜브: 채널 핸들 -> 실제 channel_id 자동 해석/캐시/재시도
-# - 미국장: 정규장 개장~마감까지 30분마다 정기 브리핑
-# - 미장 브리핑: 시간만 표시(개장 30분 문구 제거)
-# - 주요 지수/종목/ADR: 🔺 / ▼ + 등락률 (한글 상승·하락 미표시)
-# - 미국뉴스에서 실제 국내 관심종목으로 연결될 때만 🇰🇷 표시
-# - 기존 대장주/관심종목/공시/재무/일정/최근1시간/과거사례 로직 보존
-# ============================================================
 
 
-
-from master_condition_manager import MasterConditionManager
+try:
+    from master_condition_manager import MasterConditionManager
+except ModuleNotFoundError:
+    # 원본 파일명(master_condition_manager(7).py)을 그대로 유지해도 부팅 가능하도록
+    # 로컬 파일을 모듈명 master_condition_manager로 안전하게 로드한다.
+    import importlib.util as _icu
+    _os = __import__("os")
+    _sys = __import__("sys")
+    _mcm_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "master_condition_manager(7).py")
+    _mcm_spec = _icu.spec_from_file_location("master_condition_manager", _mcm_path)
+    if _mcm_spec is None or _mcm_spec.loader is None:
+        raise ImportError(f"MasterConditionManager 모듈을 찾을 수 없습니다: {_mcm_path}")
+    _mcm_mod = _icu.module_from_spec(_mcm_spec)
+    _sys.modules["master_condition_manager"] = _mcm_mod
+    _mcm_spec.loader.exec_module(_mcm_mod)
+    MasterConditionManager = _mcm_mod.MasterConditionManager
 import sys
 import time
 import datetime
@@ -223,7 +95,7 @@ import difflib
 import zipfile
 import io
 import xml.etree.ElementTree as ET
-from collections import defaultdict
+from collections import defaultdict, Counter
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -241,7 +113,16 @@ def master_finalize_news(
     schedule="",
     evidence=None,
 ):
-    """뉴스 1건을 MASTER -> Validator -> FINAL LOCK 순으로 확정."""
+    """뉴스 1건을 MASTER -> Validator -> FINAL LOCK 순으로 확정.
+
+    [수정] 기존에는 Validator에서 오류가 하나라도 나오면 여기서 예외를 던졌고,
+    호출부(_engine_master_result)의 try/except가 이를 통째로 삼켜 None을
+    반환했다. 그 결과 MASTER가 이미 계산해 둔 제목/핵심요약/용어설명/관련종목이
+    사소한 검증 오류 하나 때문에 전부 사라지고 원본 제목만 나가는 문제가 있었다.
+    이제 검증 오류가 있어도 예외를 던지지 않고, locked=False 상태로 계산된
+    내용을 그대로 반환한다. 오직 검증을 완전히 통과했을 때만 FINAL LOCK(locked=True)
+    처리한다. Formatter 쪽은 locked 여부와 무관하게 사용 가능한 내용을 그대로 쓴다.
+    """
     result = _MASTER_MANAGER.analyze(
         title=title,
         body=body,
@@ -253,10 +134,7 @@ def master_finalize_news(
     )
     result = _MASTER_MANAGER.validate(result)
     if result.get("validation_errors"):
-        raise ValueError(
-            "MASTER VALIDATOR 실패: "
-            + " / ".join(result["validation_errors"])
-        )
+        return result
     return _MASTER_MANAGER.lock(result)
 
 # ============================================================
@@ -1005,7 +883,9 @@ DART_RUMOR_KEYWORDS = ["조회공시", "풍문", "보도", "해명", "설명요�
 
 # [불변 명령체계] 최신 사용자 지시가 최우선이며 충돌하는 하위 출력 명령은 실행하지 않는다.
 LATEST_USER_COMMAND_WINS = True
-COMMAND_PRIORITY_POLICY = ("LATEST_USER_COMMAND", "MASTER", "VALIDATOR", "FINAL_LOCK", "FORMATTER", "TELEGRAM")
+COMMAND_PRIORITY_POLICY = ("LATEST_USER_COMMAND",)
+# 하위 명령/출력 레이어는 사용자 최우선 명령을 덮어쓸 수 없다.
+DISABLE_LEGACY_SUBCOMMAND_OVERRIDES = True
 
 DART_STRONG_REPORT_KEYWORDS = {
     "유상증자결정", "무상증자결정", "전환사채권발행결정", "신주인수권부사채권발행결정",
@@ -1432,6 +1312,12 @@ _engine_last_cycle_finished = 0.0
 _engine_last_watchdog_alert = 0.0
 _engine_telegram_counts = {}
 _engine_historical_cache = []
+# [중복적재 방지] 실시간 송출 성공 여부와 무관하게 과거DB(HISTORICAL_SURGE_DB)에
+# 무조건 누적 기록하게 되면서, 같은 기사가 매 폴링 주기(RSS 재수집/네이버 재검색)마다
+# 반복 적재되는 것을 막기 위한 별도 키 셋. 실시간 송출 dedupe(_engine_seen)와는
+# 완전히 분리되어 있어 실시간 송출 로직에는 영향을 주지 않는다.
+_engine_historical_recorded_keys = set()
+_engine_historical_recorded_lock = threading.Lock()
 _engine_global_briefing_cache = []
 MARKET_IMPACT_KEYWORDS = {
     "인수", "합병", "M&A", "m&a", "세계최초", "세계 최대", "세계최대", "사상 최대", "사상최대",
@@ -1602,6 +1488,13 @@ def _engine_load_extended_state():
         try:
             with open(HISTORICAL_SURGE_DB, "r", encoding="utf-8") as f:
                 _engine_historical_cache = [json.loads(x) for x in f if x.strip()][-5000:]
+            # [중복적재 방지] 실시간 송출 여부와 무관하게 과거DB에 기록하도록 바뀌면서
+            # 같은 기사(RSS 재폴링/재검색)가 매 주기 반복 적재되지 않도록, 서버 재시작 후에도
+            # 이미 적재된 기사의 dedupe key(link 우선, 없으면 title)를 복원해 둔다.
+            for _row in _engine_historical_cache:
+                _k = str(_row.get("link") or "").strip() or str(_row.get("title") or "").strip()
+                if _k:
+                    _engine_historical_recorded_keys.add(_k)
         except Exception as e:
             log_error("과거 급등 DB 읽기", e, file=HISTORICAL_SURGE_DB)
     if ENABLE_GLOBAL_BRIEFING_DB and os.path.exists(GLOBAL_BRIEFING_DB):
@@ -1643,22 +1536,49 @@ def _engine_record_global_briefing(item):
     _engine_atomic_append_jsonl(GLOBAL_BRIEFING_DB, row)
 
 
-def _engine_record_historical_case(item):
+def _engine_record_historical_case(item, force=False):
+    """[1원칙: 데이터는 무조건 누적] 강도/조건과 무관하게 카테고리가 확정된 뉴스는
+    실시간 텔레그램 송출 성공 여부와 무관하게 전부 누적 DB에 기록한다.
+    (기존에는 텔레그램 송출에 성공한 뉴스만 여기로 왔지만, 실시간 송출 시간 게이트
+    [최근 60분 등]가 데이터 누적까지 함께 막아 시장비교/과거성과 DB가 비는 문제가
+    있었다. 이제 송출 여부와 적재를 분리해, 분류(category)만 확정되면 여기로 온다.)
+    '급등/폭등/상한가/신고가' 같은 강한 재료였는지는 is_surge_hit 플래그로만
+    구분해서 남기고, 기록 자체를 막지 않는다.
+    이 누적 데이터가 이후 모든 뉴스의 관련주/테마 판정, 분석 근거의 기반이 된다.
+
+    [중복적재 방지] 같은 기사(link 또는 title)가 매 폴링 주기마다 반복 적재되지
+    않도록 _engine_historical_recorded_keys로 별도 dedupe한다. 실시간 송출용
+    dedupe(_engine_seen)와는 분리되어 있으므로 실시간 송출 로직에는 영향이 없다.
+    force=True면 dedupe를 건너뛴다(백필 등 이미 기간 단위로 별도 중복제어를 하는 경우).
+    """
     if not ENABLE_HISTORICAL_SURGE_DB:
-        return
+        return False
+    dedupe_key = str(item.get("link") or "").strip() or str(item.get("title") or "").strip()
+    if not force and dedupe_key:
+        with _engine_historical_recorded_lock:
+            if dedupe_key in _engine_historical_recorded_keys:
+                return False
+            _engine_historical_recorded_keys.add(dedupe_key)
     strong, hits = _engine_strong_material(item)
     title = item.get("title", "")
-    if not strong or not any(x in _engine_clean(title + " " + item.get("extra", "")).lower() for x in ["급등", "폭등", "상한가", "신고가", "surge", "soar", "rally"]):
-        return
+    text_all = _engine_clean(title + " " + item.get("extra", "")).lower()
+    is_surge_hit = strong and any(
+        x in text_all for x in ["급등", "폭등", "상한가", "신고가", "surge", "soar", "rally"]
+    )
     row = {
         "ts": _now_kst().isoformat(), "text": (title + " " + item.get("extra", ""))[:800],
         "title": title[:500], "link": str(item.get("link", ""))[:1000],
         "companies": item.get("companies", [])[:6], "hits": hits,
+        "market_state": str(item.get("market_state") or "").strip(),
+        "is_surge_hit": is_surge_hit,
+        "published": str(item.get("published") or "")[:80],
     }
     if _engine_atomic_append_jsonl(HISTORICAL_SURGE_DB, row):
         _engine_historical_cache.append(row)
         if len(_engine_historical_cache) > 5000:
             del _engine_historical_cache[:-5000]
+        return True
+    return False
 
 
 def _engine_record_outcome_tracking(item, master_result):
@@ -1669,7 +1589,7 @@ def _engine_record_outcome_tracking(item, master_result):
       "관련주 無로 확정한 판단이 맞았는지" 나중에 검증할 수 있도록 함께 남긴다.
     - checked=False 레코드는 2단계 스크립트/함수가 나중에 시세를 채워 넣는다.
     """
-    if not ENABLE_OUTCOME_TRACKING or not master_result or not master_result.get("locked"):
+    if not ENABLE_OUTCOME_TRACKING or not _engine_master_usable(master_result):
         return
     related = master_result.get("related") or []
     leader = master_result.get("leader") or {}
@@ -1833,6 +1753,17 @@ def _admin_fetch_updates():
     params = {"timeout": 0, "offset": _admin_last_update_id + 1}
     try:
         r = requests.get(url, params=params, timeout=ENGINE_HTTP_TIMEOUT)
+        if r.status_code == 409:
+            # [원인] Telegram getUpdates는 같은 BOT_TOKEN으로 동시에 한 프로세스만
+            # 폴링할 수 있다. 409는 다른 프로세스(예: 재배포 시 종료되지 않은
+            # 이전 인스턴스, 혹은 이 봇에 webhook이 별도로 설정된 경우)가 이미
+            # 폴링 중이라는 뜻이다. 재시도만으로는 해결 안 되므로 원인을 명확히 남긴다.
+            _engine_log(
+                "error",
+                "[관리자 명령] getUpdates 409 Conflict | 동일 BOT_TOKEN을 다른 프로세스가 "
+                "이미 폴링 중입니다(중복 배포 인스턴스 또는 webhook 설정을 확인하세요).",
+            )
+            return []
         data = r.json() if r.ok else {}
         results = data.get("result", []) if data.get("ok") else []
     except Exception as e:
@@ -1909,7 +1840,9 @@ def _admin_cmd_run(arg=""):
 def _admin_cmd_help(arg=""):
     lines = ["🟢 [통제소] 사용 가능한 명령", "/status : 엔진 상태 확인", "/pause : 일시정지",
               "/resume : 재개", "/run : 지금 즉시 1회 사이클 강제 실행",
-              "/성과리포트 : 송출된 뉴스의 실제 등락률 집계(키워드별 적중률)", "/help : 이 목록 표시"]
+              "/성과리포트 : 송출된 뉴스의 실제 등락률 집계(키워드별 적중률)",
+              "/백필 [일수] : DART 과거 공시를 소급해 과거DB에 적재(기본 365일)",
+              "/help : 이 목록 표시"]
     return "\n".join(lines)
 
 
@@ -1921,6 +1854,37 @@ def _admin_cmd_outcome_report(arg=""):
     return _outcome_aggregate_report(min_samples=min_samples)
 
 
+def _admin_cmd_backfill(arg=""):
+    """/백필 [일수] : DART 과거 공시를 지정 일수(기본 365일)만큼 소급 조회해
+    과거DB(HISTORICAL_SURGE_DB)에 적재한다. 시간이 걸리므로 백그라운드로 실행하고
+    완료되면 별도로 결과를 회신한다. 네이버 뉴스는 API 특성상 기간 백필이
+    불가능해 DART 공시만 대상으로 한다."""
+    global _ENGINE_BACKFILL_RUNNING
+    try:
+        days = int(arg.strip()) if arg.strip() else 365
+    except ValueError:
+        return "❓ 사용법: /백필 [일수]  예) /백필 365"
+    with _ENGINE_BACKFILL_LOCK:
+        if _ENGINE_BACKFILL_RUNNING:
+            return "⏳ [통제소] 이미 백필이 진행 중입니다. 완료될 때까지 기다려주세요."
+        _ENGINE_BACKFILL_RUNNING = True
+
+    def _worker():
+        global _ENGINE_BACKFILL_RUNNING
+        try:
+            recorded = _engine_backfill_dart_historical(days=days)
+            _admin_reply(f"✅ [통제소] DART 과거 {days}일 백필 완료 | 신규 누적={recorded}건")
+        except Exception as e:
+            log_error("관리자 /백필", e, days=days)
+            _admin_reply(f"⚠️ [통제소] 백필 중 오류가 발생했습니다: {html.escape(str(e)[:200])}")
+        finally:
+            with _ENGINE_BACKFILL_LOCK:
+                _ENGINE_BACKFILL_RUNNING = False
+
+    threading.Thread(target=_worker, name="admin-backfill", daemon=True).start()
+    return f"⏳ [통제소] DART 과거 {days}일 백필을 시작했습니다. 완료되면 결과를 보내드립니다."
+
+
 # 새 관리자 명령을 추가하려면 아래 딕셔너리에 "/명령어": 핸들러함수(arg) 형태로 등록만 하면 된다.
 # 핸들러는 문자열을 반환하면 그대로 관리자에게 회신된다.
 _ADMIN_COMMANDS = {
@@ -1930,6 +1894,7 @@ _ADMIN_COMMANDS = {
     "/run": _admin_cmd_run,
     "/help": _admin_cmd_help,
     "/성과리포트": _admin_cmd_outcome_report,
+    "/백필": _admin_cmd_backfill,
 }
 
 
@@ -2000,6 +1965,23 @@ KRX_HOLIDAYS_2026 = {
 US_OPEN = datetime.time(9, 30)
 US_CLOSE = datetime.time(16, 0)
 
+# ============================================================
+# [테스트 모드 / 조건56 테스트분리] 실시간 뉴스가 없는 시간대(장 마감/새벽/휴일 등)에도
+# 파이프라인 전체(수집→MASTER→포맷터→텔레그램)를 눈으로 검증할 수 있도록,
+# 아래 시간 필터들을 환경변수로만 완화한다. 기본값은 OFF(운영 동작 그대로)이며,
+# 코드상 어떤 값도 하드코딩으로 바꾸지 않는다 — 검증이 끝나면 환경변수만 지우면
+# 즉시 원래 동작(최근 60분)으로 복귀한다.
+# ============================================================
+NEWS_BOT_TEST_MODE = _env_flag("NEWS_BOT_TEST_MODE", False)
+NEWS_BOT_TEST_WINDOW_MIN = int(os.environ.get("NEWS_BOT_TEST_WINDOW_MIN", "10080"))  # 기본 7일치까지 허용
+if NEWS_BOT_TEST_MODE:
+    _logger.warning(
+        "[테스트 모드] 시간 필터 완화 ON | 최근 %d분(%.1f일) 이내 뉴스까지 통과 | "
+        "검증이 끝나면 NEWS_BOT_TEST_MODE를 반드시 끌 것(광고성/오래된 뉴스가 실제 채널로 도배될 수 있음)",
+        NEWS_BOT_TEST_WINDOW_MIN, NEWS_BOT_TEST_WINDOW_MIN / 1440,
+    )
+
+
 def _engine_market_state(source, published):
     dt = _engine_parse_datetime(published)
     if dt is None:
@@ -2040,6 +2022,8 @@ def _engine_external_time_gate(source, published, title, extra, market_state, ma
     """텔레그램/유튜브 도배 방지용 시간 관문.
     60분 초과는 원칙적으로 차단하고, 장 마감 후/휴무의 강한 재료만 예외로 통과시킨다.
     """
+    if NEWS_BOT_TEST_MODE:
+        return True, "테스트모드(시간필터 완화)"
     if not (str(source).startswith("텔레그램/") or str(source).startswith("유튜브/")):
         return True, ""
     dt = _engine_parse_datetime(published)
@@ -3024,6 +3008,23 @@ def _engine_force_numbered_keypoint(title: str, extra: str) -> str:
 # 번역 실패 시 영문 제목을 Telegram으로 내보내지 않는다.
 # ============================================================
 _TRANSLATION_CACHE = {}
+# [원인] Google 무료 번역 엔드포인트는 짧은 시간에 여러 건을 연달아 요청하면
+# 429(Too Many Requests)를 반환한다. 기존엔 429가 뜨는 즉시 포기하고 그 뉴스를
+# 통째로 송출차단했는데, RSS 한 사이클에 미국 뉴스가 여러 건 몰리면(예: 10건)
+# 사실상 전부 연쇄로 차단되는 구조적 문제가 있었다. 요청 사이 최소 간격을 두고,
+# 429/일시적 오류는 짧게 재시도하도록 고친다.
+_TRANSLATE_MIN_INTERVAL_SEC = 2.2
+_TRANSLATE_LAST_CALL_TS = [0.0]
+_TRANSLATE_LOCK = threading.Lock()
+
+# [번역 재시도 큐] 429 등으로 이번 주기에 번역이 끝내 실패한 외신은 그냥 버리지 않고
+# 여기 큐에 남겨 다음 주기(들)에 다시 시도한다. Google 번역 429는 대개 수십 초~분 단위로
+# 풀리는 일시적 레이트리밋이라, 몇 분 뒤 재시도하면 성공하는 경우가 많다.
+# 최대 재시도 후에도 실패하면 포기하고 큐에서 제거한다(그 뉴스는 송출/과거DB 모두 제외됨:
+# 원문이 한국어 분류 키워드와 매칭되지 않아 분류 자체가 어렵기 때문).
+_engine_translate_retry_queue = {}
+_engine_translate_retry_lock = threading.Lock()
+_ENGINE_TRANSLATE_RETRY_MAX_ATTEMPTS = 5
 
 def _engine_is_mostly_english(text: str) -> bool:
     s = str(text or "")
@@ -3053,27 +3054,50 @@ def _engine_translate_to_korean(text: str) -> str:
         _TRANSLATION_CACHE[text] = text
         return text
 
-    try:
-        from urllib.parse import quote
-        url = (
-            "https://translate.googleapis.com/translate_a/single"
-            "?client=gtx&sl=auto&tl=ko&dt=t&q=" + quote(text)
-        )
-        r = requests.get(
-            url,
-            headers={"User-Agent": USER_AGENT},
-            timeout=min(ENGINE_HTTP_TIMEOUT, 8),
-        )
-        if r.ok:
-            data = r.json()
-            translated = "".join(
-                str(x[0]) for x in (data[0] or []) if isinstance(x, list) and x and x[0]
-            ).strip()
-            if translated and not _engine_is_mostly_english(translated):
-                _TRANSLATION_CACHE[text] = translated
-                return translated
-    except Exception as e:
-        _engine_log("warning", "[번역 실패] 외신 | %s", str(e)[:120])
+    for attempt in range(3):
+        # [요청 간격 강제] 마지막 호출 이후 최소 간격이 지나지 않았으면 대기한다.
+        # 이걸 안 하면 같은 사이클에서 뉴스 여러 건이 몰릴 때 Google이 429로 막는다.
+        with _TRANSLATE_LOCK:
+            wait = _TRANSLATE_MIN_INTERVAL_SEC - (time.time() - _TRANSLATE_LAST_CALL_TS[0])
+            if wait > 0:
+                time.sleep(wait)
+            _TRANSLATE_LAST_CALL_TS[0] = time.time()
+        try:
+            from urllib.parse import quote
+            url = (
+                "https://translate.googleapis.com/translate_a/single"
+                "?client=gtx&sl=auto&tl=ko&dt=t&q=" + quote(text)
+            )
+            r = requests.get(
+                url,
+                headers={"User-Agent": USER_AGENT},
+                timeout=min(ENGINE_HTTP_TIMEOUT, 8),
+            )
+            if r.status_code == 429 or r.status_code >= 500:
+                # [429/일시적 오류] 즉시 포기하지 않고 짧게 대기 후 재시도한다
+                # (1차 1초, 2차 2초 백오프). 마지막 시도까지 실패하면 아래에서 빈 문자열 반환.
+                if attempt < 2:
+                    _engine_log("warning", "[번역 재시도] 외신 | status=%s | %d번째 재시도 예정", r.status_code, attempt + 2)
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                _engine_log("warning", "[번역 실패] 외신 | status=%s (재시도 소진)", r.status_code)
+                break
+            if r.ok:
+                data = r.json()
+                translated = "".join(
+                    str(x[0]) for x in (data[0] or []) if isinstance(x, list) and x and x[0]
+                ).strip()
+                if translated and not _engine_is_mostly_english(translated):
+                    _TRANSLATION_CACHE[text] = translated
+                    return translated
+            break
+        except Exception as e:
+            if attempt < 2:
+                _engine_log("warning", "[번역 재시도] 외신 | 원인=%s | %d번째 재시도 예정", str(e)[:120], attempt + 2)
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            _engine_log("warning", "[번역 실패] 외신 | %s", str(e)[:120])
+            break
 
     # 영문 원문을 그대로 송출하지 않기 위해 실패는 빈 문자열로 처리한다.
     return ""
@@ -3136,6 +3160,47 @@ def _engine_annotate_index_points_with_pct(title, extra):
         return _INDEX_POINT_PATTERN.sub(_sub, text)
 
     return _annotate(title), _annotate(extra)
+
+
+def _engine_queue_translation_retry(source, title, link, published, extra):
+    key = str(link or "").strip() or f"{source}|{title}"
+    with _engine_translate_retry_lock:
+        entry = _engine_translate_retry_queue.get(key)
+        if entry:
+            entry["attempts"] += 1
+            entry["published"] = published or entry.get("published", "")
+        else:
+            entry = {"source": source, "title": title, "link": link,
+                      "published": published, "extra": extra, "attempts": 1}
+            _engine_translate_retry_queue[key] = entry
+        if entry["attempts"] >= _ENGINE_TRANSLATE_RETRY_MAX_ATTEMPTS:
+            del _engine_translate_retry_queue[key]
+            _engine_log("warning", "[번역 영구실패] 재시도 %d회 초과로 최종 제외 | %s",
+                        _ENGINE_TRANSLATE_RETRY_MAX_ATTEMPTS, title[:80])
+
+
+def _engine_clear_translation_retry(link, title, source):
+    key = str(link or "").strip() or f"{source}|{title}"
+    with _engine_translate_retry_lock:
+        _engine_translate_retry_queue.pop(key, None)
+
+
+def _engine_retry_translation_queue():
+    """매 주기, 지난번 번역 실패로 보류된 외신을 다시 시도한다.
+    [원칙] 이 재시도도 결국 _engine_process_item()을 그대로 타므로, 번역이
+    이번엔 성공하면 분류→과거DB 누적(절대 원칙)→(시간창 안이면) 실시간 송출까지
+    정상적으로 이어진다."""
+    with _engine_translate_retry_lock:
+        pending = list(_engine_translate_retry_queue.values())
+    if not pending:
+        return
+    _engine_log("info", "[번역 재시도 큐] 대기=%d건 재시도", len(pending))
+    for entry in pending:
+        try:
+            _engine_process_item(entry["source"], entry["title"], entry["link"],
+                                  entry.get("published", ""), entry.get("extra", ""))
+        except Exception as e:
+            log_error("번역 재시도 큐 처리", e, title=str(entry.get("title", ""))[:120])
 
 
 def _engine_translate_foreign_item(source: str, title: str, extra: str):
@@ -3432,6 +3497,95 @@ def _engine_parse_featured_stock_headline(title):
     return {"company": company, "reason": reason, "reaction": reaction}
 
 
+def _engine_master_usable(result):
+    """[공용 판정] MASTER 결과가 FINAL LOCK(locked=True)까지 못 갔더라도, 실제로
+    쓸 만한 내용(제목 재구성/핵심요약)을 만들어냈으면 '사용 가능'으로 본다.
+    포맷터/배지/성과추적이 전부 이 기준으로 통일해야, 사소한 검증 오류 하나
+    때문에 화면 표시와 누적 기록이 서로 다른 기준으로 갈리는 일이 없다.
+    """
+    return bool(result) and bool(result.get('title') or result.get('key_points'))
+
+
+def _engine_company_history_score(name):
+    """[누적 데이터 연동 / 조건25·26 과거급등이력·과거주도이력]
+    과거 누적 DB(HISTORICAL_SURGE_DB)에서 이 종목이 몇 번이나 등장했는지 세어
+    보조 점수로 변환한다. [1원칙: 무조건 누적] 이후로는 강한 재료가 아닌 뉴스도
+    전부 쌓이므로, 실제 급등 이력(is_surge_hit)에는 가중치를 더 주고 단순 언급은
+    약하게 반영해 "많이 언급됐다"와 "실제로 급등했다"를 구분한다.
+    MasterConditionManager._score()의 history_score는 이 값을 받아 최대 8점까지만
+    반영한다(직접 근거를 넘어서지 않음).
+    """
+    name = str(name or "").strip()
+    if not name or not ENABLE_HISTORICAL_SURGE_DB or not _engine_historical_cache:
+        return 0.0
+    score = 0.0
+    for row in _engine_historical_cache[-3000:]:
+        companies = [str(c).strip() for c in (row.get("companies") or [])]
+        matched = name in companies or (name and name in str(row.get("text", "")))
+        if not matched:
+            continue
+        score += 1.5 if row.get("is_surge_hit") else 0.5
+    return score
+
+
+def _engine_company_history_detail(name):
+    """[누적데이터 분석] 이 종목이 과거 급등 이력 DB에 몇 번, 언제, 어떤 시장상황에서
+    등장했는지 요약한다. 메시지의 '📊 누적데이터' 섹션에서 과거-현재 시장상황 비교에 쓰인다.
+    이력이 전혀 없으면 None을 반환해 해당 섹션 자체를 표시하지 않는다(있는 데이터만 보여줌).
+    """
+    name = str(name or "").strip()
+    if not name or not ENABLE_HISTORICAL_SURGE_DB or not _engine_historical_cache:
+        return None
+    matches = []
+    for row in _engine_historical_cache[-3000:]:
+        companies = [str(c).strip() for c in (row.get("companies") or [])]
+        if name in companies or (name and name in str(row.get("text", ""))):
+            matches.append(row)
+    if not matches:
+        return None
+    matches.sort(key=lambda r: str(r.get("ts", "")))
+    state_counts = Counter(str(r.get("market_state") or "").strip() for r in matches if r.get("market_state"))
+    return {
+        "count": len(matches),
+        "first_ts": matches[0].get("ts", ""),
+        "last_ts": matches[-1].get("ts", ""),
+        "state_counts": state_counts,
+    }
+
+
+def _engine_company_outcome_stats(name):
+    """[누적데이터 분석] 성과추적 DB(OUTCOME_TRACKING_DB)에서 이 종목이 과거에 대장주/관련주로
+    송출됐던 건들의 실제 주가 등락률 평균을 계산한다. 아직 결과가 확정된 건이 없으면 None.
+    """
+    name = str(name or "").strip()
+    if not name or not ENABLE_OUTCOME_TRACKING:
+        return None
+    _engine_load_outcome_tracking()
+    changes = []
+    for row in _OUTCOME_TRACKING_ROWS:
+        names = set()
+        leader = row.get("leader") or {}
+        if leader.get("name"):
+            names.add(str(leader["name"]).strip())
+        for r in row.get("related") or []:
+            if r.get("name"):
+                names.add(str(r["name"]).strip())
+        if name not in names:
+            continue
+        outcome = row.get("outcome") or {}
+        cp = outcome.get("change_pct")
+        if cp is not None:
+            changes.append(float(cp))
+    if not changes:
+        return None
+    wins = sum(1 for c in changes if c > 0)
+    return {
+        "count": len(changes),
+        "avg": sum(changes) / len(changes),
+        "success_rate": (wins / len(changes)) * 100.0,
+    }
+
+
 def _engine_master_result(item):
     """뉴스 1건을 MASTER -> Validator -> FINAL LOCK으로 확정한다.
     [조건1/조건10 강제] MASTER는 반드시 원 제목 + 원문 본문을 직접 입력받는다.
@@ -3442,13 +3596,18 @@ def _engine_master_result(item):
         rows = _engine_domestic_watchlist(item)
         candidates = []
         for row in rows or []:
+            name = str(row.get("name", "")).strip()
             candidates.append({
-                "name": str(row.get("name", "")).strip(),
+                "name": name,
                 "reason": str(row.get("reason", "")).strip(),
                 "score": float(row.get("score", 0) or 0),
                 "direct": bool(row.get("direct")),
                 "theme_link": False,
                 "domestic_listed": True,
+                # [수정/누적 데이터 연동] 과거 급등 이력 DB 기반 보조점수를 연결한다.
+                # 기존에는 이 키가 어디서도 채워지지 않아 _score()의 history_score
+                # 가산 로직이 항상 0으로만 계산됐다.
+                "history_score": _engine_company_history_score(name),
             })
         raw_title = str(item.get("title", "")).strip()
         raw_body = str(item.get("extra", "")).strip()
@@ -3472,6 +3631,7 @@ def _engine_master_result(item):
                 "direct": True,
                 "theme_link": False,
                 "domestic_listed": True,
+                "history_score": _engine_company_history_score(featured["company"]),
             })
 
         result = master_finalize_news(
@@ -3482,8 +3642,21 @@ def _engine_master_result(item):
             candidates=candidates,
             schedule=_engine_future_schedule(raw_body),
         )
+        # 과거 실제 사례가 있을 때만 '강한 뉴스' 배지를 허용한다.
+        hist = _engine_historical_match(item)
+        if result and hist:
+            result["historical_evidence"] = True
+            result["historical_match_ratio"] = round(float(hist[0]), 3)
         if result.get("locked"):
             _engine_log("info", "[FINAL LOCK 통과] %s", str(result.get("title") or item.get("title") or "")[:220])
+        elif result.get("validation_errors"):
+            # [수정] 검증 오류가 있어도 결과 자체는 버리지 않고 그대로 반환한다.
+            # 원인 추적을 위해 어떤 조건이 걸렸는지만 로그로 남긴다.
+            _engine_log(
+                "warning", "[MASTER 검증 경고] %s | 오류=%s",
+                str(result.get("title") or item.get("title") or "")[:220],
+                " / ".join(result.get("validation_errors") or []),
+            )
         return result
     except Exception as e:
         _engine_log("error", "[MASTER] 실패 | source=%s | 원인=%s", item.get("source", ""), str(e)[:180])
@@ -3491,15 +3664,34 @@ def _engine_master_result(item):
 
 
 def _engine_master_badge(result):
-    if not result or not result.get("locked"):
+    """관련 종목 라벨만 출력한다. 제목에는 아이콘을 붙이지 않는다."""
+    # [수정] locked(=검증 완전 통과)만 허용하면, 사소한 검증 오류로 locked=False가 된
+    # 경우 이미 확정된 관련종목 배지까지 사라진다. related가 실제로 있으면 표시한다.
+    if not result or not (result.get("related") or []):
         return ""
     related = result.get("related") or []
-    names = ' · '.join(html.escape(str(r.get('name',''))) for r in related if r.get('name'))
-    return f"🟢 [MASTER] {names}" if names else ""
+    names = " · ".join(html.escape(str(r.get("name", ""))) for r in related if r.get("name"))
+    if not names:
+        return ""
+    direct = any(bool(r.get("direct")) for r in related)
+    value = str(result.get("news_value") or "").strip()
+    commercial = bool(result.get("commercial_stage") or result.get("commercial_evidence"))
+    labels = []
+    if direct:
+        labels.append("🎯 직접 연결 종목")
+    else:
+        labels.append("🎯 관련 종목")
+    if commercial and str(result.get("commercial_evidence") or "").strip():
+        labels.append("💰 돈되는 뉴스")
+    if value == "높음" and (result.get("historical_evidence") or result.get("news_value_evidence")):
+        labels.append("🔥 강한 뉴스")
+    return " | ".join(labels) + "\n" + names
 
 
 def _engine_master_image_path(result):
-    """MASTER 확정 배지 PNG를 동적으로 생성한다. 확정 뉴스에만 사용."""
+    """구버전 이미지 출력 호환용. 현재 최우선 출력 정책에서는 이미지를 생성하지 않는다."""
+    return ""
+    # legacy implementation intentionally unreachable
     if not result or not result.get("locked"):
         return ""
     related = result.get("related") or []
@@ -3572,83 +3764,175 @@ def _engine_is_pharma_news(title, extra_text=""):
 
 
 def _engine_format_message(item):
-    """최종 뉴스 카드.
-    [조건51/조건52/조건53 강제] Formatter는 판단하지 않는다.
-    MASTER(65조건) -> Validator -> FINAL LOCK 결과(item['_master_result'])만 표시하며,
-    제목·요약·관련주·상용화단계·시장전망·일정을 이 함수에서 다시 계산하지 않는다.
+    """최종 Telegram 메시지.
+    최우선 사용자 출력 규칙: 짧고 사실/데이터 중심이며 중복 장식은 금지한다.
+    Formatter는 판단하지 않고 MASTER FINAL LOCK 결과만 표시한다.
     """
-    source_raw=str(item.get('source',''))
-    source_display='🇺🇸' if source_raw=='Google-US' else source_raw
-    time_text=str(item.get('time_text','')).strip()
-    raw_title=str(item.get('title','')).strip()
+    source_raw = str(item.get('source','')).strip()
+    source_display = '🇺🇸' if source_raw == 'Google-US' else source_raw
+    time_text = str(item.get('time_text','')).strip()
+    raw_title = str(item.get('title','')).strip()
+    master_result = item.get('_master_result') or {}
 
-    master_result=item.get('_master_result')
-    if master_result and master_result.get('locked'):
-        # MASTER FINAL LOCK 값만 사용한다. (조건51 Formatter무판단)
-        title=master_result.get('title') or _engine_strip_foreign_publisher_suffix(raw_title)
-        key_points=list(master_result.get('key_points') or [])
-        stage=master_result.get('stage') or ''
-        outlook=list(master_result.get('outlook') or [])
-        related=list(master_result.get('related') or [])
-        schedule=master_result.get('schedule') or ''
+    # [수정] 기존에는 master_result.get('locked')(=검증 완전 통과)일 때만 MASTER
+    # 결과를 사용했다. 그 결과 사소한 검증 오류 하나로 locked=False가 되면 이미
+    # 계산된 제목/핵심/용어설명/관련종목까지 전부 버려지고 원본 제목만 나갔다.
+    # 이제 locked 여부와 무관하게, MASTER가 실제로 뭔가 만들어낸 경우(제목 재구성
+    # 결과나 핵심요약이 존재하는 경우)에는 그 내용을 그대로 사용한다.
+    master_usable = _engine_master_usable(master_result)
+    if master_usable:
+        title = master_result.get('title') or _engine_strip_foreign_publisher_suffix(raw_title)
+        key_points = list(master_result.get('key_points') or [])[:3]
+        stage = str(master_result.get('stage') or '').strip()
+        outlook = list(master_result.get('outlook') or [])
+        related = list(master_result.get('related') or [])[:3]
+        schedule = str(master_result.get('schedule') or '').strip()
+        analysis = str(master_result.get('analysis') or '').strip()
+        freshness = str(master_result.get('freshness') or '').strip()
+        if not freshness:
+            freshness, _ = _engine_freshness(item)
     else:
-        # MASTER가 실패/미확정인 경우에도 Formatter가 재분석하지 않는다.
-        # 원문 최소 표시만 하고, 판단이 필요한 항목은 비워둔다.
-        _engine_log("warning", "[MASTER] 결과 없음/미확정 | source=%s | Formatter는 재분석하지 않음", source_raw)
-        title=_engine_strip_foreign_publisher_suffix(raw_title)
-        key_points, stage, outlook, related, schedule = [], '', [], [], ''
+        title = _engine_strip_foreign_publisher_suffix(raw_title)
+        key_points, stage, outlook, related, schedule, analysis = [], '', [], [], '', ''
+        freshness, _ = _engine_freshness(item)
 
-    companies=item.get('companies',[]) or []
-    domestic=_engine_domestic_companies(companies)
-    title=_apply_domestic_highlight(title,domestic)
-    if _engine_is_commercial_value(item,title,' '.join(key_points)) and not title.startswith('🎯'):
-        title='🎯 '+title
-    # [제약/바이오 마커] 제목 맨 앞에 💊를 붙인다.
-    if _engine_is_pharma_news(title, ' '.join(key_points)) and not title.startswith('💊'):
-        title='💊 '+title
-    freshness,prev=_engine_freshness(item)
-    header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
-    if time_text: header += f'   🕐 {html.escape(time_text)}'
-    lines=[header,f'<b>📌 {html.escape(title)}</b>']
-    master_badge=_engine_master_badge(master_result)
-    if master_badge:
-        lines.append('<b>'+master_badge+'</b>')
-    if freshness in ('재탕','업그레이드') and prev:
-        lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
+    # 화면 표식은 사용자 지정 위치에만 사용한다.
+    companies = item.get('companies', []) or []
+    domestic = _engine_domestic_companies(companies)
+    is_pharma = _engine_is_pharma_news(title, ' '.join(key_points))
+    is_listed = bool(domestic)
+
+    # 일반 뉴스 제목엔 📌, 제약뉴스 제목엔 💊를 접두사로 붙인다.
+    # 상장종목은 접두사 없이 제목 아래에 👀 관련주 배지로 별도 표시한다.
+    header = f'<b>📰 [{html.escape(source_display)}] {html.escape(freshness or "신규")}</b>'
+    if time_text:
+        header += f'  🕐 {html.escape(time_text)}'
+    if is_listed:
+        title_prefix = ''
+    elif is_pharma:
+        title_prefix = '💊 '
+    else:
+        title_prefix = '📌 '
+    lines = [header, f'<b>{title_prefix}{html.escape(title)}</b>']
+
+    if is_listed:
+        names = ' · '.join(str(x) for x in domestic[:3])
+        lines.append(f'👀 <b>관련주</b> : {html.escape(names)}')
+
+    # 신규/후속/재탕은 header의 상태 하나로만 표시한다. 같은 뜻을 다시 설명하지 않는다.
 
     if key_points:
-        lines.append('🔎 [요약]')
+        lines.append('🔎 <b>핵심</b>')
         for kp in key_points:
-            lines.append('     ✔ '+html.escape(str(kp)[:220]))
+            clean = re.sub(r'^[▶️•✔️\s]+', '', str(kp)).strip()
+            if clean:
+                lines.append('• ' + html.escape(clean[:180]))
 
-    if stage:
-        lines.append('🧭 [진행 과정] ===> '+html.escape(stage))
+    # 분석은 별도 전망 항목 없이 자연어 한 덩어리로만 표시한다.
+    analysis_parts = []
+    if analysis:
+        analysis_parts.append(analysis)
+    market_state = str(item.get('market_state') or '').strip()
+    if market_state and analysis:
+        analysis_parts.append(f'현재 시장: {market_state}.')
+    if analysis_parts:
+        lines.append('🧠 <b>분석</b>')
+        lines.append(html.escape(' '.join(analysis_parts)[:650]))
 
-    if outlook:
-        lines.append('✅ [시장전망] ==> '+html.escape(str(outlook[0])))
-        for o in outlook[1:3]: lines.append('     ✔ '+html.escape(str(o)))
+    direct = [r for r in related if r.get('direct')] if related else []
+    if direct:
+        # [수정] 라벨과 값 사이 구분자를 '·' 대신 ':' 로 표기한다. 같은 종목이 다른
+        # 곳(예: 관련주 배지)에 아이콘과 함께 또 나오는 중복 표시는 만들지 않는다 —
+        # 이 줄이 해당 종목을 대표하는 유일한 표시이며, 다른 배지가 같은 이름을
+        # 다시 보여줄 경우 그쪽에서 생략해야 한다(badge_text 처리부에서 이름을
+        # 별도로 다시 출력하지 않는 것으로 이미 보장됨).
+        names = ' · '.join(str(r.get('name','')).strip() for r in direct[:3] if r.get('name'))
+        if names:
+            lines.append(f'🎯 <b>직접 연결 종목</b> : {html.escape(names)}')
+    else:
+        # [추가/1원칙] 직접 연결된 관련주가 없다면 최소한 어떤 테마인지는 뽑아서 보여준다.
+        # 관련주 없음 자체를 빈 결과로 남기지 않는다.
+        theme_guess = _engine_theme(_engine_clean(f"{raw_title} {item.get('extra','')}"))
+        if theme_guess:
+            lines.append(f'🏷 <b>테마</b> : {html.escape(theme_guess)}')
 
-    # 관련주/테마/BIG ISSUE는 위 master_badge에서 이미 표시했으므로 여기서 중복 출력하지 않는다.
-    # (참고: master_badge가 비어있으면 관련주/테마/BIG ISSUE가 없다는 뜻이므로 항목 자체가 비게 된다)
+    badge_text = str(_engine_master_badge(master_result) or '')
+    # 내용/데이터가 없는 빈 라벨은 절대 표시하지 않는다.
+    # [수정] '💰 돈되는 뉴스' → '💰 진행 과정'으로 라벨을 바꾸고 구분자를 ':' 로 통일한다.
+    if '돈되는 뉴스' in badge_text and master_result.get('commercial_evidence'):
+        lines.append('👀 <b>진행 과정</b> : ' + html.escape(str(master_result.get('commercial_evidence'))[:180]))
+    if '강한 뉴스' in badge_text and (master_result.get('news_value') == '높음' or master_result.get('historical_evidence')):
+        lines.append('🔥 <b>강한 뉴스</b>')
 
-    if schedule:
-        dm=re.search(r'(20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일)',schedule)
-        lines.append('📅 일정')
-        if dm: lines.append(html.escape(dm.group(1).replace('/','.').replace('-','.')))
-        rest=schedule.replace(dm.group(1),'').strip(' -—:·') if dm else schedule
-        if rest: lines.append('✔ '+html.escape(rest[:220]))
-    # 용어 설명은 메시지의 가장 아래에만 표시하며, 용어 자체는 강조하지 않는다.
+    # [추가] 📊 누적데이터: 이 종목이 과거에 몇 번 등장했고(HISTORICAL_SURGE_DB),
+    # 그때 실제 등락률은 어땠는지(OUTCOME_TRACKING_DB), 과거 등장 시점의 시장상황과
+    # 지금 시장상황이 다른지를 보여준다. 쌓인 데이터가 없으면 섹션 자체를 생략한다.
+    lead_name = ''
+    if related:
+        direct_names = [str(r.get('name', '')).strip() for r in related if r.get('direct') and r.get('name')]
+        lead_name = direct_names[0] if direct_names else str(related[0].get('name', '')).strip()
+    if not lead_name and domestic:
+        # MASTER가 관련주를 별도로 확정하지 못했어도, 본문에서 직접 추출된
+        # 상장종목(👀관련주 배지)이 있으면 그 종목 기준으로 과거 데이터를 조회한다.
+        lead_name = str(domestic[0]).strip()
+    # [데이터 누적형 분석] 현재 뉴스 → 현재 시장 → 과거 유사시장 → 실제 과거성과를
+    # 순서대로 비교해서 보여준다. 데이터가 없는 항목은 절대 만들어내지 않고 생략한다.
+    if lead_name:
+        hist = _engine_company_history_detail(lead_name)
+        outc = _engine_company_outcome_stats(lead_name)
+
+        if hist:
+            compare_parts = [f"과거 유사 재료 이력 {hist['count']}건"]
+            if market_state:
+                compare_parts.append(f"현재 시장: {market_state}")
+            if hist.get('state_counts'):
+                same_state_count = hist['state_counts'].get(market_state, 0) if market_state else 0
+                past_state, _cnt = hist['state_counts'].most_common(1)[0]
+                if market_state and same_state_count:
+                    compare_parts.append(f"그중 동일 시장상황({market_state}) {same_state_count}건")
+                elif market_state and past_state and past_state != market_state:
+                    compare_parts.append(f"과거엔 주로 '{past_state}'였고 이번엔 '{market_state}'")
+            lines.append('📊 <b>시장 비교</b>')
+            lines.append(html.escape(' · '.join(compare_parts)))
+
+        if outc:
+            sign = '+' if outc['avg'] >= 0 else ''
+            lines.append('📈 <b>과거 성과</b>')
+            lines.append(html.escape(
+                f"표본 {outc['count']}건 · 상승비율 {outc['success_rate']:.0f}% · "
+                f"평균 등락률 {sign}{outc['avg']:.2f}%"
+            ))
+            # 🎯 판단: 표본이 충분할 때만 강함/관심/주의를 매긴다.
+            # 표본이 적으면 데이터를 근거로 단정하지 않고 '데이터 부족'으로만 표시한다.
+            if outc['count'] >= 5:
+                if outc['success_rate'] >= 60 and outc['avg'] > 0:
+                    verdict = '강함'
+                elif outc['success_rate'] >= 40:
+                    verdict = '관심'
+                else:
+                    verdict = '주의'
+            else:
+                verdict = f"관심 (표본 {outc['count']}건, 판단하기엔 부족)"
+            lines.append(f"🎯 <b>판단</b> : {verdict}")
+
     terms = (master_result or {}).get('term_explanations') or []
     if terms:
-        lines.append('💡 [용어 설명]')
-        for t in terms:
+        shown = []
+        for t in terms[:2]:
             term = str(t.get('term','')).strip()
             desc = str(t.get('description','')).strip()
             if term and desc:
-                lines.append('• '+html.escape(term)+' : '+html.escape(desc))
+                shown.append(f'{term}: {desc}')
+        if shown:
+            lines.append('💡 <b>용어</b>')
+            lines.append(html.escape(' · '.join(shown)[:420]))
+
+    if schedule:
+        lines.append('📅 ' + html.escape(schedule[:180]))
     if item.get('link'):
-        lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문 보기</a>')
+        lines.append(f'<a href="{html.escape(str(item["link"]),quote=True)}">🔗 원문</a>')
     return '\n\n'.join(x for x in lines if str(x).strip())
+
 
 def _engine_flush_pending():
     """대기 뉴스는 유사기사라도 묶어서 요약하지 않고 각 기사를 그대로 판단한다.
@@ -3670,6 +3954,10 @@ def _engine_flush_pending():
         if key in cycle_keys:
             continue
         cycle_keys.add(key)
+        # [원칙] 카테고리가 없으면 여기서도 다시 한번 차단한다(이중 안전장치).
+        if not str(item.get("category") or "").strip():
+            _engine_log("info", "[제외] 카테고리 없음(송출 직전) | %s", str(item.get("title", ""))[:80])
+            continue
         if not _engine_telegram_spam_allowed(item):
             continue
         # 기존 상태파일에 이미 저장된 URL(동일 링크)은 재전송하지 않는다.
@@ -3689,10 +3977,7 @@ def _engine_flush_pending():
         message = _engine_format_message(item)
         master_badge = _engine_master_badge(master_result)
         image_sent = False
-        if master_badge:
-            image_path = _engine_master_image_path(master_result)
-            if image_path:
-                image_sent = _engine_send_telegram_photo(image_path, caption=master_badge)
+        # 뉴스 본문은 텍스트 카드만 전송한다. 기존 MASTER 🎯 이미지 카드는 사용하지 않는다.
         text_sent = _engine_send_telegram(message)
         if text_sent:
             _engine_mark_seen(key)
@@ -3713,8 +3998,6 @@ def _engine_flush_pending():
             _engine_record_historical_case(item)
             _engine_record_outcome_tracking(item, master_result)
             sent += 1
-            if master_badge and not image_sent:
-                _engine_log("warning", "[MASTER] 텍스트 송출 성공 / 이미지 송출 실패")
             _engine_log("info", "[Telegram 전송 성공] %s", str(item.get("title") or "")[:220])
     _engine_log("info", "[송출결과] 후보=%d | 묶음차단=0 | 도배차단=%d | 전송=%d", len(_engine_pending), dup_blocked, sent)
     _engine_pending = []
@@ -3736,7 +4019,11 @@ def _engine_is_relevant(title):
 def _engine_is_within_recent_window(published, window_minutes=60):
     """현재 KST 기준 최근 window_minutes분 이내 뉴스만 실시간 송출 대상으로 허용한다.
     과거 뉴스는 분석/비교 DB에서 활용할 수 있지만 현재 뉴스 송출에서는 제외한다.
+    [테스트 모드] NEWS_BOT_TEST_MODE=1 이면 window_minutes를 NEWS_BOT_TEST_WINDOW_MIN까지
+    강제로 늘려서, 실시간 뉴스가 없는 시간대에도 과거 기사로 파이프라인을 검증할 수 있다.
     """
+    if NEWS_BOT_TEST_MODE:
+        window_minutes = max(int(window_minutes), NEWS_BOT_TEST_WINDOW_MIN)
     if not published:
         return False
     dt = _engine_parse_datetime(published)
@@ -3758,9 +4045,18 @@ def _engine_process_item(source, title, link, published="", extra=""):
 
     # 외신은 여기서 단 한 번만 번역한다.
     # 이후 🔎/테마/관련주/출력은 동일한 한국어 분석 원문을 사용한다.
+    _orig_title_for_retry = title
     title, extra, translation_ok = _engine_translate_foreign_item(source, title, extra)
     if not translation_ok:
+        # [수정] 예전엔 번역 실패(주로 429) 시 그 자리에서 뉴스를 완전히 버렸다.
+        # 도메인/과거DB 절대 원칙(카테고리만 확정되면 무조건 누적)이 적용되려면
+        # 애초에 분류 단계까지 가야 하는데, 번역 실패는 분류보다 앞에서 막아버려서
+        # 외신은 이 원칙의 사각지대였다. 이제 즉시 폐기 대신 재시도 큐에 남겨
+        # 다음 주기(들)에 번역을 다시 시도하고, 성공하면 정상적으로
+        # 분류→과거DB 누적→(시간창 이내면) 실시간 송출까지 이어지게 한다.
+        _engine_queue_translation_retry(source, _orig_title_for_retry, link, published, extra)
         return False
+    _engine_clear_translation_retry(link, _orig_title_for_retry, source)
 
     # 원문 전체를 보존한다. 요약문으로 extra를 덮어쓰지 않는다.
 
@@ -3770,13 +4066,28 @@ def _engine_process_item(source, title, link, published="", extra=""):
         _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
         return False
 
-    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
-    # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
-    if not _engine_is_within_recent_window(published, 60):
-        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
-        return False
+    # [수정] 기존에는 "최근 60분 이내 발행" 시간 게이트를 분류(classify)보다도 먼저
+    # 통과해야 했고, 그 결과 텔레그램으로 실제 전송된 뉴스만 과거DB(HISTORICAL_SURGE_DB)에
+    # 쌓이는 구조였다. 시간 게이트는 원래 "실시간 송출" 여부만 결정해야 하는데,
+    # 데이터 누적(시장비교/과거성과 분석의 기반)까지 함께 막아버려서 과거DB가 계속
+    # 비어 있었다. 이제 분류를 먼저 수행하고, 카테고리가 확정되면 시간 게이트와
+    # 무관하게 곧바로 과거DB에 누적한 뒤, 실시간 송출 여부만 시간 게이트로 판단한다.
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
+    if ok and str(category or "").strip():
+        try:
+            _engine_record_historical_case({
+                "title": title, "extra": extra, "link": link, "published": published,
+                "companies": companies, "market_hits": market_hits, "market_state": market_state,
+            })
+        except Exception as e:
+            _engine_log("warning", "[과거DB 누적 실패] %s | %s", str(e)[:160], title[:80])
+
+    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출 대상.
+    # (과거 뉴스는 위에서 이미 과거DB에 누적됐고, 여기서는 신규 뉴스로 재송출하지 않는다.)
+    if not _engine_is_within_recent_window(published, 60):
+        _engine_log("info", "[제외-송출] ⏱️ 최근 1시간 밖의 뉴스(과거DB엔 누적됨) | source=%s | %s", source, title[:80])
+        return False
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
     if not gate_ok:
         _engine_log("info", "[제외] ⏱️ %s | %s", gate_reason, title[:80])
@@ -3793,8 +4104,11 @@ def _engine_process_item(source, title, link, published="", extra=""):
     with _engine_lock:
         if key in _engine_seen:
             return False
-    if not ok:
-        reason = "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
+    # [원칙] 카테고리가 없으면(분류 실패) 절대 노출하지 않는다.
+    if not ok or not str(category or "").strip():
+        reason = "카테고리 없음" if not str(category or "").strip() else (
+            "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
+        )
         _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80])
         return False
     time_text = ""
@@ -4114,6 +4428,94 @@ def _engine_run_dart():
         _engine_log("info", "[DART] 후보=%d건", sent)
     except Exception as e:
         log_error("DART 검사", e)
+
+
+_ENGINE_BACKFILL_RUNNING = False
+_ENGINE_BACKFILL_LOCK = threading.Lock()
+
+
+def _engine_backfill_dart_range(bgn_de, end_de):
+    """DART list.json은 corp_code 미지정 전체조회 시 조회기간(bgn_de~end_de)에
+    최대 약 3개월 제한이 있어, 이 함수는 [bgn_de, end_de] 한 구간(<=90일)만 처리한다.
+    페이지네이션으로 해당 구간의 전체 공시를 끝까지 순회한다."""
+    recorded = 0
+    page_no = 1
+    while True:
+        try:
+            r = requests.get(
+                "https://opendart.fss.or.kr/api/list.json",
+                params={"crtfc_key": DART_API_KEY, "bgn_de": bgn_de, "end_de": end_de,
+                        "page_no": page_no, "page_count": 100},
+                timeout=ENGINE_HTTP_TIMEOUT,
+            )
+        except Exception as e:
+            log_error("DART 백필 요청", e, bgn_de=bgn_de, end_de=end_de, page_no=page_no)
+            break
+        if not r.ok:
+            _engine_log("error", "[DART 백필 실패] HTTP=%s | %s~%s | page=%s", r.status_code, bgn_de, end_de, page_no)
+            break
+        data = r.json()
+        status = data.get("status")
+        if status == "013":
+            break  # 해당 구간 공시 없음
+        if status not in ("000", None):
+            _engine_log("error", "[DART 백필 오류] status=%s | message=%s | %s~%s", status, data.get("message"), bgn_de, end_de)
+            break
+        rows = data.get("list", []) or []
+        for row in rows:
+            report = row.get("report_nm", "")
+            if not any(k in report for k in DART_STRONG_REPORT_KEYWORDS):
+                continue
+            corp = row.get("corp_name", "")
+            title = f"{corp} | {report}"
+            link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
+            rcept_dt = row.get("rcept_dt", "")
+            # 실시간 송출 파이프라인(_engine_process_item)을 타지 않고, 분류만 거쳐
+            # 곧바로 과거DB에 적재한다(현재 시각과 무관하므로 60분 시간창 대상이 아님).
+            ok, category, companies, k1, k2, market_hits = _engine_classify("DART", title, "")
+            if not ok or not str(category or "").strip():
+                continue
+            item = {
+                "title": title, "extra": "", "link": link,
+                "published": rcept_dt, "companies": companies, "market_hits": market_hits,
+                "market_state": "",
+            }
+            if _engine_record_historical_case(item):
+                recorded += 1
+        total_page = int(data.get("total_page") or 1)
+        if page_no >= total_page:
+            break
+        page_no += 1
+        time.sleep(0.2)  # DART API 호출 과다 방지
+    return recorded
+
+
+def _engine_backfill_dart_historical(days=365):
+    """최근 `days`일치 DART 공시를 90일 단위로 나눠 순회하며 과거DB에 소급 적재한다.
+    [주의] 네이버 뉴스검색 오픈API는 정렬(sort=date)만 지원하고 임의 과거 기간
+    지정(ds/de) 자체를 지원하지 않아, 진짜 의미의 '몇 달~1년 전 뉴스 백필'은
+    DART 공시처럼 기간 조회가 되는 소스에서만 가능하다. 뉴스 쪽은 지금 이 순간부터
+    새로 쌓이는 실시간 수집으로 채워진다(위 시간게이트 분리 수정으로 이제 정상 적재됨).
+    """
+    if not DART_API_KEY:
+        _engine_log("error", "[DART 백필 실패] DART_API_KEY가 없습니다.")
+        return 0
+    if not ENABLE_HISTORICAL_SURGE_DB:
+        _engine_log("error", "[DART 백필 실패] ENABLE_HISTORICAL_SURGE_DB=OFF")
+        return 0
+    today = _now_kst().date()
+    start = today - datetime.timedelta(days=max(1, int(days)))
+    total_recorded = 0
+    cursor = start
+    while cursor <= today:
+        chunk_end = min(today, cursor + datetime.timedelta(days=89))
+        bgn_de = cursor.strftime("%Y%m%d")
+        end_de = chunk_end.strftime("%Y%m%d")
+        _engine_log("info", "[DART 백필] 구간 처리중 %s~%s", bgn_de, end_de)
+        total_recorded += _engine_backfill_dart_range(bgn_de, end_de)
+        cursor = chunk_end + datetime.timedelta(days=1)
+    _engine_log("info", "[DART 백필] 완료 | 총 %d일 | 신규누적=%d건", days, total_recorded)
+    return total_recorded
 
 
 def _engine_run_telegram_channels():
@@ -5178,6 +5580,10 @@ def _engine_cycle():
         _engine_run_google_and_domestic()
     except Exception as e:
         log_error("국내/Google RSS 전체", e)
+    try:
+        _engine_retry_translation_queue()
+    except Exception as e:
+        log_error("번역 재시도 큐", e)
     try:
         _engine_run_naver()
     except Exception as e:
