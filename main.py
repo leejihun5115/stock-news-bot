@@ -3098,6 +3098,41 @@ _engine_translate_retry_queue = {}
 _engine_translate_retry_lock = threading.Lock()
 _ENGINE_TRANSLATE_RETRY_MAX_ATTEMPTS = 5
 
+# [정식 API] Render의 공유 IP가 무료 번역 엔드포인트(Google 스크래핑/MyMemory)에서
+# 둘 다 지속적으로 429를 맞는 경우를 위해, 유료 쿼터가 있는 정식 Google Cloud
+# Translation API를 최우선으로 사용한다. 키가 없으면 이 경로는 건너뛰고
+# 기존 무료 체인(Google 스크래핑 → MyMemory)으로 자연스럽게 넘어간다.
+GOOGLE_TRANSLATE_API_KEY = os.environ.get("GOOGLE_TRANSLATE_API_KEY", "").strip()
+
+def _engine_translate_via_official_api(text: str) -> str:
+    """정식 Google Cloud Translation API(v2). GOOGLE_TRANSLATE_API_KEY가
+    설정돼 있을 때만 호출된다. 이 API는 요청자별 쿼터(월 50만자 무료)를
+    쓰므로, IP 공유로 인한 429 문제와 무관하게 안정적으로 동작한다."""
+    if not GOOGLE_TRANSLATE_API_KEY:
+        return ""
+    try:
+        url = "https://translation.googleapis.com/language/translate2"
+        r = requests.post(
+            url,
+            params={"key": GOOGLE_TRANSLATE_API_KEY},
+            json={"q": text, "target": "ko", "format": "text"},
+            timeout=min(ENGINE_HTTP_TIMEOUT, 8),
+        )
+        if not r.ok:
+            _engine_log("warning", "[번역 실패] 외신(정식 API) | status=%s | %s",
+                        r.status_code, str(r.text)[:160])
+            return ""
+        data = r.json()
+        translations = (data.get("data") or {}).get("translations") or []
+        if translations:
+            translated = str(translations[0].get("translatedText") or "").strip()
+            translated = html.unescape(translated)
+            if translated and not _engine_is_mostly_english(translated):
+                return translated
+    except Exception as e:
+        _engine_log("warning", "[번역 실패] 외신(정식 API) | %s", str(e)[:160])
+    return ""
+
 def _engine_is_mostly_english(text: str) -> bool:
     s = str(text or "")
     letters = re.findall(r"[A-Za-z가-힣]", s)
@@ -3149,6 +3184,15 @@ def _engine_translate_to_korean(text: str) -> str:
     if not _engine_is_mostly_english(text):
         _TRANSLATION_CACHE[text] = text
         return text
+
+    # [1순위] 정식 API 키가 설정돼 있으면 이걸로 먼저 시도한다. 무료 스크래핑
+    # 엔드포인트와 달리 IP 공유 문제로 인한 429가 없다.
+    if GOOGLE_TRANSLATE_API_KEY:
+        official = _engine_translate_via_official_api(text)
+        if official:
+            _TRANSLATION_CACHE[text] = official
+            return official
+        _engine_log("warning", "[번역] 정식 API 실패 | 무료 경로로 폴백 | %s", text[:80])
 
     google_failed_429 = False
     for attempt in range(1):
@@ -3330,8 +3374,11 @@ def _engine_translate_foreign_item(source: str, title: str, extra: str):
 
     ko_title = _engine_translate_to_korean(title)
     if not ko_title:
-        _engine_log("warning", "[외신 송출차단] 한국어 번역 실패 | %s", title[:100])
-        return title, extra, False
+        # [수정] API 키 없이 무료 번역 경로가 전부 막혀 있는 상황에서도, 뉴스를
+        # 통째로 버리지 않는다. 번역 없이 영문 원문 그대로라도 보내는 것이
+        # "완전히 송출 안 됨"보다 낫다는 원칙으로 원문을 그대로 사용한다.
+        _engine_log("warning", "[번역 실패] 외신 | 번역 없이 원문 그대로 송출 | %s", title[:100])
+        return title, extra, True
 
     ko_extra = extra
     if extra and _engine_is_mostly_english(extra):
