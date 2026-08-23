@@ -226,9 +226,12 @@ except Exception:
 
 
 def _redact_url(url):
-    """로그에 남기는 URL에서 API 키/토큰/시크릿 계열 query parameter를 제거한다."""
+    """로그용 URL을 안전하게 마스킹한다. Telegram bot token은 path에 들어가므로 query만 마스킹하면 안 된다."""
     try:
-        parts = urlsplit(str(url))
+        raw = str(url)
+        # Telegram Bot API: /bot<TOKEN>/method
+        raw = re.sub(r"(/bot)[^/?\s]+", r"\1***REDACTED***", raw, flags=re.I)
+        parts = urlsplit(raw)
         pairs = []
         secret_words = ("key", "token", "secret", "password", "passwd", "authorization", "auth")
         for k, v in parse_qsl(parts.query, keep_blank_values=True):
@@ -424,7 +427,7 @@ CHAT_ID_OVERSEAS = os.environ.get("CHAT_ID_OVERSEAS", "") or CHAT_ID
 # ============================================================
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "") or CHAT_ID
 ADMIN_COMMAND_PREFIX = "/"
-ADMIN_COMMAND_POLL_INTERVAL = float(os.environ.get("ADMIN_COMMAND_POLL_INTERVAL", "2"))
+ADMIN_COMMAND_POLL_INTERVAL = float(os.environ.get("ADMIN_COMMAND_POLL_INTERVAL", "5"))
 
 
 def _env_flag(name, default=True):
@@ -1397,6 +1400,42 @@ _engine_wake_event = threading.Event()     # 메인 루프의 대기(sleep)를 �
 _engine_cycle_lock = threading.Lock()      # /run 즉시실행과 정규 사이클이 동시에 돌지 않도록 보호
 _engine_paused = False
 
+# --- 뉴스 처리 진단 통계 ---
+_ENGINE_STATS_LOCK = threading.Lock()
+_ENGINE_STATS = {}
+_ENGINE_STATS_SOURCES = {}
+_ENGINE_STATS_STARTED = 0.0
+
+def _engine_stats_reset():
+    global _ENGINE_STATS_STARTED
+    with _ENGINE_STATS_LOCK:
+        _ENGINE_STATS.clear()
+        _ENGINE_STATS_SOURCES.clear()
+        _ENGINE_STATS_STARTED = time.time()
+
+def _engine_stats_inc(name, source=None, amount=1):
+    with _ENGINE_STATS_LOCK:
+        _ENGINE_STATS[name] = _ENGINE_STATS.get(name, 0) + amount
+        if source:
+            src = _ENGINE_STATS_SOURCES.setdefault(str(source), {})
+            src[name] = src.get(name, 0) + amount
+
+def _engine_stats_log():
+    with _ENGINE_STATS_LOCK:
+        snap = dict(_ENGINE_STATS)
+        src = {k: dict(v) for k, v in _ENGINE_STATS_SOURCES.items()}
+    _engine_log(
+        "info",
+        "[뉴스진단] 수집=%d | seen=%d | 사전필터=%d | 시간제외=%d | 외부게이트=%d | 분류실패=%d | 후보=%d | 유사도차단=%d | Telegram성공=%d | Telegram실패=%d",
+        snap.get("수집",0), snap.get("seen",0), snap.get("사전필터",0), snap.get("시간제외",0),
+        snap.get("외부게이트",0), snap.get("분류실패",0), snap.get("후보",0), snap.get("유사도차단",0),
+        snap.get("Telegram성공",0), snap.get("Telegram실패",0))
+    if src:
+        top=[]
+        for source, vals in sorted(src.items(), key=lambda kv: sum(kv[1].values()), reverse=True)[:8]:
+            top.append(f"{source}:수집={vals.get('수집',0)},후보={vals.get('후보',0)},전송={vals.get('Telegram성공',0)},제외={vals.get('시간제외',0)+vals.get('사전필터',0)+vals.get('분류실패',0)+vals.get('외부게이트',0)}")
+        _engine_log("info", "[뉴스진단-소스] %s", " | ".join(top))
+
 
 def _engine_log(level, message, *args):
     try:
@@ -1704,10 +1743,16 @@ def _engine_watchdog_alert(force=False):
 def _engine_load_seen():
     global _engine_seen
     try:
-        if os.path.exists(ENGINE_STATE_FILE):
+        abs_path = os.path.abspath(ENGINE_STATE_FILE)
+        exists = os.path.exists(ENGINE_STATE_FILE)
+        size = os.path.getsize(ENGINE_STATE_FILE) if exists else 0
+        mtime = datetime.datetime.fromtimestamp(os.path.getmtime(ENGINE_STATE_FILE), tz=_now_kst().tzinfo).strftime("%Y-%m-%d %H:%M:%S") if exists else "없음"
+        if exists:
             with open(ENGINE_STATE_FILE, "r", encoding="utf-8") as f:
                 _engine_seen = {x.strip() for x in f if x.strip()}
-        _engine_log("info", "[상태] 이미 처리한 기사=%d건", len(_engine_seen))
+        _engine_log("info", "[상태진단] seen_file=%s | 존재=%s | 크기=%dB | 수정=%s | seen_count=%d", abs_path, exists, size, mtime, len(_engine_seen))
+        if not exists:
+            _engine_log("warning", "[상태진단] 상태파일이 없습니다. Render 재배포 후 중복 재처리가 발생할 수 있습니다. 영속 디스크/NEWS_BOT_STATE_FILE을 확인하세요.")
     except Exception as e:
         log_error("상태파일 읽기", e, file=ENGINE_STATE_FILE)
 
@@ -1748,10 +1793,13 @@ def _engine_send_telegram(text):
         r = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False}, timeout=ENGINE_HTTP_TIMEOUT)
         api_result = r.json() if r.headers.get("content-type", "").lower().startswith("application/json") else {}
         if r.ok and api_result.get("ok", True):
+            _engine_stats_inc("Telegram성공", source="Telegram")
             _engine_log("info", "[성공] Telegram 전송")
             return True
+        _engine_stats_inc("Telegram실패", source="Telegram")
         _engine_log("error", "[실패] Telegram 전송 | 원인=%s", api_result.get("description") or r.reason)
     except Exception as e:
+        _engine_stats_inc("Telegram실패", source="Telegram")
         _engine_log("error", "[실패] Telegram 전송 | 원인=%s", str(e)[:160])
     return False
 
@@ -1776,15 +1824,28 @@ def _admin_reply(text):
         return False
 
 
+_ADMIN_NEXT_POLL_AT = 0.0
+_ADMIN_BACKOFF = 0.0
+
 def _admin_fetch_updates():
-    """Telegram getUpdates로 새 메시지만 가져온다(이미 읽은 update_id는 제외)."""
-    global _admin_last_update_id
+    """Telegram getUpdates를 짧은 timeout + 지수 backoff로 호출한다.
+    5xx/502가 발생해도 뉴스 엔진과 관리자 감시 루프가 과도하게 붙잡히지 않게 한다."""
+    global _admin_last_update_id, _ADMIN_NEXT_POLL_AT, _ADMIN_BACKOFF
+    now = time.time()
+    if now < _ADMIN_NEXT_POLL_AT:
+        return []
     if not BOT_TOKEN:
         return []
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-    params = {"timeout": 0, "offset": _admin_last_update_id + 1}
+    params = {"timeout": 2, "offset": _admin_last_update_id + 1}
     try:
-        r = requests.get(url, params=params, timeout=ENGINE_HTTP_TIMEOUT)
+        r = requests.get(url, params=params, timeout=5)
+        if r.status_code in (500, 502, 503, 504):
+            _ADMIN_BACKOFF = min(30.0, max(3.0, (_ADMIN_BACKOFF * 2) if _ADMIN_BACKOFF else 3.0))
+            _ADMIN_NEXT_POLL_AT = time.time() + _ADMIN_BACKOFF
+            _engine_log("warning", "[관리자 명령] getUpdates %s | %ss 후 재시도", r.status_code, int(_ADMIN_BACKOFF))
+            return []
+        _ADMIN_BACKOFF = 0.0
         if r.status_code == 409:
             # [원인] Telegram getUpdates는 같은 BOT_TOKEN으로 동시에 한 프로세스만
             # 폴링할 수 있다. 409는 다른 프로세스(예: 재배포 시 종료되지 않은
@@ -3088,6 +3149,10 @@ _TRANSLATE_MIN_INTERVAL_SEC = 4.5  # [수정] 2.2s → 4.5s. 사전 필터로 �
 # 남은 호출도 무료 번역 엔드포인트의 429를 덜 맞도록 간격을 더 넓힌다.
 _TRANSLATE_LAST_CALL_TS = [0.0]
 _TRANSLATE_LOCK = threading.Lock()
+# 무료 번역 엔드포인트가 429를 반환하면 해당 엔드포인트를 잠시 쉬게 한다.
+# 같은 사이클에서 여러 외신이 연속으로 Google/MyMemory를 두드려 429를 확대하지 않도록 한다.
+_TRANSLATE_COOLDOWN_UNTIL = {"google": 0.0, "mymemory": 0.0}
+_TRANSLATE_COOLDOWN_SEC = float(os.environ.get("TRANSLATE_429_COOLDOWN_SEC", "600"))
 
 # [번역 재시도 큐] 429 등으로 이번 주기에 번역이 끝내 실패한 외신은 그냥 버리지 않고
 # 여기 큐에 남겨 다음 주기(들)에 다시 시도한다. Google 번역 429는 대개 수십 초~분 단위로
@@ -3154,6 +3219,8 @@ def _engine_translate_via_mymemory(text: str) -> str:
     막혀 있어도 이쪽은 살아있는 경우가 많다. 실패하면 빈 문자열을 반환한다
     (호출부에서 Google 실패와 동일하게 처리).
     """
+    if time.time() < _TRANSLATE_COOLDOWN_UNTIL["mymemory"]:
+        return ""
     try:
         from urllib.parse import quote
         url = (
@@ -3162,6 +3229,9 @@ def _engine_translate_via_mymemory(text: str) -> str:
         )
         r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=min(ENGINE_HTTP_TIMEOUT, 8))
         if not r.ok:
+            if r.status_code == 429:
+                _TRANSLATE_COOLDOWN_UNTIL["mymemory"] = time.time() + _TRANSLATE_COOLDOWN_SEC
+                _engine_log("warning", "[번역 백업 쿨다운] MyMemory 429 | %d초 동안 추가 호출 중단", int(_TRANSLATE_COOLDOWN_SEC))
             return ""
         data = r.json()
         translated = str((data.get("responseData") or {}).get("translatedText") or "").strip()
@@ -3180,76 +3250,68 @@ def _engine_translate_to_korean(text: str) -> str:
     if cached:
         return cached
 
-    # 이미 충분한 한국어라면 번역하지 않는다.
     if not _engine_is_mostly_english(text):
         _TRANSLATION_CACHE[text] = text
         return text
 
-    # [1순위] 정식 API 키가 설정돼 있으면 이걸로 먼저 시도한다. 무료 스크래핑
-    # 엔드포인트와 달리 IP 공유 문제로 인한 429가 없다.
+    # 정식 Google API가 있으면 무료 엔드포인트보다 먼저 사용한다.
     if GOOGLE_TRANSLATE_API_KEY:
         official = _engine_translate_via_official_api(text)
         if official:
             _TRANSLATION_CACHE[text] = official
             return official
-        _engine_log("warning", "[번역] 정식 API 실패 | 무료 경로로 폴백 | %s", text[:80])
 
-    google_failed_429 = False
-    for attempt in range(1):
-        # [요청 간격 강제] 마지막 호출 이후 최소 간격이 지나지 않았으면 대기한다.
-        # 이걸 안 하면 같은 사이클에서 뉴스 여러 건이 몰릴 때 Google이 429로 막는다.
-        with _TRANSLATE_LOCK:
-            wait = _TRANSLATE_MIN_INTERVAL_SEC - (time.time() - _TRANSLATE_LAST_CALL_TS[0])
-            if wait > 0:
-                time.sleep(wait)
-            _TRANSLATE_LAST_CALL_TS[0] = time.time()
-        try:
-            from urllib.parse import quote
-            url = (
-                "https://translate.googleapis.com/translate_a/single"
-                "?client=gtx&sl=auto&tl=ko&dt=t&q=" + quote(text)
-            )
-            r = requests.get(
-                url,
-                headers={"User-Agent": USER_AGENT},
-                timeout=min(ENGINE_HTTP_TIMEOUT, 8),
-            )
-            if r.status_code == 429 or r.status_code >= 500:
-                # [429/일시적 오류] 즉시 포기하지 않고 짧게 대기 후 재시도한다
-                # (1차 1초, 2차 2초 백오프). 마지막 시도까지 실패하면 아래에서 빈 문자열 반환.
-                if attempt < 0:
-                    continue
-                _engine_log("warning", "[번역 실패] 외신 | status=%s | 백업 번역기로 전환", r.status_code)
-                google_failed_429 = True
-                break
-            if r.ok:
-                data = r.json()
-                translated = "".join(
-                    str(x[0]) for x in (data[0] or []) if isinstance(x, list) and x and x[0]
-                ).strip()
-                if translated and not _engine_is_mostly_english(translated):
-                    _TRANSLATION_CACHE[text] = translated
-                    return translated
-            break
-        except Exception as e:
-            if attempt < 2:
-                _engine_log("warning", "[번역 재시도] 외신 | 원인=%s | %d번째 재시도 예정", str(e)[:120], attempt + 2)
-                time.sleep(1.0 * (attempt + 1))
-                continue
-            _engine_log("warning", "[번역 실패] 외신 | %s", str(e)[:120])
-            break
+    # 무료 Google 번역 엔드포인트가 429를 반환한 뒤에는 일정 시간 호출하지 않는다.
+    # 같은 사이클의 외신 여러 건이 연쇄적으로 429를 만드는 것을 방지한다.
+    if time.time() < _TRANSLATE_COOLDOWN_UNTIL["google"]:
+        return ""
 
-    # [백업] Google이 429/5xx로 막혔을 때만 두 번째 무료 번역 API로 한 번 더 시도한다.
-    # (Google이 아예 응답을 안 하거나 파싱 실패한 경우까지 포함하지 않는 이유는,
-    # 그 경우는 대개 원문/네트워크 자체의 문제라 백업도 동일하게 실패할 가능성이 높기 때문.)
-    if google_failed_429:
+    with _TRANSLATE_LOCK:
+        wait = _TRANSLATE_MIN_INTERVAL_SEC - (time.time() - _TRANSLATE_LAST_CALL_TS[0])
+        if wait > 0:
+            time.sleep(wait)
+        _TRANSLATE_LAST_CALL_TS[0] = time.time()
+
+    try:
+        from urllib.parse import quote
+        url = (
+            "https://translate.googleapis.com/translate_a/single"
+            "?client=gtx&sl=auto&tl=ko&dt=t&q=" + quote(text)
+        )
+        r = requests.get(
+            url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=min(ENGINE_HTTP_TIMEOUT, 5),
+        )
+        if r.status_code == 429:
+            _TRANSLATE_COOLDOWN_UNTIL["google"] = time.time() + _TRANSLATE_COOLDOWN_SEC
+            _engine_log("warning", "[번역 쿨다운] Google 429 | %d초 동안 무료 번역 호출 중단", int(_TRANSLATE_COOLDOWN_SEC))
+            return ""
+        if r.status_code >= 500:
+            _TRANSLATE_COOLDOWN_UNTIL["google"] = time.time() + 120.0
+            _engine_log("warning", "[번역 쿨다운] Google %s | 120초 동안 호출 중단", r.status_code)
+            return ""
+        if r.ok:
+            data = r.json()
+            translated = "".join(
+                str(x[0]) for x in (data[0] or []) if isinstance(x, list) and x and x[0]
+            ).strip()
+            if translated and not _engine_is_mostly_english(translated):
+                _TRANSLATION_CACHE[text] = translated
+                return translated
+    except Exception as e:
+        _engine_log("warning", "[번역 실패] 외신 | %s", str(e)[:120])
+        return ""
+
+    # Google 429일 때 MyMemory까지 즉시 연쇄 호출하지 않는다.
+    # MyMemory 자체가 429 상태라면 그 API도 10분 쿨다운된다.
+    if time.time() >= _TRANSLATE_COOLDOWN_UNTIL["mymemory"]:
         backup = _engine_translate_via_mymemory(text)
         if backup:
             _TRANSLATION_CACHE[text] = backup
             _engine_log("info", "[번역 성공] 외신(백업 번역기) | %s", text[:80])
             return backup
 
-    # 영문 원문을 그대로 송출하지 않기 위해 실패는 빈 문자열로 처리한다.
     return ""
 
 
@@ -3731,8 +3793,11 @@ def _engine_company_history_detail(name):
 
 
 def _engine_company_outcome_stats(name):
-    """[누적데이터 분석] 성과추적 DB(OUTCOME_TRACKING_DB)에서 이 종목이 과거에 대장주/관련주로
-    송출됐던 건들의 실제 주가 등락률 평균을 계산한다. 아직 결과가 확정된 건이 없으면 None.
+    """송출됐던 건들의 실제 주가 등락률 평균을 계산한다.
+
+    성과추적 DB의 구버전/신버전 스키마를 모두 허용한다.
+    구버전에는 leader가 문자열로 저장된 기록이 있을 수 있고, 신버전에는
+    leader가 dict일 수 있으므로 어느 쪽이든 이름을 안전하게 추출한다.
     """
     name = str(name or "").strip()
     if not name or not ENABLE_OUTCOME_TRACKING:
@@ -3740,19 +3805,34 @@ def _engine_company_outcome_stats(name):
     _engine_load_outcome_tracking()
     changes = []
     for row in _OUTCOME_TRACKING_ROWS:
+        if not isinstance(row, dict):
+            continue
         names = set()
         leader = row.get("leader") or {}
-        if leader.get("name"):
-            names.add(str(leader["name"]).strip())
-        for r in row.get("related") or []:
-            if r.get("name"):
-                names.add(str(r["name"]).strip())
+        if isinstance(leader, dict):
+            leader_name = leader.get("name")
+        else:
+            leader_name = leader
+        if leader_name:
+            names.add(str(leader_name).strip())
+        related_rows = row.get("related") or []
+        if isinstance(related_rows, dict):
+            related_rows = [related_rows]
+        for r in related_rows:
+            related_name = r.get("name") if isinstance(r, dict) else r
+            if related_name:
+                names.add(str(related_name).strip())
         if name not in names:
             continue
         outcome = row.get("outcome") or {}
+        if not isinstance(outcome, dict):
+            continue
         cp = outcome.get("change_pct")
         if cp is not None:
-            changes.append(float(cp))
+            try:
+                changes.append(float(cp))
+            except (TypeError, ValueError):
+                continue
     if not changes:
         return None
     wins = sum(1 for c in changes if c > 0)
@@ -3760,8 +3840,6 @@ def _engine_company_outcome_stats(name):
         "count": len(changes),
         "avg": sum(changes) / len(changes),
         "success_rate": (wins / len(changes)) * 100.0,
-        # [강화] 평균만 보여주면 변동폭(리스크)이 감춰진다. 실제 투자판단에는
-        # "최고 얼마까지 갔었고 최악은 얼마였는지" 범위가 평균보다 더 중요하다.
         "best": max(changes),
         "worst": min(changes),
     }
@@ -4298,8 +4376,9 @@ def _engine_flush_pending():
         is_dup, dup_prev = _engine_is_duplicate_spam(item)
         if is_dup:
             dup_blocked += 1
+            _engine_stats_inc("유사도차단", source=item.get("source"))
             prev_title = str((dup_prev or {}).get("title", ""))[:80] if isinstance(dup_prev, dict) else ""
-            _engine_log("info", "[제외] 유사도 80%%+ 도배 차단 | %s | 선행=%s", item.get("title", "")[:80], prev_title)
+            _engine_log("info", "[제외] 유사도 %.0f%%+ 도배 차단 | %s | 선행=%s", DUPLICATE_BLOCK_SIMILARITY * 100, item.get("title", "")[:80], prev_title)
             _engine_mark_seen(key)
             continue
         master_result = _engine_master_result(item)
@@ -4420,6 +4499,7 @@ def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
     if not title:
         return False
+    _engine_stats_inc("수집", source=source)
 
     # [수정] 기존에는 seen 체크가 번역/분류를 다 끝낸 뒤(함수 후반부)에야 일어났다.
     # 그런데 시간창/게이트/카테고리로 최종 제외되는 기사는 애초에 seen 처리가 안 됐고,
@@ -4429,11 +4509,13 @@ def _engine_process_item(source, title, link, published="", extra=""):
     key = link or f"{source}|{title}"
     with _engine_lock:
         if key in _engine_seen:
+            _engine_stats_inc("seen", source=source)
             return False
 
     # [수정] 번역 API 쿼터를 지키기 위해, 주식/증시와 아무 관계가 없어 보이는
     # 콘텐츠(예: 정치 트윗 재게시, 순수 링크 게시물)는 번역 시도 자체를 건너뛴다.
     if not _engine_is_plausibly_market_relevant(source, title, extra):
+        _engine_stats_inc("사전필터", source=source)
         _engine_log("info", "[제외-사전필터] 주가재료 가능성 없음(번역 생략) | %s | %s", source, title[:80])
         return False
 
@@ -4499,6 +4581,7 @@ def _engine_process_item(source, title, link, published="", extra=""):
     if source == "Google-US" or source.startswith(("텔레그램/", "유튜브/")):
         recent_window = 60
     if source != "DART" and not _engine_is_within_recent_window(published, recent_window):
+        _engine_stats_inc("시간제외", source=source)
         _engine_log("info", "[제외-송출] ⏱️ 최근 %d분 밖의 뉴스(과거DB엔 누적됨) | source=%s | %s", recent_window, source, title[:80])
         # [수정] 발행시각은 시간이 지나도 다시 "최근"으로 돌아오지 않으므로, 이미 과거DB에
         # 누적한 이 기사는 seen 처리해서 RSS에 계속 남아있어도 다음 사이클부터 재번역·재분류
@@ -4507,6 +4590,7 @@ def _engine_process_item(source, title, link, published="", extra=""):
         return False
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
     if not gate_ok:
+        _engine_stats_inc("외부게이트", source=source)
         _engine_log("info", "[제외] ⏱️ %s | %s", gate_reason, title[:80])
         return False
     if market_state == "시장시간 확인불가":
@@ -4540,6 +4624,7 @@ def _engine_process_item(source, title, link, published="", extra=""):
     dt = _engine_parse_datetime(published)
     if dt:
         time_text = dt.strftime("%H:%M")
+    _engine_stats_inc("후보", source=source)
     _engine_pending.append({"source":source,"title":title,"link":link,"published":published,"extra":extra,"key":key,"category":category,"companies":companies,"k1":k1,"k2":k2,"market_hits":market_hits,"time_text":time_text,"market_state":market_state,"earnings_info":earnings_info})
     # 뉴스 1건을 수집 주기 끝까지 대기시키지 않는다. 등록 즉시 MASTER→포맷→Telegram 송출한다.
     try:
@@ -4597,6 +4682,18 @@ def _engine_run_google_and_domestic():
         for url in DOMESTIC_RSS_URLS:
             source = DOMESTIC_RSS_SOURCE_NAMES.get(url, "국내RSS")
             entries = _engine_fetch_rss(url, source)
+            # 한국경제 원 RSS가 실행환경/서버 IP에 따라 403을 반환할 경우
+            # Google News의 site 검색 RSS를 대체 수집원으로 사용한다.
+            if source == "한국경제" and not entries:
+                fallback_url = (
+                    "https://news.google.com/rss/search?q=site%3Ahankyung.com"
+                    "&hl=ko&gl=KR&ceid=KR%3Ako"
+                )
+                fallback_entries = _engine_fetch_rss(fallback_url, "한국경제-Google대체")
+                if fallback_entries:
+                    entries = fallback_entries
+                    source = "한국경제"
+                    _engine_log("info", "[RSS 대체] 한국경제 원 RSS 403 → Google News site RSS 사용 | 수집=%d건", len(entries))
             for e in entries[:50]:
                 if _engine_process_item(source, e.get("title", ""), e.get("link", ""), _engine_entry_published(e), e.get("summary", "")):
                     total += 1
@@ -6012,6 +6109,7 @@ def _engine_cycle():
         _engine_log("info", "[주기 건너뜀] 관리자 명령으로 일시정지 상태")
         return
     started = time.time()
+    _engine_stats_reset()
     _engine_last_cycle_started = started
     _engine_log("info", "[주기 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
     try:
@@ -6059,6 +6157,7 @@ def _engine_cycle():
         _engine_outcome_tracking_cycle()
     except Exception as e:
         log_error("성과 피드백 루프", e)
+    _engine_stats_log()
     _engine_last_cycle_finished = time.time()
     _engine_log("info", "[주기 완료] %.2f초 | Telegram 즉시송출 구조", time.time()-started)
 
@@ -6153,6 +6252,9 @@ if __name__ == "__main__":
         _engine_log("info", "[BOOT] 관리자 최우선 명령 통제소 가동 | ADMIN_CHAT_ID=%s | 폴링주기=%s초",
                     ADMIN_CHAT_ID, ADMIN_COMMAND_POLL_INTERVAL)
 
+        _engine_log("info", "[BOOT] 필터설정 | 국내RSS/네이버=120분 | 외부=60분 | NAVER_BATCH=16 | NAVER_INTERVAL=%ss | DUPLICATE=%.0f%%", _NAVER_CHECK_INTERVAL if "_NAVER_CHECK_INTERVAL" in globals() else 180, DUPLICATE_BLOCK_SIMILARITY * 100)
+        _engine_log("info", "[BOOT] 상태파일=%s | TelegramToken=MASKED", os.path.abspath(ENGINE_STATE_FILE))
+        _engine_log("info", "[BOOT] TelegramPoll=%ss | TranslationMinInterval=%.1fs | Translation429Cooldown=%ss", ADMIN_COMMAND_POLL_INTERVAL, _TRANSLATE_MIN_INTERVAL_SEC, int(_TRANSLATE_COOLDOWN_SEC))
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
         _engine_log("info", "[BOOT] NAVER_HUB=%s | NAVER_LEGACY=%s | DART=%s | 국내RSS=%s | US뉴스=%s | TG채널=%s",
                     bool(NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET),
