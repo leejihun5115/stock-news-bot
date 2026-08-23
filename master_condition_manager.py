@@ -11,7 +11,7 @@ Reusable central decision-logic module for news / stock analysis programs.
 - Formatter / Telegram은 판단하지 않고 결과만 사용
 
 ==============================================================================
-[중요] 65개 조건 중 핵심 판단에 직접 연결되는 조건은 아래 실행 목록에서 관리합니다.
+[중요] 65개 조건 중 실제로 "동작"하는 건 아래 19개뿐입니다.
 ==============================================================================
 CONDITION_RULES 안의 "rule" 문구(설명 텍스트)는 실행 코드가 읽지 않습니다.
 실제 동작은 아래 _execute_rule()의 elif 분기에 이름이 걸려 있는 조건만 실행되고,
@@ -33,8 +33,10 @@ CONDITION_RULES 안의 "rule" 문구(설명 텍스트)는 실행 코드가 읽�
     - 시장전망 문구          → _outlook(text, stage, key_points) / OUTLOOK_PATTERNS
     - 상용화 단계 판정       → _stage(text) / STAGES
 
-나머지 조건도 최종 판단에 필요한 경우 관련 선택/검증 함수와 연결되어야 하며,
-CONDITION_RULES의 설명만으로 판단을 막지 않습니다.
+나머지 46개(예: 직접사업연관/실제사건연결/과거급등이력/글로벌오인방지 등)는
+"이 원칙을 지킨다"는 설명일 뿐 별도 코드가 없습니다. 이 조건들의 실질 효과가
+필요하면 CONDITION_RULES를 고치는 게 아니라 _execute_rule()에 새 elif 분기를
+추가해야 합니다.
 ==============================================================================
 """
 
@@ -58,8 +60,6 @@ IMPLEMENTED_CONDITION_NAMES = frozenset({
     "상용화단계", "실행신호", "미래일정검증", "시장영향",
     "전망근거", "후속확인", "지속성", "시장전망최대3",
     "대장주선정", "대장주이유", "관찰후보", "관련주없음", "점수화",
-    "직접사업연관", "실제사건연결", "공급망연결", "테마연결",
-    "과거급등이력", "과거주도이력", "수급탄력", "글로벌오인방지", "근거필수", "근거품질",
     "조건중앙관리", "FINAL_LOCK",
     "Formatter무판단", "Telegram무판단", "재호출금지",
 })
@@ -661,7 +661,6 @@ class MasterConditionManager:
         if c.get("supply_chain"): score += 15
         if c.get("commercial_link"): score += 12
         if c.get("theme_link"): score += 5
-        if c.get("theme_verified"): score += 8
         score += min(float(c.get("history_score", 0) or 0), 8)
         if not self._clean(c.get("reason")): score -= 80
         if c.get("domestic_listed") is False: score = 0
@@ -676,25 +675,17 @@ class MasterConditionManager:
             if not name or not reason or c.get("domestic_listed") is False:
                 continue
             # [최종사용자지시우선 / MASTER 단일통제]
-            # 관련주 연결은 직접연관 → 실제 사건 → 공급망 → 상용화 → 실제 테마 순으로
-            # 교차검증한다. 과거의 "theme_link 단독 후보 무조건 탈락" 규칙은 제거한다.
-            # 단순 단어 매칭만으로는 통과시키지 않고, 기사 본문에 실제 사건 신호가 있고
-            # 후보의 테마/근거가 본문과 겹칠 때만 테마 연결을 허용한다.
-            event_context = bool(re.search(
-                r"수주|계약|공급|납품|투자|증설|양산|출시|상용화|승인|허가|임상|기술이전|기술수출|"
-                r"실적|매출|수출|수요|가격|정책|규제|관세|채택|구매|도입|생산",
-                text or "", re.I))
-            theme_overlap = bool(c.get("theme_link") and event_context)
+            # 하위 함수가 넣은 단순 테마 매핑만으로는 관련주를 확정하지 않는다.
+            # 반드시 MASTER가 기사 본문에서 직접 사업연관/실제 사건/공급망/상용화 근거를
+            # 확인할 수 있어야 한다. theme_link 단독 후보는 무조건 탈락시킨다.
             concrete_link = bool(
                 c.get("direct") or c.get("event_link") or c.get("supply_chain")
-                or c.get("commercial_link") or theme_overlap
+                or c.get("commercial_link")
             )
             anchors = [self._clean(c.get(k)) for k in ("event", "event_link", "supply_chain", "commercial_link") if self._clean(c.get(k))]
             reason_evidence = reason
             if c.get("theme_link") and not concrete_link:
                 continue
-            if c.get("theme_link") and theme_overlap and not (c.get("direct") or c.get("event_link") or c.get("supply_chain") or c.get("commercial_link")):
-                c["theme_verified"] = True
             if not concrete_link:
                 # 직접 후보라 하더라도 기사 본문에 후보명이 실제로 등장해야 한다.
                 if self._norm(name) not in self._norm(text):

@@ -443,7 +443,7 @@ _logger.info("[환경] Render=%s | NAVER=%s(%s) | DART=%s | RSS=%s | 미국뉴�
              bool(os.environ.get("PORT")), bool((NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET) or (NAVER_CLIENT_ID and NAVER_CLIENT_SECRET)), NAVER_API_MODE,
              bool(DART_API_KEY), ENABLE_DOMESTIC_NEWS, ENABLE_US_NEWS,
              ENABLE_TELEGRAM_CHANNELS, ENABLE_YOUTUBE)
-_logger.info("[정상] 국내뉴스=시장반영형 | 텔레그램/유튜브=최근7일 기본 | 강한 마감후·휴무 재료만 예외")
+_logger.info("[정상] 국내뉴스=시장반영형 | 텔레그램/유튜브=최근60분 기본 | 강한 마감후·휴무 재료만 예외")
 _logger.info("============================================================")
 
 # requests를 사용하는 기존 함수는 수정하지 않고, 모든 HTTP 요청을 자동 진단한다.
@@ -620,14 +620,14 @@ if not BOT_TOKEN or not CHAT_ID:
         "    환경변수(BOT_TOKEN, CHAT_ID)에 값을 설정해주세요."
     )
 
-RSS_CHECK_INTERVAL = 10          
-CUSTOM_SOURCE_INTERVAL = 60      
-TELEGRAM_CHANNEL_INTERVAL = 15   
-TELEGRAM_UNFILTERED_INTERVAL = 15  
-DART_CHECK_INTERVAL = 30         
-NAVER_CHECK_INTERVAL = 60        
-BLOG_CHECK_INTERVAL = 300       
-YOUTUBE_CHECK_INTERVAL = 300    
+RSS_CHECK_INTERVAL = 15          
+CUSTOM_SOURCE_INTERVAL = 300     
+TELEGRAM_CHANNEL_INTERVAL = 60   
+TELEGRAM_UNFILTERED_INTERVAL = 60  
+DART_CHECK_INTERVAL = 60         
+NAVER_CHECK_INTERVAL = 300       
+BLOG_CHECK_INTERVAL = 1800       
+YOUTUBE_CHECK_INTERVAL = 1800    
 MAIN_LOOP_TICK = 5               
 
 US_MARKET_START_HOUR = 22
@@ -1386,7 +1386,7 @@ def _engine_schedule_daily_monitor():
         _engine_log('info','[일정] %s시 일일 일정 브리핑 송출 완료',slot)
 
 ENGINE_HTTP_TIMEOUT = 20
-ENGINE_MAX_SEND_PER_CYCLE = 100
+ENGINE_MAX_SEND_PER_CYCLE = 20
 ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
 
 # 외부채널(텔레그램/유튜브)은 60분을 기본으로 하며, 시장 마감 후/휴무의 강한 국내 상장기업 재료만 예외 허용한다.
@@ -1399,12 +1399,12 @@ TELEGRAM_SPAM_STATE = os.environ.get("NEWS_BOT_TELEGRAM_SPAM_STATE", "news_bot_t
 # 재시작돼도 "몇 분 전에 이미 보낸 기사"를 다시 신규로 착각해 재전송하지 않게 한다.
 SENT_FINGERPRINT_DB = os.environ.get("NEWS_BOT_SENT_FINGERPRINT_DB", "news_bot_sent_fingerprints.jsonl")
 # 제목+본문 유사도가 이 값 이상이면 "같은 뉴스"로 보고 도배 차단 대상으로 삼는다.
-DUPLICATE_BLOCK_SIMILARITY = float(os.environ.get("NEWS_BOT_DUPLICATE_BLOCK_SIMILARITY", "0.90"))
+DUPLICATE_BLOCK_SIMILARITY = float(os.environ.get("NEWS_BOT_DUPLICATE_BLOCK_SIMILARITY", "0.80"))
 # 이 시간(분)보다 오래된 과거 송출 기록과는 비교하지 않는다(며칠 뒤 동일 사건 재조명 기사는 허용).
-DUPLICATE_BLOCK_WINDOW_MIN = int(os.environ.get("NEWS_BOT_DUPLICATE_BLOCK_WINDOW_MIN", "120"))
+DUPLICATE_BLOCK_WINDOW_MIN = int(os.environ.get("NEWS_BOT_DUPLICATE_BLOCK_WINDOW_MIN", "720"))
 WATCHDOG_TIMEOUT = max(120, int(os.environ.get("NEWS_BOT_WATCHDOG_TIMEOUT", "300")))
 WATCHDOG_ALERT_INTERVAL = max(300, int(os.environ.get("NEWS_BOT_WATCHDOG_ALERT_INTERVAL", "900")))
-TELEGRAM_MAX_PER_SOURCE_HOUR = max(1, int(os.environ.get("NEWS_BOT_TELEGRAM_MAX_PER_SOURCE_HOUR", "60")))
+TELEGRAM_MAX_PER_SOURCE_HOUR = max(1, int(os.environ.get("NEWS_BOT_TELEGRAM_MAX_PER_SOURCE_HOUR", "6")))
 HISTORICAL_MATCH_THRESHOLD = float(os.environ.get("NEWS_BOT_HISTORICAL_MATCH_THRESHOLD", "0.72"))
 ENABLE_GLOBAL_BRIEFING_DB = _env_flag("ENABLE_GLOBAL_BRIEFING_DB")
 ENABLE_HISTORICAL_SURGE_DB = _env_flag("ENABLE_HISTORICAL_SURGE_DB")
@@ -1427,30 +1427,12 @@ OUTCOME_CYCLE_INTERVAL_SEC = max(60, int(os.environ.get("NEWS_BOT_OUTCOME_CYCLE_
 # 한 번의 루프에서 처리할 최대 건수(시세 API 순간 폭주 방지).
 OUTCOME_CYCLE_MAX_PER_RUN = max(5, int(os.environ.get("NEWS_BOT_OUTCOME_CYCLE_MAX_PER_RUN", "30")))
 
-# ============================================================
-# [데이터 누적형 시장·뉴스 분석 시스템]
-# 현재시장 × 과거 유사시장 × 유사뉴스 × 실제 T+5/T+30/T+60 결과
-# ------------------------------------------------------------
-# 분석을 막던 기존 구조(과거 급등뉴스만 저장, 단일 60분 결과,
-# 테마 후보의 MASTER 탈락)를 제거하고 모든 확정 뉴스에 대해 누적한다.
-# 데이터가 없는 경우에는 수치를 만들지 않고 "데이터 부족"만 표시한다.
-# ============================================================
-MARKET_ANALYSIS_DB = os.environ.get("NEWS_BOT_MARKET_ANALYSIS_DB", "news_bot_market_analysis.jsonl")
-ENABLE_MARKET_ANALYSIS = _env_flag("ENABLE_MARKET_ANALYSIS", True)
-MARKET_SIMILARITY_THRESHOLD = float(os.environ.get("NEWS_BOT_MARKET_SIMILARITY_THRESHOLD", "0.72"))
-MARKET_ANALYSIS_MAX_HISTORY = max(500, int(os.environ.get("NEWS_BOT_MARKET_ANALYSIS_MAX_HISTORY", "10000")))
-MARKET_OUTCOME_HORIZONS = (5, 30, 60)
-MARKET_ANALYSIS_MAX_SIMILAR = max(5, int(os.environ.get("NEWS_BOT_MARKET_ANALYSIS_MAX_SIMILAR", "50")))
-
 _engine_last_cycle_started = 0.0
 _engine_last_cycle_finished = 0.0
 _engine_last_watchdog_alert = 0.0
 _engine_telegram_counts = {}
 _engine_historical_cache = []
 _engine_global_briefing_cache = []
-_market_analysis_rows = []
-_market_analysis_loaded = False
-_market_analysis_last_run = 0.0
 MARKET_IMPACT_KEYWORDS = {
     "인수", "합병", "M&A", "m&a", "세계최초", "세계 최대", "세계최대", "사상 최대", "사상최대",
     "대규모 수주", "수주", "공급계약", "계약", "독점", "FDA", "승인", "허가", "특허",
@@ -1679,293 +1661,14 @@ def _engine_record_historical_case(item):
             del _engine_historical_cache[:-5000]
 
 
-def _market_analysis_quote_snapshot():
-    """현재 국내 시장을 실제 시세로 스냅샷한다. 조회 실패 값은 만들지 않는다."""
-    symbols = {
-        "KOSPI": "^KS11", "KOSDAQ": "^KQ11", "원달러": "USDKRW=X",
-        "삼성전자": "005930.KS", "SK하이닉스": "000660.KS",
-        "LG에너지솔루션": "373220.KS", "삼성바이오로직스": "207940.KS",
-        "현대차": "005380.KS", "한화에어로스페이스": "012450.KS",
-        "한화오션": "042660.KS", "NAVER": "035420.KS", "카카오": "035720.KS",
-    }
-    snap = {}
-    for name, symbol in symbols.items():
-        try:
-            q = _yahoo_chart_quote(symbol, interval="5m", range_="1d")
-            if q and q.get("price") is not None:
-                snap[name] = {
-                    "symbol": symbol,
-                    "price": q.get("price"),
-                    "change_pct": q.get("change_pct"),
-                    "timestamp": q.get("timestamp"),
-                }
-        except Exception:
-            continue
-    return snap
-
-
-def _market_analysis_vector(snapshot):
-    keys = ("KOSPI", "KOSDAQ", "원달러", "삼성전자", "SK하이닉스", "LG에너지솔루션",
-            "삼성바이오로직스", "현대차", "한화에어로스페이스", "한화오션", "NAVER", "카카오")
-    return [float(snapshot[k].get("change_pct")) for k in keys
-            if k in snapshot and snapshot[k].get("change_pct") is not None]
-
-
-def _market_similarity(a, b):
-    """현재/과거 시장 스냅샷의 유사도(0~1). 데이터가 부족하면 계산하지 않는다."""
-    if not a or not b:
-        return None
-    keys = ("KOSPI", "KOSDAQ", "원달러", "삼성전자", "SK하이닉스", "LG에너지솔루션",
-            "삼성바이오로직스", "현대차", "한화에어로스페이스", "한화오션", "NAVER", "카카오")
-    pairs = []
-    for k in keys:
-        av = (a.get(k) or {}).get("change_pct")
-        bv = (b.get(k) or {}).get("change_pct")
-        if av is None or bv is None:
-            continue
-        # ±10%를 넘어가는 차이는 시장상태 비교에서 최대 차이로 제한한다.
-        d = min(abs(float(av) - float(bv)), 10.0) / 10.0
-        pairs.append(1.0 - d)
-    if len(pairs) < 2:
-        return None
-    return round(sum(pairs) / len(pairs), 4)
-
-
-def _market_news_similarity(current_text, old_text):
-    a = re.sub(r"[^0-9a-zA-Z가-힣]", "", _engine_clean(current_text).lower())[:500]
-    b = re.sub(r"[^0-9a-zA-Z가-힣]", "", _engine_clean(old_text).lower())[:500]
-    if not a or not b:
-        return 0.0
-    return difflib.SequenceMatcher(None, a, b).ratio()
-
-
-def _market_analysis_load():
-    global _market_analysis_rows, _market_analysis_loaded
-    if _market_analysis_loaded:
-        return
-    _market_analysis_loaded = True
-    if not os.path.exists(MARKET_ANALYSIS_DB):
-        return
-    try:
-        with open(MARKET_ANALYSIS_DB, "r", encoding="utf-8") as f:
-            _market_analysis_rows = [json.loads(x) for x in f if x.strip()][-MARKET_ANALYSIS_MAX_HISTORY:]
-        _engine_log("info", "[시장분석DB] 누적 기록 %d건 로드", len(_market_analysis_rows))
-    except Exception as e:
-        log_error("시장분석 DB 읽기", e, file=MARKET_ANALYSIS_DB)
-        _market_analysis_rows = []
-
-
-def _market_analysis_stock_code(name):
-    return _resolve_stock_code_for_name(name) if name else ""
-
-
-def _market_analysis_tracked_stocks(master_result):
-    names = []
-    leader = master_result.get("leader") or {}
-    if leader.get("name"):
-        names.append(str(leader["name"]).strip())
-    for r in master_result.get("related") or []:
-        if r.get("name"):
-            names.append(str(r["name"]).strip())
-    out = []
-    seen = set()
-    for name in names:
-        code = _market_analysis_stock_code(name)
-        if code and name not in seen:
-            out.append({"name": name, "code": code})
-            seen.add(name)
-    return out[:3]
-
-
-def _market_analysis_record(item, master_result):
-    """모든 MASTER 확정 뉴스에 현재시장+유사시장+후속성과를 누적한다."""
-    if not ENABLE_MARKET_ANALYSIS or not master_result or not master_result.get("locked"):
-        return
-    try:
-        _market_analysis_load()
-        snapshot = _market_analysis_quote_snapshot()
-        tracked = _market_analysis_tracked_stocks(master_result)
-        now = _now_kst().isoformat()
-        text = _engine_clean(str(item.get("title", "")) + " " + str(item.get("extra", "")))
-        theme = _engine_theme(text)
-        row = {
-            "id": hashlib.sha1(f"{now}|{item.get('link','')}|{text}".encode("utf-8", "ignore")).hexdigest(),
-            "ts": now,
-            "published": str(item.get("published", ""))[:80],
-            "source": str(item.get("source", ""))[:80],
-            "title": str(master_result.get("title") or item.get("title", ""))[:500],
-            "body": str(item.get("extra", ""))[:2500],
-            "text": text[:3000],
-            "link": str(item.get("link", ""))[:1000],
-            "theme": theme,
-            "market_state": str(item.get("market_state", ""))[:80],
-            "market_snapshot": snapshot,
-            "market_vector": _market_analysis_vector(snapshot),
-            "master_score": master_result.get("news_value", ""),
-            "related": [
-                {"name": str(r.get("name", ""))[:60], "reason": str(r.get("reason", ""))[:300],
-                 "score": r.get("score"), "direct": bool(r.get("direct"))}
-                for r in (master_result.get("related") or [])[:3]
-            ],
-            "leader": str((master_result.get("leader") or {}).get("name", ""))[:60],
-            "selection_reason": str(((master_result.get("leader") or {}).get("reason", "")))[:500],
-            "evidence": [str(x)[:300] for x in (master_result.get("evidence") or [])[:10]],
-            "tracked": [dict(x, baseline_price=None, baseline_ts=None, outcomes={}) for x in tracked],
-            "similar_market": [],
-            "similar_news": [],
-            "analysis": {},
-        }
-        # 기준가는 뉴스 기록 시점에 가능한 즉시 확보한다.
-        # 이후 T+5/T+30/T+60은 이 실제 기준가를 기준으로 계산한다.
-        for tracked_row in row.get("tracked") or []:
-            try:
-                q = _kr_yahoo_quote(tracked_row.get("code", ""))
-                if q and q.get("price") is not None:
-                    tracked_row["baseline_price"] = q.get("price")
-                    tracked_row["baseline_ts"] = now
-            except Exception:
-                pass
-
-        # 기록 직전 현재시장과 과거시장/과거뉴스를 교차검증한다.
-        current_news = row["text"]
-        scored = []
-        for old in _market_analysis_rows[-MARKET_ANALYSIS_MAX_HISTORY:]:
-            ms = _market_similarity(snapshot, old.get("market_snapshot") or {})
-            if ms is None:
-                continue
-            ns = _market_news_similarity(current_news, old.get("text", ""))
-            combined = ms * 0.60 + ns * 0.40
-            if combined >= MARKET_SIMILARITY_THRESHOLD:
-                scored.append((combined, ms, ns, old))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        for combined, ms, ns, old in scored[:MARKET_ANALYSIS_MAX_SIMILAR]:
-            result_summary = []
-            for t in old.get("tracked") or []:
-                for h, outcome in (t.get("outcomes") or {}).items():
-                    if outcome and outcome.get("change_pct") is not None:
-                        result_summary.append({"horizon": h, "change_pct": outcome.get("change_pct")})
-            row["similar_market"].append({"id": old.get("id"), "similarity": round(ms, 4), "news_similarity": round(ns, 4), "combined": round(combined, 4), "title": old.get("title", "")[:180]})
-            if result_summary:
-                row["similar_news"].append({"id": old.get("id"), "title": old.get("title", "")[:180], "results": result_summary[:9]})
-        # 과거 유사환경 중 실제 결과가 확정된 표본만 통계에 사용한다.
-        samples = []
-        for old in _market_analysis_rows:
-            if not any(x.get("id") == old.get("id") for x in row["similar_market"]):
-                continue
-            for t in old.get("tracked") or []:
-                for h, outcome in (t.get("outcomes") or {}).items():
-                    if outcome and outcome.get("change_pct") is not None:
-                        samples.append((h, float(outcome["change_pct"])))
-        stats = {}
-        for h in ("T+5", "T+30", "T+60"):
-            vals = [v for hh, v in samples if hh == h]
-            if vals:
-                stats[h] = {"samples": len(vals), "avg_pct": round(sum(vals)/len(vals), 2), "positive_rate": round(sum(v > 0 for v in vals)/len(vals)*100, 1), "max_up": round(max(vals), 2), "max_down": round(min(vals), 2)}
-        row["analysis"] = {
-            "similar_market_count": len(row["similar_market"]),
-            "similar_news_count": len(row["similar_news"]),
-            "outcome_stats": stats,
-        }
-        if _engine_atomic_append_jsonl(MARKET_ANALYSIS_DB, row):
-            _market_analysis_rows.append(row)
-            if len(_market_analysis_rows) > MARKET_ANALYSIS_MAX_HISTORY:
-                del _market_analysis_rows[:-MARKET_ANALYSIS_MAX_HISTORY]
-    except Exception as e:
-        log_error("시장·뉴스 누적분석 기록", e)
-
-
-def _market_analysis_outcome_cycle():
-    """모든 추적 종목에 대해 T+5/T+30/T+60 실제 결과를 누적한다."""
-    if not ENABLE_MARKET_ANALYSIS:
-        return
-    _market_analysis_load()
-    if not _market_analysis_rows:
-        return
-    now = _now_kst()
-    dirty = False
-    for row in _market_analysis_rows[-MARKET_ANALYSIS_MAX_HISTORY:]:
-        base_dt = _engine_parse_datetime(row.get("ts", ""))
-        if not base_dt:
-            continue
-        for t in row.get("tracked") or []:
-            code = t.get("code", "")
-            if not code:
-                continue
-            # 기준가는 뉴스 발생 직후 처음 확인 가능한 실제 가격으로 잡는다.
-            if t.get("baseline_price") is None:
-                q = _kr_yahoo_quote(code)
-                if q and q.get("price") is not None:
-                    t["baseline_price"] = q["price"]
-                    t["baseline_ts"] = now.isoformat()
-                    dirty = True
-            if t.get("baseline_price") is None:
-                continue
-            bts = _engine_parse_datetime(t.get("baseline_ts", "")) or base_dt
-            age_min = (now - bts).total_seconds() / 60.0
-            outcomes = t.setdefault("outcomes", {})
-            for horizon in MARKET_OUTCOME_HORIZONS:
-                key = f"T+{horizon}"
-                if key in outcomes or age_min < horizon:
-                    continue
-                q = _kr_yahoo_quote(code)
-                if not q or q.get("price") is None:
-                    continue
-                base = float(t["baseline_price"])
-                pct = ((float(q["price"]) - base) / base * 100.0) if base else None
-                if pct is None:
-                    continue
-                outcomes[key] = {"price": q["price"], "change_pct": round(pct, 2), "checked_ts": now.isoformat()}
-                dirty = True
-        if row.get("analysis") is None:
-            row["analysis"] = {}
-        if dirty:
-            # 같은 row가 확정되면 현재 행의 유사성과 통계는 다음 새 뉴스부터 재계산된다.
-            pass
-    if dirty:
-        _engine_atomic_rewrite_jsonl(MARKET_ANALYSIS_DB, _market_analysis_rows)
-
-
-def _market_analysis_summary_for_message(item):
-    """현재 뉴스에 대해 저장된 교차검증 결과를 표시용 텍스트로만 반환한다."""
-    if not ENABLE_MARKET_ANALYSIS:
-        return []
-    title = str(item.get("title", ""))
-    # 현재 row는 flush 직전 record되어야 하므로 가장 최근 title/link를 우선 찾는다.
-    _market_analysis_load()
-    rows = [r for r in reversed(_market_analysis_rows) if r.get("title") and (_market_news_similarity(title, r.get("title", "")) >= 0.85)]
-    if not rows:
-        return []
-    row = rows[0]
-    lines = []
-    snap = row.get("market_snapshot") or {}
-    cur = []
-    for k in ("KOSPI", "KOSDAQ"):
-        q = snap.get(k) or {}
-        if q.get("change_pct") is not None:
-            cur.append(f"{k} {q['change_pct']:+.2f}%")
-    if cur:
-        lines.append("현재시장: " + " · ".join(cur))
-    sm = row.get("similar_market") or []
-    sn = row.get("similar_news") or []
-    if sm:
-        best = sm[0]
-        lines.append(f"과거 유사시장: {len(sm)}건 · 최고 유사도 {float(best.get('similarity',0))*100:.0f}%")
-    if sn:
-        lines.append(f"과거 유사뉴스: 실제 결과가 확인된 사례 {len(sn)}건")
-    stats = (row.get("analysis") or {}).get("outcome_stats") or {}
-    for h in ("T+5", "T+30", "T+60"):
-        st = stats.get(h)
-        if st:
-            lines.append(f"{h}: 표본 {st['samples']}건 · 평균 {st['avg_pct']:+.2f}% · 상승비율 {st['positive_rate']:.0f}%")
-    if not sm:
-        lines.append("과거 유사시장 데이터 부족")
-    elif not sn:
-        lines.append("과거 유사뉴스 실제 결과 데이터 부족")
-    return lines
-
-
 def _engine_record_outcome_tracking(item, master_result):
-    """기존 성과 DB도 유지하되 시장분석 DB와 동시에 누적한다."""
+    """[성과 피드백 루프 1단계] 실제로 송출된 뉴스의 판정 근거를 기록만 한다.
+
+    - 여기서는 주가 조회를 하지 않는다(발송 경로를 절대 느리게 하지 않기 위함).
+    - MASTER가 관련주를 확정하지 못한 뉴스(related_none_reason만 있는 경우)도
+      "관련주 無로 확정한 판단이 맞았는지" 나중에 검증할 수 있도록 함께 남긴다.
+    - checked=False 레코드는 2단계 스크립트/함수가 나중에 시세를 채워 넣는다.
+    """
     if not ENABLE_OUTCOME_TRACKING or not master_result or not master_result.get("locked"):
         return
     related = master_result.get("related") or []
@@ -1979,16 +1682,29 @@ def _engine_record_outcome_tracking(item, master_result):
         "stage": str(master_result.get("stage", ""))[:80],
         "leader": str(leader.get("name", ""))[:60],
         "leader_code": _resolve_stock_code_for_name(leader.get("name", "")) if ENABLE_OUTCOME_TRACKING else "",
-        "related": [{"name": str(r.get("name", ""))[:60], "code": _resolve_stock_code_for_name(r.get("name", "")), "reason": str(r.get("reason", ""))[:200]} for r in related[:3]],
+        "related": [
+            {
+                "name": str(r.get("name", ""))[:60],
+                "code": _resolve_stock_code_for_name(r.get("name", "")),
+                "reason": str(r.get("reason", ""))[:200],
+            }
+            for r in related[:3]
+        ],
         "related_none_reason": str(master_result.get("related_none_reason", ""))[:200],
         "evidence": [str(x)[:120] for x in (master_result.get("evidence") or [])[:8]],
-        "baseline_price": None, "baseline_failed": False, "checked": False, "outcome": None,
+        "baseline_price": None,
+        "baseline_failed": False,
+        "checked": False,
+        "outcome": None,
     }
     if _engine_atomic_append_jsonl(OUTCOME_TRACKING_DB, row):
+        # 재시작 없이도 이번 프로세스의 성과추적 사이클이 바로 이 기록을 처리할 수 있도록
+        # 메모리 목록에도 함께 반영한다(파일에는 이미 append됐으므로 다음 로드 때도 정상 복원됨).
         _engine_load_outcome_tracking()
         _OUTCOME_TRACKING_ROWS.append(row)
         if len(_OUTCOME_TRACKING_ROWS) > 5000:
             del _OUTCOME_TRACKING_ROWS[:-5000]
+
 
 def _engine_telegram_spam_allowed(item):
     source = str(item.get("source", ""))
@@ -2305,7 +2021,7 @@ def _engine_market_state(source, published):
 
 
 def _engine_recent_enough(published, source=""):
-    """외부 콘텐츠(텔레그램/유튜브)는 최근 7일을 기본으로 한다.
+    """외부 콘텐츠(텔레그램/유튜브)는 최근 60분을 기본으로 한다.
     단, 국내 장 마감 후/휴무에 발생한 강한 주가 재료는 다음 거래일 반영을 위해 예외 허용한다.
     국내 RSS/NAVER/DART/미국뉴스는 이 함수로 노출을 제한하지 않는다.
     """
@@ -2322,7 +2038,7 @@ def _engine_recent_enough(published, source=""):
 
 def _engine_external_time_gate(source, published, title, extra, market_state, market_hits):
     """텔레그램/유튜브 도배 방지용 시간 관문.
-    7일 초과는 원칙적으로 차단하고, 장 마감 후/휴무의 강한 재료만 예외로 통과시킨다.
+    60분 초과는 원칙적으로 차단하고, 장 마감 후/휴무의 강한 재료만 예외로 통과시킨다.
     """
     if not (str(source).startswith("텔레그램/") or str(source).startswith("유튜브/")):
         return True, ""
@@ -2330,8 +2046,8 @@ def _engine_external_time_gate(source, published, title, extra, market_state, ma
     if dt is None:
         return False, "발행시간 확인불가"
     age = (_now_kst() - dt).total_seconds()
-    if age <= 7 * 24 * 3600:
-        return True, "최근7일"
+    if age <= 3600:
+        return True, "최근60분"
     text = _engine_clean(f"{title} {extra}")
     text_l = text.lower()
 
@@ -2356,7 +2072,7 @@ def _engine_external_time_gate(source, published, title, extra, market_state, ma
     if market_state in ("시장 마감 후 뉴스", "시장 휴무로 미반영") and domestic_hit and strong:
         return True, f"{market_state} | 국내상장기업+강한재료"
 
-    return False, "7일 초과"
+    return False, "60분 초과"
 
 
 AMBIGUOUS_COMPANY_TERMS = {
@@ -3731,15 +3447,7 @@ def _engine_master_result(item):
                 "reason": str(row.get("reason", "")).strip(),
                 "score": float(row.get("score", 0) or 0),
                 "direct": bool(row.get("direct")),
-                # 테마 후보라도 기사에 실제 사건/수요/공급 변화가 있으면
-                # event_link/supply_chain 근거를 명시해 MASTER에서 탈락시키지 않는다.
-                "event_link": bool(not row.get("direct") and any(k in (raw_body + " " + raw_title).lower() for k in (
-                    "수주", "계약", "공급", "납품", "투자", "증설", "양산", "출시", "상용화",
-                    "승인", "허가", "기술이전", "기술수출", "임상", "실적", "매출", "수출", "수요", "가격", "정책", "규제", "관세", "hbm", "ai"
-                ))),
-                "supply_chain": bool(not row.get("direct") and row.get("theme")),
-                "commercial_link": bool(row.get("direct")),
-                "theme_link": bool(not row.get("direct")),
+                "theme_link": False,
                 "domestic_listed": True,
             })
         raw_title = str(item.get("title", "")).strip()
@@ -3920,15 +3628,6 @@ def _engine_format_message(item):
         lines.append('✅ [시장전망] ==> '+html.escape(str(outlook[0])))
         for o in outlook[1:3]: lines.append('     ✔ '+html.escape(str(o)))
 
-    # ========================================================
-    # 데이터 누적형 시장·뉴스 분석: Formatter는 저장된 값만 표시한다.
-    # ========================================================
-    data_lines = _market_analysis_summary_for_message(item)
-    if data_lines:
-        lines.append('🧠 [데이터 기반 분석]')
-        for dl in data_lines:
-            lines.append('     '+html.escape(str(dl)))
-
     # 관련주/테마/BIG ISSUE는 위 master_badge에서 이미 표시했으므로 여기서 중복 출력하지 않는다.
     # (참고: master_badge가 비어있으면 관련주/테마/BIG ISSUE가 없다는 뜻이므로 항목 자체가 비게 된다)
 
@@ -3987,8 +3686,6 @@ def _engine_flush_pending():
             continue
         master_result = _engine_master_result(item)
         item["_master_result"] = master_result
-        if master_result and master_result.get("locked"):
-            _market_analysis_record(item, master_result)
         message = _engine_format_message(item)
         master_badge = _engine_master_badge(master_result)
         image_sent = False
@@ -4036,7 +3733,7 @@ def _engine_is_relevant(title):
     return list(kws)[:8]
 
 
-def _engine_is_within_recent_window(published, window_minutes=10080):
+def _engine_is_within_recent_window(published, window_minutes=60):
     """현재 KST 기준 최근 window_minutes분 이내 뉴스만 실시간 송출 대상으로 허용한다.
     과거 뉴스는 분석/비교 DB에서 활용할 수 있지만 현재 뉴스 송출에서는 제외한다.
     """
@@ -4073,9 +3770,9 @@ def _engine_process_item(source, title, link, published="", extra=""):
         _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
         return False
 
-    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 7일 이내 발행 뉴스만 실시간 송출.
-    # 과거 뉴스도 검증·데이터 누적을 위해 최대 7일 범위에서 송출 후보로 활용한다.
-    if not _engine_is_within_recent_window(published, 10080):
+    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
+    # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
+    if not _engine_is_within_recent_window(published, 60):
         _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
         return False
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
@@ -4174,7 +3871,7 @@ def _engine_run_google_and_domestic():
                     total += 1
     _engine_log("info", "[Google/RSS 결과] 신규 전송=%d", total)
     if ENABLE_US_NEWS and total == 0:
-        _engine_log("warning", "[Google 진단] RSS 수집은 되었지만 송출후보 0건이면 when:1h/최근7일/주가재료 조건을 확인")
+        _engine_log("warning", "[Google 진단] RSS 수집은 되었지만 송출후보 0건이면 when:1h/최근60분/주가재료 조건을 확인")
 
 
 _NAVER_RUNTIME_MODE = None
@@ -4329,7 +4026,7 @@ def _engine_run_naver():
 
     _engine_log("info", "[네이버] 이번주기=%d개 검색 | 전송후보=%d | API=%s | runtime=%s", len(selected), total, "정상" if api_ok else "오류", _NAVER_RUNTIME_MODE or "없음")
     if api_ok and total == 0:
-        _engine_log("warning", "[네이버 진단] API는 정상이나 송출후보 0건 | 최근7일/주가재료/중복 조건을 점검")
+        _engine_log("warning", "[네이버 진단] API는 정상이나 송출후보 0건 | 최근60분/주가재료/중복 조건을 점검")
 
 
 _NAVER_COMBO_INTERVAL = 300
@@ -5518,10 +5215,6 @@ def _engine_cycle():
         _engine_outcome_tracking_cycle()
     except Exception as e:
         log_error("성과 피드백 루프", e)
-    try:
-        _market_analysis_outcome_cycle()
-    except Exception as e:
-        log_error("시장·뉴스 T+5/T+30/T+60 성과루프", e)
     _engine_last_cycle_finished = time.time()
     _engine_log("info", "[주기 완료] %.2f초 | Telegram 즉시송출 구조", time.time()-started)
 
@@ -5564,7 +5257,6 @@ def _start_render_health_server():
 def _engine_main_loop():
     _engine_load_seen()
     _engine_load_extended_state()
-    _market_analysis_load()
     if ENABLE_OUTCOME_TRACKING:
         _dart_load_corp_code_map()
         _engine_load_outcome_tracking()
