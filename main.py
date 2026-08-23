@@ -293,7 +293,15 @@ def log_debug(message, *args):
 
 
 def log_error(context, exc=None, **details):
-    """실패 원인을 최대한 자세히 기록한다."""
+    """실패 원인을 최대한 자세히 기록한다.
+    [수정/로그 시스템 점검] 기존에는 예외 타입+메시지만 남기고 traceback을
+    완전히 버려서, 'str' object has no attribute 'get' 같은 예외가 정확히
+    어느 파일·몇 번째 줄·어떤 함수에서 발생했는지 로그만으로는 전혀 알 수
+    없었다(원인 추적 불가 → 같은 오류가 반복돼도 고칠 지점을 못 찾음).
+    이제 traceback의 마지막 몇 프레임(파일:줄번호(함수명))을 한 줄로 압축해
+    함께 남긴다. 로그 폭주 방지를 위해 전체 스택은 남기지 않고, 실제 예외가
+    발생한 지점에 가까운 프레임 몇 개만 남긴다.
+    """
     parts = [f"[실패] {context}"]
     for k, v in details.items():
         if "url" in k.lower():
@@ -301,9 +309,15 @@ def log_error(context, exc=None, **details):
         parts.append(f"{k}={v}")
     if exc is not None:
         parts.append(f"예외={type(exc).__name__}: {exc}")
+        tb = getattr(exc, "__traceback__", None)
+        if tb is not None:
+            frames = traceback.extract_tb(tb)[-4:]
+            trace_str = " > ".join(
+                f"{os.path.basename(f.filename)}:{f.lineno}({f.name})" for f in frames
+            )
+            if trace_str:
+                parts.append(f"위치={trace_str}")
     _logger.error(" | ".join(parts))
-    # 일반 운영 로그에는 traceback을 남기지 않아 로그 폭주를 방지한다.
-    # 치명적 예외는 sys.excepthook에서 별도로 기록한다.
 
 
 def _log_uncaught_exception(exc_type, exc_value, exc_tb):
