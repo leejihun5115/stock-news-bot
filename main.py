@@ -1697,6 +1697,17 @@ def _admin_fetch_updates():
     params = {"timeout": 0, "offset": _admin_last_update_id + 1}
     try:
         r = requests.get(url, params=params, timeout=ENGINE_HTTP_TIMEOUT)
+        if r.status_code == 409:
+            # [원인] Telegram getUpdates는 같은 BOT_TOKEN으로 동시에 한 프로세스만
+            # 폴링할 수 있다. 409는 다른 프로세스(예: 재배포 시 종료되지 않은
+            # 이전 인스턴스, 혹은 이 봇에 webhook이 별도로 설정된 경우)가 이미
+            # 폴링 중이라는 뜻이다. 재시도만으로는 해결 안 되므로 원인을 명확히 남긴다.
+            _engine_log(
+                "error",
+                "[관리자 명령] getUpdates 409 Conflict | 동일 BOT_TOKEN을 다른 프로세스가 "
+                "이미 폴링 중입니다(중복 배포 인스턴스 또는 webhook 설정을 확인하세요).",
+            )
+            return []
         data = r.json() if r.ok else {}
         results = data.get("result", []) if data.get("ok") else []
     except Exception as e:
@@ -2907,6 +2918,14 @@ def _engine_force_numbered_keypoint(title: str, extra: str) -> str:
 # 번역 실패 시 영문 제목을 Telegram으로 내보내지 않는다.
 # ============================================================
 _TRANSLATION_CACHE = {}
+# [원인] Google 무료 번역 엔드포인트는 짧은 시간에 여러 건을 연달아 요청하면
+# 429(Too Many Requests)를 반환한다. 기존엔 429가 뜨는 즉시 포기하고 그 뉴스를
+# 통째로 송출차단했는데, RSS 한 사이클에 미국 뉴스가 여러 건 몰리면(예: 10건)
+# 사실상 전부 연쇄로 차단되는 구조적 문제가 있었다. 요청 사이 최소 간격을 두고,
+# 429/일시적 오류는 짧게 재시도하도록 고친다.
+_TRANSLATE_MIN_INTERVAL_SEC = 1.3
+_TRANSLATE_LAST_CALL_TS = [0.0]
+_TRANSLATE_LOCK = threading.Lock()
 
 def _engine_is_mostly_english(text: str) -> bool:
     s = str(text or "")
@@ -2936,27 +2955,50 @@ def _engine_translate_to_korean(text: str) -> str:
         _TRANSLATION_CACHE[text] = text
         return text
 
-    try:
-        from urllib.parse import quote
-        url = (
-            "https://translate.googleapis.com/translate_a/single"
-            "?client=gtx&sl=auto&tl=ko&dt=t&q=" + quote(text)
-        )
-        r = requests.get(
-            url,
-            headers={"User-Agent": USER_AGENT},
-            timeout=min(ENGINE_HTTP_TIMEOUT, 8),
-        )
-        if r.ok:
-            data = r.json()
-            translated = "".join(
-                str(x[0]) for x in (data[0] or []) if isinstance(x, list) and x and x[0]
-            ).strip()
-            if translated and not _engine_is_mostly_english(translated):
-                _TRANSLATION_CACHE[text] = translated
-                return translated
-    except Exception as e:
-        _engine_log("warning", "[번역 실패] 외신 | %s", str(e)[:120])
+    for attempt in range(3):
+        # [요청 간격 강제] 마지막 호출 이후 최소 간격이 지나지 않았으면 대기한다.
+        # 이걸 안 하면 같은 사이클에서 뉴스 여러 건이 몰릴 때 Google이 429로 막는다.
+        with _TRANSLATE_LOCK:
+            wait = _TRANSLATE_MIN_INTERVAL_SEC - (time.time() - _TRANSLATE_LAST_CALL_TS[0])
+            if wait > 0:
+                time.sleep(wait)
+            _TRANSLATE_LAST_CALL_TS[0] = time.time()
+        try:
+            from urllib.parse import quote
+            url = (
+                "https://translate.googleapis.com/translate_a/single"
+                "?client=gtx&sl=auto&tl=ko&dt=t&q=" + quote(text)
+            )
+            r = requests.get(
+                url,
+                headers={"User-Agent": USER_AGENT},
+                timeout=min(ENGINE_HTTP_TIMEOUT, 8),
+            )
+            if r.status_code == 429 or r.status_code >= 500:
+                # [429/일시적 오류] 즉시 포기하지 않고 짧게 대기 후 재시도한다
+                # (1차 1초, 2차 2초 백오프). 마지막 시도까지 실패하면 아래에서 빈 문자열 반환.
+                if attempt < 2:
+                    _engine_log("warning", "[번역 재시도] 외신 | status=%s | %d번째 재시도 예정", r.status_code, attempt + 2)
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                _engine_log("warning", "[번역 실패] 외신 | status=%s (재시도 소진)", r.status_code)
+                break
+            if r.ok:
+                data = r.json()
+                translated = "".join(
+                    str(x[0]) for x in (data[0] or []) if isinstance(x, list) and x and x[0]
+                ).strip()
+                if translated and not _engine_is_mostly_english(translated):
+                    _TRANSLATION_CACHE[text] = translated
+                    return translated
+            break
+        except Exception as e:
+            if attempt < 2:
+                _engine_log("warning", "[번역 재시도] 외신 | 원인=%s | %d번째 재시도 예정", str(e)[:120], attempt + 2)
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            _engine_log("warning", "[번역 실패] 외신 | %s", str(e)[:120])
+            break
 
     # 영문 원문을 그대로 송출하지 않기 위해 실패는 빈 문자열로 처리한다.
     return ""
