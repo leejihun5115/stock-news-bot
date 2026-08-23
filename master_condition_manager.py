@@ -173,6 +173,9 @@ class MasterResult:
     commercial_stage: str = ""
     commercial_evidence: str = ""
     term_explanations: List[Dict[str, str]] = field(default_factory=list)
+    # [수정] Formatter(main.py)가 '🧠 분석' 섹션에 사용하는 필드인데 기존에는
+    # MasterResult에 정의조차 되어 있지 않아 항상 빈 값으로만 읽혔다.
+    analysis: str = ""
 
     def as_dict(self):
         return self.__dict__.copy()
@@ -201,6 +204,8 @@ COMMAND_PRIORITY_POLICY = (
     "TELEGRAM_SEND_ONLY",
 )
 LATEST_USER_COMMAND_WINS = True
+COMMAND_PRIORITY_POLICY = ("LATEST_USER_COMMAND",)
+DISABLE_LEGACY_SUBCOMMAND_OVERRIDES = True
 
 
 # ============================================================
@@ -430,43 +435,91 @@ class MasterConditionManager:
         "huawei", "byd",
     }
 
+    # [용어설명] 기사 이해에 꼭 필요한 경제/증시 용어만 짧게 설명한다.
+    # 사전에 없는 단어는 절대 임의로 설명을 만들지 않는다(추측성 설명 금지).
+    ECONOMIC_TERM_GLOSSARY = {
+        # 밸류에이션/재무
+        "PER": "주가를 주당순이익으로 나눈 값, 낮을수록 저평가로 본다",
+        "PBR": "주가를 주당순자산으로 나눈 값, 1보다 낮으면 자산가치보다 싸다는 뜻",
+        "EPS": "1주당 벌어들인 순이익",
+        "ROE": "자기자본으로 얼마나 이익을 냈는지 보여주는 지표",
+        "ROA": "전체 자산으로 얼마나 이익을 냈는지 보여주는 지표",
+        "EBITDA": "이자·세금·감가상각을 빼기 전 영업이익",
+        # 실적/공시
+        "어닝서프라이즈": "시장 예상치를 크게 웃도는 실적 발표",
+        "어닝쇼크": "시장 예상치를 크게 밑도는 실적 발표",
+        "흑자전환": "적자였던 실적이 이익으로 돌아서는 것",
+        "적자전환": "이익이었던 실적이 손실로 돌아서는 것",
+        # 자본거래
+        "유상증자": "회사가 새 주식을 팔아 자금을 조달하는 것",
+        "무상증자": "주주에게 대가 없이 새 주식을 나눠주는 것",
+        "자사주 매입": "회사가 자기 회사 주식을 사들이는 것",
+        "자사주 소각": "회사가 사들인 자기 주식을 없애는 것",
+        "액면분할": "주식 1주를 여러 주로 쪼개 주당 가격을 낮추는 것",
+        "액면병합": "여러 주를 하나로 합쳐 주당 가격을 높이는 것",
+        "감자": "회사의 자본금을 줄이는 것",
+        "블록딜": "대량 주식을 장 시작 전후 시간외거래로 사고파는 것",
+        "공개매수": "정해진 가격에 주식을 대량으로 사들이겠다고 제안하는 것",
+        "락업": "상장 후 일정 기간 대주주 등의 주식 매도를 금지하는 것",
+        # 시장 제도
+        "상한가": "하루 오를 수 있는 최대 가격(전일 대비 +30%)",
+        "하한가": "하루 내릴 수 있는 최대 가격(전일 대비 -30%)",
+        "서킷브레이커": "주가 급락 시 거래를 일시 중단시키는 제도",
+        "사이드카": "선물 가격 급변동 시 프로그램 매매를 일시 중단하는 제도",
+        "공매도": "주식을 빌려 먼저 팔고 나중에 사서 갚는 거래",
+        "숏커버링": "공매도한 주식을 다시 사들여 갚는 것",
+        # 거시경제
+        "FOMC": "미국 기준금리를 결정하는 연방공개시장위원회",
+        "CPI": "소비자물가지수, 물가 상승률을 나타내는 대표 지표",
+        "PPI": "생산자물가지수",
+        "GDP": "한 나라가 일정 기간 만들어낸 재화·서비스의 총액",
+        "DXY": "달러의 전반적인 강약을 나타내는 달러인덱스",
+        "WTI": "미국 서부텍사스산 원유, 대표 유가 지표",
+        # 시장/지수
+        "IPO": "기업이 처음 증시에 상장해 주식을 파는 것",
+        "MSCI": "해외 투자자금 흐름의 기준이 되는 글로벌 주가지수",
+        "ADR": "해외 주식을 미국 증시에서 거래할 수 있게 만든 예탁증서",
+        "코스피": "국내 대형주 중심의 종합주가지수",
+        "코스닥": "국내 중소·벤처기업 중심의 주식시장",
+        "시가총액": "주가에 발행주식 수를 곱한 회사 전체 가치",
+        # 반도체/기술(뉴스 빈출 용어)
+        "HBM": "여러 층을 쌓아 처리 속도를 높인 고성능 메모리",
+        "파운드리": "다른 회사가 설계한 반도체를 위탁 생산하는 사업",
+        "팹리스": "생산 설비 없이 반도체 설계만 하는 회사",
+    }
+
     def _term_explanations(self, title, body):
-        """기사에 실제 등장한 낯선 영문 고유명사/제품·행사명을 설명용으로 추출한다.
-        기사에 없는 정의는 만들지 않고, 본문 문맥으로 확인 가능한 종류만 표시한다.
+        """기사 이해에 꼭 필요한 경제용어만, 정해진 사전 설명으로 짧게 반환한다.
+
+        사전(ECONOMIC_TERM_GLOSSARY)에 없는 단어는 설명을 만들지 않는다.
+        의미가 불확실한 임의 추론 설명은 만들지 않는다(추측 금지).
         """
         text = self._clean(f"{title} {body}")
         if not text:
             return []
-        candidates = []
-        pat = re.compile(r"\b[A-Z][A-Za-z0-9&\'-]*(?:\s+[A-Z][A-Za-z0-9&\'-]*){0,4}\b")
-        stop = {"The","This","That","And","For","With","From","New","Today","Market",
-                "United States","New York","Wall Street","Federal Reserve","Google News"}
-        for match in pat.finditer(text):
-            term = match.group(0).strip()
-            if len(term) < 3 or term in stop or (term.isupper() and len(term) <= 4):
-                continue
-            if any(term == x["term"] for x in candidates):
-                continue
-            if term.lower() in self.KNOWN_COMPANY_NAMES:
-                candidates.append({"term": term, "description": "기사상 회사명"})
-                if len(candidates) >= 5:
-                    break
-                continue
-            left = text[max(0, match.start()-90):match.start()]
-            right = text[match.end():min(len(text), match.end()+90)]
-            ctx = left + term + right
-            if re.search(r"출시|제품|서비스|플랫폼|앱|솔루션|판매|구매|도입", ctx, re.I):
-                kind = "제품·서비스명"
-            elif re.search(r"시상|수상|행사|라디오|프로그램|어워드|honors?|award", ctx, re.I):
-                kind = "행사·프로그램명"
-            elif re.search(rf"{re.escape(term)}\s*(?:의|가|은|는)", ctx):
-                kind = "인물·기관명"
+        hits = []  # (position, term, description)
+        for term, desc in self.ECONOMIC_TERM_GLOSSARY.items():
+            if re.search(r"[A-Za-z]", term):
+                pat = r"(?<![A-Za-z0-9])" + re.escape(term) + r"(?![A-Za-z0-9])"
+                m = re.search(pat, text, re.I)
             else:
-                kind = "기사에 등장한 고유명사"
-            candidates.append({"term": term, "description": f"기사상 {kind}"})
-            if len(candidates) >= 5:
+                idx = text.find(term)
+                m = None
+                if idx >= 0:
+                    m = type("M", (), {"start": lambda self, i=idx: i})()
+            if m:
+                hits.append((m.start(), term, desc))
+        hits.sort(key=lambda x: x[0])
+        out = []
+        seen = set()
+        for _pos, term, desc in hits:
+            if term.lower() in seen:
+                continue
+            out.append({"term": term, "description": desc})
+            seen.add(term.lower())
+            if len(out) >= 3:
                 break
-        return candidates
+        return out
 
     def _key_points(self, title, body):
         """[고정 요약 원칙]
@@ -499,6 +552,8 @@ class MasterConditionManager:
                 score += 6
             if impact_pat.search(sentence):
                 score += 5
+            if re.search(r"다룬다|소개한다|살펴본다|설명한다|전한다|분석한다", sentence):
+                score -= 10
             scored.append((score, idx, trimmed, bool(impact_pat.search(sentence))))
 
         if not scored:
@@ -584,42 +639,53 @@ class MasterConditionManager:
         return False
 
     def _synthesize_title(self, title, body):
+        """원문 제목 보존을 최우선으로 한다.
+
+        제목은 요약문이나 본문 첫 문장으로 대체하지 않는다. 수집 단계에서
+        이미 전달문 메타데이터를 제거했으므로, 정상적인 기사 제목은 원문 그대로
+        유지한다. 제목이 비어 있거나 전달문 흔적만 남은 경우에만 안전한 최소 정리를 한다.
+        [수정: 자동제목] 제목이 너무 길면(가독성 기준 초과) 핵심 절만 남기고 축약한다.
+        """
         title = self._clean(title)
-        pts = self._key_points(title, body)
-        # 원 제목이 충분히 구체적인 '헤드라인'이면 그대로 보존한다.
-        # 단순 브리핑 제목/유튜브 제목/서술형 클릭베이트/장황한 번역 제목이면 재구성한다.
-        generic = re.search(r"모닝|브리핑|뉴스모음|오늘의|종합|프리뷰|시황|경제브리핑", title, re.I)
-        too_long = len(title) > 60
-        narrative = self._is_narrative_title(title)
-        if not generic and not too_long and not narrative and len(title) >= 18:
+        if not title:
+            return ""
+        # 제목처럼 보이지 않는 전달문 흔적만 제거. 본문에서 새 제목을 만들지 않는다.
+        if re.search(r"Forwarded from|^루팡\b", title, re.I):
+            cleaned = re.sub(r"Forwarded from\s+[^:：]+[:：]?", "", title, flags=re.I).strip()
+            cleaned = re.sub(r"^루팡\s*[:：-]?\s*", "", cleaned).strip()
+            if cleaned:
+                title = cleaned
+        title = title[:220].strip()
+        return self._auto_shorten_title(title)
+
+    def _auto_shorten_title(self, title, max_len=42):
+        """제목이 max_len(기본 42자)을 넘으면 핵심 절만 남기고 축약한다.
+        쉼표/가운뎃점 등 자연스러운 경계가 있으면 max_len에 가장 가까운 경계에서
+        자르되, 너무 앞쪽(제목의 절반 미만)에서 잘리면 회사명만 남는 등 내용이
+        사라지므로 그 경우는 무시하고 단어 경계 기준으로 잘라 말줄임표(…)를 붙인다.
+        원문 자체를 새로 창작하지 않고 "어디까지 보여줄지"만 결정한다.
+        """
+        title = str(title or "").strip()
+        if len(title) <= max_len:
             return title
-        # [요약칸 보존] 본문에 핵심문장이 2개 이상 있을 때만 그중 하나를 제목으로 쓴다.
-        # 문장이 1개뿐이면 그걸 제목으로 써버리는 순간 요약(key_points)이 통째로
-        # 비게 되므로, 이 경우엔 원제목을 절 단위로만 다듬어 남겨 요약칸을 살린다.
-        if len(pts) >= 2:
-            p = pts[0]
-            p = re.sub(r"\s*(?:-|\|)\s*(?:[^-_|]{2,20})$", "", p).strip()
-            # 핵심 문장이 이미 _key_points()에서 절 단위로 정리됐지만, 제목 용도로는
-            # 80자 제한이 더 짧으므로 필요하면 한 번 더 절 경계에서 자른다.
-            if len(p) > 80:
-                cut = self._clause_cut(p)
-                p = cut if cut else p
-            return p[:80]
-        # 핵심문장을 못 뽑았고 원제목만 서술형인 경우, 원제목이라도 앞 절만 잘라 간결화
-        if narrative:
-            cut = self._clause_cut(title)
-            if cut:
-                return cut[:80]
-        # [본문 없이도 자동요약] 본문이 짧아 핵심문장을 못 뽑았어도, 제목이 60자를
-        # 넘으면 단어 경계에서 자연스럽게 잘라 짧게 만든다. 문자수로 그냥 자르면
-        # 단어 중간이 잘려 어색해지므로, 뒤에서부터 가장 가까운 공백/구두점을 찾는다.
-        if too_long or narrative:
-            head = title[:70]
-            cut_at = max(head.rfind(" "), head.rfind(","), head.rfind("·"), head.rfind("-"))
-            if cut_at > 25:
-                return head[:cut_at].rstrip(" -–—,·")
-            return head.rstrip()
-        return title[:110]
+        min_len = max(10, max_len // 2)
+        best_idx = -1
+        for sep in [", ", "· ", " - ", "…", " · ", "..."]:
+            start = 0
+            while True:
+                idx = title.find(sep, start)
+                if idx == -1:
+                    break
+                if min_len <= idx <= max_len and idx > best_idx:
+                    best_idx = idx
+                start = idx + 1
+        if best_idx >= min_len:
+            return title[:best_idx].strip()
+        cut = title[:max_len]
+        last_space = cut.rfind(" ")
+        if last_space >= min_len:
+            cut = cut[:last_space]
+        return cut.rstrip(" ,.-") + "…"
 
     def _stage(self, text):
         found = []
@@ -827,8 +893,9 @@ class MasterConditionManager:
         elif name == "증거보존":
             state["evidence"] = list(dict.fromkeys(state["evidence"] + state["key_points"]))
         elif name == "제목반복금지":
-            if self._norm(state["title"]) == self._norm(state["key_points"][0] if state["key_points"] else ""):
-                state["title"] = self._synthesize_title(state["title"], state["body"])
+            # 제목은 원문을 보존한다. 요약과 같아도 본문에서 새 제목을 만들지 않는다.
+            # 대신 같은 문장은 요약 단계에서 제외한다.
+            pass
         elif name == "추정금지":
             state["schedule"] = self._future_schedule(state["schedule"], state["body"])
         elif name == "핵심추출":
@@ -857,7 +924,13 @@ class MasterConditionManager:
         elif name == "시장영향":
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
         elif name in ("전망근거", "후속확인", "지속성"):
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])
+            # [수정] 기존에는 여기서 무조건 빈 리스트로 초기화해 _outlook()의
+            # 실제 로직이 한 번도 실행되지 못했다. 이제 실제로 _outlook()을 호출해
+            # 본문 근거 기반 시장전망을 계산한다.
+            state["outlook"] = self._outlook(
+                text, state["stage"], state["key_points"],
+                body=state["body"], title=state["title"],
+            )
         elif name == "시장전망최대3":
             state["outlook"] = state["outlook"][:3]
         elif name == "대장주선정":
@@ -876,7 +949,10 @@ class MasterConditionManager:
             # 현재까지의 모든 조건을 최종 상태로 고정한다.
             state["stage"], state["commercial_evidence"] = self._stage(text)
             state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])[:3]
+            # [수정] 기존에는 여기서 outlook을 무조건 빈 리스트로 덮어써서, 41~43번에서
+            # 계산한 결과가 최종 단계 직전에 항상 삭제됐다. 주석의 의도("앞선 중간 결과를
+            # 다시 덮어쓰지 않는다")대로 이미 계산된 값을 그대로 유지(최대 3개로만 재확인)한다.
+            state["outlook"] = state["outlook"][:3]
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
             state["master_confirmed"] = bool(
                 state["news_value"] in ("높음", "중간") and
@@ -955,6 +1031,11 @@ class MasterConditionManager:
         if missing:
             raise RuntimeError(f"MASTER 65조건 미실행: {missing}")
 
+        # [수정] outlook(시장전망) 문장을 그대로 '분석' 텍스트로도 사용한다.
+        # Formatter는 outlook이 아니라 analysis 필드를 읽으므로, 이 연결이 없으면
+        # outlook을 아무리 잘 계산해도 화면에는 절대 나타나지 않는다.
+        analysis_text = " ".join(state["outlook"][:2]).strip()
+
         result = MasterResult(
             rule_version=RULE_VERSION + "_EXEC65",
             title=state["title"],
@@ -968,6 +1049,7 @@ class MasterConditionManager:
             term_explanations=list(state.get("term_explanations") or [])[:5],
             schedule=state["schedule"],
             outlook=state["outlook"][:3],
+            analysis=analysis_text,
             selection_method=list(self.SELECTION_METHOD),
             evidence=list(dict.fromkeys(state["evidence"]))[:8],
             source=state["source"],
@@ -1049,9 +1131,14 @@ class MasterConditionManager:
 
 
 def analyze_news(**kwargs):
+    """[수정] 검증 오류가 있어도 예외로 결과를 날리지 않고, 계산된 내용을
+    locked=False 상태로 그대로 반환한다. (main.py의 master_finalize_news와 동일한 정책)
+    """
     manager = MasterConditionManager()
     result = manager.analyze(**kwargs)
     result = manager.validate(result)
+    if result.get("validation_errors"):
+        return result
     return manager.lock(result)
 
 
