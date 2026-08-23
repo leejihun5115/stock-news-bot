@@ -3374,11 +3374,12 @@ def _engine_translate_foreign_item(source: str, title: str, extra: str):
 
     ko_title = _engine_translate_to_korean(title)
     if not ko_title:
-        # [수정] API 키 없이 무료 번역 경로가 전부 막혀 있는 상황에서도, 뉴스를
-        # 통째로 버리지 않는다. 번역 없이 영문 원문 그대로라도 보내는 것이
-        # "완전히 송출 안 됨"보다 낫다는 원칙으로 원문을 그대로 사용한다.
-        _engine_log("warning", "[번역 실패] 외신 | 번역 없이 원문 그대로 송출 | %s", title[:100])
-        return title, extra, True
+        # [수정] 예전에는 여기서 True를 반환해 "번역 성공"으로 위장시켰는데,
+        # 그러면 호출부(_engine_process_item)의 재시도 큐 분기가 절대 실행되지
+        # 않는다. 파일 상단 "데이터 누적 절대 원칙"대로 번역 실패는 즉시 폐기가
+        # 아니라 재시도 큐로 보내야 하므로, 여기서는 정직하게 False를 반환한다.
+        _engine_log("warning", "[번역 실패] 외신 | 재시도 큐로 이관 | %s", title[:100])
+        return title, extra, False
 
     ko_extra = extra
     if extra and _engine_is_mostly_english(extra):
@@ -4457,7 +4458,12 @@ def _engine_process_item(source, title, link, published="", extra=""):
 
     # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출 대상.
     # (과거 뉴스는 위에서 이미 과거DB에 누적됐고, 여기서는 신규 뉴스로 재송출하지 않는다.)
-    if not _engine_is_within_recent_window(published, 60):
+    # [수정] DART의 rcept_dt는 날짜만 있고 시간 정보가 없어("20260824" 8자리) 자정
+    # 발행으로 해석되고, 그 결과 분단위 최근시간창 체크가 하루 중 거의 모든 시간대에
+    # 실패해 DART 실시간 송출이 사실상 항상 막혀 있었다. DART는 매 주기 당일 날짜
+    # 범위만 조회하고 link 기반 중복제거를 쓰므로 신선도가 이미 보장되어 있어,
+    # 이 시간창 체크만 DART에 한해 우회한다.
+    if source != "DART" and not _engine_is_within_recent_window(published, 60):
         _engine_log("info", "[제외-송출] ⏱️ 최근 1시간 밖의 뉴스(과거DB엔 누적됨) | source=%s | %s", source, title[:80])
         return False
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
