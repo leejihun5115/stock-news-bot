@@ -1776,75 +1776,40 @@ def _admin_reply(text):
         return False
 
 
-def _admin_telegram_prepare_polling():
-    """Polling 전용 봇의 webhook 잔존으로 인한 409를 시작 전에 정리한다."""
-    if not BOT_TOKEN:
-        return False
-    base = f"https://api.telegram.org/bot{BOT_TOKEN}"
-    try:
-        r = requests.get(f"{base}/getWebhookInfo", timeout=ENGINE_HTTP_TIMEOUT)
-        if r.ok:
-            info = (r.json() or {}).get("result") or {}
-            webhook_url = str(info.get("url") or "").strip()
-            if webhook_url:
-                d = requests.post(
-                    f"{base}/deleteWebhook",
-                    params={"drop_pending_updates": "false"},
-                    timeout=ENGINE_HTTP_TIMEOUT,
-                )
-                if d.ok:
-                    _engine_log("warning", "[관리자 명령] 잔존 webhook 자동 제거 완료 | pending 유지")
-                    return True
-                _engine_log("error", "[관리자 명령] webhook 제거 실패 | status=%s", d.status_code)
-        return True
-    except Exception as e:
-        _engine_log("warning", "[관리자 명령] webhook 확인 실패 | 원인=%s", str(e)[:160])
-        return False
-
-
 def _admin_fetch_updates():
-    """Telegram getUpdates로 새 메시지만 가져온다. 409 발생 시 webhook을 정리하고 제한적으로 재시도한다."""
+    """Telegram getUpdates로 새 메시지만 가져온다(이미 읽은 update_id는 제외)."""
     global _admin_last_update_id
     if not BOT_TOKEN:
         return []
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     params = {"timeout": 0, "offset": _admin_last_update_id + 1}
-    backoff = [2, 4, 8, 12]
-    for attempt in range(len(backoff) + 1):
-        try:
-            r = requests.get(url, params=params, timeout=ENGINE_HTTP_TIMEOUT)
-            if r.status_code == 409:
-                _engine_log("warning", "[관리자 명령] getUpdates 409 Conflict | 재복구 시도 %d/%d", attempt + 1, len(backoff) + 1)
-                _admin_telegram_prepare_polling()
-                if attempt < len(backoff):
-                    time.sleep(backoff[attempt])
-                    continue
-                _engine_log("error", "[관리자 명령] 409 재시도 소진 | 다른 프로세스가 동일 BOT_TOKEN을 폴링 중일 수 있습니다.")
-                return []
-            if not r.ok:
-                _engine_log("error", "[관리자 명령] getUpdates HTTP 실패 | status=%s", r.status_code)
-                return []
-            data = r.json() or {}
-            if not data.get("ok"):
-                _engine_log("error", "[관리자 명령] getUpdates API 실패 | %s", str(data)[:200])
-                return []
-            results = data.get("result", []) or []
-            updates = []
-            for u in results:
-                try:
-                    _admin_last_update_id = max(_admin_last_update_id, int(u.get("update_id", 0)))
-                except Exception:
-                    continue
-                msg = u.get("message") or u.get("edited_message") or {}
-                chat_id = str((msg.get("chat") or {}).get("id", ""))
-                text = str(msg.get("text", "") or "").strip()
-                if chat_id and text:
-                    updates.append((chat_id, text))
-            return updates
-        except Exception as e:
-            _engine_log("error", "[관리자 명령] getUpdates 실패 | 원인=%s", str(e)[:160])
+    try:
+        r = requests.get(url, params=params, timeout=ENGINE_HTTP_TIMEOUT)
+        if r.status_code == 409:
+            # [원인] Telegram getUpdates는 같은 BOT_TOKEN으로 동시에 한 프로세스만
+            # 폴링할 수 있다. 409는 다른 프로세스(예: 재배포 시 종료되지 않은
+            # 이전 인스턴스, 혹은 이 봇에 webhook이 별도로 설정된 경우)가 이미
+            # 폴링 중이라는 뜻이다. 재시도만으로는 해결 안 되므로 원인을 명확히 남긴다.
+            _engine_log(
+                "error",
+                "[관리자 명령] getUpdates 409 Conflict | 동일 BOT_TOKEN을 다른 프로세스가 "
+                "이미 폴링 중입니다(중복 배포 인스턴스 또는 webhook 설정을 확인하세요).",
+            )
             return []
-    return []
+        data = r.json() if r.ok else {}
+        results = data.get("result", []) if data.get("ok") else []
+    except Exception as e:
+        _engine_log("error", "[관리자 명령] getUpdates 실패 | 원인=%s", str(e)[:160])
+        return []
+    updates = []
+    for u in results:
+        _admin_last_update_id = max(_admin_last_update_id, int(u.get("update_id", 0)))
+        msg = u.get("message") or u.get("edited_message") or {}
+        chat_id = str((msg.get("chat") or {}).get("id", ""))
+        text = str(msg.get("text", "") or "").strip()
+        if chat_id and text:
+            updates.append((chat_id, text))
+    return updates
 
 
 def _admin_command_listener():
@@ -3161,7 +3126,7 @@ def _engine_translate_to_korean(text: str) -> str:
         _TRANSLATION_CACHE[text] = text
         return text
 
-    for attempt in range(3):
+    for attempt in range(1):
         # [요청 간격 강제] 마지막 호출 이후 최소 간격이 지나지 않았으면 대기한다.
         # 이걸 안 하면 같은 사이클에서 뉴스 여러 건이 몰릴 때 Google이 429로 막는다.
         with _TRANSLATE_LOCK:
@@ -3183,11 +3148,9 @@ def _engine_translate_to_korean(text: str) -> str:
             if r.status_code == 429 or r.status_code >= 500:
                 # [429/일시적 오류] 즉시 포기하지 않고 짧게 대기 후 재시도한다
                 # (1차 1초, 2차 2초 백오프). 마지막 시도까지 실패하면 아래에서 빈 문자열 반환.
-                if attempt < 2:
-                    _engine_log("warning", "[번역 재시도] 외신 | status=%s | %d번째 재시도 예정", r.status_code, attempt + 2)
-                    time.sleep(2.0 * (attempt + 1))
+                if attempt < 0:
                     continue
-                _engine_log("warning", "[번역 실패] 외신 | status=%s (재시도 소진)", r.status_code)
+                _engine_log("warning", "[번역 실패] 외신 | status=%s | 이번 주기는 스킵하고 재시도 큐로 이동", r.status_code)
                 break
             if r.ok:
                 data = r.json()
@@ -3276,9 +3239,11 @@ def _engine_queue_translation_retry(source, title, link, published, extra):
         if entry:
             entry["attempts"] += 1
             entry["published"] = published or entry.get("published", "")
+            entry["extra"] = extra or entry.get("extra", "")
+            entry["next_retry_at"] = time.time() + min(300.0, 60.0 * entry["attempts"])
         else:
             entry = {"source": source, "title": title, "link": link,
-                      "published": published, "extra": extra, "attempts": 1}
+                      "published": published, "extra": extra, "attempts": 1, "next_retry_at": time.time() + 60.0}
             _engine_translate_retry_queue[key] = entry
         if entry["attempts"] >= _ENGINE_TRANSLATE_RETRY_MAX_ATTEMPTS:
             del _engine_translate_retry_queue[key]
@@ -3297,11 +3262,15 @@ def _engine_retry_translation_queue():
     [원칙] 이 재시도도 결국 _engine_process_item()을 그대로 타므로, 번역이
     이번엔 성공하면 분류→과거DB 누적(절대 원칙)→(시간창 안이면) 실시간 송출까지
     정상적으로 이어진다."""
+    now = time.time()
     with _engine_translate_retry_lock:
-        pending = list(_engine_translate_retry_queue.values())
+        pending = [e for e in _engine_translate_retry_queue.values()
+                   if float(e.get("next_retry_at", 0) or 0) <= now]
     if not pending:
         return
-    _engine_log("info", "[번역 재시도 큐] 대기=%d건 재시도", len(pending))
+    # 번역 재시도가 한 사이클 전체를 붙잡지 않도록 최대 2건만 처리한다.
+    pending = pending[:2]
+    _engine_log("info", "[번역 재시도 큐] 대기=%d건 | 이번 주기 최대 2건 처리", len(pending))
     for entry in pending:
         try:
             _engine_process_item(entry["source"], entry["title"], entry["link"],
@@ -5962,8 +5931,6 @@ if __name__ == "__main__":
         # 관리자 최우선 명령 통제소: 감시 스레드 + 즉시실행 스레드.
         # 뉴스 수집 메인 루프와 완전히 분리되어 있어, 어떤 상황에서도
         # 관리자의 마지막 명령이 지연 없이 즉시 처리된다.
-        # 이 봇은 polling 전용이므로 시작 시 webhook 잔존으로 인한 409를 선제 정리한다.
-        _admin_telegram_prepare_polling()
         admin_listener_thread = threading.Thread(
             target=_admin_command_listener,
             name="admin-command-listener",
