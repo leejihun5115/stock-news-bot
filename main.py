@@ -3329,6 +3329,10 @@ def _engine_queue_translation_retry(source, title, link, published, extra):
             del _engine_translate_retry_queue[key]
             _engine_log("warning", "[번역 영구실패] 재시도 %d회 초과로 최종 제외 | %s",
                         _ENGINE_TRANSLATE_RETRY_MAX_ATTEMPTS, title[:80])
+            # [수정] 재시도 큐에서 제거된 뒤에도 seen 처리를 안 하면, 원본 RSS 피드에
+            # 이 기사가 남아있는 동안 매 사이클 처음부터 다시 번역을 시도하게 된다.
+            # 재시도 한도까지 다 썼으니 이제 seen 처리해서 더는 재시도하지 않는다.
+            _engine_mark_seen(key)
 
 
 def _engine_clear_translation_retry(link, title, source):
@@ -4402,6 +4406,16 @@ def _engine_process_item(source, title, link, published="", extra=""):
     if not title:
         return False
 
+    # [수정] 기존에는 seen 체크가 번역/분류를 다 끝낸 뒤(함수 후반부)에야 일어났다.
+    # 그런데 시간창/게이트/카테고리로 최종 제외되는 기사는 애초에 seen 처리가 안 됐고,
+    # 그 결과 RSS 피드에 같은 기사가 남아있는 한 매 사이클마다 처음부터 다시 번역·분류를
+    # 반복했다(외신은 매 사이클 재번역 → 번역 API 쿼터 소진 → 429 반복 → 사이클 지연의
+    # 악순환). 이제 번역 등 비용이 드는 작업을 하기 전에 먼저 seen 여부를 확인한다.
+    key = link or f"{source}|{title}"
+    with _engine_lock:
+        if key in _engine_seen:
+            return False
+
     # [수정] 번역 API 쿼터를 지키기 위해, 주식/증시와 아무 관계가 없어 보이는
     # 콘텐츠(예: 정치 트윗 재게시, 순수 링크 게시물)는 번역 시도 자체를 건너뛴다.
     if not _engine_is_plausibly_market_relevant(source, title, extra):
@@ -4437,6 +4451,7 @@ def _engine_process_item(source, title, link, published="", extra=""):
     growth_block = ("그로쓰리서치" in str(source)) or ("rocket_news1" in link) or ("growth_semi" in link) or ("growthbio" in link) or ("growthresearch" in link)
     if growth_block:
         _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
+        _engine_mark_seen(key)  # 채널 자체가 영구 차단 대상이므로 재평가할 필요가 없다
         return False
 
     # [수정] 기존에는 "최근 60분 이내 발행" 시간 게이트를 분류(classify)보다도 먼저
@@ -4465,6 +4480,10 @@ def _engine_process_item(source, title, link, published="", extra=""):
     # 이 시간창 체크만 DART에 한해 우회한다.
     if source != "DART" and not _engine_is_within_recent_window(published, 60):
         _engine_log("info", "[제외-송출] ⏱️ 최근 1시간 밖의 뉴스(과거DB엔 누적됨) | source=%s | %s", source, title[:80])
+        # [수정] 발행시각은 시간이 지나도 다시 "최근"으로 돌아오지 않으므로, 이미 과거DB에
+        # 누적한 이 기사는 seen 처리해서 RSS에 계속 남아있어도 다음 사이클부터 재번역·재분류
+        # 하지 않는다(반복 재번역이 번역 API 쿼터를 소진시켜 사이클이 느려지는 문제 방지).
+        _engine_mark_seen(key)
         return False
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
     if not gate_ok:
@@ -4478,16 +4497,17 @@ def _engine_process_item(source, title, link, published="", extra=""):
         _schedule_add_news_item(source, title, extra, link, published, companies, market_hits)
     except Exception as e:
         _engine_log('warning', '[일정DB 누적 실패] %s', str(e)[:160])
-    key = link or f"{source}|{title}"
-    with _engine_lock:
-        if key in _engine_seen:
-            return False
+    # [수정] key 계산·seen 체크는 함수 맨 앞에서 이미 했으므로 여기서 다시 하지 않는다
+    # (중복 계산 제거).
     # [원칙] 카테고리가 없으면(분류 실패) 절대 노출하지 않는다.
     if not ok or not str(category or "").strip():
         reason = "카테고리 없음" if not str(category or "").strip() else (
             "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
         )
         _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80])
+        # [수정] 같은 제목/본문이면 분류 결과도 동일할 것이므로 seen 처리해서
+        # 매 사이클 반복 재분류(및 그 앞단의 재번역)를 막는다.
+        _engine_mark_seen(key)
         return False
     time_text = ""
     dt = _engine_parse_datetime(published)
