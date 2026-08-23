@@ -3396,7 +3396,12 @@ def _engine_company_outcome_stats(name):
             changes.append(float(cp))
     if not changes:
         return None
-    return {"count": len(changes), "avg": sum(changes) / len(changes)}
+    wins = sum(1 for c in changes if c > 0)
+    return {
+        "count": len(changes),
+        "avg": sum(changes) / len(changes),
+        "success_rate": (wins / len(changes)) * 100.0,
+    }
 
 
 def _engine_master_result(item):
@@ -3615,18 +3620,22 @@ def _engine_format_message(item):
     is_pharma = _engine_is_pharma_news(title, ' '.join(key_points))
     is_listed = bool(domestic)
 
-    # 일반 뉴스 제목에만 📌. 상장종목/제약뉴스는 별도 라벨에서 표시한다.
+    # 일반 뉴스 제목엔 📌, 제약뉴스 제목엔 💊를 접두사로 붙인다.
+    # 상장종목은 접두사 없이 제목 아래에 👀 관련주 배지로 별도 표시한다.
     header = f'<b>📰 [{html.escape(source_display)}] {html.escape(freshness or "신규")}</b>'
     if time_text:
         header += f'  🕐 {html.escape(time_text)}'
-    title_prefix = '' if (is_listed or is_pharma) else '📌 '
+    if is_listed:
+        title_prefix = ''
+    elif is_pharma:
+        title_prefix = '💊 '
+    else:
+        title_prefix = '📌 '
     lines = [header, f'<b>{title_prefix}{html.escape(title)}</b>']
 
     if is_listed:
         names = ' · '.join(str(x) for x in domestic[:3])
         lines.append(f'👀 <b>관련주</b> : {html.escape(names)}')
-    elif is_pharma:
-        lines.append('💊 <b>제약뉴스</b>')
 
     # 신규/후속/재탕은 header의 상태 하나로만 표시한다. 같은 뜻을 다시 설명하지 않는다.
 
@@ -3684,23 +3693,45 @@ def _engine_format_message(item):
         # MASTER가 관련주를 별도로 확정하지 못했어도, 본문에서 직접 추출된
         # 상장종목(👀관련주 배지)이 있으면 그 종목 기준으로 과거 데이터를 조회한다.
         lead_name = str(domestic[0]).strip()
+    # [데이터 누적형 분석] 현재 뉴스 → 현재 시장 → 과거 유사시장 → 실제 과거성과를
+    # 순서대로 비교해서 보여준다. 데이터가 없는 항목은 절대 만들어내지 않고 생략한다.
     if lead_name:
         hist = _engine_company_history_detail(lead_name)
         outc = _engine_company_outcome_stats(lead_name)
-        if hist or outc:
-            parts = []
-            if hist:
-                parts.append(f"과거 유사 재료 이력 {hist['count']}건")
-            if outc:
-                sign = '+' if outc['avg'] >= 0 else ''
-                parts.append(f"과거 판단 이후 평균 등락률 {sign}{outc['avg']:.2f}%({outc['count']}건 기준)")
-            if hist and hist['state_counts']:
+
+        if hist:
+            compare_parts = [f"과거 유사 재료 이력 {hist['count']}건"]
+            if market_state:
+                compare_parts.append(f"현재 시장: {market_state}")
+            if hist.get('state_counts'):
+                same_state_count = hist['state_counts'].get(market_state, 0) if market_state else 0
                 past_state, _cnt = hist['state_counts'].most_common(1)[0]
-                if market_state and past_state and past_state != market_state:
-                    parts.append(f"과거엔 주로 '{past_state}'였고 이번엔 '{market_state}'")
-            if parts:
-                lines.append('📊 <b>누적데이터</b>')
-                lines.append(html.escape(' · '.join(parts)))
+                if market_state and same_state_count:
+                    compare_parts.append(f"그중 동일 시장상황({market_state}) {same_state_count}건")
+                elif market_state and past_state and past_state != market_state:
+                    compare_parts.append(f"과거엔 주로 '{past_state}'였고 이번엔 '{market_state}'")
+            lines.append('📊 <b>시장 비교</b>')
+            lines.append(html.escape(' · '.join(compare_parts)))
+
+        if outc:
+            sign = '+' if outc['avg'] >= 0 else ''
+            lines.append('📈 <b>과거 성과</b>')
+            lines.append(html.escape(
+                f"표본 {outc['count']}건 · 상승비율 {outc['success_rate']:.0f}% · "
+                f"평균 등락률 {sign}{outc['avg']:.2f}%"
+            ))
+            # 🎯 판단: 표본이 충분할 때만 강함/관심/주의를 매긴다.
+            # 표본이 적으면 데이터를 근거로 단정하지 않고 '데이터 부족'으로만 표시한다.
+            if outc['count'] >= 5:
+                if outc['success_rate'] >= 60 and outc['avg'] > 0:
+                    verdict = '강함'
+                elif outc['success_rate'] >= 40:
+                    verdict = '관심'
+                else:
+                    verdict = '주의'
+            else:
+                verdict = f"관심 (표본 {outc['count']}건, 판단하기엔 부족)"
+            lines.append(f"🎯 <b>판단</b> : {verdict}")
 
     terms = (master_result or {}).get('term_explanations') or []
     if terms:
