@@ -3084,7 +3084,8 @@ _TRANSLATION_CACHE = {}
 # 통째로 송출차단했는데, RSS 한 사이클에 미국 뉴스가 여러 건 몰리면(예: 10건)
 # 사실상 전부 연쇄로 차단되는 구조적 문제가 있었다. 요청 사이 최소 간격을 두고,
 # 429/일시적 오류는 짧게 재시도하도록 고친다.
-_TRANSLATE_MIN_INTERVAL_SEC = 2.2
+_TRANSLATE_MIN_INTERVAL_SEC = 4.5  # [수정] 2.2s → 4.5s. 사전 필터로 호출량 자체를 줄였지만,
+# 남은 호출도 무료 번역 엔드포인트의 429를 덜 맞도록 간격을 더 넓힌다.
 _TRANSLATE_LAST_CALL_TS = [0.0]
 _TRANSLATE_LOCK = threading.Lock()
 
@@ -4217,9 +4218,48 @@ def _engine_is_within_recent_window(published, window_minutes=60):
     return 0 <= age_seconds <= window_minutes * 60
 
 
+def _engine_is_plausibly_market_relevant(source, title, extra):
+    """번역 API(무료 엔드포인트, 분당 한도가 낮음)를 호출하기 *전에* 최소한의
+    주가재료 가능성이 있는지 원문(번역 전) 그대로 훑어본다.
+    [수정] 예전엔 트럼프 트루스소셜 재게시물, 순수 URL 게시물처럼 주식과
+    아무 상관 없는 텔레그램/유튜브 콘텐츠까지 전부 번역부터 하고 봤다.
+    그 결과 번역 쿼터가 소진돼 정작 필요한 미국 증시 뉴스까지 429로
+    번역 실패 처리되는 문제가 있었다(로그로 확인됨). 회사명/티커/시장
+    키워드가 전혀 없는 콘텐츠는 번역 없이 즉시 걸러 쿼터를 아낀다.
+    국내 소스(사실상 이미 한국어)는 이 필터를 적용하지 않는다 - 번역
+    자체가 필요 없거나 최소한 API 호출량이 크지 않기 때문이다.
+    """
+    if not (source == "Google-US" or source.startswith("텔레그램/") or source.startswith("유튜브/")):
+        return True
+    t = f"{title} {extra}"
+    low = t.lower()
+    # 순수 링크만 있는 게시물(썸네일/원문 링크 재게시)은 그 자체로 정보가 없다.
+    stripped = re.sub(r"https?://\S+", "", t).strip()
+    if len(stripped) < 8:
+        return False
+    hit_pools = (
+        GLOBAL_COMPANY_KEYWORDS, LISTED_COMPANY_ALIASES, US_MARKET_KEYWORDS,
+        US_FEATURE_STOCK_WORDS, US_EARNINGS_WORDS, US_BREAKING_WORDS,
+    )
+    for pool in hit_pools:
+        if any(str(k).lower() in low for k in pool):
+            return True
+    extra_market_words = (
+        "stock", "shares", "market", "trading", "investor", "wall street",
+        "$", "%", "코스피", "코스닥", "증시", "주가", "주식", "종목",
+    )
+    return any(w in low for w in extra_market_words)
+
+
 def _engine_process_item(source, title, link, published="", extra=""):
     title = _engine_clean(title); extra = _engine_clean(extra); link = str(link or "").strip()
     if not title:
+        return False
+
+    # [수정] 번역 API 쿼터를 지키기 위해, 주식/증시와 아무 관계가 없어 보이는
+    # 콘텐츠(예: 정치 트윗 재게시, 순수 링크 게시물)는 번역 시도 자체를 건너뛴다.
+    if not _engine_is_plausibly_market_relevant(source, title, extra):
+        _engine_log("info", "[제외-사전필터] 주가재료 가능성 없음(번역 생략) | %s | %s", source, title[:80])
         return False
 
     # 외신은 여기서 단 한 번만 번역한다.
