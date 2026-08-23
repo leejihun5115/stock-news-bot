@@ -3763,6 +3763,37 @@ def _engine_is_pharma_news(title, extra_text=""):
     return bool(_PHARMA_KEYWORDS_RE.search(f"{title} {extra_text}"))
 
 
+def _engine_line_is_duplicate(candidate, shown_texts, threshold=0.6):
+    """짧은 문장 단위 중복 검사. 🔎[핵심]에 이미 쓰인 문장과 사실상 같은 내용을
+    🧠[분석_전망]에서 또 보여주는 것을 막기 위해 쓴다(공백 무시 완전 포함 관계 +
+    difflib 유사도 기준 둘 다 확인)."""
+    cand_n = re.sub(r'\s+', '', str(candidate)).strip()
+    if not cand_n:
+        return True
+    for shown in shown_texts:
+        shown_n = re.sub(r'\s+', '', str(shown)).strip()
+        if not shown_n:
+            continue
+        if cand_n in shown_n or shown_n in cand_n:
+            return True
+        if difflib.SequenceMatcher(None, cand_n[:200], shown_n[:200]).ratio() >= threshold:
+            return True
+    return False
+
+
+def _engine_market_state_sentence(market_state):
+    """market_state 값을 헤딩식 라벨(현재 시장: ...)이 아니라 자연스러운
+    서술형 문장으로 바꾼다."""
+    state = str(market_state or '').strip()
+    if not state:
+        return ''
+    if state == '시장 휴무로 미반영':
+        return '현재 시장이 휴무라 이 소식은 아직 실시간으로 반영되지 않았다.'
+    if state == '시장 마감 후 뉴스':
+        return '시장 마감 이후 나온 소식이라 다음 거래일 반영 여부를 지켜봐야 한다.'
+    return f'현재 시장 상황은 {state}이다.'
+
+
 def _engine_format_message(item):
     """최종 Telegram 메시지.
     최우선 사용자 출력 규칙: 짧고 사실/데이터 중심이며 중복 장식은 금지한다.
@@ -3842,32 +3873,39 @@ def _engine_format_message(item):
 
     # 신규/후속/재탕은 header의 상태 하나로만 표시한다. 같은 뜻을 다시 설명하지 않는다.
 
+    # 🔎[핵심]에 실제로 쓰인 문장들을 기록해 두고, 🧠[분석_전망]에서
+    # 같은 내용을 그대로 반복하지 않도록 뒤에서 이 목록과 대조한다.
+    shown_texts = []
     if key_points:
         lines.append('🔎 <b>핵심</b>')
         for kp in key_points:
             clean = re.sub(r'^[▶️•✔️\s]+', '', str(kp)).strip()
-            if clean:
+            if clean and not _engine_line_is_duplicate(clean, shown_texts):
                 lines.append('     ✔ ' + html.escape(clean[:180]))
+                shown_texts.append(clean)
 
     # ============================================================
     # 🧠 [분석_전망]
     # ------------------------------------------------------------
-    # 본문 사실 기반 분석(analysis)과 향후 전망(outlook)을 한 섹션으로 합쳐
-    # 보여준다. 시장이 현재 휴장/마감 상태라 실시간으로 반영되지 않았다면
-    # market_state를 통해 그 상황도 함께 설명한다(예: '시장 휴무로 미반영').
+    # 본문 사실 기반 분석(analysis)과 향후 전망(outlook)을 한 섹션으로 합쳐,
+    # 🔎[핵심]과 동일하게 문장 단위 서술형 불릿으로 보여준다. 이미 핵심에
+    # 나온 문장과 사실상 같은 내용은 여기서 다시 반복하지 않는다. 시장이
+    # 현재 휴장/마감 상태라 실시간으로 반영되지 않았다면 market_state를
+    # 자연스러운 문장으로 풀어 마지막에 덧붙인다.
     # ============================================================
-    analysis_parts = []
-    if analysis:
-        analysis_parts.append(analysis)
-    for ol in outlook:
-        ol_clean = str(ol).strip()
-        if ol_clean and ol_clean not in analysis_parts and ol_clean not in analysis:
-            analysis_parts.append(ol_clean)
-    if market_state:
-        analysis_parts.append(f'현재 시장: {market_state}.')
-    if analysis_parts:
+    analysis_lines = []
+    for candidate in ([analysis] if analysis else []) + [str(x).strip() for x in outlook]:
+        candidate = candidate.strip()
+        if candidate and not _engine_line_is_duplicate(candidate, shown_texts):
+            analysis_lines.append(candidate)
+            shown_texts.append(candidate)
+    market_sentence = _engine_market_state_sentence(market_state)
+    if market_sentence and not _engine_line_is_duplicate(market_sentence, shown_texts):
+        analysis_lines.append(market_sentence)
+    if analysis_lines:
         lines.append('🧠 <b>분석_전망</b>')
-        lines.append(html.escape(' '.join(analysis_parts)[:650]))
+        for al in analysis_lines:
+            lines.append('     ✔ ' + html.escape(al[:220]))
 
     badge_text = str(_engine_master_badge(master_result) or '')
     # 내용/데이터가 없는 빈 라벨은 절대 표시하지 않는다.
