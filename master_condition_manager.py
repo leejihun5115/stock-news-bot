@@ -6,7 +6,7 @@ Reusable central decision-logic module for news / stock analysis programs.
 핵심:
 - 조건 65개를 CONDITION_RULES 한 곳에서 관리
 - 뉴스 1건 = MASTER 1회 분석
-- 본문 → 핵심요약 → 종목선정 → 실행단계 → 일정 → 시장전망
+- 본문 → 핵심요약 → 종목선정 → 실행단계 → 일정 → 시장 데이터
 - Validator → FINAL LOCK
 - Formatter / Telegram은 판단하지 않고 결과만 사용
 
@@ -20,7 +20,7 @@ CONDITION_RULES 안의 "rule" 문구(설명 텍스트)는 실행 코드가 읽�
 ▶ 실제로 동작하는 19개 (이름 = _execute_rule의 elif 분기와 1:1 대응):
   원문확보/본문우선/분석입력고정, 증거보존, 제목반복금지, 추정금지, 핵심추출,
   5W1H우선/사실우선/주제분리, 핵심필요량/요약확정, 일반문구제거, 상용화단계,
-  실행신호, 미래일정검증, 시장영향, 전망근거/후속확인/지속성, 시장전망최대3,
+  실행신호, 미래일정검증, 시장영향, 데이터검증, 실제성과검증,
   대장주선정, 대장주이유, 관찰후보, 관련주없음, 점수화, 조건중앙관리,
   FINAL_LOCK, Formatter무판단/Telegram무판단, 재호출금지
 
@@ -30,7 +30,6 @@ CONDITION_RULES 안의 "rule" 문구(설명 텍스트)는 실행 코드가 읽�
     - 서브제목/요약(핵심포인트) → _key_points(title, body)
     - 관련종목 선정/필터     → _select_related(candidates, text)
       (관련종목 후보는 MASTER가 기사 본문 근거를 검증한 국내 상장사 후보만 사용하며, 하위 테마 매핑은 관련주 확정 근거로 인정하지 않는다)
-    - 시장전망 문구          → _outlook(text, stage, key_points) / OUTLOOK_PATTERNS
     - 상용화 단계 판정       → _stage(text) / STAGES
 
 나머지 조건도 최종 판단에 필요한 경우 관련 선택/검증 함수와 연결되어야 하며,
@@ -152,7 +151,6 @@ class MasterResult:
     observe: List[Dict[str, Any]] = field(default_factory=list)
     stage: str = ""
     schedule: str = ""
-    outlook: List[str] = field(default_factory=list)
     selection_method: List[str] = field(default_factory=list)
     evidence: List[str] = field(default_factory=list)
     source: str = ""
@@ -223,7 +221,7 @@ class MasterConditionManager:
       2) 뒤의 조건이 앞의 결과와 충돌하면 뒤의 결과가 override 한다.
       3) Validator/Lock 이후에는 결과를 변경할 수 없다.
       4) Formatter가 판단할 수 있도록 근거/이유를 결과 객체에 포함한다.
-      5) 시장전망은 본문에서 추출한 사건에만 연결하며 generic fallback을 금지한다.
+      5) 시장 데이터은 본문에서 추출한 사건에만 연결하며 generic fallback을 금지한다.
     """
 
     # 실행 진척도는 '먼저 발견된 단계'가 아니라 실제 진행도가 높은 단계가 승리한다.
@@ -257,8 +255,6 @@ class MasterConditionManager:
     def _is_non_commercial_geopolitical(self, text):
         return bool(self._GEO_DIPLOMATIC_RE.search(text or "")) and not bool(self._BIZ_REGULATORY_RE.search(text or ""))
 
-    # 사건별 전망은 고정문구가 아니라 '사실 + 다음 확인할 경제적 연결'로 만든다.
-
 
     SELECTION_METHOD = [
         "65조건 순차 실행",
@@ -285,7 +281,7 @@ class MasterConditionManager:
     )
 
     # [출처 꼬리표 제거] 외신 RSS 요약은 종종 문장 끝에 "... livemint.com"처럼
-    # 출처 도메인이 그대로 붙어 나온다. 이걸 안 떼면 요약/시장전망에 도메인
+    # 출처 도메인이 그대로 붙어 나온다. 이걸 안 떼면 요약에 도메인
     # 문자열이 그대로 노출된다. 문장 맨 끝에 붙은 "단어.tld" 형태만 제거하므로
     # 본문 중간의 정상적인 내용은 건드리지 않는다.
     _PUBLISHER_SUFFIX_RE = re.compile(
@@ -688,7 +684,8 @@ class MasterConditionManager:
         if related:
             return related, related[0], related[1:]
 
-        # 직접 종목이 없을 때만 MASTER가 본문 전체를 보고 실제 연결 테마를 선택한다.
+        # 직접 사업연결 종목이 없으면 관련주는 비워 둔다.
+        # 테마는 별도 표시 대상으로만 취급하며, 관련주 자리에 끼워 넣지 않는다.
         theme_patterns = [
             ("AI 반도체 테마", r"AI.{0,30}(?:반도체|칩)|반도체.{0,30}AI"),
             ("원전 테마", r"원전|원자력|SMR"),
@@ -699,7 +696,7 @@ class MasterConditionManager:
         ]
         for label, pattern in theme_patterns:
             if re.search(pattern, text or "", re.I):
-                return [{"name": label, "reason": "기사 본문에서 해당 산업 테마가 확인됨", "score": 70, "direct": False, "theme": True, "domestic_listed": True}], None, []
+                return [{"name": label, "reason": "기사 본문에서 해당 산업 테마가 확인됨", "score": 70, "direct": False, "theme": True, "theme_verified": True, "domestic_listed": True}], None, []
 
         # 시장 반응 가능성이 큰 빅이슈도 MASTER가 본문 근거로만 확정한다.
         big_issue = re.search(r"(?:전쟁|제재|관세|금리|기준금리|대규모 인수|합병|M&A|대규모 계약|대규모 투자|정책 전환|규제 변화|시장 충격)", text or "", re.I)
@@ -784,7 +781,6 @@ class MasterConditionManager:
             # 현재까지의 모든 조건을 최종 상태로 고정한다.
             state["stage"], state["commercial_evidence"] = self._stage(text)
             state["related_none_reason"] = self._related_none_reason(state["related"], text, state["candidates"])
-            state["outlook"] = self._outlook(text, state["stage"], state["key_points"], state["body"], state["title"])[:3]
             state["news_value"] = self._news_value(text, state["key_points"], state["related"], state["stage"])
             state["master_confirmed"] = bool(
                 state["news_value"] in ("높음", "중간") and
@@ -793,7 +789,7 @@ class MasterConditionManager:
             )
         elif name == "FINAL_LOCK":
             state["prelock_snapshot"] = {
-                k: state[k] for k in ("title", "key_points", "related", "stage", "schedule", "outlook")
+                k: state[k] for k in ("title", "key_points", "related", "stage", "schedule")
             }
         elif name == "Formatter무판단" or name == "Telegram무판단":
             state["display_only"] = True
@@ -822,7 +818,6 @@ class MasterConditionManager:
             "commercial_stage": "",
             "commercial_evidence": "",
             "schedule": self._future_schedule(schedule, body),
-            "outlook": [],
             "evidence": [self._clean(x) for x in (evidence or []) if self._clean(x)],
             "related_none_reason": "",
             "news_value": "",
@@ -842,21 +837,19 @@ class MasterConditionManager:
             before = {
                 "title": state["title"], "stage": state["stage"],
                 "related_count": len(state["related"]),
-                "outlook_count": len(state["outlook"]),
             }
             self._execute_rule(order, name, state)
             after = {
                 "title": state["title"], "stage": state["stage"],
                 "related_count": len(state["related"]),
-                "outlook_count": len(state["outlook"]),
             }
             if before != after or order in (1, 31, 36, 41, 50, 53, 65):
                 self._record(state, order, name, "EXECUTE/OVERRIDE", before=before, after=after)
 
         # [조건53/조건65 강제] 65번(조건중앙관리) 실행이 최종 판단이다.
-        # 여기서 related/outlook/news_value/master_confirmed를 다시 계산하면
+        # 여기서 related/news_value/master_confirmed를 다시 계산하면
         # 65번 이후 재호출이 되어 조건53(재호출금지)·조건65(조건중앙관리)를 위반한다.
-        # related/leader/observe는 order 31~35에서, stage/outlook/news_value/master_confirmed는
+        # related/leader/observe는 order 31~35에서, stage/news_value/master_confirmed는
         # order 65("조건중앙관리")에서 이미 최종 확정되었으므로 그대로 사용한다.
         expected_orders = {int(r["order"]) for r in CONDITION_RULES}
         missing = sorted(expected_orders - set(state["executed_orders"]))
@@ -875,7 +868,6 @@ class MasterConditionManager:
             commercial_evidence=state["commercial_evidence"],
             term_explanations=list(state.get("term_explanations") or [])[:5],
             schedule=state["schedule"],
-            outlook=state["outlook"][:3],
             selection_method=list(self.SELECTION_METHOD),
             evidence=list(dict.fromkeys(state["evidence"]))[:8],
             source=state["source"],
@@ -908,7 +900,7 @@ class MasterConditionManager:
             errors.append("제목 없음")
         # [조건19 빈요약허용 확장] 본문이 짧은 외신/속보성 기사는 제목과 겹치지 않는
         # 핵심문장을 뽑을 수 없는 경우가 있다. 이때 억지로 요약을 만들거나 MASTER
-        # 분석 자체를 실패시키지 않고, 관련주 無 / 시장전망 無와 같은 원칙으로
+        # 분석 자체를 실패시키지 않고, 관련주 無와 같은 원칙으로
         # 빈 요약을 정상 허용한다(요약칸은 화면에서 자연히 생략됨).
         if any(self._is_title_near_dup(k, title_n) for k in points):
             errors.append("요약이 제목과 동일함")
@@ -938,7 +930,6 @@ class MasterConditionManager:
                 *result.get("key_points",[]),
                 *[self._clean(x.get("name")) for x in result.get("related",[])],
                 result.get("stage",""),
-                *result.get("outlook",[]),
             ])
         )
         return result

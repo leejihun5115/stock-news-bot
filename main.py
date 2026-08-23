@@ -1964,6 +1964,32 @@ def _market_analysis_summary_for_message(item):
     return lines
 
 
+def _market_analysis_explanation_for_message(item):
+    """실제 저장된 유사시장/유사뉴스 결과가 있을 때만 해설을 반환한다."""
+    if not ENABLE_MARKET_ANALYSIS:
+        return []
+    title = str(item.get("title", ""))
+    _market_analysis_load()
+    rows = [r for r in reversed(_market_analysis_rows)
+            if r.get("title") and (_market_news_similarity(title, r.get("title", "")) >= 0.85)]
+    if not rows:
+        return []
+    row = rows[0]
+    stats = (row.get("analysis") or {}).get("outcome_stats") or {}
+    if not stats:
+        return []
+    confirmed = [(h, s) for h, s in stats.items()
+                 if s.get("samples", 0) and s.get("avg_pct") is not None and s.get("positive_rate") is not None]
+    if not confirmed:
+        return []
+    confirmed.sort(key=lambda x: {"T+5": 1, "T+30": 2, "T+60": 3}.get(x[0], 99))
+    parts = []
+    for h, s in confirmed:
+        direction = "플러스" if float(s["avg_pct"]) > 0 else "마이너스" if float(s["avg_pct"]) < 0 else "보합"
+        parts.append(f"{h} 실제 결과 {s['samples']}건 기준 평균 {float(s['avg_pct']):+.2f}% · 상승비율 {float(s['positive_rate']):.0f}% ({direction})")
+    return ["과거 유사사례의 실제 결과가 확인된 범위: " + " / ".join(parts)]
+
+
 def _engine_record_outcome_tracking(item, master_result):
     """기존 성과 DB도 유지하되 시장분석 DB와 동시에 누적한다."""
     if not ENABLE_OUTCOME_TRACKING or not master_result or not master_result.get("locked"):
@@ -3593,7 +3619,7 @@ def _engine_extract_title(title: str, extra: str) -> str:
 
 def _engine_news_insight(title: str, body: str, source: str = "") -> dict:
     """[DEPRECATED] 더 이상 MASTER 입력이나 Formatter 표시에 사용되지 않는다.
-    제목/요약/상용화단계/시장전망/관련주 판단은 반드시 master_condition_manager의
+    제목/요약/상용화단계/관련주 판단은 반드시 master_condition_manager의
     MasterConditionManager(65조건) -> Validator -> FINAL LOCK 결과만 사용한다.
     (조건1 원문확보 / 조건51 Formatter무판단 / 조건53 재호출금지)
     이 함수는 하위호환을 위해서만 남겨둔다. 새 코드에서 호출하지 말 것.
@@ -3633,24 +3659,7 @@ def _engine_news_insight(title: str, body: str, source: str = "") -> dict:
         if re.search(pat, low, re.I): commercial.append(label)
     stage=commercial[0] if commercial else ''
 
-    outlook=[]
-    if any(k in low for k in ['자사주','주주환원','배당','fcf']):
-        outlook.append('주주환원 강화가 주가의 실적 외 지지 요인으로 작용할 가능성')
-    elif any(k in low for k in ['수주','공급계약','계약 체결','판매계약']):
-        outlook.append('계약·수주가 실제 매출과 수주잔고로 이어지는지 확인하는 구간')
-    elif any(k in low for k in ['양산','상용화','실제 도입','구매']):
-        outlook.append('기술·테마 단계에서 실제 매출과 생산으로 넘어가는지 여부가 핵심')
-    elif any(k in low for k in ['증설','투자','생산']):
-        outlook.append('투자·생산 확대가 공급능력과 관련 밸류체인 수요 증가로 이어질 가능성')
-    elif any(k in low for k in ['승인','허가','임상']):
-        outlook.append('규제·임상 진전 이후 실제 상업화와 매출 전환 여부가 핵심')
-    else:
-        outlook.append('후속 발표와 실제 실적 반영 여부가 시장 영향의 핵심 확인 포인트')
-    if stage:
-        outlook.append(f'현재 뉴스는 {stage} 신호가 확인돼 단순 기대보다 실행 단계의 진전 여부가 중요')
-    if re.search(r'\d+\s*(?:억|조|원|%)', low):
-        outlook.append('제시된 수치의 실제 집행 규모와 지속성이 주가 반응을 좌우할 가능성')
-    return {'title':title,'key_points':picked,'stage':stage,'outlook':outlook[:3]}
+    return {'title':title,'key_points':picked,'stage':stage}
 
 
 def _engine_future_schedule(text: str) -> str:
@@ -3785,9 +3794,10 @@ def _engine_master_result(item):
 def _engine_master_badge(result):
     if not result or not result.get("locked"):
         return ""
-    related = result.get("related") or []
-    names = ' · '.join(html.escape(str(r.get('name',''))) for r in related if r.get('name'))
-    return f"🟢 [MASTER] {names}" if names else ""
+    related = [r for r in (result.get("related") or [])
+               if r.get("name") and (r.get("direct") or r.get("event_link") or r.get("supply_chain") or r.get("commercial_link"))]
+    names = ' · '.join(html.escape(str(r.get('name',''))) for r in related)
+    return f"🔥 [관련주] {names}" if names else ""
 
 
 def _engine_master_image_path(result):
@@ -3867,7 +3877,7 @@ def _engine_format_message(item):
     """최종 뉴스 카드.
     [조건51/조건52/조건53 강제] Formatter는 판단하지 않는다.
     MASTER(65조건) -> Validator -> FINAL LOCK 결과(item['_master_result'])만 표시하며,
-    제목·요약·관련주·상용화단계·시장전망·일정을 이 함수에서 다시 계산하지 않는다.
+    제목·요약·관련주·상용화단계·일정을 이 함수에서 다시 계산하지 않는다.
     """
     source_raw=str(item.get('source',''))
     source_display='🇺🇸' if source_raw=='Google-US' else source_raw
@@ -3880,7 +3890,6 @@ def _engine_format_message(item):
         title=master_result.get('title') or _engine_strip_foreign_publisher_suffix(raw_title)
         key_points=list(master_result.get('key_points') or [])
         stage=master_result.get('stage') or ''
-        outlook=list(master_result.get('outlook') or [])
         related=list(master_result.get('related') or [])
         schedule=master_result.get('schedule') or ''
     else:
@@ -3888,7 +3897,7 @@ def _engine_format_message(item):
         # 원문 최소 표시만 하고, 판단이 필요한 항목은 비워둔다.
         _engine_log("warning", "[MASTER] 결과 없음/미확정 | source=%s | Formatter는 재분석하지 않음", source_raw)
         title=_engine_strip_foreign_publisher_suffix(raw_title)
-        key_points, stage, outlook, related, schedule = [], '', [], [], ''
+        key_points, stage, related, schedule = [], '', [], ''
 
     companies=item.get('companies',[]) or []
     domestic=_engine_domestic_companies(companies)
@@ -3902,9 +3911,6 @@ def _engine_format_message(item):
     header=f'<b>✅ [{html.escape(source_display)}] [{html.escape(freshness)}]</b>'
     if time_text: header += f'   🕐 {html.escape(time_text)}'
     lines=[header,f'<b>📌 {html.escape(title)}</b>']
-    master_badge=_engine_master_badge(master_result)
-    if master_badge:
-        lines.append('<b>'+master_badge+'</b>')
     if freshness in ('재탕','업그레이드') and prev:
         lines.append(f'↳ 선행 보도: <b>{html.escape(str(prev.get("time_text","")))} / {html.escape(str(prev.get("source","")))}</b>')
 
@@ -3922,7 +3928,26 @@ def _engine_format_message(item):
         for dl in data_lines:
             lines.append('     '+html.escape(str(dl)))
 
-    # 관련주/테마/BIG ISSUE는 위 master_badge에서 이미 표시했으므로 여기서 중복 출력하지 않는다.
+    # 데이터로 확인된 근거가 있을 때만 해설을 만든다. 추정/일반론은 출력하지 않는다.
+    explanation_lines = _market_analysis_explanation_for_message(item)
+    if explanation_lines:
+        lines.append('📢 [해설]')
+        for el in explanation_lines:
+            lines.append('     '+html.escape(str(el)))
+
+    # 최종 출력 순서: 데이터/근거 확인 후 실제 사업 연결 종목과 실제 내용 연결 테마를 표시한다.
+    master_badge=_engine_master_badge(master_result)
+    if master_badge:
+        lines.append('<b>'+master_badge+'</b>')
+
+    themes = []
+    for r in (master_result or {}).get('related') or []:
+        if r.get('theme_verified') and r.get('name'):
+            themes.append(str(r.get('name')).strip())
+    if themes:
+        lines.append('📌 [관련테마] ' + ' · '.join(html.escape(x) for x in dict.fromkeys(themes)))
+
+    # 관련주/테마는 위에서 최종 확정값만 표시한다.
     # (참고: master_badge가 비어있으면 관련주/테마/BIG ISSUE가 없다는 뜻이므로 항목 자체가 비게 된다)
 
     if schedule:
