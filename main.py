@@ -3113,6 +3113,30 @@ def _engine_strip_foreign_publisher_suffix(title: str) -> str:
     t = re.sub(r"\s+[-–—|]\s*(?:AD HOC NEWS|Simplywall\.st|simplywall\.st)\s*$", "", t, flags=re.I)
     return t.strip()
 
+def _engine_translate_via_mymemory(text: str) -> str:
+    """[백업 번역기] Google 무료 엔드포인트가 429(레이트리밋/IP차단)로 막혔을 때
+    쓰는 두 번째 무료 번역 API. 별도 서비스/별도 IP 판정 기준이라 Google이
+    막혀 있어도 이쪽은 살아있는 경우가 많다. 실패하면 빈 문자열을 반환한다
+    (호출부에서 Google 실패와 동일하게 처리).
+    """
+    try:
+        from urllib.parse import quote
+        url = (
+            "https://api.mymemory.translated.net/get"
+            "?q=" + quote(text[:490]) + "&langpair=en|ko"
+        )
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=min(ENGINE_HTTP_TIMEOUT, 8))
+        if not r.ok:
+            return ""
+        data = r.json()
+        translated = str((data.get("responseData") or {}).get("translatedText") or "").strip()
+        if translated and not _engine_is_mostly_english(translated):
+            return translated
+    except Exception as e:
+        _engine_log("warning", "[번역 실패] 외신(백업) | %s", str(e)[:120])
+    return ""
+
+
 def _engine_translate_to_korean(text: str) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     if not text:
@@ -3126,6 +3150,7 @@ def _engine_translate_to_korean(text: str) -> str:
         _TRANSLATION_CACHE[text] = text
         return text
 
+    google_failed_429 = False
     for attempt in range(1):
         # [요청 간격 강제] 마지막 호출 이후 최소 간격이 지나지 않았으면 대기한다.
         # 이걸 안 하면 같은 사이클에서 뉴스 여러 건이 몰릴 때 Google이 429로 막는다.
@@ -3150,7 +3175,8 @@ def _engine_translate_to_korean(text: str) -> str:
                 # (1차 1초, 2차 2초 백오프). 마지막 시도까지 실패하면 아래에서 빈 문자열 반환.
                 if attempt < 0:
                     continue
-                _engine_log("warning", "[번역 실패] 외신 | status=%s | 이번 주기는 스킵하고 재시도 큐로 이동", r.status_code)
+                _engine_log("warning", "[번역 실패] 외신 | status=%s | 백업 번역기로 전환", r.status_code)
+                google_failed_429 = True
                 break
             if r.ok:
                 data = r.json()
@@ -3168,6 +3194,16 @@ def _engine_translate_to_korean(text: str) -> str:
                 continue
             _engine_log("warning", "[번역 실패] 외신 | %s", str(e)[:120])
             break
+
+    # [백업] Google이 429/5xx로 막혔을 때만 두 번째 무료 번역 API로 한 번 더 시도한다.
+    # (Google이 아예 응답을 안 하거나 파싱 실패한 경우까지 포함하지 않는 이유는,
+    # 그 경우는 대개 원문/네트워크 자체의 문제라 백업도 동일하게 실패할 가능성이 높기 때문.)
+    if google_failed_429:
+        backup = _engine_translate_via_mymemory(text)
+        if backup:
+            _TRANSLATION_CACHE[text] = backup
+            _engine_log("info", "[번역 성공] 외신(백업 번역기) | %s", text[:80])
+            return backup
 
     # 영문 원문을 그대로 송출하지 않기 위해 실패는 빈 문자열로 처리한다.
     return ""
