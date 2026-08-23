@@ -48,9 +48,15 @@ AI 주식 브리핑 엔진 — 국내/해외 뉴스·공시·텔레그램 채널
 #   시장비교/과거성과 분석 DB가 다시 비어버리는 원래 문제가 재발한다.
 # - DART 등 기간 조회가 되는 소스는 /백필 명령으로 과거 데이터를 소급 적재하고,
 #   그 외 실시간 수집분은 시간 경과에 따라 자연스럽게 누적된다.
+# - [보완] 외신(영문) 뉴스는 번역이 분류보다 먼저 실행되는데, 번역 API가
+#   429(Too Many Requests) 등으로 실패하면 그 즉시 뉴스를 버리지 않고
+#   _engine_translate_retry_queue에 남겨 다음 주기(들)에 번역을 재시도한다.
+#   번역이 성공하는 순간에만 이 원칙(분류→과거DB 무조건 누적)이 정상 적용되므로,
+#   번역 재시도 큐 자체를 삭제하거나 "1회 실패 시 완전 폐기"로 되돌리지 않는다.
 # - 이 절은 이후 어떤 리팩터링에서도 삭제/약화되지 않아야 하며, 관련 함수
-#   (_engine_process_item, _engine_record_historical_case)를 수정할 때는
-#   이 원칙을 먼저 재확인한다.
+#   (_engine_process_item, _engine_record_historical_case,
+#   _engine_queue_translation_retry/_engine_retry_translation_queue)를
+#   수정할 때는 이 원칙을 먼저 재확인한다.
 # ============================================================
 """
 
@@ -3007,9 +3013,18 @@ _TRANSLATION_CACHE = {}
 # 통째로 송출차단했는데, RSS 한 사이클에 미국 뉴스가 여러 건 몰리면(예: 10건)
 # 사실상 전부 연쇄로 차단되는 구조적 문제가 있었다. 요청 사이 최소 간격을 두고,
 # 429/일시적 오류는 짧게 재시도하도록 고친다.
-_TRANSLATE_MIN_INTERVAL_SEC = 1.3
+_TRANSLATE_MIN_INTERVAL_SEC = 2.2
 _TRANSLATE_LAST_CALL_TS = [0.0]
 _TRANSLATE_LOCK = threading.Lock()
+
+# [번역 재시도 큐] 429 등으로 이번 주기에 번역이 끝내 실패한 외신은 그냥 버리지 않고
+# 여기 큐에 남겨 다음 주기(들)에 다시 시도한다. Google 번역 429는 대개 수십 초~분 단위로
+# 풀리는 일시적 레이트리밋이라, 몇 분 뒤 재시도하면 성공하는 경우가 많다.
+# 최대 재시도 후에도 실패하면 포기하고 큐에서 제거한다(그 뉴스는 송출/과거DB 모두 제외됨:
+# 원문이 한국어 분류 키워드와 매칭되지 않아 분류 자체가 어렵기 때문).
+_engine_translate_retry_queue = {}
+_engine_translate_retry_lock = threading.Lock()
+_ENGINE_TRANSLATE_RETRY_MAX_ATTEMPTS = 5
 
 def _engine_is_mostly_english(text: str) -> bool:
     s = str(text or "")
@@ -3063,7 +3078,7 @@ def _engine_translate_to_korean(text: str) -> str:
                 # (1차 1초, 2차 2초 백오프). 마지막 시도까지 실패하면 아래에서 빈 문자열 반환.
                 if attempt < 2:
                     _engine_log("warning", "[번역 재시도] 외신 | status=%s | %d번째 재시도 예정", r.status_code, attempt + 2)
-                    time.sleep(1.0 * (attempt + 1))
+                    time.sleep(2.0 * (attempt + 1))
                     continue
                 _engine_log("warning", "[번역 실패] 외신 | status=%s (재시도 소진)", r.status_code)
                 break
@@ -3145,6 +3160,47 @@ def _engine_annotate_index_points_with_pct(title, extra):
         return _INDEX_POINT_PATTERN.sub(_sub, text)
 
     return _annotate(title), _annotate(extra)
+
+
+def _engine_queue_translation_retry(source, title, link, published, extra):
+    key = str(link or "").strip() or f"{source}|{title}"
+    with _engine_translate_retry_lock:
+        entry = _engine_translate_retry_queue.get(key)
+        if entry:
+            entry["attempts"] += 1
+            entry["published"] = published or entry.get("published", "")
+        else:
+            entry = {"source": source, "title": title, "link": link,
+                      "published": published, "extra": extra, "attempts": 1}
+            _engine_translate_retry_queue[key] = entry
+        if entry["attempts"] >= _ENGINE_TRANSLATE_RETRY_MAX_ATTEMPTS:
+            del _engine_translate_retry_queue[key]
+            _engine_log("warning", "[번역 영구실패] 재시도 %d회 초과로 최종 제외 | %s",
+                        _ENGINE_TRANSLATE_RETRY_MAX_ATTEMPTS, title[:80])
+
+
+def _engine_clear_translation_retry(link, title, source):
+    key = str(link or "").strip() or f"{source}|{title}"
+    with _engine_translate_retry_lock:
+        _engine_translate_retry_queue.pop(key, None)
+
+
+def _engine_retry_translation_queue():
+    """매 주기, 지난번 번역 실패로 보류된 외신을 다시 시도한다.
+    [원칙] 이 재시도도 결국 _engine_process_item()을 그대로 타므로, 번역이
+    이번엔 성공하면 분류→과거DB 누적(절대 원칙)→(시간창 안이면) 실시간 송출까지
+    정상적으로 이어진다."""
+    with _engine_translate_retry_lock:
+        pending = list(_engine_translate_retry_queue.values())
+    if not pending:
+        return
+    _engine_log("info", "[번역 재시도 큐] 대기=%d건 재시도", len(pending))
+    for entry in pending:
+        try:
+            _engine_process_item(entry["source"], entry["title"], entry["link"],
+                                  entry.get("published", ""), entry.get("extra", ""))
+        except Exception as e:
+            log_error("번역 재시도 큐 처리", e, title=str(entry.get("title", ""))[:120])
 
 
 def _engine_translate_foreign_item(source: str, title: str, extra: str):
@@ -3989,9 +4045,18 @@ def _engine_process_item(source, title, link, published="", extra=""):
 
     # 외신은 여기서 단 한 번만 번역한다.
     # 이후 🔎/테마/관련주/출력은 동일한 한국어 분석 원문을 사용한다.
+    _orig_title_for_retry = title
     title, extra, translation_ok = _engine_translate_foreign_item(source, title, extra)
     if not translation_ok:
+        # [수정] 예전엔 번역 실패(주로 429) 시 그 자리에서 뉴스를 완전히 버렸다.
+        # 도메인/과거DB 절대 원칙(카테고리만 확정되면 무조건 누적)이 적용되려면
+        # 애초에 분류 단계까지 가야 하는데, 번역 실패는 분류보다 앞에서 막아버려서
+        # 외신은 이 원칙의 사각지대였다. 이제 즉시 폐기 대신 재시도 큐에 남겨
+        # 다음 주기(들)에 번역을 다시 시도하고, 성공하면 정상적으로
+        # 분류→과거DB 누적→(시간창 이내면) 실시간 송출까지 이어지게 한다.
+        _engine_queue_translation_retry(source, _orig_title_for_retry, link, published, extra)
         return False
+    _engine_clear_translation_retry(link, _orig_title_for_retry, source)
 
     # 원문 전체를 보존한다. 요약문으로 extra를 덮어쓰지 않는다.
 
@@ -5515,6 +5580,10 @@ def _engine_cycle():
         _engine_run_google_and_domestic()
     except Exception as e:
         log_error("국내/Google RSS 전체", e)
+    try:
+        _engine_retry_translation_queue()
+    except Exception as e:
+        log_error("번역 재시도 큐", e)
     try:
         _engine_run_naver()
     except Exception as e:
