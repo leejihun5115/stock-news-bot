@@ -4102,7 +4102,8 @@ def _engine_format_message(item):
         for kp in key_points:
             clean = re.sub(r'^[▶️•✔️\s]+', '', str(kp)).strip()
             if clean and not _engine_line_is_duplicate(clean, shown_texts):
-                lines.append('     ✔ ' + html.escape(clean[:180]))
+                display_kp = clean[:180] + ('…' if len(clean) > 180 else '')
+                lines.append('     ✔ ' + html.escape(display_kp))
                 shown_texts.append(clean)
 
     # ============================================================
@@ -4129,7 +4130,8 @@ def _engine_format_message(item):
     if analysis_lines:
         lines.append('🧠 <b>분석</b>')
         for al in analysis_lines:
-            lines.append('     ✔ ' + html.escape(al[:220]))
+            display_al = al[:220] + ('…' if len(al) > 220 else '')
+            lines.append('     ✔ ' + html.escape(display_al))
 
     badge_text = str(_engine_master_badge(master_result) or '')
     # 내용/데이터가 없는 빈 라벨은 절대 표시하지 않는다.

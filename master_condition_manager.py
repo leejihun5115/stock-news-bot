@@ -354,8 +354,14 @@ class MasterConditionManager:
         text = re.sub(r"\[[^\]]{0,30}\]", " ", text)
         # 한국어 기사는 종종 "...다." 뒤에 공백 없이 다음 문장이 바로 붙는다(예: "...있다.인공지능...").
         # 이 경우를 분리하지 못하면 여러 사건이 한 문장으로 뭉쳐 핵심요약이 1개로만 나온다.
+        # [수정] 소제목/문단이 마침표 없이 바로 이어지는 경우도 있다
+        # (예: "...미국 AI 기업들2026년 상반기..."). 이걸 못 자르면 서로 다른
+        # 두 내용이 한 문장으로 뭉쳐서 노출되고, 뒤에서 길이 제한에 걸려 어중간하게
+        # 잘리기까지 한다(사용자 신고 사례). 한글 뒤에 공백 없이 "YYYY년"류 숫자가
+        # 바로 붙는 지점을 문단/문장 경계로 보고 추가로 자른다.
         parts = re.split(
-            r"(?<=[.!?。！？])\s+|[\r\n]+|(?<=다)\s{2,}|(?<=다\.)(?=[가-힣A-Za-z0-9])",
+            r"(?<=[.!?。！？])\s+|[\r\n]+|(?<=다)\s{2,}|(?<=다\.)(?=[가-힣A-Za-z0-9])"
+            r"|(?<=[가-힣])(?=\d{4}년)",
             text,
         )
         out = []
@@ -596,25 +602,34 @@ class MasterConditionManager:
         1) 60자를 넘는 문장은 자연스러운 절 경계(면서/라며/는데/이에 따라 등)에서 자른다.
         2) 문장이 짧아도 '~했다/~밝혔다/~전했다/~나타났다'처럼 서술형으로 끝나면
            마침표 없이 사실(누가/무엇을/얼마나)만 남도록 종결어미를 정리한다.
+        [수정] 자연스러운 절 경계를 못 찾아 어절 단위로 강제 절단한 경우, 예전엔
+        아무 표시 없이 문장이 그냥 뚝 끊겨 마치 그게 완결된 내용인 것처럼 보였다
+        (사용자 신고: 요약이 부정확하게 잘려 보임). 실제로 내용이 잘려나간
+        경우에만 말줄임표(…)를 붙여 "여기서 끊겼다"는 걸 명확히 표시한다.
         """
         s = sentence.strip()
+        truncated = False
         if len(s) > 60:
             cut = self._clause_cut(s)
             if cut:
                 s = cut
+                truncated = len(cut) < len(sentence.strip())
             else:
                 head = s[:70]
                 last_punct = max(head.rfind("."), head.rfind(","), head.rfind(" "))
                 s = head[:last_punct].rstrip(",，") if last_punct > 30 else head.rstrip()
+                truncated = True
         # 문장 종결형 어미를 떼어 서술형 문장이 아니라 요점(구)처럼 보이게 정리한다.
-        # 절단 결과에는 말줄임표를 넣지 않고 완결된 구로 표시한다.
         if True:
             s = re.sub(
                 r"(?:(?:라고|다고)\s*)?(?:밝혔다|전했다|전해졌다|나타났다|드러났다|확인됐다|알려졌다|설명했다|덧붙였다|밝혀졌다)\.?$",
                 "", s,
             ).strip()
             s = re.sub(r"(?:했다|됐다|졌다|이다|한다)\.$", "", s).strip()
-        return s or sentence.strip()
+        s = s or sentence.strip()
+        if truncated and s and not s.endswith("…"):
+            s = s.rstrip(" ,，.") + "…"
+        return s
 
     def _is_narrative_title(self, title):
         """제목이 '헤드라인'이 아니라 '서술형 문장'인지 판정한다.
@@ -644,7 +659,12 @@ class MasterConditionManager:
         제목은 요약문이나 본문 첫 문장으로 대체하지 않는다. 수집 단계에서
         이미 전달문 메타데이터를 제거했으므로, 정상적인 기사 제목은 원문 그대로
         유지한다. 제목이 비어 있거나 전달문 흔적만 남은 경우에만 안전한 최소 정리를 한다.
-        [수정: 자동제목] 제목이 너무 길면(가독성 기준 초과) 핵심 절만 남기고 축약한다.
+        [수정] 이전엔 42자를 넘으면 _auto_shorten_title()로 강제 축약하며 "…"를
+        붙였는데, 이는 위 원칙("원문 제목 보존")과 실제로 어긋나 제목이 중간에
+        잘려 나가는 문제였다(사용자 신고: "제목에 줄임이 어디 있어?"). 이제 제목은
+        축약하지 않고 정리된 원문 그대로 반환한다. title[:220]은 비정상적으로
+        긴 문자열(파싱 오류 등)에 대한 안전장치일 뿐, 정상 제목 길이에는 절대
+        영향을 주지 않는다.
         """
         title = self._clean(title)
         if not title:
@@ -655,37 +675,7 @@ class MasterConditionManager:
             cleaned = re.sub(r"^루팡\s*[:：-]?\s*", "", cleaned).strip()
             if cleaned:
                 title = cleaned
-        title = title[:220].strip()
-        return self._auto_shorten_title(title)
-
-    def _auto_shorten_title(self, title, max_len=42):
-        """제목이 max_len(기본 42자)을 넘으면 핵심 절만 남기고 축약한다.
-        쉼표/가운뎃점 등 자연스러운 경계가 있으면 max_len에 가장 가까운 경계에서
-        자르되, 너무 앞쪽(제목의 절반 미만)에서 잘리면 회사명만 남는 등 내용이
-        사라지므로 그 경우는 무시하고 단어 경계 기준으로 잘라 말줄임표(…)를 붙인다.
-        원문 자체를 새로 창작하지 않고 "어디까지 보여줄지"만 결정한다.
-        """
-        title = str(title or "").strip()
-        if len(title) <= max_len:
-            return title
-        min_len = max(10, max_len // 2)
-        best_idx = -1
-        for sep in [", ", "· ", " - ", "…", " · ", "..."]:
-            start = 0
-            while True:
-                idx = title.find(sep, start)
-                if idx == -1:
-                    break
-                if min_len <= idx <= max_len and idx > best_idx:
-                    best_idx = idx
-                start = idx + 1
-        if best_idx >= min_len:
-            return title[:best_idx].strip()
-        cut = title[:max_len]
-        last_space = cut.rfind(" ")
-        if last_space >= min_len:
-            cut = cut[:last_space]
-        return cut.rstrip(" ,.-") + "…"
+        return title[:220].strip()
 
     def _stage(self, text):
         found = []
