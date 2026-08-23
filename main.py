@@ -1287,6 +1287,12 @@ _engine_last_cycle_finished = 0.0
 _engine_last_watchdog_alert = 0.0
 _engine_telegram_counts = {}
 _engine_historical_cache = []
+# [중복적재 방지] 실시간 송출 성공 여부와 무관하게 과거DB(HISTORICAL_SURGE_DB)에
+# 무조건 누적 기록하게 되면서, 같은 기사가 매 폴링 주기(RSS 재수집/네이버 재검색)마다
+# 반복 적재되는 것을 막기 위한 별도 키 셋. 실시간 송출 dedupe(_engine_seen)와는
+# 완전히 분리되어 있어 실시간 송출 로직에는 영향을 주지 않는다.
+_engine_historical_recorded_keys = set()
+_engine_historical_recorded_lock = threading.Lock()
 _engine_global_briefing_cache = []
 MARKET_IMPACT_KEYWORDS = {
     "인수", "합병", "M&A", "m&a", "세계최초", "세계 최대", "세계최대", "사상 최대", "사상최대",
@@ -1457,6 +1463,13 @@ def _engine_load_extended_state():
         try:
             with open(HISTORICAL_SURGE_DB, "r", encoding="utf-8") as f:
                 _engine_historical_cache = [json.loads(x) for x in f if x.strip()][-5000:]
+            # [중복적재 방지] 실시간 송출 여부와 무관하게 과거DB에 기록하도록 바뀌면서
+            # 같은 기사(RSS 재폴링/재검색)가 매 주기 반복 적재되지 않도록, 서버 재시작 후에도
+            # 이미 적재된 기사의 dedupe key(link 우선, 없으면 title)를 복원해 둔다.
+            for _row in _engine_historical_cache:
+                _k = str(_row.get("link") or "").strip() or str(_row.get("title") or "").strip()
+                if _k:
+                    _engine_historical_recorded_keys.add(_k)
         except Exception as e:
             log_error("과거 급등 DB 읽기", e, file=HISTORICAL_SURGE_DB)
     if ENABLE_GLOBAL_BRIEFING_DB and os.path.exists(GLOBAL_BRIEFING_DB):
@@ -1498,14 +1511,29 @@ def _engine_record_global_briefing(item):
     _engine_atomic_append_jsonl(GLOBAL_BRIEFING_DB, row)
 
 
-def _engine_record_historical_case(item):
-    """[1원칙: 데이터는 무조건 누적] 강도/조건과 무관하게 실제로 송출된 뉴스는
-    전부 누적 DB에 기록한다. '급등/폭등/상한가/신고가' 같은 강한 재료였는지는
-    is_surge_hit 플래그로만 구분해서 남기고, 기록 자체를 막지 않는다.
+def _engine_record_historical_case(item, force=False):
+    """[1원칙: 데이터는 무조건 누적] 강도/조건과 무관하게 카테고리가 확정된 뉴스는
+    실시간 텔레그램 송출 성공 여부와 무관하게 전부 누적 DB에 기록한다.
+    (기존에는 텔레그램 송출에 성공한 뉴스만 여기로 왔지만, 실시간 송출 시간 게이트
+    [최근 60분 등]가 데이터 누적까지 함께 막아 시장비교/과거성과 DB가 비는 문제가
+    있었다. 이제 송출 여부와 적재를 분리해, 분류(category)만 확정되면 여기로 온다.)
+    '급등/폭등/상한가/신고가' 같은 강한 재료였는지는 is_surge_hit 플래그로만
+    구분해서 남기고, 기록 자체를 막지 않는다.
     이 누적 데이터가 이후 모든 뉴스의 관련주/테마 판정, 분석 근거의 기반이 된다.
+
+    [중복적재 방지] 같은 기사(link 또는 title)가 매 폴링 주기마다 반복 적재되지
+    않도록 _engine_historical_recorded_keys로 별도 dedupe한다. 실시간 송출용
+    dedupe(_engine_seen)와는 분리되어 있으므로 실시간 송출 로직에는 영향이 없다.
+    force=True면 dedupe를 건너뛴다(백필 등 이미 기간 단위로 별도 중복제어를 하는 경우).
     """
     if not ENABLE_HISTORICAL_SURGE_DB:
-        return
+        return False
+    dedupe_key = str(item.get("link") or "").strip() or str(item.get("title") or "").strip()
+    if not force and dedupe_key:
+        with _engine_historical_recorded_lock:
+            if dedupe_key in _engine_historical_recorded_keys:
+                return False
+            _engine_historical_recorded_keys.add(dedupe_key)
     strong, hits = _engine_strong_material(item)
     title = item.get("title", "")
     text_all = _engine_clean(title + " " + item.get("extra", "")).lower()
@@ -1518,11 +1546,14 @@ def _engine_record_historical_case(item):
         "companies": item.get("companies", [])[:6], "hits": hits,
         "market_state": str(item.get("market_state") or "").strip(),
         "is_surge_hit": is_surge_hit,
+        "published": str(item.get("published") or "")[:80],
     }
     if _engine_atomic_append_jsonl(HISTORICAL_SURGE_DB, row):
         _engine_historical_cache.append(row)
         if len(_engine_historical_cache) > 5000:
             del _engine_historical_cache[:-5000]
+        return True
+    return False
 
 
 def _engine_record_outcome_tracking(item, master_result):
@@ -1784,7 +1815,9 @@ def _admin_cmd_run(arg=""):
 def _admin_cmd_help(arg=""):
     lines = ["🟢 [통제소] 사용 가능한 명령", "/status : 엔진 상태 확인", "/pause : 일시정지",
               "/resume : 재개", "/run : 지금 즉시 1회 사이클 강제 실행",
-              "/성과리포트 : 송출된 뉴스의 실제 등락률 집계(키워드별 적중률)", "/help : 이 목록 표시"]
+              "/성과리포트 : 송출된 뉴스의 실제 등락률 집계(키워드별 적중률)",
+              "/백필 [일수] : DART 과거 공시를 소급해 과거DB에 적재(기본 365일)",
+              "/help : 이 목록 표시"]
     return "\n".join(lines)
 
 
@@ -1796,6 +1829,37 @@ def _admin_cmd_outcome_report(arg=""):
     return _outcome_aggregate_report(min_samples=min_samples)
 
 
+def _admin_cmd_backfill(arg=""):
+    """/백필 [일수] : DART 과거 공시를 지정 일수(기본 365일)만큼 소급 조회해
+    과거DB(HISTORICAL_SURGE_DB)에 적재한다. 시간이 걸리므로 백그라운드로 실행하고
+    완료되면 별도로 결과를 회신한다. 네이버 뉴스는 API 특성상 기간 백필이
+    불가능해 DART 공시만 대상으로 한다."""
+    global _ENGINE_BACKFILL_RUNNING
+    try:
+        days = int(arg.strip()) if arg.strip() else 365
+    except ValueError:
+        return "❓ 사용법: /백필 [일수]  예) /백필 365"
+    with _ENGINE_BACKFILL_LOCK:
+        if _ENGINE_BACKFILL_RUNNING:
+            return "⏳ [통제소] 이미 백필이 진행 중입니다. 완료될 때까지 기다려주세요."
+        _ENGINE_BACKFILL_RUNNING = True
+
+    def _worker():
+        global _ENGINE_BACKFILL_RUNNING
+        try:
+            recorded = _engine_backfill_dart_historical(days=days)
+            _admin_reply(f"✅ [통제소] DART 과거 {days}일 백필 완료 | 신규 누적={recorded}건")
+        except Exception as e:
+            log_error("관리자 /백필", e, days=days)
+            _admin_reply(f"⚠️ [통제소] 백필 중 오류가 발생했습니다: {html.escape(str(e)[:200])}")
+        finally:
+            with _ENGINE_BACKFILL_LOCK:
+                _ENGINE_BACKFILL_RUNNING = False
+
+    threading.Thread(target=_worker, name="admin-backfill", daemon=True).start()
+    return f"⏳ [통제소] DART 과거 {days}일 백필을 시작했습니다. 완료되면 결과를 보내드립니다."
+
+
 # 새 관리자 명령을 추가하려면 아래 딕셔너리에 "/명령어": 핸들러함수(arg) 형태로 등록만 하면 된다.
 # 핸들러는 문자열을 반환하면 그대로 관리자에게 회신된다.
 _ADMIN_COMMANDS = {
@@ -1805,6 +1869,7 @@ _ADMIN_COMMANDS = {
     "/run": _admin_cmd_run,
     "/help": _admin_cmd_help,
     "/성과리포트": _admin_cmd_outcome_report,
+    "/백필": _admin_cmd_backfill,
 }
 
 
@@ -3917,13 +3982,28 @@ def _engine_process_item(source, title, link, published="", extra=""):
         _engine_log("info", "[제외] 그로쓰리서치 채널 차단 | %s | %s", source, title[:80])
         return False
 
-    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출.
-    # 과거 뉴스/1년 데이터는 별도 분석·급등재료 DB 용도로만 활용하고 신규 뉴스로 재송출하지 않는다.
-    if not _engine_is_within_recent_window(published, 60):
-        _engine_log("info", "[제외] ⏱️ 최근 1시간 밖의 뉴스 | source=%s | %s", source, title[:80])
-        return False
+    # [수정] 기존에는 "최근 60분 이내 발행" 시간 게이트를 분류(classify)보다도 먼저
+    # 통과해야 했고, 그 결과 텔레그램으로 실제 전송된 뉴스만 과거DB(HISTORICAL_SURGE_DB)에
+    # 쌓이는 구조였다. 시간 게이트는 원래 "실시간 송출" 여부만 결정해야 하는데,
+    # 데이터 누적(시장비교/과거성과 분석의 기반)까지 함께 막아버려서 과거DB가 계속
+    # 비어 있었다. 이제 분류를 먼저 수행하고, 카테고리가 확정되면 시간 게이트와
+    # 무관하게 곧바로 과거DB에 누적한 뒤, 실시간 송출 여부만 시간 게이트로 판단한다.
     ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra)
     market_state = _engine_market_state(source, published)
+    if ok and str(category or "").strip():
+        try:
+            _engine_record_historical_case({
+                "title": title, "extra": extra, "link": link, "published": published,
+                "companies": companies, "market_hits": market_hits, "market_state": market_state,
+            })
+        except Exception as e:
+            _engine_log("warning", "[과거DB 누적 실패] %s | %s", str(e)[:160], title[:80])
+
+    # 모든 뉴스 소스 공통: 현재 KST 기준 최근 60분 이내 발행 뉴스만 실시간 송출 대상.
+    # (과거 뉴스는 위에서 이미 과거DB에 누적됐고, 여기서는 신규 뉴스로 재송출하지 않는다.)
+    if not _engine_is_within_recent_window(published, 60):
+        _engine_log("info", "[제외-송출] ⏱️ 최근 1시간 밖의 뉴스(과거DB엔 누적됨) | source=%s | %s", source, title[:80])
+        return False
     gate_ok, gate_reason = _engine_external_time_gate(source, published, title, extra, market_state, market_hits)
     if not gate_ok:
         _engine_log("info", "[제외] ⏱️ %s | %s", gate_reason, title[:80])
@@ -4264,6 +4344,94 @@ def _engine_run_dart():
         _engine_log("info", "[DART] 후보=%d건", sent)
     except Exception as e:
         log_error("DART 검사", e)
+
+
+_ENGINE_BACKFILL_RUNNING = False
+_ENGINE_BACKFILL_LOCK = threading.Lock()
+
+
+def _engine_backfill_dart_range(bgn_de, end_de):
+    """DART list.json은 corp_code 미지정 전체조회 시 조회기간(bgn_de~end_de)에
+    최대 약 3개월 제한이 있어, 이 함수는 [bgn_de, end_de] 한 구간(<=90일)만 처리한다.
+    페이지네이션으로 해당 구간의 전체 공시를 끝까지 순회한다."""
+    recorded = 0
+    page_no = 1
+    while True:
+        try:
+            r = requests.get(
+                "https://opendart.fss.or.kr/api/list.json",
+                params={"crtfc_key": DART_API_KEY, "bgn_de": bgn_de, "end_de": end_de,
+                        "page_no": page_no, "page_count": 100},
+                timeout=ENGINE_HTTP_TIMEOUT,
+            )
+        except Exception as e:
+            log_error("DART 백필 요청", e, bgn_de=bgn_de, end_de=end_de, page_no=page_no)
+            break
+        if not r.ok:
+            _engine_log("error", "[DART 백필 실패] HTTP=%s | %s~%s | page=%s", r.status_code, bgn_de, end_de, page_no)
+            break
+        data = r.json()
+        status = data.get("status")
+        if status == "013":
+            break  # 해당 구간 공시 없음
+        if status not in ("000", None):
+            _engine_log("error", "[DART 백필 오류] status=%s | message=%s | %s~%s", status, data.get("message"), bgn_de, end_de)
+            break
+        rows = data.get("list", []) or []
+        for row in rows:
+            report = row.get("report_nm", "")
+            if not any(k in report for k in DART_STRONG_REPORT_KEYWORDS):
+                continue
+            corp = row.get("corp_name", "")
+            title = f"{corp} | {report}"
+            link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
+            rcept_dt = row.get("rcept_dt", "")
+            # 실시간 송출 파이프라인(_engine_process_item)을 타지 않고, 분류만 거쳐
+            # 곧바로 과거DB에 적재한다(현재 시각과 무관하므로 60분 시간창 대상이 아님).
+            ok, category, companies, k1, k2, market_hits = _engine_classify("DART", title, "")
+            if not ok or not str(category or "").strip():
+                continue
+            item = {
+                "title": title, "extra": "", "link": link,
+                "published": rcept_dt, "companies": companies, "market_hits": market_hits,
+                "market_state": "",
+            }
+            if _engine_record_historical_case(item):
+                recorded += 1
+        total_page = int(data.get("total_page") or 1)
+        if page_no >= total_page:
+            break
+        page_no += 1
+        time.sleep(0.2)  # DART API 호출 과다 방지
+    return recorded
+
+
+def _engine_backfill_dart_historical(days=365):
+    """최근 `days`일치 DART 공시를 90일 단위로 나눠 순회하며 과거DB에 소급 적재한다.
+    [주의] 네이버 뉴스검색 오픈API는 정렬(sort=date)만 지원하고 임의 과거 기간
+    지정(ds/de) 자체를 지원하지 않아, 진짜 의미의 '몇 달~1년 전 뉴스 백필'은
+    DART 공시처럼 기간 조회가 되는 소스에서만 가능하다. 뉴스 쪽은 지금 이 순간부터
+    새로 쌓이는 실시간 수집으로 채워진다(위 시간게이트 분리 수정으로 이제 정상 적재됨).
+    """
+    if not DART_API_KEY:
+        _engine_log("error", "[DART 백필 실패] DART_API_KEY가 없습니다.")
+        return 0
+    if not ENABLE_HISTORICAL_SURGE_DB:
+        _engine_log("error", "[DART 백필 실패] ENABLE_HISTORICAL_SURGE_DB=OFF")
+        return 0
+    today = _now_kst().date()
+    start = today - datetime.timedelta(days=max(1, int(days)))
+    total_recorded = 0
+    cursor = start
+    while cursor <= today:
+        chunk_end = min(today, cursor + datetime.timedelta(days=89))
+        bgn_de = cursor.strftime("%Y%m%d")
+        end_de = chunk_end.strftime("%Y%m%d")
+        _engine_log("info", "[DART 백필] 구간 처리중 %s~%s", bgn_de, end_de)
+        total_recorded += _engine_backfill_dart_range(bgn_de, end_de)
+        cursor = chunk_end + datetime.timedelta(days=1)
+    _engine_log("info", "[DART 백필] 완료 | 총 %d일 | 신규누적=%d건", days, total_recorded)
+    return total_recorded
 
 
 def _engine_run_telegram_channels():
