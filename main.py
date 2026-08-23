@@ -2609,6 +2609,29 @@ def _engine_classify(source, title, extra=""):
     # 국내 관련주가 없어도 의미 있는 글로벌 시황은 보존한다.
     if _engine_is_global_market_news(text):
         return True, "🌐시황", [], k1, k2, market_hits
+
+    # [최종수정] 특정 국내기업이 없어도 '실제 투자/주식시장 행동'을 다루는
+    # 시장뉴스는 정상 분류한다. 예: 트럼프의 종목 매수/보유, 기관·외국인
+    # 대규모 매수, 주요 투자자의 포트폴리오 변화 등.
+    # 단순히 '주식/투자' 단어 하나가 들어간 일반 경제기사는 통과시키지 않는다.
+    investment_words = {
+        "주식", "종목", "주가", "증시", "주식거래", "거래", "매수", "매도",
+        "보유", "포트폴리오", "지분", "투자", "투자자", "주주", "기관", "외국인",
+        "펀드", "헤지펀드", "자산운용", "매입", "매각", "순매수", "순매도",
+    }
+    actor_words = {
+        "트럼프", "대통령", "기관", "외국인", "투자자", "펀드", "헤지펀드",
+        "자산운용", "워런 버핏", "버핏", "블랙록", "뱅가드", "소로스",
+    }
+    inv_hits = {w for w in investment_words if w.lower() in low}
+    actor_hits = {w for w in actor_words if w.lower() in low}
+    explicit_trade = any(w in low for w in (
+        "매수", "매도", "순매수", "순매도", "주식거래", "보유", "지분 매입",
+        "지분 매각", "포트폴리오", "종목들",
+    ))
+    if len(inv_hits) >= 2 and (actor_hits or explicit_trade):
+        return True, "🌐시황", [], k1, k2, market_hits
+
     return False, "일반", [], k1, k2, market_hits
 
 
@@ -4603,23 +4626,20 @@ def _engine_process_item(source, title, link, published="", extra=""):
         _engine_log('warning', '[일정DB 누적 실패] %s', str(e)[:160])
     # [수정] key 계산·seen 체크는 함수 맨 앞에서 이미 했으므로 여기서 다시 하지 않는다
     # (중복 계산 제거).
-    # 분류 실패라도 명확한 기업/시장 재료가 확인되면 범용 시장뉴스 카테고리로
-    # fallback하여 유효한 뉴스가 분류기 한 번의 실패 때문에 영구 폐기되지 않게 한다.
+    # [최종수정] 분류 실패를 범용 "시장뉴스"로 되살리지 않는다.
+    # 시장 전체 뉴스의 예외는 _engine_classify() 내부에서 정상적인 카테고리로
+    # 판정해야 하며, 여기서 fallback하면 일반 산업/투자 콘텐츠가 MASTER까지
+    # 무분별하게 올라가는 문제가 생긴다.
     if not ok or not str(category or "").strip():
-        fallback_relevant = bool(companies or market_hits or _engine_is_relevant(title))
-        if fallback_relevant:
-            category = "📌 시장뉴스"
-            ok = True
-            _engine_log("warning", "[분류 fallback] 시장뉴스 | source=%s | %s", source, title[:100])
-        else:
-            reason = "카테고리 없음" if not str(category or "").strip() else (
-                "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
-            )
-            _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80])
-            # [수정] 같은 제목/본문이면 분류 결과도 동일할 것이므로 seen 처리해서
-            # 매 사이클 반복 재분류(및 그 앞단의 재번역)를 막는다.
-            _engine_mark_seen(key)
-            return False
+        _engine_stats_inc("분류실패", source=source)
+        reason = "카테고리 없음" if not str(category or "").strip() else (
+            "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
+        )
+        _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80])
+        # 같은 제목/본문이면 분류 결과도 동일할 가능성이 높으므로 seen 처리하여
+        # 매 사이클 반복 재분류/재번역을 막는다.
+        _engine_mark_seen(key)
+        return False
     time_text = ""
     dt = _engine_parse_datetime(published)
     if dt:
@@ -6253,6 +6273,7 @@ if __name__ == "__main__":
                     ADMIN_CHAT_ID, ADMIN_COMMAND_POLL_INTERVAL)
 
         _engine_log("info", "[BOOT] 필터설정 | 국내RSS/네이버=120분 | 외부=60분 | NAVER_BATCH=16 | NAVER_INTERVAL=%ss | DUPLICATE=%.0f%%", _NAVER_CHECK_INTERVAL if "_NAVER_CHECK_INTERVAL" in globals() else 180, DUPLICATE_BLOCK_SIMILARITY * 100)
+        _engine_log("info", "[BOOT] 분류정책 | fallback=OFF | 글로벌시장투자뉴스=ON | 분류실패는 송출/과거DB 모두 제외")
         _engine_log("info", "[BOOT] 상태파일=%s | TelegramToken=MASKED", os.path.abspath(ENGINE_STATE_FILE))
         _engine_log("info", "[BOOT] TelegramPoll=%ss | TranslationMinInterval=%.1fs | Translation429Cooldown=%ss", ADMIN_COMMAND_POLL_INTERVAL, _TRANSLATE_MIN_INTERVAL_SEC, int(_TRANSLATE_COOLDOWN_SEC))
         _engine_log("info", "[시작] 뉴스 수집·분석 | 통합 보안/중복/글로벌/과거사례/일정DB 기능 활성화")
