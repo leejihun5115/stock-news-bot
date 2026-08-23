@@ -517,7 +517,7 @@ CUSTOM_SOURCE_INTERVAL = 300
 TELEGRAM_CHANNEL_INTERVAL = 60   
 TELEGRAM_UNFILTERED_INTERVAL = 60  
 DART_CHECK_INTERVAL = 60         
-NAVER_CHECK_INTERVAL = 300       
+NAVER_CHECK_INTERVAL = 180       
 BLOG_CHECK_INTERVAL = 1800       
 YOUTUBE_CHECK_INTERVAL = 1800    
 MAIN_LOOP_TICK = 5               
@@ -1311,7 +1311,7 @@ TELEGRAM_SPAM_STATE = os.environ.get("NEWS_BOT_TELEGRAM_SPAM_STATE", "news_bot_t
 # 재시작돼도 "몇 분 전에 이미 보낸 기사"를 다시 신규로 착각해 재전송하지 않게 한다.
 SENT_FINGERPRINT_DB = os.environ.get("NEWS_BOT_SENT_FINGERPRINT_DB", "news_bot_sent_fingerprints.jsonl")
 # 제목+본문 유사도가 이 값 이상이면 "같은 뉴스"로 보고 도배 차단 대상으로 삼는다.
-DUPLICATE_BLOCK_SIMILARITY = float(os.environ.get("NEWS_BOT_DUPLICATE_BLOCK_SIMILARITY", "0.80"))
+DUPLICATE_BLOCK_SIMILARITY = float(os.environ.get("NEWS_BOT_DUPLICATE_BLOCK_SIMILARITY", "0.90"))
 # 이 시간(분)보다 오래된 과거 송출 기록과는 비교하지 않는다(며칠 뒤 동일 사건 재조명 기사는 허용).
 DUPLICATE_BLOCK_WINDOW_MIN = int(os.environ.get("NEWS_BOT_DUPLICATE_BLOCK_WINDOW_MIN", "720"))
 WATCHDOG_TIMEOUT = max(120, int(os.environ.get("NEWS_BOT_WATCHDOG_TIMEOUT", "300")))
@@ -2898,7 +2898,7 @@ def _engine_similar(a, b):
 
 
 # ============================================================
-# [도배 차단] 유사도 80%+ 동일 뉴스 재송출 차단
+# [도배 차단] 유사도 90%+ 동일 뉴스 재송출 차단
 # ------------------------------------------------------------
 # _engine_freshness()는 "재탕"이라고 라벨만 붙이고 그대로 내보내지만,
 # 이 함수는 실제로 송출 자체를 막는다. 새로운 확정적 사실(금액/승인/체결 등)이
@@ -2916,7 +2916,7 @@ _AMOUNT_RE = re.compile(r"(?:[0-9][0-9,]*\s*(?:억|조|만|달러|원|USD|억원
 
 
 def _engine_is_duplicate_spam(item):
-    """제목+본문 유사도 80%+ 인 기사가 최근에 이미 송출됐다면 True를 반환한다.
+    """제목+본문 유사도 90%+ 인 기사가 최근에 이미 송출됐다면 True를 반환한다.
     (실제 새 정보 없는 순수 재전송/도배만 차단하며, 정당한 후속 보도는 통과시킨다.)
     """
     full = _engine_clean(str(item.get("title", "")) + " " + str(item.get("extra", "")))
@@ -4266,7 +4266,7 @@ def _engine_format_message(item):
 
 def _engine_flush_pending():
     """대기 뉴스는 유사기사라도 묶어서 요약하지 않고 각 기사를 그대로 판단한다.
-    단, 유사도 DUPLICATE_BLOCK_SIMILARITY(기본 80%) 이상인 '사실상 동일 뉴스'가
+    단, 유사도 DUPLICATE_BLOCK_SIMILARITY(기본 90%) 이상인 '사실상 동일 뉴스'가
     최근에 이미 송출됐고 새로운 확정 정보가 없다면 도배로 보고 송출 자체를 막는다.
     (_engine_freshness()의 [신규]/[업그레이드]/[재탕] 라벨은 통과한 기사 표시용으로 유지.)
     동일 URL은 같은 폴링에서만 1회 처리하여 1분 주기 무한도배만 막는다.
@@ -4394,6 +4394,21 @@ def _engine_is_plausibly_market_relevant(source, title, extra):
     for pool in hit_pools:
         if any(str(k).lower() in low for k in pool):
             return True
+    # 회사명/티커가 없어도 미국 시장 전체에 영향을 주는 핵심 거시 키워드는
+    # 유효한 시장뉴스로 간주한다. Google-US에서 이런 기사가 과도하게 사전 차단되는
+    # 것을 방지하면서도 정치/일반 뉴스 전체를 번역하는 것은 피한다.
+    macro_market_words = (
+        "fed", "federal reserve", "fomc", "cpi", "pce", "inflation",
+        "interest rate", "interest rates", "rate cut", "rate hike", "treasury",
+        "bond yield", "yield", "oil", "crude", "wti", "brent", "dollar",
+        "nasdaq", "s&p 500", "s&p500", "dow jones", "dow", "russell 2000",
+        "semiconductor index", "philadelphia semiconductor", "tariff", "tariffs",
+        "jobs report", "payrolls", "unemployment", "고용", "연준", "금리", "관세",
+        "인플레이션", "국채", "수익률", "유가", "환율", "달러", "나스닥", "다우",
+        "s&p", "증시", "시장",
+    )
+    if any(w in low for w in macro_market_words):
+        return True
     extra_market_words = (
         "stock", "shares", "market", "trading", "investor", "wall street",
         "$", "%", "코스피", "코스닥", "증시", "주가", "주식", "종목",
@@ -4478,8 +4493,13 @@ def _engine_process_item(source, title, link, published="", extra=""):
     # 실패해 DART 실시간 송출이 사실상 항상 막혀 있었다. DART는 매 주기 당일 날짜
     # 범위만 조회하고 link 기반 중복제거를 쓰므로 신선도가 이미 보장되어 있어,
     # 이 시간창 체크만 DART에 한해 우회한다.
-    if source != "DART" and not _engine_is_within_recent_window(published, 60):
-        _engine_log("info", "[제외-송출] ⏱️ 최근 1시간 밖의 뉴스(과거DB엔 누적됨) | source=%s | %s", source, title[:80])
+    # 국내 RSS/네이버는 RSS 발행시각이 실제 발견시각보다 늦게 잡히는 경우가 있어
+    # 실시간 송출 창을 120분으로 완화한다. 외부채널/미국뉴스는 기존 60분을 유지한다.
+    recent_window = 120
+    if source == "Google-US" or source.startswith(("텔레그램/", "유튜브/")):
+        recent_window = 60
+    if source != "DART" and not _engine_is_within_recent_window(published, recent_window):
+        _engine_log("info", "[제외-송출] ⏱️ 최근 %d분 밖의 뉴스(과거DB엔 누적됨) | source=%s | %s", recent_window, source, title[:80])
         # [수정] 발행시각은 시간이 지나도 다시 "최근"으로 돌아오지 않으므로, 이미 과거DB에
         # 누적한 이 기사는 seen 처리해서 RSS에 계속 남아있어도 다음 사이클부터 재번역·재분류
         # 하지 않는다(반복 재번역이 번역 API 쿼터를 소진시켜 사이클이 느려지는 문제 방지).
@@ -4499,16 +4519,23 @@ def _engine_process_item(source, title, link, published="", extra=""):
         _engine_log('warning', '[일정DB 누적 실패] %s', str(e)[:160])
     # [수정] key 계산·seen 체크는 함수 맨 앞에서 이미 했으므로 여기서 다시 하지 않는다
     # (중복 계산 제거).
-    # [원칙] 카테고리가 없으면(분류 실패) 절대 노출하지 않는다.
+    # 분류 실패라도 명확한 기업/시장 재료가 확인되면 범용 시장뉴스 카테고리로
+    # fallback하여 유효한 뉴스가 분류기 한 번의 실패 때문에 영구 폐기되지 않게 한다.
     if not ok or not str(category or "").strip():
-        reason = "카테고리 없음" if not str(category or "").strip() else (
-            "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
-        )
-        _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80])
-        # [수정] 같은 제목/본문이면 분류 결과도 동일할 것이므로 seen 처리해서
-        # 매 사이클 반복 재분류(및 그 앞단의 재번역)를 막는다.
-        _engine_mark_seen(key)
-        return False
+        fallback_relevant = bool(companies or market_hits or _engine_is_relevant(title))
+        if fallback_relevant:
+            category = "📌 시장뉴스"
+            ok = True
+            _engine_log("warning", "[분류 fallback] 시장뉴스 | source=%s | %s", source, title[:100])
+        else:
+            reason = "카테고리 없음" if not str(category or "").strip() else (
+                "상장기업·주가재료 없음" if source.startswith(("텔레그램/", "유튜브/")) else "기업·주가재료 조건 불충족"
+            )
+            _engine_log("info", "[제외] %s | %s | %s", source, reason, title[:80])
+            # [수정] 같은 제목/본문이면 분류 결과도 동일할 것이므로 seen 처리해서
+            # 매 사이클 반복 재분류(및 그 앞단의 재번역)를 막는다.
+            _engine_mark_seen(key)
+            return False
     time_text = ""
     dt = _engine_parse_datetime(published)
     if dt:
@@ -4709,7 +4736,7 @@ def _engine_run_naver():
         return
 
     queries = list(dict.fromkeys(NAVER_SEARCH_QUERIES))
-    batch_size = min(12, len(queries))
+    batch_size = min(16, len(queries))
     cycle = getattr(_engine_run_naver, "cycle", 0)
     start = (cycle * batch_size) % max(1, len(queries))
     selected = [queries[(start+i) % len(queries)] for i in range(batch_size)] if queries else []
