@@ -1,11 +1,48 @@
+import os
+import sys
 import json
 import logging
+import psutil
 from datetime import datetime
 
 logger = logging.getLogger("NewsBotEngine")
 
+def enforce_single_instance(lock_file="bot_process.lock"):
+    """
+    이전에 실행 중이던 동일 봇 프로세스(좀비 루프/랜더 값)가 있다면 
+    강제로 종료하고 새로운 프로세스만 단독으로 실행되도록 강제하는 제어 로직
+    """
+    current_pid = os.getpid()
+    
+    if os.path.exists(lock_file):
+        try:
+            with open(lock_file, "r", encoding="utf-8") as f:
+                old_pid = int(f.read().strip())
+            
+            if psutil.pid_exists(old_pid):
+                old_process = psutil.Process(old_pid)
+                logger.warning(f"[강제 종료] 이전 실행 중이던 프로세스 발견 (PID: {old_pid}). 강제 종료를 수행합니다.")
+                old_process.terminate()
+                old_process.wait(timeout=3)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, Exception) as e:
+            logger.info(f"이전 프로세스 정리 중 예외 발생 (무시 가능): {e}")
+        
+        try:
+            os.remove(lock_file)
+        except:
+            pass
+
+    try:
+        with open(lock_file, "w", encoding="utf-8") as f:
+            f.write(str(current_pid))
+        logger.info(f"[프로세스 락 획득] 현재 봇 프로세스가 단독 실행됩니다. (PID: {current_pid})")
+    except Exception as e:
+        logger.error(f"프로세스 락 파일 생성 실패: {e}")
+
 class NewsAnalysisEngine:
     def __init__(self, db_path="outcome_tracking.jsonl"):
+        # 실행 시점에 이전 좀비 프로세스 강제 종료 및 단독 락 획득
+        enforce_single_instance()
         self.db_path = db_path
 
     def _load_historical_records(self):
@@ -19,33 +56,13 @@ class NewsAnalysisEngine:
             return []
 
     def analyze_and_extract(self, title, body, category):
-        """
-        뉴스 본문 및 제목을 분석하여:
-        1. 동적 진행 과정 추출 (출하, 양산, 승인 등)
-        2. 관련주(대장주 + 급등/상한가 이력 후보) 또는 관련 테마 추출
-        3. 연계성 및 상승 근거 생성
-        4. 누적 데이터 학습 기반 시황/광고 필터링 판정
-        """
         records = self._load_historical_records()
-        
-        # 1. 동적 진행 과정 추출 (본문 키워드 매칭)
-        process_stage = "일반 진행"
-        stage_keywords = {
-            "출하": ["출하", "초도 물량", "납품", "선적"],
-            "양산": ["양산", "라인 가동", "공장 가동", "제조"],
-            "임상": ["임상", "3상", "2상", "허가 신청"],
-            "승인": ["승인", "규제 통과", "허가 획득", "특허"],
-            "계약": ["계약", "수주", "협약", "MOU"]
-        }
-        
         full_text = f"{title} {body}"
-        for stage, keywords in stage_keywords.items():
-            if any(kw in full_text for kw in keywords):
-                process_stage = stage
-                break
+        
+        # 합의 사항 반영: 진행 과정은 고정된 '실행 단계'로 표기
+        process_stage = "실행 단계"
 
-        # 2. 관련주 및 테마 추출 로직 (본문 내 회사명 우선 매칭)
-        # 예시 구현: 본문 내 특정 기업명 추출 가정 (실제 NER 또는 딕셔너리 연동부)
+        # 관련주 및 테마 추출 로직 (본문 내 회사명 우선 매칭)
         mentioned_company = None
         known_companies = ["에코프로", "SK이노베이션", "LG에너지솔루션", "삼성전자", "SK하이닉스", "한화오션", "현대차"]
         for comp in known_companies:
@@ -54,24 +71,21 @@ class NewsAnalysisEngine:
                 break
 
         if mentioned_company:
-            # 뉴스 언급 종목이 있는 경우: 대장주 + 급등 이력이 있는 후보 매칭
             leader_stock = f"{mentioned_company} (대장주)"
-            # 누적 데이터에서 과거 급등 이력이 자주 등장했던 연관 종목 매칭 (또는 기본 매핑)
             candidate_stock = "SK이노베이션 (급등/상한가 이력 후보)" if mentioned_company == "에코프로" else "관련 후발주 (급등 이력 후보)"
             related_stocks_str = f"{leader_stock}, {candidate_stock}"
-            connection_reason = f"뉴스 언급 종목인 '{mentioned_company}'를 대장주로 선정하였으며, 과거 유사 섹터 강세 시 높은 거래대금과 상한가 이력이 있는 후보군을 함께 연계함."
+            connection_reason = f"뉴스 본문에 직접 언급된 '{mentioned_company}'를 대장주로 최우선 배치하였으며, 과거 유사 섹터 강세 시 높은 거래대금과 상한가 이력이 있는 종목을 차기 후보로 함께 연계함."
         else:
-            # 관련주가 없을 경우 관련 테마로 연결
             related_stocks_str = "[테마] 관련 수혜주 및 후발 테마"
             connection_reason = "본문에 특정 기업명이 직접 언급되지 않아, 핵심 키워드 연관성이 높은 주도 테마 그룹으로 연결함."
 
-        # 3. 누적 데이터 기반 시황/광고 필터링 여부 판정
+        # 누적 데이터 기반 시황/광고 필터링 여부 판정
         is_macro_or_ad = False
         macro_keywords = ["시황", "마감", "브리핑", "라이브", "순환매"]
         if any(kw in title for kw in macro_keywords):
             is_macro_or_ad = True
 
-        # 4. 누적 통계 분석
+        # 누적 통계 분석
         total_count = len(records)
         category_matches = [r for r in records if r.get("category") == category]
         macro_count = sum(1 for r in category_matches if r.get("is_macro_or_ad", False))
