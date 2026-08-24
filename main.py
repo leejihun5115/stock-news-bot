@@ -2018,6 +2018,19 @@ def _engine_market_state(source, published):
     dt = _engine_parse_datetime(published)
     if dt is None:
         return "시장시간 확인불가"
+    if source == "DART":
+        # [수정/버그] DART list.json의 rcept_dt는 날짜만 제공하고("20260824" 8자리)
+        # 정확한 접수시각이 없다. 기존엔 이 값이 파싱되며 시간이 00:00으로 채워졌고,
+        # 그 결과 실제로는 장중에 올라온 공시까지도 KRX_WEEKDAY_OPEN(09:00) 이전이라는
+        # 이유로 전부 "시장 마감 후 뉴스"로 잘못 표시됐다
+        # (신고: "방금 온 신규 공시인데 왜 마감후로 뜨나?").
+        # 접수시각을 알 수 없는 이상 장중/마감을 함부로 단정하지 않는다.
+        # 날짜만으로 판단 가능한 휴장일/주말만 확정하고, 나머지는 "확인불가"로 남겨
+        # 헤더에 잘못된 ⏳마감후 배지가 붙지 않게 한다.
+        date_key = dt.strftime("%Y-%m-%d")
+        if dt.weekday() >= 5 or date_key in KRX_HOLIDAYS_2026:
+            return "시장 휴무로 미반영"
+        return "시장시간 확인불가"
     if source == "Google-US" and ZoneInfo is not None:
         aware = dt.replace(tzinfo=_KST).astimezone(ZoneInfo("America/New_York"))
         d, tm = aware.date(), aware.time()
@@ -3740,16 +3753,30 @@ def _engine_company_outcome_stats(name):
     _engine_load_outcome_tracking()
     changes = []
     for row in _OUTCOME_TRACKING_ROWS:
+        if not isinstance(row, dict):
+            continue
         names = set()
-        leader = row.get("leader") or {}
-        if leader.get("name"):
+        # [버그 수정] 기록 시점(_engine_record_outcome_tracking)에는 leader를
+        # 문자열(회사명)로 저장하는데, 여기서는 dict로 착각해 leader.get("name")을
+        # 호출하고 있었다 -> 'str' object has no attribute 'get' 로 해당 종목이
+        # 처음 매칭되는 순간 즉시 실패(운영 로그에서 실제 발생 확인).
+        # 실제 저장 포맷(문자열)을 우선 처리하고, 혹시 다른 경로로 dict가 들어온
+        # 경우까지 방어적으로 함께 처리한다.
+        leader = row.get("leader")
+        if isinstance(leader, str) and leader.strip():
+            names.add(leader.strip())
+        elif isinstance(leader, dict) and leader.get("name"):
             names.add(str(leader["name"]).strip())
         for r in row.get("related") or []:
-            if r.get("name"):
+            if isinstance(r, dict) and r.get("name"):
                 names.add(str(r["name"]).strip())
+            elif isinstance(r, str) and r.strip():
+                names.add(r.strip())
         if name not in names:
             continue
         outcome = row.get("outcome") or {}
+        if not isinstance(outcome, dict):
+            continue
         cp = outcome.get("change_pct")
         if cp is not None:
             changes.append(float(cp))
@@ -3890,6 +3917,40 @@ def _engine_master_badge(result):
     return " | ".join(labels) + "\n" + names
 
 
+_CONTRACT_AMOUNT_RE = re.compile(
+    r"계약\s*금액[:\s]*([0-9][0-9,]*(?:\.\d+)?)\s*(억원|조원|백만원|천만원|원)", re.I
+)
+_CONTRACT_REVENUE_RATIO_RE = re.compile(
+    r"(?:최근\s*)?매출액\s*(?:대비)?[\s:]*([0-9]+(?:\.\d+)?)\s*%", re.I
+)
+
+
+def _engine_contract_size_vs_revenue(text):
+    """'단일판매·공급계약체결' 등 DART 공시 원문에서 실제로 기재된 계약금액과
+    '매출액대비(%)' 수치를 뽑아낸다.
+    [수정] 예전엔 '🔥 강한 뉴스' 배지가 아무 근거 데이터 없이 라벨만 붙었다
+    (사용자 신고: "계약 규모가 매출의 몇%인지 비교 기준·근거가 없다").
+    DART 단일판매·공급계약체결 공시는 통상 '매출액대비(%)'를 공시 항목으로
+    포함하므로, 원문에 그 수치가 실제로 있을 때만 뽑아 쓴다 — 없는 값을
+    추정해서 채우지 않는다(전체 코드의 '데이터 없으면 생략' 원칙과 동일).
+    """
+    if not text:
+        return None
+    amount_m = _CONTRACT_AMOUNT_RE.search(text)
+    ratio_m = _CONTRACT_REVENUE_RATIO_RE.search(text)
+    if not amount_m and not ratio_m:
+        return None
+    out = {}
+    if amount_m:
+        out["amount_text"] = f"{amount_m.group(1)}{amount_m.group(2)}"
+    if ratio_m:
+        try:
+            out["ratio_pct"] = float(ratio_m.group(1))
+        except Exception:
+            pass
+    return out or None
+
+
 def _engine_master_image_path(result):
     """구버전 이미지 출력 호환용. 현재 최우선 출력 정책에서는 이미지를 생성하지 않는다."""
     return ""
@@ -3993,6 +4054,10 @@ def _engine_market_state_sentence(market_state):
         return '현재 시장이 휴무라 이 소식은 아직 실시간으로 반영되지 않았다.'
     if state == '시장 마감 후 뉴스':
         return '시장 마감 이후 나온 소식이라 다음 거래일 반영 여부를 지켜봐야 한다.'
+    if state == '시장시간 확인불가':
+        # DART처럼 정확한 접수시각을 모르는 경우: 모르는 채로 어색한 문장을
+        # 만들어내지 않고 그냥 생략한다(없는 정보를 있는 척 서술하지 않는다).
+        return ''
     return f'현재 시장 상황은 {state}이다.'
 
 
@@ -4138,13 +4203,57 @@ def _engine_format_message(item):
             display_al = al[:220] + ('…' if len(al) > 220 else '')
             lines.append('     ✔ ' + html.escape(display_al))
 
+    # ============================================================
+    # 🧠 [데이터 값] 산출을 위해 어느 종목 기준인지 먼저 정한다.
+    # ------------------------------------------------------------
+    # [수정] '🔥 강한 뉴스' 배지가 실제 근거(트랙레코드/계약규모) 없이도
+    # news_value 키워드 점수만으로 붙던 문제를 고치기 위해, 데이터 값
+    # 산출에 쓰던 lead_name/hist/outc 계산을 이 자리로 앞당겨 배지
+    # 판단에도 재사용한다(같은 계산을 두 번 하지 않는다).
+    # ============================================================
+    lead_name = ''
+    if related:
+        lead_name = direct_names[0] if direct_names else str(related[0].get('name', '')).strip()
+    if not lead_name and domestic:
+        # MASTER가 관련주를 별도로 확정하지 못했어도, 본문에서 직접 추출된
+        # 상장종목(👀관련주 배지)이 있으면 그 종목 기준으로 과거 데이터를 조회한다.
+        # domestic은 이미 실제 성과 데이터 기준으로 재정렬돼 있으므로, 여기서
+        # 고르는 domestic[0]은 곧 '데이터 값 근거로 뽑힌 관련주'가 된다.
+        lead_name = str(domestic[0]).strip()
+    lead_hist = _engine_company_history_detail(lead_name) if lead_name else None
+    lead_outc = _engine_company_outcome_stats(lead_name) if lead_name else None
+
     badge_text = str(_engine_master_badge(master_result) or '')
     # 내용/데이터가 없는 빈 라벨은 절대 표시하지 않는다.
     # [수정] '💰 돈되는 뉴스' → '💰 진행 과정'으로 라벨을 바꾸고 구분자를 ':' 로 통일한다.
     if '돈되는 뉴스' in badge_text and master_result.get('commercial_evidence'):
         lines.append('👀 <b>진행 과정</b> : ' + html.escape(str(master_result.get('commercial_evidence'))[:180]))
     if '강한 뉴스' in badge_text and (master_result.get('news_value') == '높음' or master_result.get('historical_evidence')):
-        lines.append('🔥 <b>강한 뉴스</b>')
+        # [수정/2차] '🔥 강한 뉴스'가 근거 없이 라벨만 붙던 문제.
+        # 1차 수정에서 계약금액·매출액대비(%) 근거를 추가했지만, 이 배지는
+        # 원래 news_value(키워드 점수)+historical_evidence(과거 유사 "제목" 매칭)만
+        # 으로 켜진다. "주식 초고수는 지금"류 매일 반복되는 시황 칼럼은 "급락/1위"
+        # 같은 단어와 %수치 때문에 news_value가 쉽게 "높음"이 되고, 매일 비슷한
+        # 문장 구조라 과거 유사 제목도 쉽게 매칭돼 실제로 강한 재료가 아닌데도
+        # 배지가 붙는다(신고: "이게 강한 뉴스 맞아?").
+        # 이제 아래 둘 중 하나로 실제 뒷받침되는 근거가 있을 때만 배지를 보여주고,
+        # 근거가 없으면 배지 자체를 생략한다(빈 라벨을 남기지 않는다):
+        #   1) 공시 원문에 계약금액/매출액대비(%)가 실제로 적혀 있는 경우
+        #   2) 표본 3건 이상 + 상승비율 50% 이상 + 평균 상승인, 실제 트랙레코드가 있는 경우
+        contract_info = _engine_contract_size_vs_revenue(f"{raw_title} {item.get('extra', '')}")
+        detail_parts = []
+        if contract_info and contract_info.get('amount_text'):
+            detail_parts.append(f"계약금액 {contract_info['amount_text']}")
+        if contract_info and contract_info.get('ratio_pct') is not None:
+            detail_parts.append(f"최근 매출액 대비 {contract_info['ratio_pct']:.1f}% 수준")
+        if not detail_parts and lead_outc and lead_outc.get('count', 0) >= 3 \
+                and lead_outc.get('success_rate', 0) >= 50 and lead_outc.get('avg', 0) > 0:
+            detail_parts.append(
+                f"{lead_name} 과거 유사 뉴스 {lead_outc['count']}건 중 "
+                f"상승비율 {lead_outc['success_rate']:.0f}% · 평균 +{lead_outc['avg']:.2f}%"
+            )
+        if detail_parts:
+            lines.append('🔥 ' + html.escape(' · '.join(detail_parts)))
 
     # ============================================================
     # 🧠 [데이터 값]
@@ -4160,20 +4269,11 @@ def _engine_format_message(item):
     #    함께 보여준다.
     # 쌓인 데이터가 없으면 섹션 자체를 생략한다(형식적 기록 없음).
     # ============================================================
-    lead_name = ''
-    if related:
-        lead_name = direct_names[0] if direct_names else str(related[0].get('name', '')).strip()
-    if not lead_name and domestic:
-        # MASTER가 관련주를 별도로 확정하지 못했어도, 본문에서 직접 추출된
-        # 상장종목(👀관련주 배지)이 있으면 그 종목 기준으로 과거 데이터를 조회한다.
-        # domestic은 이미 실제 성과 데이터 기준으로 재정렬돼 있으므로, 여기서
-        # 고르는 domestic[0]은 곧 '데이터 값 근거로 뽑힌 관련주'가 된다.
-        lead_name = str(domestic[0]).strip()
     # [데이터 누적형 분석] 현재 뉴스 → 현재 시장 → 과거 유사시장 → 실제 과거성과를
     # 순서대로 비교해서 보여준다. 데이터가 없는 항목은 절대 만들어내지 않고 생략한다.
     if lead_name:
-        hist = _engine_company_history_detail(lead_name)
-        outc = _engine_company_outcome_stats(lead_name)
+        hist = lead_hist
+        outc = lead_outc
         data_lines = []
 
         if hist:
