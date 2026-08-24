@@ -2237,26 +2237,35 @@ def _engine_format_message(item):
         data_lines = []
 
         if hist:
-            compare_parts = [f"과거 유사 재료 이력 {hist['count']}건"]
+            # 현재 시장상태와 과거 각 사례 당시의 시장상태를 분리해서 표시한다.
+            # 숫자형 KOSPI/KOSDAQ 값이 DB에 저장돼 있지 않으면 절대 만들어내지 않는다.
             if market_state:
-                compare_parts.append(f"현재 시장: {market_state}")
-            if hist.get('state_counts'):
-                same_state_count = hist['state_counts'].get(market_state, 0) if market_state else 0
-                past_state, _cnt = hist['state_counts'].most_common(1)[0]
-                if market_state and same_state_count:
-                    compare_parts.append(f"그중 동일 시장상황({market_state}) {same_state_count}건")
-                elif market_state and past_state and past_state != market_state:
-                    compare_parts.append(f"과거엔 주로 '{past_state}'였고 이번엔 '{market_state}'")
-            data_lines.append(' · '.join(compare_parts))
+                data_lines.append(f"현재 시장상태 : {market_state}")
+            data_lines.append(f"과거 유사 재료 이력 : {hist['count']}건")
+            if hist.get('first_ts'):
+                data_lines.append(f"과거 최초 사례 : {str(hist['first_ts'])[:10]}")
+            if hist.get('last_ts'):
+                data_lines.append(f"과거 최근 사례 : {str(hist['last_ts'])[:10]}")
+
+            state_counts = hist.get('state_counts') or Counter()
+            if state_counts:
+                total_states = sum(state_counts.values())
+                same_state_count = state_counts.get(market_state, 0) if market_state else 0
+                if market_state and total_states:
+                    same_rate = same_state_count / total_states * 100.0
+                    data_lines.append(
+                        f"당시 시장상황 비교 : 동일 상태 {same_state_count}/{total_states}건 ({same_rate:.0f}%)"
+                    )
+                for past_state, cnt in state_counts.most_common():
+                    rate = cnt / total_states * 100.0 if total_states else 0.0
+                    data_lines.append(f"과거 당시 시장 : {past_state} {cnt}건 ({rate:.0f}%)")
 
         if outc:
             sign = '+' if outc['avg'] >= 0 else ''
-            data_lines.append(
-                f"표본 {outc['count']}건 · 상승비율 {outc['success_rate']:.0f}% · "
-                f"평균 등락률 {sign}{outc['avg']:.2f}%"
-            )
-            # 판단: 표본이 충분할 때만 강함/관심/주의를 매긴다.
-            # 표본이 적으면 데이터를 근거로 단정하지 않고 '데이터 부족'으로만 표시한다.
+            data_lines.append(f"실제 결과 표본 : {outc['count']}건")
+            data_lines.append(f"상승 비율 : {outc['success_rate']:.0f}%")
+            data_lines.append(f"평균 등락률 : {sign}{outc['avg']:.2f}%")
+            # 현재 DB가 제공하는 실제 확정 성과만 표시한다.
             if outc['count'] >= 5:
                 if outc['success_rate'] >= 60 and outc['avg'] > 0:
                     verdict = '강함'
@@ -2264,9 +2273,9 @@ def _engine_format_message(item):
                     verdict = '관심'
                 else:
                     verdict = '주의'
+                data_lines.append(f"표본 기준 판단 : {verdict}")
             else:
-                verdict = f"관심 (표본 {outc['count']}건, 판단하기엔 부족)"
-            data_lines.append(f"판단 : {verdict}")
+                data_lines.append(f"표본 기준 판단 : 데이터 부족 (표본 {outc['count']}건)")
 
         if data_lines:
             lines.append('🧠 <b>데이터 값</b>')
