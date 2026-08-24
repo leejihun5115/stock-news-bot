@@ -28,35 +28,23 @@ try:
 except Exception:
     ZoneInfo = None
 
-# ==== module: sources_external (auto-split from original main.py) ====
+# ==== module: sources_external (restored from original main.py) ====
 
-from common_공용유틸 import ENGINE_HTTP_TIMEOUT, _engine_clean, _engine_log, _now_kst, log_error
+from common_공용유틸 import BOT_TOKEN, CHAT_ID, ENGINE_HTTP_TIMEOUT, _engine_clean, _engine_log, _engine_send_telegram, _now_kst, log_error
 from config_환경설정 import ENABLE_DART, ENABLE_HISTORICAL_SURGE_DB, ENABLE_TELEGRAM_CHANNELS, ENABLE_YOUTUBE, USER_AGENT
-from news_engine_핵심엔진 import GLOBAL_AND_DOMESTIC_GIANTS, _engine_classify, _engine_entry_published, _engine_fetch_rss, _engine_process_item, _engine_record_historical_case, _engine_telegram_title
+from news_engine_핵심엔진 import _engine_classify, _engine_entry_published, _engine_fetch_rss, _engine_process_item, _engine_record_historical_case, _engine_telegram_title
 from schedule_일정DB import _schedule_add_dart_row
 
-DART_API_KEY = os.environ.get("DART_API_KEY", "")
 
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
-CUSTOM_SOURCE_INTERVAL = 300     
-TELEGRAM_CHANNEL_INTERVAL = 60   
-TELEGRAM_UNFILTERED_INTERVAL = 60  
-DART_CHECK_INTERVAL = 60         
-BLOG_CHECK_INTERVAL = 1800       
-YOUTUBE_CHECK_INTERVAL = 1800    
 
-PAUSED_SOURCES = {}
-
-UNRESTRICTED_SOURCES = {
-    "시황맨TV",
-    "라르고TV 공식채널",
-}
 
 TARGET_TELEGRAM_CHANNELS = [
     ("텔레그램", "https://t.me/s/notRealDonaldTrump_kr"),
     ("뉴스짱", "https://t.me/s/newszzang"),
     ("공시알리미", "https://t.me/s/stockdartalert"),
 ]
+
 
 TARGET_TELEGRAM_CHANNELS_UNFILTERED = [
     ("빠짐없이실적공시", "https://t.me/s/allsiljuk"),
@@ -72,21 +60,6 @@ TARGET_TELEGRAM_CHANNELS_UNFILTERED = [
     ("라르고TV 공식채널", "https://t.me/s/scalpinglove"),
 ]
 
-ANALYSIS_BLOG_RSS_URLS = [
-    ("ranto28", "https://rss.blog.naver.com/ranto28.xml"),
-    ("tosoha1", "https://rss.blog.naver.com/tosoha1.xml"),
-    ("freechip", "https://rss.blog.naver.com/freechip.xml"),
-    ("dkanchup", "https://rss.blog.naver.com/dkanchup.xml"),
-    ("noruda11", "https://rss.blog.naver.com/noruda11.xml"),
-    ("richyun0108", "https://rss.blog.naver.com/richyun0108.xml"),
-    ("crush212121", "https://rss.blog.naver.com/crush212121.xml"),
-    ("bsj7000", "https://rss.blog.naver.com/bsj7000.xml"),
-    ("limsk1212", "https://rss.blog.naver.com/limsk1212.xml"),
-    ("cart10101", "https://rss.blog.naver.com/cart10101.xml"),
-    ("zero_family", "https://rss.blog.naver.com/zero_family.xml"),
-    ("pokara61", "https://rss.blog.naver.com/pokara61.xml"),
-    ("와이스트릿(프리미엄)", "https://contents.premium.naver.com/ystreet/irnote/rss"),
-]
 
 YOUTUBE_CHANNELS = [
     ("IT의 신 이형수", "GODofIT_official"),
@@ -103,8 +76,6 @@ YOUTUBE_CHANNELS = [
     ("시황맨TV", "blueoak1004"),
 ]
 
-DART_WATCH_COMPANIES = set(GLOBAL_AND_DOMESTIC_GIANTS)
-DART_RUMOR_KEYWORDS = ["조회공시", "풍문", "보도", "해명", "설명요구"]
 
 DART_STRONG_REPORT_KEYWORDS = {
     "유상증자결정", "무상증자결정", "전환사채권발행결정", "신주인수권부사채권발행결정",
@@ -133,31 +104,23 @@ DART_STRONG_REPORT_KEYWORDS = {
     "추가상장",
 }
 
-DART_ALWAYS_EXPOSE_KEYWORDS = DART_STRONG_REPORT_KEYWORDS - {
-    "유상증자결정",
-    "단일판매ㆍ공급계약체결", "단일판매·공급계약체결",
-    "타법인주식및출자증권취득결정", "타법인주식및출자증권처분결정",
-    "영업양수결정", "영업양도결정", "합병결정", "분할결정", "분할합병결정",
-    "자기주식취득결정",
-    "주요사항보고서",
-}
 
-# ============================================================
-# [성과 피드백 루프 2단계 - 종목코드 매핑] DART corpCode.xml 기반
-# ------------------------------------------------------------
-# LISTED_COMPANY_ALIASES는 "이름만" 있고 종목코드가 없어서, 사후 시세 조회를
-# 하려면 이름→코드 매핑이 필요하다. DART가 제공하는 corpCode.xml(전체 상장/비상장
-# 법인 목록, zip 압축)을 내려받아 종목코드가 있는(=상장된) 법인만 추려서 캐시한다.
-# - 하루 수십~수백 건 조회에 매번 네트워크를 타지 않도록 디스크에 캐시하고,
-#   일정 기간(기본 7일)이 지나야 다시 내려받는다.
-# - 실패해도(키 없음/네트워크 오류) 조용히 빈 매핑으로 계속 동작한다(기존 기능에
-#   영향을 주지 않기 위함 - 종목코드가 없으면 해당 항목의 사후 시세 조회만 건너뜀).
-# ============================================================
+TELEGRAM_SPAM_STATE = os.environ.get("NEWS_BOT_TELEGRAM_SPAM_STATE", "news_bot_telegram_spam.json")
+
+
+TELEGRAM_MAX_PER_SOURCE_HOUR = max(1, int(os.environ.get("NEWS_BOT_TELEGRAM_MAX_PER_SOURCE_HOUR", "6")))
+
+
 DART_CORP_CODE_CACHE = os.environ.get("NEWS_BOT_DART_CORP_CODE_CACHE", "dart_corp_code_map.json")
+
+
 DART_CORP_CODE_CACHE_DAYS = max(1, int(os.environ.get("NEWS_BOT_DART_CORP_CODE_CACHE_DAYS", "7")))
 
-_DART_CORP_CODE_MAP = {}          # {법인명: 종목코드(6자리)}
-_DART_CORP_CODE_LOADED = False    # 이번 프로세스에서 로드를 시도했는지(성공/실패 무관)
+
+_DART_CORP_CODE_MAP = {}
+
+
+_DART_CORP_CODE_LOADED = False
 
 
 def _dart_download_corp_code_map():
@@ -247,69 +210,6 @@ def _dart_stock_code_for_name(name):
             return mapping[name[:-len(suffix)].strip()]
     return ""
 
-_DART_CONTRACT_REPORT_HINTS = ("단일판매", "공급계약")
-
-
-def _dart_fetch_contract_detail(rcept_no):
-    """[신규 2026-08-24] '단일판매·공급계약체결' 등 계약 공시의 원문을 받아
-    계약금액/매출액 대비 비율/계약상대방/계약기간을 추출한다.
-    DART list.json(공시 목록)에는 이 수치들이 없고, 원문 문서에만 있다.
-    사용자 요청: "🔥 강한 뉴스"라는 빈 배지 대신, 계약 규모가 실제 매출의
-    몇%인지 등 판단 근거가 될 실제 수치를 보여달라는 요청에 따라 추가.
-    실패해도(429, 포맷 변경 등) 예외를 던지지 않고 빈 문자열을 반환해
-    본 파이프라인 전체가 이 때문에 멈추지 않게 한다.
-    """
-    if not rcept_no or not DART_API_KEY:
-        return ""
-    try:
-        r = requests.get(
-            "https://opendart.fss.or.kr/api/document.xml",
-            params={"crtfc_key": DART_API_KEY, "rcept_no": rcept_no},
-            timeout=ENGINE_HTTP_TIMEOUT,
-        )
-        if not r.ok:
-            return ""
-        text = ""
-        try:
-            with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
-                for name in zf.namelist():
-                    raw = zf.read(name)
-                    try:
-                        text += raw.decode("euc-kr", errors="ignore")
-                    except Exception:
-                        text += raw.decode("utf-8", errors="ignore")
-        except zipfile.BadZipFile:
-            # 일부 공시는 zip이 아니라 원문 그대로 오는 경우가 있어 그대로 시도한다.
-            text = r.content.decode("utf-8", errors="ignore")
-        if not text:
-            return ""
-        plain = re.sub(r"<[^>]+>", " ", text)
-        plain = html.unescape(plain)
-        plain = re.sub(r"\s+", " ", plain).strip()
-
-        def _find(pattern):
-            m = re.search(pattern, plain)
-            return m.group(1).strip() if m else ""
-
-        amount = _find(r"계약금액\s*[:：]?\s*([0-9][0-9,\.]*\s*(?:원|백만원|억원)?)")
-        pct = _find(r"(?:매출액|자산총액)\s*대비\s*\(?%?\)?\s*[:：]?\s*([0-9]+(?:\.[0-9]+)?)\s*%")
-        counterpart = _find(r"계약상대\s*[:：]?\s*([^\s]{2,40})")
-        period = _find(r"계약기간\s*[:：]?\s*([0-9]{4}[-./][0-9]{2}[-./][0-9]{2}\s*[~\-]\s*[0-9]{4}[-./][0-9]{2}[-./][0-9]{2})")
-
-        parts = []
-        if amount:
-            parts.append(f"계약금액 {amount}")
-        if pct:
-            parts.append(f"최근 매출액 대비 {pct}%")
-        if counterpart:
-            parts.append(f"계약상대방 {counterpart}")
-        if period:
-            parts.append(f"계약기간 {period}")
-        return " · ".join(parts)
-    except Exception as e:
-        _engine_log("warning", "[DART 원문 조회 실패] rcept_no=%s | %s", rcept_no, str(e)[:160])
-        return ""
-
 
 def _engine_run_dart():
     if not ENABLE_DART:
@@ -342,13 +242,8 @@ def _engine_run_dart():
             corp = row.get("corp_name", "")
             title = f"{corp} | {report}"
             link = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row.get('rcept_no','')}"
-            # [신규] 계약(공급계약) 공시는 원문에서 계약금액/매출액대비 비율을
-            # 추출해 extra에 실어 보낸다. 그 외 리포트는 기존과 동일하게 extra 없음.
-            contract_extra = ""
-            if any(h in report for h in _DART_CONTRACT_REPORT_HINTS):
-                contract_extra = _dart_fetch_contract_detail(row.get("rcept_no", ""))
             _schedule_add_dart_row(report, corp, link, row.get("rcept_dt", ""))
-            if _engine_process_item("DART", title, link, row.get("rcept_dt", ""), contract_extra):
+            if _engine_process_item("DART", title, link, row.get("rcept_dt", "")):
                 sent += 1
         _engine_log("info", "[DART] 후보=%d건", sent)
     except Exception as e:
@@ -492,6 +387,8 @@ def _engine_run_telegram_channels():
 
 
 _YOUTUBE_CHANNEL_ID_CACHE = {}
+
+
 _YOUTUBE_CHANNEL_ID_CACHE_TS = {}
 
 
