@@ -2361,6 +2361,22 @@ def _engine_company_mentions(text):
             if any(w.lower() in ctx_low for w in event_words):
                 found.append(x)
                 break
+
+    # [보강] 삼성전자·SK하이닉스처럼 정적 목록에 미리 등록된 대형주가 아닌
+    # 중소형 상장사는 지금까지 아예 후보로도 못 잡혔다(예: "에이프릴바이오,
+    # 에보뮨에 APB-R3 핵심 물질 이전..." → 관련주 없이 🏷 테마만 표시되는
+    # 문제, 사용자 신고). 한국 뉴스는 보통 "회사명, 사건..." 형태로 시작하므로
+    # 제목 맨 앞 토큰을 후보로 추출해, 실제 종목코드가 조회되는 경우에만
+    # (=진짜 상장사인 경우에만) 인정한다. 정적 목록으로 이미 잡힌 경우에는
+    # 굳이 추가 조회를 하지 않고, 아무것도 못 잡았을 때만 시도한다.
+    # _resolve_stock_code_for_name()에 자체 캐시가 있어 반복 조회 비용은 없다.
+    if not found:
+        m = re.match(r"^([가-힣A-Za-z0-9][가-힣A-Za-z0-9&\-·]{1,14})\s*[,，]", t)
+        if m:
+            cand = m.group(1).strip()
+            if cand and cand not in UNIQUE_CELEBS and _resolve_stock_code_for_name(cand):
+                found.append(cand)
+
     return found[:12]
 
 
@@ -2469,6 +2485,13 @@ def _engine_domestic_companies(companies, text=""):
             continue
         code_bearing = bool(re.search(rf"{re.escape(str(c))}\s*\((?:KRX:)?\d{{6}}\)", text, re.I)) if text else False
         if c in LISTED_COMPANY_ALIASES or code_bearing:
+            if c not in out:
+                out.append(c)
+            continue
+        # [보강] 정적 목록에도 없고 본문에 종목코드 표기도 없지만, 실제 조회
+        # 결과 상장 종목코드가 확인되는 회사(위 _engine_company_mentions의
+        # 제목 선두 토큰 추론 등으로 들어온 경우)는 국내 상장사로 인정한다.
+        if _resolve_stock_code_for_name(c):
             if c not in out:
                 out.append(c)
     return out
