@@ -35,7 +35,7 @@ from common_공용유틸 import _engine_log, _logger, _now_kst, log_error
 from config_환경설정 import ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_DOMESTIC_NEWS, ENABLE_NAVER_NEWS, ENABLE_OUTCOME_TRACKING, ENABLE_TELEGRAM_CHANNELS, ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_NEWS, ENABLE_YOUTUBE
 from domestic_국내수집 import NAVER_APIHUB_CLIENT_ID, NAVER_APIHUB_CLIENT_SECRET, NAVER_API_MODE, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, _engine_krx_market_monitor, _engine_run_google_and_domestic, _engine_run_keyword_combinations, _engine_run_naver
 from engine_state_공유상태 import ENGINE_INTERVAL, _engine_cycle_lock, _engine_wake_event, _engine_watchdog_alert
-from news_engine_핵심엔진 import _engine_load_extended_state, _engine_load_seen
+from news_engine_핵심엔진 import _engine_load_extended_state, _engine_load_seen, _engine_save_extended_state
 from outcome_tracking_성과추적 import _engine_load_outcome_tracking, _engine_outcome_tracking_cycle
 from overseas_해외수집 import _engine_us_market_close_monitor, _engine_us_market_monitor
 from sources_external_외부연동 import DART_API_KEY, _dart_load_corp_code_map, _engine_run_dart, _engine_run_telegram_channels, _engine_run_youtube
@@ -73,6 +73,12 @@ def _engine_cycle():
     engine_state_공유상태._engine_run_stage("미장 장중 브리핑", _engine_us_market_monitor)
     engine_state_공유상태._engine_run_stage("미장 장마감 브리핑", _engine_us_market_close_monitor)
     engine_state_공유상태._engine_run_stage("성과 피드백 루프", _engine_outcome_tracking_cycle)
+    # [버그 수정] 과거사례 캐시(_engine_historical_cache)를 디스크에 남기는
+    # _engine_save_extended_state()가 정의만 되어 있고 어디서도 호출되지 않아
+    # 재배포/재시작할 때마다 그동안 쌓인 과거사례가 전부 사라졌다. 매 주기 끝에
+    # 저장해 재시작해도 이어지게 한다(회로차단기로 감싸 저장 실패가 다음 주기를
+    # 막지 않게 한다).
+    engine_state_공유상태._engine_run_stage("확장상태 저장", _engine_save_extended_state)
     engine_state_공유상태._engine_last_cycle_finished = time.time()
     _engine_log("info", "[주기 완료] %.2f초 | Telegram 즉시송출 구조", time.time()-started)
 

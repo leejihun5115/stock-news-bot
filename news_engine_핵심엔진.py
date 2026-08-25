@@ -22,6 +22,7 @@ import os
 import re
 import json
 import time
+import datetime
 import hashlib
 import logging
 from collections import deque
@@ -220,24 +221,48 @@ def _engine_force_end_cold_start():
 
 def _engine_load_extended_state():
     """확장 상태(과거 유사사례 캐시 등)를 디스크에서 복원한다.
-    파일이 없거나 손상돼도 조용히 빈 상태로 시작한다."""
+    파일이 없거나 손상돼도 조용히 빈 상태로 시작한다.
+    [버그 수정] published_dt는 저장 시 ISO 문자열로 바꿔 기록되므로, 불러올 때
+    다시 datetime 객체로 되돌린다(변환 실패 시 None으로 안전하게 대체)."""
     if not os.path.exists(EXTENDED_STATE_FILE):
         return
     try:
         with open(EXTENDED_STATE_FILE, "r", encoding="utf-8") as f:
             state = json.load(f) or {}
         cached = state.get("historical_cache", []) or []
+        restored = []
+        for row in cached[-_HISTORICAL_CACHE_MAX:]:
+            row = dict(row)
+            pd = row.get("published_dt")
+            if isinstance(pd, str):
+                try:
+                    row["published_dt"] = datetime.datetime.fromisoformat(pd)
+                except Exception:
+                    row["published_dt"] = None
+            restored.append(row)
         _engine_historical_cache.clear()
-        _engine_historical_cache.extend(cached[-_HISTORICAL_CACHE_MAX:])
+        _engine_historical_cache.extend(restored)
         _engine_log("info", "[확장상태] 로드 완료 | 과거사례=%d건", len(_engine_historical_cache))
     except Exception as e:
         log_error("확장상태 로드", e)
 
 
 def _engine_save_extended_state():
+    """[버그 수정] 이 함수는 정의만 되어 있고 아무 데서도 호출되지 않아 과거사례
+    캐시가 재시작하면 전부 사라졌다. 게다가 호출해도 캐시 안의 published_dt가
+    datetime 객체 그대로라 json.dump()가 'Object of type datetime is not JSON
+    serializable'로 매번 조용히(try/except에 먹혀서) 실패했다. ISO 문자열로
+    바꿔서 저장하도록 고치고, main_메인._engine_cycle()에서 주기마다 호출하도록
+    연결했다(그래야 재배포/재시작에도 과거사례 캐시가 유지된다)."""
     try:
+        serializable_cache = []
+        for item in _engine_historical_cache[-_HISTORICAL_CACHE_MAX:]:
+            row = dict(item)
+            pd = row.get("published_dt")
+            row["published_dt"] = pd.isoformat() if isinstance(pd, datetime.datetime) else pd
+            serializable_cache.append(row)
         with open(EXTENDED_STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"historical_cache": _engine_historical_cache[-_HISTORICAL_CACHE_MAX:]}, f, ensure_ascii=False)
+            json.dump({"historical_cache": serializable_cache}, f, ensure_ascii=False)
     except Exception as e:
         log_error("확장상태 저장", e)
 
@@ -417,12 +442,27 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         reason = result.get("analysis") or " ".join(result.get("outlook") or [])[:300] or "MASTER 분석 결과"
 
         # 과거사례 캐시 누적 (macro/ad 여부와 무관하게 브리핑 근거자료로 계속 쌓는다)
-        _engine_historical_cache.append({
+        cache_row = {
             "text": full_text[:600], "title": ko_title, "link": link,
             "published_dt": pub_dt or now, "source": str(source),
-        })
+        }
+        _engine_historical_cache.append(cache_row)
         if len(_engine_historical_cache) > _HISTORICAL_CACHE_MAX:
             del _engine_historical_cache[: len(_engine_historical_cache) - _HISTORICAL_CACHE_MAX]
+
+        # [버그 수정] overseas_해외수집.py의 미장 개장/장중/마감 브리핑은
+        # "원인: ○○" · MSCI 재료 · 강한 재료 섹션을 전부 _US_BRIEFING_NEWS_MEMORY에서
+        # 찾는데, 그 리스트가 선언만 되어 있고 어디서도 채워지지 않아 브리핑에는
+        # 항상 "확인된 뉴스 없음"만 나왔다. overseas가 news_engine을 top-level에서
+        # import하므로 순환 임포트를 피하려면 여기서는 지연 import로 접근해야 한다.
+        try:
+            from overseas_해외수집 import _US_BRIEFING_NEWS_MEMORY, _US_BRIEFING_LOCK
+            with _US_BRIEFING_LOCK:
+                _US_BRIEFING_NEWS_MEMORY.append(dict(cache_row))
+                if len(_US_BRIEFING_NEWS_MEMORY) > _HISTORICAL_CACHE_MAX:
+                    del _US_BRIEFING_NEWS_MEMORY[: len(_US_BRIEFING_NEWS_MEMORY) - _HISTORICAL_CACHE_MAX]
+        except Exception as e:
+            log_error("미장 브리핑 뉴스메모리 갱신 실패", e)
 
         is_macro_or_ad = macro_kw_hit or news_value_low or not related_names
         if is_macro_or_ad and not force_send:
