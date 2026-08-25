@@ -51,6 +51,133 @@ _engine_cycle_lock = threading.Lock()      # /run 즉시실행과 정규 사이�
 _engine_paused = False
 
 
+# ============================================================
+# 🧭 [SSOT 상태 영속화] 일시정지 여부는 재시작해도 유지되어야 한다.
+# ------------------------------------------------------------
+# 관리자가 /pause를 내렸는데 배포/재시작이 한 번 일어나면 메모리 변수가 초기화되어
+# 조용히 재개되는 사고를 막는다. 파일 쓰기는 tmp에 먼저 쓰고 os.replace로 원자적
+# 교체하므로, 쓰는 도중 프로세스가 죽어도 파일이 반쯤 깨진 상태로 남지 않는다.
+# ============================================================
+_ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_ENGINE_STATE_FILE", "news_bot_engine_state.json")
+_engine_state_lock = threading.Lock()
+
+
+def _engine_state_atomic_write(path, obj):
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def _engine_save_state():
+    """현재 일시정지 여부 + 회로차단 상태를 디스크에 즉시 영속화한다."""
+    with _engine_state_lock:
+        try:
+            _engine_state_atomic_write(_ENGINE_STATE_FILE, {
+                "paused": _engine_paused,
+                "stage_breakers": _engine_stage_breakers,
+                "saved_at": _now_kst().isoformat(),
+            })
+        except Exception as e:
+            log_error("엔진 상태 저장", e)
+
+
+def _engine_load_state():
+    """부팅 시 마지막으로 저장된 일시정지/회로차단 상태를 복원한다.
+    관리자가 재시작 직전에 /pause를 내렸다면, 재시작 후에도 계속 정지 상태여야 한다."""
+    global _engine_paused, _engine_stage_breakers
+    if not os.path.exists(_ENGINE_STATE_FILE):
+        return
+    try:
+        with open(_ENGINE_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        _engine_paused = bool(data.get("paused", False))
+        loaded_breakers = data.get("stage_breakers") or {}
+        if isinstance(loaded_breakers, dict):
+            _engine_stage_breakers.update(loaded_breakers)
+        _engine_log("info", "[엔진 상태 복원] paused=%s | 회로차단 단계=%d개",
+                    _engine_paused, len(_engine_stage_breakers))
+    except Exception as e:
+        log_error("엔진 상태 복원", e)
+
+
+def _engine_set_paused(value):
+    """일시정지 여부를 바꾸고 즉시 디스크에 반영한다. 명령 실행 지점에서만 사용."""
+    global _engine_paused
+    _engine_paused = bool(value)
+    _engine_save_state()
+
+
+# ============================================================
+# 🔌 [단계별 회로차단기] 특정 단계(예: DART, 네이버)가 계속 실패해도
+# 나머지 단계와 메인 사이클 전체가 함께 멈추지 않도록 격리한다.
+# - 연속 실패가 임계치를 넘으면 자동 비활성화 + 쿨다운
+# - 쿨다운이 지나면 자동으로 1회 재시도
+# - 관리자가 /재진단 명령으로 즉시 강제 재시도 가능
+# ============================================================
+STAGE_BREAKER_FAIL_THRESHOLD = max(1, int(os.environ.get("NEWS_BOT_STAGE_FAIL_THRESHOLD", "5")))
+STAGE_BREAKER_COOLDOWN_SEC = max(60, int(os.environ.get("NEWS_BOT_STAGE_COOLDOWN_SEC", "900")))
+
+_engine_stage_breakers = {}   # {단계명: {"fail_count":int, "disabled":bool, "last_error":str, "disabled_until":float}}
+_engine_stage_breaker_lock = threading.Lock()
+
+
+def _engine_run_stage(name, func, *args, **kwargs):
+    """뉴스 사이클의 한 단계를 실행한다. 실패해도 예외를 삼켜 다음 단계로 넘어가되,
+    같은 단계가 연속으로 계속 실패하면 자동으로 잠시 꺼서(회로차단) 매 사이클마다
+    같은 오류로 시간을 낭비하거나 로그가 폭주하는 것을 막는다."""
+    with _engine_stage_breaker_lock:
+        info = _engine_stage_breakers.get(name)
+        if info and info.get("disabled"):
+            if time.time() < info.get("disabled_until", 0):
+                _engine_log("debug", "[회로차단] %s | 쿨다운 중이라 이번 주기는 건너뜀", name)
+                return False
+            # 쿨다운이 끝났으므로 이번 한 번은 다시 시도해본다.
+            _engine_log("info", "[회로차단] %s | 쿨다운 종료, 재시도 시작", name)
+
+    try:
+        func(*args, **kwargs)
+    except Exception as e:
+        log_error(name, e)
+        with _engine_stage_breaker_lock:
+            info = _engine_stage_breakers.setdefault(name, {"fail_count": 0, "disabled": False, "last_error": "", "disabled_until": 0})
+            info["fail_count"] += 1
+            info["last_error"] = f"{type(e).__name__}: {str(e)[:160]}"
+            if info["fail_count"] >= STAGE_BREAKER_FAIL_THRESHOLD:
+                info["disabled"] = True
+                info["disabled_until"] = time.time() + STAGE_BREAKER_COOLDOWN_SEC
+                _engine_log("error", "[회로차단 작동] %s | 연속 %d회 실패로 %d초간 자동 비활성화",
+                            name, info["fail_count"], STAGE_BREAKER_COOLDOWN_SEC)
+        _engine_save_state()
+        return False
+    else:
+        with _engine_stage_breaker_lock:
+            if name in _engine_stage_breakers and (_engine_stage_breakers[name].get("fail_count") or _engine_stage_breakers[name].get("disabled")):
+                _engine_stage_breakers[name] = {"fail_count": 0, "disabled": False, "last_error": "", "disabled_until": 0}
+                _engine_save_state()
+        return True
+
+
+def _engine_list_disabled_stages():
+    """현재 회로차단으로 자동 비활성화된 단계만 반환한다. /status에서 사용."""
+    with _engine_stage_breaker_lock:
+        return {name: dict(info) for name, info in _engine_stage_breakers.items() if info.get("disabled")}
+
+
+def _engine_reset_all_stage_breakers():
+    """관리자 /재진단 명령: 모든 회로차단 상태를 즉시 초기화해 다음 주기부터 바로 재시도하게 한다."""
+    with _engine_stage_breaker_lock:
+        n = sum(1 for info in _engine_stage_breakers.values() if info.get("disabled"))
+        for info in _engine_stage_breakers.values():
+            info["disabled"] = False
+            info["fail_count"] = 0
+            info["disabled_until"] = 0
+    _engine_save_state()
+    return n
+
+
 def _engine_watchdog_alert(force=False):
     global _engine_last_watchdog_alert
     if not _engine_last_cycle_started:
@@ -67,86 +194,3 @@ def _engine_watchdog_alert(force=False):
         _engine_send_telegram(msg)
     except Exception as e:
         log_error("WATCHDOG Telegram 알림", e)
-
-
-# ============================================================
-# [단계별 회로차단기 — Stage Circuit Breaker]
-# ------------------------------------------------------------
-# [배경] 기존 _engine_cycle()은 국내수집/네이버/DART/텔레그램/유튜브/브리핑
-# 등 각 단계를 개별 try/except로만 감싸고 있었다. 파일을 수정하다 특정 단계에
-# 버그가 생기면(오타, 잘못된 인자, 삭제된 함수 등) 그 버그가 60초 주기마다
-# "영원히" 재발생한다. log_error() 자체에는 반복 억제(dedup)가 있어 로그 줄
-# 수는 줄었지만, 그 단계는 계속 죽은 채로 방치되고 관리자는 텔레그램으로
-# 아무 것도 모른 채 "왜 특정 뉴스가 안 오지?"만 겪게 된다.
-#
-# [해결] 각 단계를 이 함수로 감싸면:
-#   1) 같은 단계가 threshold회(기본 5회) 연속 실패하면 cooldown(기본 15분)
-#      동안 그 단계만 자동으로 건너뛴다 → 나머지 단계는 정상 동작 유지.
-#   2) 회로가 열릴 때(cooldown 시작) 딱 1번만 "어느 단계가 왜 실패하는지"를
-#      요약해 관리자 텔레그램으로 보낸다 → "파일 수정 후 문제가 생겼는지"를
-#      바로 알 수 있다.
-#   3) cooldown이 지나면 자동으로 다시 시도하고, 성공하면 카운터를 리셋한다
-#      → 원인을 고치고 재배포하면 별도 조치 없이 자동으로 정상 복귀한다.
-#   4) 관리자가 원인을 고친 걸 확인했으면 /재진단 명령으로 즉시 재시도시킬
-#      수 있다(admin_관리자._admin_cmd_reset_stages).
-# ============================================================
-STAGE_FAILURE_THRESHOLD = int(os.environ.get("NEWS_BOT_STAGE_FAILURE_THRESHOLD", "5"))
-STAGE_COOLDOWN_SEC = int(os.environ.get("NEWS_BOT_STAGE_COOLDOWN_SEC", "900"))  # 15분
-
-_engine_stage_state = {}   # {단계명: {"fail_count", "disabled_until", "alerted", "last_error"}}
-_engine_stage_state_lock = threading.Lock()
-
-
-def _engine_run_stage(stage_name, func):
-    """주기 안의 각 단계(수집/브리핑 등)를 안전하게 실행한다. 위 회로차단기 설명 참고."""
-    now = time.time()
-    with _engine_stage_state_lock:
-        st = _engine_stage_state.setdefault(
-            stage_name, {"fail_count": 0, "disabled_until": 0.0, "alerted": False, "last_error": ""}
-        )
-        if st["disabled_until"] > now:
-            return  # 쿨다운 중 - 이미 1회 알림을 보냈으므로 조용히 건너뛴다(로그 폭주 방지)
-
-    try:
-        func()
-        with _engine_stage_state_lock:
-            if st["fail_count"] > 0:
-                _engine_log("info", "[자동복구] '%s' 단계 정상화(이전 연속 실패 %d회)", stage_name, st["fail_count"])
-            st["fail_count"] = 0
-            st["alerted"] = False
-    except Exception as e:
-        log_error(f"{stage_name}", e)
-        alert_msg = None
-        with _engine_stage_state_lock:
-            st["fail_count"] += 1
-            st["last_error"] = f"{type(e).__name__}: {str(e)[:200]}"
-            if st["fail_count"] >= STAGE_FAILURE_THRESHOLD and not st["alerted"]:
-                st["disabled_until"] = now + STAGE_COOLDOWN_SEC
-                st["alerted"] = True
-                alert_msg = (
-                    f"🚨 [자동진단] '{stage_name}' 단계가 {st['fail_count']}회 연속 실패해 "
-                    f"{STAGE_COOLDOWN_SEC // 60}분간 자동으로 건너뜁니다.\n"
-                    f"마지막 원인: {st['last_error']}\n"
-                    f"※ 최근 이 단계 관련 파일을 수정했다면 그 변경부터 확인해주세요.\n"
-                    f"※ 수정 완료 후 /재진단 명령으로 즉시 재시도할 수 있습니다."
-                )
-        if alert_msg:
-            try:
-                _engine_send_telegram(alert_msg)
-            except Exception as send_e:
-                log_error("회로차단 알림 전송", send_e, stage=stage_name)
-
-
-def _engine_list_disabled_stages():
-    """/status 명령에서 현재 자동 비활성화된 단계 목록을 보여주기 위함."""
-    now = time.time()
-    with _engine_stage_state_lock:
-        return {name: dict(st) for name, st in _engine_stage_state.items() if st.get("disabled_until", 0) > now}
-
-
-def _engine_reset_all_stage_breakers():
-    """/재진단 명령: 회로차단으로 비활성화된 모든 단계를 즉시 초기화해 다음 주기부터 재시도한다."""
-    with _engine_stage_state_lock:
-        n = len(_engine_stage_state)
-        _engine_stage_state.clear()
-    return n

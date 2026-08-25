@@ -31,14 +31,13 @@ except Exception:
 # ==== module: admin (auto-split from original main.py) ====
 
 from common_공용유틸 import BOT_TOKEN, CHAT_ID, ENGINE_HTTP_TIMEOUT, _engine_log, _now_kst, log_error
-from engine_state_공유상태 import _engine_cycle_lock, _engine_wake_event
-from news_engine_핵심엔진 import _engine_force_end_cold_start
+from engine_state_공유상태 import (
+    _engine_cycle_lock, _engine_wake_event, _engine_list_disabled_stages,
+    _engine_reset_all_stage_breakers, _engine_set_paused,
+)
 from outcome_tracking_성과추적 import _outcome_aggregate_report
 from sources_external_외부연동 import _engine_backfill_dart_historical
-from ml_learning_기계학습 import _ml_status_report
-from 정책_최상위통제 import get_runtime_policy, set_runtime_policy, reset_runtime_policy, format_policy
 import engine_state_공유상태
-import news_engine_핵심엔진  # 실시간 값(콜드스타트 플래그 등) 읽기용 — 값은 반드시 모듈 경로로 접근
 
 
 # ============================================================
@@ -47,6 +46,16 @@ import news_engine_핵심엔진  # 실시간 값(콜드스타트 플래그 등) 
 # 관리자가 텔레그램으로 내린 '마지막 명령' 기준으로 즉시 제어하는 최상위 계층이다.
 # 뉴스 수집 사이클과 완전히 분리된 별도 스레드에서 짧은 주기로 명령을 감시하므로,
 # 데이터 수집 중이라도 명령 실행이 지연되지 않는다.
+#
+# [성공 패턴 요약 — 이 통제소가 반드시 지키는 5원칙]
+# 1) 단일 진실 공급원(SSOT): 상태는 engine_state_공유상태 모듈 하나만 읽고 쓴다.
+# 2) 즉시 영속화: 명령으로 바뀐 값은 그 자리에서 디스크에 원자적으로 저장한다.
+#    → 재배포/재시작돼도 마지막 명령 상태가 유지된다.
+# 3) 최신 명령 우선: 처리 못한 명령이 쌓여도 항상 '가장 마지막' 명령만 실행한다.
+# 4) 반드시 회신: 모든 명령은 성공/실패와 무관하게 텔레그램으로 결과를 알린다.
+#    → "먹혔는지 안 먹혔는지 몰라서 불안한" 상황 자체를 없앤다.
+# 5) 격리 실행: 명령 감시/실행 스레드는 뉴스 수집 루프와 락을 공유하지 않는다.
+#    → 수집이 멈추거나 느려져도 명령 응답은 항상 즉시 온다.
 # ============================================================
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "") or CHAT_ID
 ADMIN_COMMAND_PREFIX = "/"
@@ -57,6 +66,40 @@ _admin_lock = threading.Lock()
 _admin_last_update_id = 0
 _admin_pending_command = None      # 아직 실행되지 않은 '가장 최신' 명령만 보관 (덮어쓰기 방식)
 _admin_command_event = threading.Event()   # 새 명령 도착 시 실행 스레드를 즉시 깨움
+_admin_last_poll_ts = 0.0          # 감시 스레드가 마지막으로 정상 동작한 시각(하트비트)
+
+# ============================================================
+# 🧭 update_id 영속화
+# ------------------------------------------------------------
+# 이전 구조는 _admin_last_update_id가 메모리 변수뿐이라 재시작하면 0으로
+# 초기화됐다. 그러면 재시작 직후 Telegram이 갖고 있는 과거 메시지 이력을
+# 처음부터 다시 훑게 되어(오래된 /pause, /resume 등이 뒤섞여 재생),
+# "분명 마지막에 resume을 눌렀는데 재시작 후엔 다시 pause처럼 보이는" 류의
+# 혼란이 생길 수 있었다. offset을 디스크에 저장해 재시작해도 이어서 읽는다.
+# ============================================================
+_ADMIN_OFFSET_FILE = os.environ.get("NEWS_BOT_ADMIN_OFFSET_FILE", "news_bot_admin_offset.json")
+
+
+def _admin_load_offset():
+    global _admin_last_update_id
+    try:
+        if os.path.exists(_ADMIN_OFFSET_FILE):
+            with open(_ADMIN_OFFSET_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            _admin_last_update_id = int(data.get("last_update_id", 0) or 0)
+            _engine_log("info", "[관리자 명령] 마지막 update_id 복원 | %s", _admin_last_update_id)
+    except Exception as e:
+        log_error("관리자 offset 복원", e)
+
+
+def _admin_save_offset():
+    try:
+        tmp = _ADMIN_OFFSET_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"last_update_id": _admin_last_update_id, "saved_at": _now_kst().isoformat()}, f, ensure_ascii=False)
+        os.replace(tmp, _ADMIN_OFFSET_FILE)
+    except Exception as e:
+        log_error("관리자 offset 저장", e)
 
 
 # ============================================================
@@ -112,15 +155,20 @@ def _admin_fetch_updates():
         text = str(msg.get("text", "") or "").strip()
         if chat_id and text:
             updates.append((chat_id, text))
+    if results:
+        _admin_save_offset()   # 새 update_id를 즉시 디스크에 반영 (재시작해도 이어서 읽기 위함)
     return updates
 
 
 def _admin_command_listener():
     """관리자 채팅방을 짧은 주기(기본 2초)로 감시한다.
     새 명령이 오면 이전에 처리되지 않은 명령이 남아있어도 무조건 최신 명령으로 덮어쓴다.
-    → '마지막으로 내린 명령'만 실행 대상이 된다."""
-    global _admin_pending_command
-    _engine_log("info", "[관리자 명령] 통제소 감시 시작 | ADMIN_CHAT_ID=%s", ADMIN_CHAT_ID)
+    → '마지막으로 내린 명령'만 실행 대상이 된다.
+    이 함수 자체가 예외로 죽으면 명령 수신이 영구히 멈추므로, 루프 내부 예외는
+    반드시 여기서 잡고 절대 밖으로 전파하지 않는다(스레드가 조용히 죽는 것을 방지)."""
+    global _admin_pending_command, _admin_last_poll_ts
+    _admin_load_offset()
+    _engine_log("info", "[관리자 명령] 통제소 감시 시작 | ADMIN_CHAT_ID=%s | offset=%s", ADMIN_CHAT_ID, _admin_last_update_id)
     while True:
         try:
             for chat_id, text in _admin_fetch_updates():
@@ -133,36 +181,53 @@ def _admin_command_listener():
                 _admin_command_event.set()
                 _engine_wake_event.set()  # 메인 루프가 sleep 중이어도 즉시 깨운다.
                 _engine_log("info", "[관리자 명령] 수신 | %s", text[:120])
+            _admin_last_poll_ts = time.time()
         except Exception as e:
-            _engine_log("error", "[관리자 명령] 감시 루프 오류 | 원인=%s", str(e)[:160])
+            # [핵심] 여기서 예외를 삼키지 않고 그냥 두면 스레드가 죽고, 그 순간부터
+            # "명령을 아무리 보내도 반응이 없는" 상태가 영구히 지속된다.
+            # 반드시 로그만 남기고 다음 주기에 계속 폴링을 이어간다.
+            _engine_log("error", "[관리자 명령] 감시 루프 오류(계속 진행) | 원인=%s", str(e)[:160])
         time.sleep(ADMIN_COMMAND_POLL_INTERVAL)
 
 
 def _admin_cmd_status(arg=""):
     state = "⏸ 일시정지" if engine_state_공유상태._engine_paused else "▶️ 정상 가동"
     last = _now_kst().strftime("%Y-%m-%d %H:%M:%S") if engine_state_공유상태._engine_last_cycle_finished else "없음"
-    cold = "🥶 콜드스타트 워밍업 중(송출 강제금지)" if news_engine_핵심엔진._engine_cold_start_active else "정상(워밍업 아님)"
-    disabled = engine_state_공유상태._engine_list_disabled_stages()
+    heartbeat = "정상" if (time.time() - _admin_last_poll_ts) < max(30, ADMIN_COMMAND_POLL_INTERVAL * 5) else "⚠️ 응답 지연 의심"
+    disabled = _engine_list_disabled_stages()
     if disabled:
         disabled_lines = "\n".join(
-            f"  - {name} | 연속실패 {info.get('fail_count',0)}회 | 원인: {info.get('last_error','')[:100]}"
+            f"  - {name} | 연속실패 {info.get('fail_count', 0)}회 | 원인: {info.get('last_error', '')[:100]}"
             for name, info in disabled.items()
         )
     else:
         disabled_lines = "  없음"
-    return (f"🟢 [통제소] 엔진 상태: {state}\n최근 주기 완료 시각: {last}\n중복방지 상태: {cold}\n"
-            f"🔌 자동 비활성화된 단계(회로차단):\n{disabled_lines}")
+    return (
+        f"🟢 [통제소] 엔진 상태: {state}\n"
+        f"최근 주기 완료 시각: {last}\n"
+        f"명령 감시 스레드: {heartbeat}\n"
+        f"마지막 처리 update_id: {_admin_last_update_id}\n"
+        f"🔌 회로차단으로 자동 비활성화된 단계:\n{disabled_lines}"
+    )
 
 
 def _admin_cmd_pause(arg=""):
-    engine_state_공유상태._engine_paused = True
-    return "⏸ [통제소] 뉴스 수집·송출을 일시정지했습니다."
+    _engine_set_paused(True)   # 즉시 디스크에도 저장 → 재시작해도 정지 상태 유지
+    return "⏸ [통제소] 뉴스 수집·송출을 일시정지했습니다. (재시작해도 유지됩니다)"
 
 
 def _admin_cmd_resume(arg=""):
-    engine_state_공유상태._engine_paused = False
+    _engine_set_paused(False)
     _engine_wake_event.set()
     return "▶️ [통제소] 뉴스 수집·송출을 재개했습니다."
+
+
+def _admin_cmd_reset_stages(arg=""):
+    """/재진단 : 회로차단으로 자동 비활성화된 단계를 즉시 초기화해 다음 주기부터
+    바로 재시도하게 한다. 원인을 고친 뒤 쿨다운(기본 15분)을 기다리지 않고
+    바로 정상화 여부를 확인하고 싶을 때 사용한다."""
+    n = _engine_reset_all_stage_breakers()
+    return f"🔄 [통제소] 회로차단 상태 초기화 완료 | 초기화된 단계={n}개 | 다음 주기부터 재시도합니다."
 
 
 def _admin_cmd_run(arg=""):
@@ -181,51 +246,14 @@ def _admin_cmd_run(arg=""):
     return "⏳ [통제소] 즉시 실행을 시작했습니다."
 
 
-def _admin_cmd_end_warmup(arg=""):
-    """[강제종료 명령] 콜드스타트 감지로 열린 송출금지 워밍업 구간을 관리자가
-    즉시 강제로 끝낸다. 이력 파일이 없어서 열린 안전장치이므로, 관리자가
-    "지금 재송출돼도 괜찮다/이미 확인했다"고 판단했을 때만 사용한다."""
-    was_active = _engine_force_end_cold_start()
-    if was_active:
-        return "🔓 [통제소] 콜드스타트 워밍업을 강제로 해제했습니다. 지금부터 정상 송출됩니다."
-    return "ℹ️ [통제소] 현재 워밍업 상태가 아닙니다(강제 해제할 대상 없음)."
-
-
 def _admin_cmd_help(arg=""):
     lines = ["🟢 [통제소] 사용 가능한 명령", "/status : 엔진 상태 확인", "/pause : 일시정지",
               "/resume : 재개", "/run : 지금 즉시 1회 사이클 강제 실행",
-              "/워밍업해제 : 콜드스타트 송출금지 워밍업을 강제로 즉시 해제",
-              "/성과리포트 : 송출된 뉴스의 실제 등락률 집계(키워드별 적중률)",
-              "/학습현황 : 누적 데이터 학습형 AI의 학습량·예측 적중률 확인",
-              "/정책 : 현재 최상위 정책 조회",
-              "/정책 {JSON} : 마지막 정책으로 전체 뉴스에 강제 적용",
-              "/정책 초기화 : 최상위 정책을 MASTER 기본판정으로 복귀",
               "/재진단 : 회로차단으로 자동 비활성화된 단계를 즉시 재시도",
+              "/성과리포트 : 송출된 뉴스의 실제 등락률 집계(키워드별 적중률)",
               "/백필 [일수] : DART 과거 공시를 소급해 과거DB에 적재(기본 365일)",
               "/help : 이 목록 표시"]
     return "\n".join(lines)
-
-
-def _admin_cmd_policy(arg=""):
-    """최상위 정책을 조회/변경한다. JSON으로 지정한 값이 이후 모든 뉴스에 공통 적용된다."""
-    arg = (arg or "").strip()
-    if not arg:
-        return format_policy() + "\n사용법: /정책 {\"title\":\"...\",\"outlook\":[\"...\"]}"
-    if arg in {"초기화", "reset", "RESET"}:
-        reset_runtime_policy(source="admin:/정책 초기화")
-        return "♻️ [최상위 정책] 초기화 완료. 다음 뉴스부터 MASTER 기본판정으로 돌아갑니다."
-    try:
-        payload = json.loads(arg)
-        if not isinstance(payload, dict):
-            raise ValueError("JSON 객체가 아닙니다.")
-    except Exception as e:
-        return "❓ 사용법: /정책 {\"title\":\"...\",\"key_points\":[\"...\"],\"outlook\":[\"...\"],\"schedule\":\"...\"}"
-    allowed = {"title", "key_points", "outlook", "schedule"}
-    unknown = sorted(set(payload) - allowed)
-    if unknown:
-        return f"❌ 허용되지 않은 정책 필드: {', '.join(unknown)}"
-    state = set_runtime_policy(payload, source="admin:/정책")
-    return "✅ [최상위 정책] 변경 즉시 저장/적용\n" + format_policy(state)
 
 
 def _admin_cmd_outcome_report(arg=""):
@@ -234,20 +262,6 @@ def _admin_cmd_outcome_report(arg=""):
     except ValueError:
         min_samples = 3
     return _outcome_aggregate_report(min_samples=min_samples)
-
-
-def _admin_cmd_ml_status(arg=""):
-    """/학습현황 : 누적 데이터로 계속 학습 중인 AI 분석 모듈의 학습량과
-    예측 적중률(백테스트)을 보여준다."""
-    return _ml_status_report()
-
-
-def _admin_cmd_reset_stages(arg=""):
-    """/재진단 : 회로차단기로 자동 비활성화된 단계를 즉시 초기화해 다음 주기부터
-    바로 재시도하게 한다. 파일 수정으로 원인을 고친 뒤, 쿨다운(기본 15분)을
-    기다리지 않고 즉시 정상화 여부를 확인하고 싶을 때 사용한다."""
-    n = engine_state_공유상태._engine_reset_all_stage_breakers()
-    return f"🔄 [통제소] 회로차단 상태 초기화 완료 | 초기화된 단계={n}개 | 다음 주기부터 재시도합니다."
 
 
 def _admin_cmd_backfill(arg=""):
@@ -288,14 +302,24 @@ _ADMIN_COMMANDS = {
     "/pause": _admin_cmd_pause,
     "/resume": _admin_cmd_resume,
     "/run": _admin_cmd_run,
-    "/help": _admin_cmd_help,
-    "/워밍업해제": _admin_cmd_end_warmup,
-    "/성과리포트": _admin_cmd_outcome_report,
-    "/학습현황": _admin_cmd_ml_status,
-    "/정책": _admin_cmd_policy,
     "/재진단": _admin_cmd_reset_stages,
+    "/help": _admin_cmd_help,
+    "/성과리포트": _admin_cmd_outcome_report,
     "/백필": _admin_cmd_backfill,
 }
+
+
+def _admin_selfcheck_commands():
+    """[부팅 자가진단] 등록된 모든 명령 핸들러가 실제로 호출 가능한 함수인지
+    부팅 시점에 검증한다. 과거 사고 원인이 '존재하지 않는 함수/모듈을 참조한 채
+    배포'였기 때문에, 이런 문제는 반드시 부팅 단계에서 걸러내고 명확한 에러를
+    텔레그램으로 즉시 알린다 — "조용히 예전 코드로 되돌아간 것처럼 보이는"
+    상황 자체를 없애는 것이 목적이다."""
+    problems = []
+    for cmd, handler in _ADMIN_COMMANDS.items():
+        if not callable(handler):
+            problems.append(f"{cmd} → 핸들러가 함수가 아님({type(handler)})")
+    return problems
 
 
 def _admin_execute_command(raw_text):
