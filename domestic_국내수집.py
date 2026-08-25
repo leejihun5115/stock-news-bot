@@ -362,6 +362,14 @@ _NAVER_COMBO_LAST_RUN = 0.0
 
 def _engine_run_keyword_combinations():
     global _NAVER_COMBO_LAST_RUN
+    if not ENABLE_NAVER_NEWS:
+        # [버그 수정] _engine_run_naver()는 ENABLE_NAVER_NEWS=OFF면 즉시 리턴하는데
+        # 이 함수는 그 체크가 없어서, 네이버 뉴스 기능 자체가 꺼져 있어도(예: 네이버
+        # 개발자센터 검색 오픈API 서비스 종료로 인한 기본 OFF) 키워드조합만 5분마다
+        # 계속 (만료됐거나 더 이상 유효하지 않은) NAVER 인증정보로 요청을 보내
+        # "모든 NAVER 인증경로 실패" 에러 로그를 반복 생산하고 있었다.
+        _engine_log("debug", "[키워드 조합] ENABLE_NAVER_NEWS=OFF | 스킵")
+        return
     now_ts = time.time()
     if now_ts - _NAVER_COMBO_LAST_RUN < _NAVER_COMBO_INTERVAL:
         return
