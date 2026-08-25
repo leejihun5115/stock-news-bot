@@ -278,7 +278,9 @@ def _ml_generate_analysis(title, category, related_stocks, reason, evidence):
 
         macro_prob, macro_n = _ml_predict_class_stats(model["macro_model"], vocab_size, tokens)
         outcome_prob, outcome_n = _ml_predict_class_stats(model["outcome_model"], vocab_size, tokens)
-        similar = _ml_find_similar_cases(model, tokens, related_stocks, top_k=3)
+        # [수정] top_k를 3→8로 넓혀서 평균/범위/승률 같은 통계치를 낼 표본을 더 확보한다.
+        # (개별 사례 표시는 여전히 상위 3건만 하되, 요약 통계는 최대 8건으로 계산)
+        similar = _ml_find_similar_cases(model, tokens, related_stocks, top_k=8)
 
         lines = ["🤖 [AI 학습 분석 · 누적 데이터 기반]"]
         lines.append(f"• 누적 학습 표본: 시황/광고 판정 {macro_n}건 · 등락 결과 학습 {outcome_n}건")
@@ -289,11 +291,29 @@ def _ml_generate_analysis(title, category, related_stocks, reason, evidence):
             direction = "상승 우세" if outcome_prob >= 0.5 else "약세 우려"
             lines.append(f"• AI 추정 상승 방향 확률: {outcome_prob*100:.1f}% ({direction})")
         else:
-            lines.append(f"• AI 등락 방향 예측: 학습 표본 부족(최소 {ML_MIN_TRAIN_SAMPLES}건, 상승/하락 사례 모두 확보 필요)")
+            lines.append(f"• AI 등락 방향 예측: 정식 확률모형은 학습 표본 부족(최소 {ML_MIN_TRAIN_SAMPLES}건, "
+                          f"현재 {outcome_n}건, 상승/하락 사례 모두 필요) — 아래 유사사례 실측치로 대체 판단")
 
+        # [핵심 수정 — 이전 버그] 정식 확률모형(나이브베이즈) 표본이 부족하면
+        # "학습 표본 부족"이라는 문장 하나만 나가고 끝나서, 매매 판단에 쓸 수 있는
+        # 숫자가 하나도 없는 메시지가 나가는 경우가 대부분이었다(신규 소재는 항상
+        # 8건 미만이므로 사실상 매번 발생). 정식 확률모형과 별개로, 이미 찾아낸
+        # "유사 과거사례"들의 실제 등락률을 평균/승률/범위로 즉시 요약해 정식 모형이
+        # 없어도 근거 수치가 항상 나가도록 한다.
         if similar:
+            changes = [c for _, c, _ in similar]
+            avg_change = sum(changes) / len(changes)
+            up_count = sum(1 for c in changes if c > 0)
+            win_rate = up_count / len(changes) * 100
+            max_c, min_c = max(changes), min(changes)
+
+            lines.append(
+                f"• 유사사례 {len(changes)}건 실측 요약: 평균 {avg_change:+.2f}% · "
+                f"상승비율 {win_rate:.0f}%({up_count}/{len(changes)}) · 범위 {min_c:+.2f}%~{max_c:+.2f}%"
+            )
+
             lines.append("• 가장 유사한 과거 사례:")
-            for sim, change, r in similar:
+            for sim, change, r in similar[:3]:
                 arrow = "📈" if change > 0 else ("📉" if change < 0 else "➖")
                 same_stock = bool(set(related_stocks or []) & set(r.get("related_stocks") or []))
                 diff_note = "동일 종목" if same_stock else "다른 종목·유사 소재"
@@ -301,14 +321,22 @@ def _ml_generate_analysis(title, category, related_stocks, reason, evidence):
                     f"  - (유사도 {sim*100:.0f}%, {diff_note}) \"{str(r.get('title',''))[:40]}\" "
                     f"→ 당시 결과 {arrow} 평균 {change:+.2f}%"
                 )
+
             best_sim, best_change, _ = similar[0]
             if best_sim >= 0.35:
-                trend_word = "비슷한 흐름이 재현되는지" if best_change > 0 else "그때처럼 반응이 약할 수 있는지"
-                lines.append(f"• 방향성 제안: 가장 유사했던 사례 대비 {trend_word}, 관련주 초반 반응 속도를 우선 확인.")
+                if win_rate >= 65 and avg_change > 0:
+                    verdict = f"과거 유사 재료 상승비율 {win_rate:.0f}%로 우호적 — 초반 관련주 반응 속도 우선 확인"
+                elif win_rate <= 35 and avg_change < 0:
+                    verdict = f"과거 유사 재료 상승비율 {win_rate:.0f}%로 부진 — 단기 재료 소멸 가능성 유의"
+                else:
+                    verdict = f"과거 사례 결과가 혼재({win_rate:.0f}% 상승) — 방향성 단정 어려움, 관련주 첫 반응으로 재확인 필요"
+                lines.append(f"• 방향성 제안: {verdict}.")
             else:
-                lines.append("• 방향성 제안: 과거 사례와 유사도가 낮은 신규 유형 소재 — 이번 결과부터 새로 학습 데이터로 축적됩니다.")
+                lines.append(f"• 방향성 제안: 과거 사례와 유사도가 낮은 신규 유형 소재(최고 유사도 {best_sim*100:.0f}%) "
+                              f"— 위 실측 평균({avg_change:+.2f}%)은 참고치일 뿐, 이번 결과부터 새로 학습 데이터로 축적됩니다.")
         else:
-            lines.append("• 비교할 수 있는 과거 유사 사례가 아직 충분히 쌓이지 않았습니다(계속 누적 중).")
+            lines.append("• 비교할 수 있는 과거 유사 사례가 아직 충분히 쌓이지 않았습니다(계속 누적 중) — "
+                          "현재 이 소재 유형은 수치 근거 없이 판단 보류 권장.")
 
         prediction_snapshot = {
             "ts": _now_kst().isoformat(),

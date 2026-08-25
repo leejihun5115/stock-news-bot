@@ -317,38 +317,76 @@ def _engine_entry_published(entry):
 
 # ============================================================
 # 메시지 포맷터
+# [형식 통일] 실제 운영 포맷(📌 제목 : 한줄설명 / 🏷 관련종목 / 🔎 요약(✔️)
+# + 데이터 누적 기반 분석/전망)에 맞춰 재작성. 필드는 전부 MASTER 결과
+# (result)와 성과추적/AI분석(accumulated_summary_msg)에서만 가져오며,
+# 근거 없는 값(예: 계열사/그룹 소속 같은 미보유 데이터)은 지어내지 않고
+# 실제로 있는 데이터(관련종목·근거)로만 채운다.
 # ============================================================
+def _accumulated_block_to_bullets(accumulated_summary_msg):
+    """outcome_tracking/ml_learning이 만든 '•' 불릿 블록을 동일한 ✔️ 불릿
+    스타일로 통일해, 요약 섹션과 시각적으로 한 흐름처럼 이어지게 한다."""
+    if not accumulated_summary_msg:
+        return []
+    out = []
+    for raw in accumulated_summary_msg.split("\n"):
+        if not raw.strip():
+            continue
+        is_sub_bullet = bool(re.match(r"^\s{2,}-\s*", raw))  # 들여쓰기 판별은 strip 전에 해야 한다
+        line = raw.strip()
+        if line.startswith(("🤖", "📊")):
+            out.append(f"\n{line}")
+            continue
+        if is_sub_bullet:
+            line = re.sub(r"^-\s*", "", line)
+            out.append(f"    ↳ {line}")
+        else:
+            line = re.sub(r"^[•\-]\s*", "", line)
+            out.append(f"✔️ {line}")
+    return out
+
+
 def _format_news_message(source, title, result, related_names, accumulated_summary_msg):
-    stage = result.get("stage") or "확인 필요"
     key_points = result.get("key_points") or []
     outlook = result.get("outlook") or []
     schedule = result.get("schedule") or ""
-    related_str = ", ".join(related_names) if related_names else "[테마] 관련 종목 확인 필요"
+    evidence = result.get("evidence") or []
+    related_str = ", ".join(related_names) if related_names else "관련 종목 확인 필요"
+
+    # 📌 제목 뒤에 붙는 한줄 설명: MASTER가 뽑은 핵심포인트/근거문장 중 첫 문장을
+    # 그대로 쓴다(제목 재진술 방지 로직은 MASTER가 이미 처리했으므로 신뢰).
+    lead_sentence = (key_points[0] if key_points else (evidence[0] if evidence else "")).strip()
 
     lines = [
-        f"📰 [{source}] 신규  🕐 {_now_kst().strftime('%H:%M')}  ⏳ 장중",
+        f"📰 [{source}] 신규 🕐 {_now_kst().strftime('%H:%M')}",
         "",
-        title,
+        f"📌 {title}" + (f" : {lead_sentence}" if lead_sentence else ""),
         "",
-        f"👀 관련주 : {related_str}",
-        f"👀 진행 과정 : {stage}",
-        "-" * 50,
+        f"🏷 관련종목 : {related_str}",
     ]
+
     if key_points:
-        lines.append("🔎 핵심 포인트")
-        for kp in key_points:
-            lines.append(f"- {kp}")
         lines.append("")
+        lines.append("🔎 요약")
+        lines.append("")
+        for kp in key_points[1:] if lead_sentence == (key_points[0] if key_points else None) else key_points:
+            lines.append(f"✔️ {kp}")
+
     if schedule:
-        lines.append(f"📅 일정 : {schedule}")
         lines.append("")
+        lines.append(f"📅 일정 : {schedule}")
+
     if outlook:
+        lines.append("")
         lines.append("🧠 시장 전망")
         for o in outlook:
-            lines.append(f"• {o}")
+            lines.append(f"✔️ {o}")
+
+    bullet_block = _accumulated_block_to_bullets(accumulated_summary_msg)
+    if bullet_block:
         lines.append("")
-    if accumulated_summary_msg:
-        lines.append(accumulated_summary_msg)
+        lines.extend(bullet_block)
+
     return "\n".join(lines)
 
 
