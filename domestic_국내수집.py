@@ -407,17 +407,147 @@ KRX_OPEN_BRIEF_DELAY_MIN = 30
 KRX_POLL_MIN = 5
 KRX_STOCK_MOVE_THRESHOLD = 2.5
 KRX_INDEX_MOVE_THRESHOLD = 0.7
+# [확장] 테마별 대장주 순위(거래대금 1위)를 매기려면 테마당 최소 3개 이상의
+# 종목이 있어야 의미가 있다. 기존 10개 고정 종목에서 8개 테마 x 3~4개로 확장했다.
 KRX_WATCHLIST = {
     "^KS11": ("코스피", "지수"), "^KQ11": ("코스닥", "지수"),
-    "005930.KS": ("삼성전자", "반도체"), "000660.KS": ("SK하이닉스", "HBM"),
-    "373220.KS": ("LG에너지솔루션", "2차전지"), "207940.KS": ("삼성바이오로직스", "바이오"),
+    # 반도체
+    "005930.KS": ("삼성전자", "반도체"), "000660.KS": ("SK하이닉스", "반도체"),
+    "042700.KS": ("한미반도체", "반도체"), "000990.KS": ("DB하이텍", "반도체"),
+    # 2차전지
+    "373220.KS": ("LG에너지솔루션", "2차전지"), "006400.KS": ("삼성SDI", "2차전지"),
+    "247540.KQ": ("에코프로비엠", "2차전지"), "003670.KS": ("포스코퓨처엠", "2차전지"),
+    # 바이오
+    "207940.KS": ("삼성바이오로직스", "바이오"), "068270.KS": ("셀트리온", "바이오"),
+    "302440.KS": ("SK바이오사이언스", "바이오"), "000100.KS": ("유한양행", "바이오"),
+    # 조선
+    "042660.KS": ("한화오션", "조선"), "329180.KS": ("HD현대중공업", "조선"),
+    "010140.KS": ("삼성중공업", "조선"), "009540.KS": ("HD한국조선해양", "조선"),
+    # 방산
+    "012450.KS": ("한화에어로스페이스", "방산"), "079550.KS": ("LIG넥스원", "방산"),
+    "064350.KS": ("현대로템", "방산"), "272210.KS": ("한화시스템", "방산"),
+    # 자동차
     "005380.KS": ("현대차", "자동차"), "000270.KS": ("기아", "자동차"),
-    "012450.KS": ("한화에어로스페이스", "방산"), "042660.KS": ("한화오션", "조선"),
+    "012330.KS": ("현대모비스", "자동차"), "204320.KS": ("HL만도", "자동차"),
+    # 인터넷/플랫폼
     "035420.KS": ("NAVER", "인터넷"), "035720.KS": ("카카오", "인터넷"),
+    "323410.KS": ("카카오뱅크", "인터넷"), "259960.KS": ("크래프톤", "인터넷"),
+    # AI/로봇
+    "454910.KS": ("두산로보틱스", "AI로봇"), "277810.KQ": ("레인보우로보틱스", "AI로봇"),
+    "090360.KQ": ("로보스타", "AI로봇"),
+    # 원전
+    "034020.KS": ("두산에너빌리티", "원전"), "051600.KS": ("한전KPS", "원전"),
+    "052690.KS": ("한전기술", "원전"),
+    # 금융지주
+    "105560.KS": ("KB금융", "금융지주"), "055550.KS": ("신한지주", "금융지주"),
+    "086790.KS": ("하나금융지주", "금융지주"), "316140.KS": ("우리금융지주", "금융지주"),
     "USDKRW=X": ("원/달러", "환율"),
 }
 _KRX_BRIEFING_LAST_SNAPSHOT = {}
 _KRX_BRIEFING_LAST_POLL = None
+
+
+# ============================================================
+# [거래대금 보완 — 네이버 모바일 시세 API]
+# Yahoo chart 엔드포인트는 거래대금을 주지 않아 "테마별 거래대금 1위(대장주)"를
+# 판정할 방법이 없었다. 네이버 모바일 시세 목록 API(코스피/코스닥 상위 종목을
+# 페이지 단위로 한 번에 반환)에서 종목별 거래대금(aa)을 가져와 보완한다.
+# 이 API는 시가총액 상위 순으로 반환되므로, 감시종목이 상위권 밖이면 여기 없을
+# 수 있다 — 그 경우 거래대금 없이 등락률만 표시하고 추정하지 않는다.
+# [주의] 배포 환경에서 실제 응답 스키마를 한 번 확인해 필요시 파싱 경로를
+# 조정할 것 — 네트워크가 차단된 환경에서 작성해 실응답으로 검증하지 못했다.
+# ============================================================
+NAVER_MOBILE_SISE_LIST_URL = "https://m.stock.naver.com/api/json/sise/siseListJson.nhn"
+
+
+def _krx_naver_bulk_market_quotes():
+    """코스피(sosok=0)/코스닥(sosok=1) 상위 종목의 가격·등락률·거래대금을
+    가져온다. 실패하거나 스키마가 예상과 다르면 빈 dict를 반환하고 조용히
+    넘어간다(거래대금 보완 실패가 브리핑 전체를 막지 않게 한다)."""
+    out = {}
+    for sosok in (0, 1):
+        try:
+            r = requests.get(
+                NAVER_MOBILE_SISE_LIST_URL,
+                params={"menu": "market_sum", "sosok": sosok, "pageSize": 200, "page": 1},
+                headers={"User-Agent": USER_AGENT},
+                timeout=ENGINE_HTTP_TIMEOUT,
+            )
+            if not r.ok:
+                continue
+            data = r.json()
+            rows = (
+                (data.get("result") or {}).get("itemList")
+                or data.get("itemList")
+                or (data if isinstance(data, list) else [])
+                or []
+            )
+            for row in rows:
+                code = str(row.get("cd", "")).strip()
+                if not code:
+                    continue
+                out[code] = {
+                    "name": row.get("nm", ""),
+                    "price": row.get("nv"),
+                    "change_pct": row.get("cr"),
+                    "trade_value": row.get("aa"),  # 거래대금(백만원 단위로 추정)
+                }
+        except Exception as e:
+            _engine_log("warning", "[국내장브리핑] 네이버 거래대금 벌크조회 실패 | sosok=%s | 원인=%s", sosok, str(e)[:120])
+    return out
+
+
+# ============================================================
+# [외국인/기관 수급 — 네이버 금융 투자자별 매매동향]
+# 시장 전체(코스피/코스닥) 당일 외국인·기관 순매수를 스크래핑한다.
+# 열 순서가 아니라 헤더 텍스트로 열을 찾아, 페이지 구조가 소폭 바뀌어도
+# 안정적으로 동작하도록 한다. 실패하면 None을 반환하며 추정하지 않는다.
+# [주의] 위와 동일하게 실응답 검증이 안 된 상태이므로 배포 후 1회 확인 필요.
+# ============================================================
+def _krx_market_investor_flow(market="KOSPI"):
+    sosok = "01" if market == "KOSPI" else "02"
+    bizdate = _now_kst().strftime("%Y%m%d")
+    try:
+        r = requests.get(
+            "https://finance.naver.com/sise/investorDealTrendDay.naver",
+            params={"bizdate": bizdate, "sosok": sosok, "page": 1},
+            headers={"User-Agent": USER_AGENT},
+            timeout=ENGINE_HTTP_TIMEOUT,
+        )
+        if not r.ok:
+            return None
+        soup = BeautifulSoup(r.text, "html.parser")
+        tables = soup.select("table")
+        if not tables:
+            return None
+        table = tables[0]
+        trs = table.select("tr")
+        if len(trs) < 2:
+            return None
+        header_cells = [_engine_clean(c.get_text()) for c in trs[0].select("th, td")]
+        for tr in trs[1:]:
+            cells = [_engine_clean(td.get_text()) for td in tr.select("td")]
+            if not cells or not cells[0]:
+                continue
+            row = dict(zip(header_cells, cells))
+
+            def _num(keyword):
+                for hk, v in row.items():
+                    if keyword in hk:
+                        try:
+                            return float(v.replace(",", ""))
+                        except Exception:
+                            return None
+                return None
+
+            foreign = _num("외국인")
+            organ = _num("기관")
+            if foreign is not None or organ is not None:
+                return {"date": cells[0], "foreign": foreign, "organ": organ}
+        return None
+    except Exception as e:
+        _engine_log("warning", "[국내장브리핑] %s 수급 조회 실패 | 원인=%s", market, str(e)[:120])
+        return None
 
 def _krx_briefing_fetch_all():
     data = {}
@@ -426,6 +556,23 @@ def _krx_briefing_fetch_all():
         if q:
             q.update({"name": meta[0], "theme": meta[1]})
             data[symbol] = q
+    # 유가(WTI)는 국내장 브리핑에서도 환율과 함께 참고용으로 표시한다.
+    oil = _yahoo_chart_quote("CL=F")
+    if oil:
+        oil.update({"name": "WTI 유가", "theme": "원자재"})
+        data["CL=F"] = oil
+    # 거래대금(대장주 판정용)은 네이버 벌크 시세로 보완한다. 실패해도 등락률
+    # 표시에는 지장이 없도록 예외를 흡수하고 조용히 스킵한다.
+    try:
+        bulk = _krx_naver_bulk_market_quotes()
+    except Exception as e:
+        bulk = {}
+        _engine_log("warning", "[국내장브리핑] 거래대금 보완 조회 실패 | 원인=%s", str(e)[:120])
+    for symbol, q in data.items():
+        code = symbol.split(".")[0]
+        b = bulk.get(code)
+        if b and b.get("trade_value") is not None:
+            q["trade_value"] = b["trade_value"]
     return data
 
 def _krx_intraday_events(snapshot):
@@ -441,32 +588,168 @@ def _krx_intraday_events(snapshot):
         if abs(delta)>=threshold: events.append((abs(delta),symbol,q,delta))
     return sorted(events, reverse=True, key=lambda x:x[0])
 
+
+# ============================================================
+# [테마별 순위 — 시장분석 섹션용]
+# 테마 합산 거래대금 기준으로 1/2/3등을 매기고, 테마 내에서는
+# 거래대금이 가장 큰 종목을 "대장주"로, 등락률 절대값이 가장 큰 종목을
+# "급등종목"으로 구분한다(둘이 같으면 하나만 표기).
+# ============================================================
+def _krx_rank_themes(snapshot):
+    excluded = {"^KS11", "^KQ11", "USDKRW=X", "CL=F"}
+    groups = {}
+    for symbol, q in snapshot.items():
+        if symbol in excluded or q.get("change_pct") is None:
+            continue
+        theme = str(q.get("theme", "")).strip()
+        if not theme:
+            continue
+        groups.setdefault(theme, []).append(q)
+    ranked = []
+    for theme, qs in groups.items():
+        total_value = sum(float(q.get("trade_value") or 0) for q in qs)
+        leader_by_value = max(qs, key=lambda q: float(q.get("trade_value") or 0))
+        leader_by_pct = max(qs, key=lambda q: abs(float(q.get("change_pct") or 0)))
+        ranked.append({
+            "theme": theme, "total_value": total_value, "members": qs,
+            "leader_by_value": leader_by_value, "leader_by_pct": leader_by_pct,
+        })
+    ranked.sort(key=lambda x: x["total_value"], reverse=True)
+    return ranked
+
+
+def _krx_recent_reason(name, theme):
+    """최근 처리된 뉴스(과거사례 캐시)에서 이 종목/테마와 관련된 가장 최근
+    기사 제목을 찾는다. 확인된 근거가 없으면 추정하지 않고 빈 값을 반환한다."""
+    try:
+        from news_engine_핵심엔진 import _engine_historical_cache
+    except Exception:
+        return "", ""
+    now = _now_kst()
+    needles = [n for n in (name, theme) if n]
+    for row in reversed(_engine_historical_cache[-1500:]):
+        dt = row.get("published_dt")
+        try:
+            if dt and (now - dt).total_seconds() > 180 * 60:
+                continue
+        except Exception:
+            pass
+        text = str(row.get("text", "")) + " " + str(row.get("title", ""))
+        if any(n and n in text for n in needles):
+            return str(row.get("title", ""))[:180], str(row.get("link", ""))
+    return "", ""
+
+
+def _krx_similar_past_move(theme):
+    """과거사례 캐시에서 같은 테마명이 언급된 과거 기사 중 실제 등락률(%)이
+    본문에 명시된 것을 찾아 "누적 데이터 기반 참고"로 덧붙인다. 못 찾으면
+    빈 문자열(추정하지 않음)."""
+    try:
+        from news_engine_핵심엔진 import _engine_historical_cache
+    except Exception:
+        return ""
+    for row in reversed(_engine_historical_cache[-3000:]):
+        text = str(row.get("text", "")) + " " + str(row.get("title", ""))
+        if theme and theme in text:
+            m = re.search(r"(?:\+|-)?\d+(?:\.\d+)?\s*%", text)
+            if m:
+                return f"{str(row.get('title',''))[:80]} → 당시 {m.group(0)}"
+    return ""
+
+
 def _krx_briefing_message(snapshot, et, events=None, opening=False):
-    events=events or []
-    lines=["<b>🇰🇷 [국내장 브리핑]</b>", f"🕐 {et.strftime('%H:%M KST')}", ""]
+    events = events or []
+    lines = ["<b>🇰🇷 [국내장 브리핑]</b>", f"🕐 {et.strftime('%H:%M KST')}", ""]
+
     lines.append("<b>📊 주요 지수</b>")
-    for s in ("^KS11","^KQ11"):
-        q=snapshot.get(s)
-        if q: lines.append(f"• {_us_display_name(s, q['name'])} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
-    lines += ["", "<b>⚡️ 주요 종목 변화</b>"]
-    rows=[]
-    for s,q in snapshot.items():
-        if s in {"^KS11","^KQ11","USDKRW=X"}: continue
-        if q.get("change_pct") is not None: rows.append(q)
-    rows.sort(key=lambda x:abs(x.get("change_pct") or 0), reverse=True)
-    shown=0
-    for q in rows[:8]:
-        pct=q.get("change_pct")
-        if abs(pct or 0)<1.0: continue
-        lines.append(f"• ⚡️ {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}")
-        shown+=1
-    if not shown: lines.append("• 주요 종목 큰 변동 없음")
-    fx=snapshot.get("USDKRW=X")
-    if fx: lines += ["", f"<b>💱 원/달러</b> · {_us_format_pct(fx.get('change_pct'))}"]
+    for s in ("^KS11", "^KQ11"):
+        q = snapshot.get(s)
+        if q:
+            lines.append(f"• {_us_display_name(s, q['name'])} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+
+    # [선물] 코스피200 선물의 검증된 무료 실시간 소스가 아직 연동되어 있지
+    # 않다. 가짜 수치를 넣지 않고 정직하게 미연동 상태를 표시한다.
+    lines.append("• 선물 · 데이터 소스 미연동(추가 예정)")
+
+    flow_fg = _krx_market_investor_flow("KOSPI")
+    flow_fg_kq = _krx_market_investor_flow("KOSDAQ")
+    def _sum_flow(key):
+        vals = [f.get(key) for f in (flow_fg, flow_fg_kq) if f and f.get(key) is not None]
+        return sum(vals) if vals else None
+    foreign_total = _sum_flow("foreign")
+    organ_total = _sum_flow("organ")
+    if foreign_total is not None:
+        lines.append(f"• 외국인 수급 · 코스피+코스닥 순매수 {foreign_total:+,.0f}억원")
+    else:
+        lines.append("• 외국인 수급 · 확인불가")
+    if organ_total is not None:
+        lines.append(f"• 기관 수급 · 코스피+코스닥 순매수 {organ_total:+,.0f}억원")
+    else:
+        lines.append("• 기관 수급 · 확인불가")
+
+    fx = snapshot.get("USDKRW=X")
+    lines.append(f"<b>💱 원/달러</b> · {_us_format_pct(fx.get('change_pct')) if fx else '확인불가'}")
+    oil = snapshot.get("CL=F")
+    lines.append(f"<b>💱 유가</b> · WTI {_us_format_pct(oil.get('change_pct')) if oil else '확인불가'}")
+
+    # ------------------------------------------------------------
+    # 📊 시장 분석: 거래대금 1/2/3등 테마 + 대장주/급등종목 + 특이종목 +
+    # 누적 데이터 기반 참고 코멘트
+    # ------------------------------------------------------------
+    lines += ["", "<b>📊 시장 분석</b>"]
+    ranked = _krx_rank_themes(snapshot)
+    covered_symbols = set()
+    if ranked:
+        medal = ["🥇", "🥈", "🥉"]
+        for i, r in enumerate(ranked[:3]):
+            lead_v = r["leader_by_value"]
+            lead_p = r["leader_by_pct"]
+            same = lead_v is lead_p
+            lines.append(f"{medal[i] if i < 3 else '•'} <b>{r['theme']}</b> 테마")
+            lines.append(f"  ↳ 대장주(거래대금 1위): {lead_v['name']} {_us_direction(lead_v.get('change_pct'))} {_us_format_pct(lead_v.get('change_pct'))}")
+            if not same:
+                lines.append(f"  ↳ 급등 종목(등락률 1위): {lead_p['name']} {_us_direction(lead_p.get('change_pct'))} {_us_format_pct(lead_p.get('change_pct'))}")
+            covered_symbols.add(lead_v.get("name"))
+            covered_symbols.add(lead_p.get("name"))
+
+            reason_title, reason_link = _krx_recent_reason(lead_v.get("name", ""), r["theme"])
+            if reason_title:
+                lines.append(f"  ↳ 이유: {html.escape(reason_title)}")
+            else:
+                lines.append("  ↳ 이유: 확인된 관련 뉴스 없음")
+
+            past = _krx_similar_past_move(r["theme"])
+            if past:
+                lines.append(f"  📚 누적 데이터 참고: {html.escape(past)}")
+    else:
+        lines.append("• 테마별 유의미한 거래대금 데이터 없음")
+
+    # 테마 상위 3개에 포함되지 않은 종목 중 변동폭이 큰 "특이 종목"만 별도 언급
+    notable = []
+    for s, q in snapshot.items():
+        if s in {"^KS11", "^KQ11", "USDKRW=X", "CL=F"}:
+            continue
+        pct = q.get("change_pct")
+        if pct is None or q.get("name") in covered_symbols:
+            continue
+        if abs(pct) >= KRX_STOCK_MOVE_THRESHOLD:
+            notable.append(q)
+    notable.sort(key=lambda q: abs(q.get("change_pct") or 0), reverse=True)
+    if notable:
+        lines += ["", "<b>⭐ 특이 종목</b>"]
+        for q in notable[:5]:
+            pct = q.get("change_pct")
+            reason_title, _ = _krx_recent_reason(q.get("name", ""), q.get("theme", ""))
+            line = f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
+            line += f" · 이유: {html.escape(reason_title)}" if reason_title else " · 이유: 확인된 관련 뉴스 없음"
+            lines.append(line)
+
     if events:
         lines += ["", "<b>🚨 장중 구조 변화</b>"]
-        for _,_,q,delta in events[:5]:
-            lines.append(f"• ⚡️ {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q.get('change_pct'))}")
+        for _, _, q, delta in events[:5]:
+            lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q.get('change_pct'))}")
+
+    lines += ["", "※ 수급·거래대금은 참고용 집계치이며, 누적 데이터 코멘트는 과거 유사 사례 참고용으로 방향성을 보장하지 않습니다."]
     return "\n".join(lines)
 
 def _engine_krx_market_monitor():
