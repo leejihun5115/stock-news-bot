@@ -41,6 +41,7 @@ from overseas_해외수집 import _engine_us_market_close_monitor, _engine_us_ma
 from sources_external_외부연동 import DART_API_KEY, _dart_load_corp_code_map, _engine_run_dart, _engine_run_telegram_channels, _engine_run_youtube
 from translation_번역 import _engine_retry_translation_queue
 import engine_state_공유상태
+from 정책_최상위통제 import format_policy
 
 
 # 시작 시점에 환경 정보를 남겨 Render 설정 문제도 바로 확인할 수 있게 한다.
@@ -51,6 +52,7 @@ _logger.info("[환경] Render=%s | NAVER=%s(%s) | DART=%s | RSS=%s | 미국뉴�
              bool(DART_API_KEY), ENABLE_DOMESTIC_NEWS, ENABLE_US_NEWS,
              ENABLE_TELEGRAM_CHANNELS, ENABLE_YOUTUBE)
 _logger.info("[정상] 국내뉴스=시장반영형 | 텔레그램/유튜브=최근60분 기본 | 강한 마감후·휴무 재료만 예외")
+_logger.info("[최상위 정책]\n%s", format_policy())
 _logger.info("============================================================")
 
 
