@@ -27,6 +27,7 @@ try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==== module: domestic (auto-split from original main.py) ====
 
@@ -460,40 +461,60 @@ _KRX_BRIEFING_LAST_POLL = None
 NAVER_MOBILE_SISE_LIST_URL = "https://m.stock.naver.com/api/json/sise/siseListJson.nhn"
 
 
+def _krx_naver_bulk_fetch_one(sosok, timeout):
+    """sosok 1개(코스피 또는 코스닥)의 벌크 시세를 조회한다. 병렬 호출용으로
+    분리된 단일 요청 함수 — 실패 시 빈 dict를 반환하고 예외를 던지지 않는다."""
+    out = {}
+    try:
+        r = requests.get(
+            NAVER_MOBILE_SISE_LIST_URL,
+            params={"menu": "market_sum", "sosok": sosok, "pageSize": 200, "page": 1},
+            headers={"User-Agent": USER_AGENT},
+            timeout=timeout,
+        )
+        if not r.ok:
+            return out
+        data = r.json()
+        rows = (
+            (data.get("result") or {}).get("itemList")
+            or data.get("itemList")
+            or (data if isinstance(data, list) else [])
+            or []
+        )
+        for row in rows:
+            code = str(row.get("cd", "")).strip()
+            if not code:
+                continue
+            out[code] = {
+                "name": row.get("nm", ""),
+                "price": row.get("nv"),
+                "change_pct": row.get("cr"),
+                "trade_value": row.get("aa"),  # 거래대금(백만원 단위로 추정)
+            }
+    except Exception as e:
+        _engine_log("warning", "[국내장브리핑] 네이버 거래대금 벌크조회 실패 | sosok=%s | 원인=%s", sosok, str(e)[:120])
+    return out
+
+
+# [성능 수정] 코스피/코스닥 조회를 순차 2회가 아니라 병렬 2회로 실행해 전체
+# 대기시간을 요청 1건 수준으로 줄인다. 이 요청은 브리핑 전용이라 전체
+# ENGINE_HTTP_TIMEOUT보다 짧게(최대 8초) 끊어, 느린 응답 1건이 이 단계 전체를
+# 오래 붙잡지 않게 한다.
+KRX_NAVER_BULK_TIMEOUT = min(ENGINE_HTTP_TIMEOUT, 8)
+
+
 def _krx_naver_bulk_market_quotes():
     """코스피(sosok=0)/코스닥(sosok=1) 상위 종목의 가격·등락률·거래대금을
     가져온다. 실패하거나 스키마가 예상과 다르면 빈 dict를 반환하고 조용히
     넘어간다(거래대금 보완 실패가 브리핑 전체를 막지 않게 한다)."""
     out = {}
-    for sosok in (0, 1):
-        try:
-            r = requests.get(
-                NAVER_MOBILE_SISE_LIST_URL,
-                params={"menu": "market_sum", "sosok": sosok, "pageSize": 200, "page": 1},
-                headers={"User-Agent": USER_AGENT},
-                timeout=ENGINE_HTTP_TIMEOUT,
-            )
-            if not r.ok:
-                continue
-            data = r.json()
-            rows = (
-                (data.get("result") or {}).get("itemList")
-                or data.get("itemList")
-                or (data if isinstance(data, list) else [])
-                or []
-            )
-            for row in rows:
-                code = str(row.get("cd", "")).strip()
-                if not code:
-                    continue
-                out[code] = {
-                    "name": row.get("nm", ""),
-                    "price": row.get("nv"),
-                    "change_pct": row.get("cr"),
-                    "trade_value": row.get("aa"),  # 거래대금(백만원 단위로 추정)
-                }
-        except Exception as e:
-            _engine_log("warning", "[국내장브리핑] 네이버 거래대금 벌크조회 실패 | sosok=%s | 원인=%s", sosok, str(e)[:120])
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        futures = [ex.submit(_krx_naver_bulk_fetch_one, sosok, KRX_NAVER_BULK_TIMEOUT) for sosok in (0, 1)]
+        for fut in as_completed(futures):
+            try:
+                out.update(fut.result())
+            except Exception as e:
+                _engine_log("warning", "[국내장브리핑] 거래대금 벌크조회 스레드 오류 | 원인=%s", str(e)[:120])
     return out
 
 
@@ -512,7 +533,7 @@ def _krx_market_investor_flow(market="KOSPI"):
             "https://finance.naver.com/sise/investorDealTrendDay.naver",
             params={"bizdate": bizdate, "sosok": sosok, "page": 1},
             headers={"User-Agent": USER_AGENT},
-            timeout=ENGINE_HTTP_TIMEOUT,
+            timeout=KRX_NAVER_BULK_TIMEOUT,
         )
         if not r.ok:
             return None
@@ -549,18 +570,31 @@ def _krx_market_investor_flow(market="KOSPI"):
         _engine_log("warning", "[국내장브리핑] %s 수급 조회 실패 | 원인=%s", market, str(e)[:120])
         return None
 
+KRX_QUOTE_FETCH_WORKERS = 12  # [성능수정] 아래 사유 참고
+
 def _krx_briefing_fetch_all():
+    """[성능 수정 — 부팅/사이클 지연 원인]
+    감시종목을 10개→33개로 확장하면서 Yahoo 시세를 종목별로 순차(for문) 조회하면
+    한 번의 브리핑 갱신에 네트워크 요청이 30건 이상 한 줄로 쌓여, 요청 하나하나가
+    느려질 때마다 그 지연이 그대로 누적되어 이 단계 하나가 몇 분씩 걸리는 문제가
+    있었다(메인 루프가 한 사이클 안에서 이 단계를 기다리므로 전체가 멈춘 것처럼
+    보임). ThreadPoolExecutor로 동시에 요청해 전체 소요시간을 개별 요청 1건
+    수준으로 줄인다. 개별 요청 실패는 기존과 동일하게 조용히 스킵한다."""
     data = {}
-    for symbol, meta in KRX_WATCHLIST.items():
-        q = _yahoo_chart_quote(symbol)
-        if q:
-            q.update({"name": meta[0], "theme": meta[1]})
-            data[symbol] = q
-    # 유가(WTI)는 국내장 브리핑에서도 환율과 함께 참고용으로 표시한다.
-    oil = _yahoo_chart_quote("CL=F")
-    if oil:
-        oil.update({"name": "WTI 유가", "theme": "원자재"})
-        data["CL=F"] = oil
+    with ThreadPoolExecutor(max_workers=KRX_QUOTE_FETCH_WORKERS) as ex:
+        futures = {ex.submit(_yahoo_chart_quote, symbol): (symbol, meta) for symbol, meta in KRX_WATCHLIST.items()}
+        futures[ex.submit(_yahoo_chart_quote, "CL=F")] = ("CL=F", ("WTI 유가", "원자재"))
+        for fut in as_completed(futures):
+            symbol, meta = futures[fut]
+            try:
+                q = fut.result()
+            except Exception as e:
+                _engine_log("warning", "[국내장브리핑] %s 시세 조회 실패 | 원인=%s", symbol, str(e)[:120])
+                continue
+            if q:
+                q.update({"name": meta[0], "theme": meta[1]})
+                data[symbol] = q
+
     # 거래대금(대장주 판정용)은 네이버 벌크 시세로 보완한다. 실패해도 등락률
     # 표시에는 지장이 없도록 예외를 흡수하고 조용히 스킵한다.
     try:
@@ -671,8 +705,18 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     # 않다. 가짜 수치를 넣지 않고 정직하게 미연동 상태를 표시한다.
     lines.append("• 선물 · 데이터 소스 미연동(추가 예정)")
 
-    flow_fg = _krx_market_investor_flow("KOSPI")
-    flow_fg_kq = _krx_market_investor_flow("KOSDAQ")
+    # [성능 수정] 코스피/코스닥 수급 조회도 순차 2회 대신 병렬 2회로 실행한다.
+    with ThreadPoolExecutor(max_workers=2) as _ex:
+        _fut_map = {_ex.submit(_krx_market_investor_flow, m): m for m in ("KOSPI", "KOSDAQ")}
+        _flow_results = {}
+        for _fut in as_completed(_fut_map):
+            try:
+                _flow_results[_fut_map[_fut]] = _fut.result()
+            except Exception as e:
+                _engine_log("warning", "[국내장브리핑] 수급조회 스레드 오류 | %s | 원인=%s", _fut_map[_fut], str(e)[:120])
+                _flow_results[_fut_map[_fut]] = None
+    flow_fg = _flow_results.get("KOSPI")
+    flow_fg_kq = _flow_results.get("KOSDAQ")
     def _sum_flow(key):
         vals = [f.get(key) for f in (flow_fg, flow_fg_kq) if f and f.get(key) is not None]
         return sum(vals) if vals else None
