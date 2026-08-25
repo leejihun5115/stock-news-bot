@@ -121,7 +121,7 @@ HISTORICAL_MATCH_THRESHOLD = float(os.environ.get("NEWS_BOT_HISTORICAL_MATCH_THR
 _HISTORICAL_CACHE_MAX = int(os.environ.get("NEWS_BOT_HISTORICAL_CACHE_MAX", "5000"))
 _engine_historical_cache = []  # [{"text","title","link","published_dt","source"}, ...]
 
-RECENT_WINDOW_MIN = int(os.environ.get("NEWS_BOT_RECENT_WINDOW_MIN", "4320"))  # [수정] 60분 → 3일(4320분). 60분 안에 못 잡으면 그 뉴스는 영영 확인 불가능했던 문제 완화.
+RECENT_WINDOW_MIN = int(os.environ.get("NEWS_BOT_RECENT_WINDOW_MIN", "60"))
 
 SEEN_DB_FILE = os.environ.get("NEWS_BOT_SEEN_DB", "news_bot_seen.txt")
 EXTENDED_STATE_FILE = os.environ.get("NEWS_BOT_EXTENDED_STATE", "news_bot_extended_state.json")

@@ -54,10 +54,11 @@ ENABLE_US_INTRADAY_BRIEFING = _env_flag("ENABLE_US_INTRADAY_BRIEFING", True)  # 
 ENABLE_TELEGRAM_CHANNELS = _env_flag("ENABLE_TELEGRAM_CHANNELS") # 텔레그램1(필터)+2(무조건)
 ENABLE_CUSTOM_SOURCES = _env_flag("ENABLE_CUSTOM_SOURCES")       # 약업신문/전자신문
 ENABLE_DART = _env_flag("ENABLE_DART")                           # DART 공시
-ENABLE_NAVER_NEWS = _env_flag("ENABLE_NAVER_NEWS")               # 네이버 뉴스
+ENABLE_NAVER_NEWS = _env_flag("ENABLE_NAVER_NEWS", False)               # 네이버 뉴스 — [2026-08] 네이버 개발자센터 검색 오픈API 서비스 종료로 기본 OFF. 대체 키(API HUB) 확보 시에만 켤 것.
 ENABLE_BLOG = _env_flag("ENABLE_BLOG")                           # 분석 블로그
 ENABLE_YOUTUBE = _env_flag("ENABLE_YOUTUBE")                     # 유튜브
 ENABLE_SCHEDULE_REMINDERS = _env_flag("ENABLE_SCHEDULE_REMINDERS")   # 일정 D-7/D-3 리마인더
+ENABLE_SCHEDULE_BOOTSTRAP = _env_flag("ENABLE_SCHEDULE_BOOTSTRAP", False)  # [버그 수정] 최초 1년 일정 백필(200회+ Google RSS 요청)이 구글 연쇄차단→국내뉴스 유실을 유발한 적이 있어 기본 OFF. 필요 시 /일정백필 명령으로 수동 실행.
 ENABLE_IPO_ALERTS = _env_flag("ENABLE_IPO_ALERTS")               # 신규상장(IPO) 알림
 
 _SOLO_MODE_ALIASES = {

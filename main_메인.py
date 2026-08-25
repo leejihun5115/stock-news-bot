@@ -65,7 +65,7 @@ def _boot_alert_and_die(exc: BaseException):
 try:
     from admin_관리자 import ADMIN_CHAT_ID, ADMIN_COMMAND_POLL_INTERVAL, _admin_command_executor, _admin_command_listener, _admin_selfcheck_commands
     from common_공용유틸 import _engine_log, _logger, _now_kst, log_error
-    from config_환경설정 import ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_DOMESTIC_NEWS, ENABLE_NAVER_NEWS, ENABLE_OUTCOME_TRACKING, ENABLE_TELEGRAM_CHANNELS, ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_NEWS, ENABLE_YOUTUBE
+    from config_환경설정 import ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_DOMESTIC_NEWS, ENABLE_NAVER_NEWS, ENABLE_OUTCOME_TRACKING, ENABLE_SCHEDULE_BOOTSTRAP, ENABLE_TELEGRAM_CHANNELS, ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_NEWS, ENABLE_YOUTUBE
     from domestic_국내수집 import NAVER_APIHUB_CLIENT_ID, NAVER_APIHUB_CLIENT_SECRET, NAVER_API_MODE, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, _engine_krx_market_monitor, _engine_run_google_and_domestic, _engine_run_keyword_combinations, _engine_run_naver
     from engine_state_공유상태 import ENGINE_INTERVAL, _engine_cycle_lock, _engine_wake_event, _engine_watchdog_alert, _engine_run_stage, _engine_load_state, _engine_save_state
     from news_engine_핵심엔진 import _engine_load_extended_state, _engine_load_seen, _engine_save_extended_state
@@ -166,11 +166,14 @@ def _engine_main_loop():
     if ENABLE_OUTCOME_TRACKING:
         _dart_load_corp_code_map()
         _engine_load_outcome_tracking()
-    # [버그 수정] 일정DB 최초 1년 백필이 어디서도 호출되지 않아 죽은 코드였다.
-    # 수백 건의 RSS 요청이 필요해 오래 걸릴 수 있으므로 메인 루프를 막지 않도록
-    # 별도 데몬 스레드에서 실행한다. 함수 내부에 done 상태 체크가 있어 이미
-    # 완료된 경우(재시작 시)는 즉시 반환되며 중복 실행되지 않는다.
-    threading.Thread(target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True).start()
+    # [버그 수정] 일정DB 최초 1년 백필을 부팅 시 자동 실행했더니 요청 간 딜레이가
+    # 없어(200회+ 연속 Google RSS 요청) 구글 쪽 일시 차단을 유발했고, 그 여파로
+    # 같은 프로세스의 정상 국내 Google RSS 수집까지 함께 막혀 뉴스가 전혀
+    # 내려오지 않는 사고로 이어졌다. 이제 요청 간 딜레이(SCHEDULE_BOOTSTRAP_REQUEST_DELAY_SEC)를
+    # 넣었지만, 그래도 자동 실행은 기본적으로 끄고 관리자가 명시적으로 원할 때만
+    # (ENABLE_SCHEDULE_BOOTSTRAP=true 환경변수 또는 /일정백필 명령) 실행하게 한다.
+    if ENABLE_SCHEDULE_BOOTSTRAP:
+        threading.Thread(target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True).start()
     _engine_log("info", "[엔진] 60초 주기 시작")
     while True:
         cycle_start = time.time()

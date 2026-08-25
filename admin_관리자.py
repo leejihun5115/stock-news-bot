@@ -252,6 +252,7 @@ def _admin_cmd_help(arg=""):
               "/재진단 : 회로차단으로 자동 비활성화된 단계를 즉시 재시도",
               "/성과리포트 : 송출된 뉴스의 실제 등락률 집계(키워드별 적중률)",
               "/백필 [일수] : DART 과거 공시를 소급해 과거DB에 적재(기본 365일)",
+              "/일정백필 : 일정DB 최초 1년 백필을 수동 실행(요청 간 딜레이 있어 몇 분 소요)",
               "/help : 이 목록 표시"]
     return "\n".join(lines)
 
@@ -295,6 +296,40 @@ def _admin_cmd_backfill(arg=""):
     return f"⏳ [통제소] DART 과거 {days}일 백필을 시작했습니다. 완료되면 결과를 보내드립니다."
 
 
+_ENGINE_SCHEDULE_BACKFILL_RUNNING = False
+_ENGINE_SCHEDULE_BACKFILL_LOCK = threading.Lock()
+
+
+def _admin_cmd_schedule_backfill(arg=""):
+    """/일정백필 : 일정DB 최초 1년 백필을 수동으로 즉시 실행한다.
+    [주의] 부팅 시 자동 실행하던 것을 껐다 — 요청 간 딜레이 없이 200회+ Google
+    RSS 요청을 연달아 쏴서 구글 쪽 일시 차단을 유발했고, 그 여파로 정상 국내
+    뉴스 수집까지 함께 막힌 사고가 있었다. 지금은 요청 사이에 딜레이를 넣었지만
+    그래도 몇 분 정도 걸리고, 진행 중에는 다른 뉴스 수집이 살짝 느려질 수 있으니
+    필요할 때만 수동으로 실행할 것."""
+    global _ENGINE_SCHEDULE_BACKFILL_RUNNING
+    with _ENGINE_SCHEDULE_BACKFILL_LOCK:
+        if _ENGINE_SCHEDULE_BACKFILL_RUNNING:
+            return "⏳ [통제소] 이미 일정 백필이 진행 중입니다. 완료될 때까지 기다려주세요."
+        _ENGINE_SCHEDULE_BACKFILL_RUNNING = True
+
+    def _worker():
+        global _ENGINE_SCHEDULE_BACKFILL_RUNNING
+        try:
+            from schedule_일정DB import _schedule_bootstrap_one_year
+            _schedule_bootstrap_one_year()
+            _admin_reply("✅ [통제소] 일정DB 1년 백필이 완료되었습니다.")
+        except Exception as e:
+            log_error("관리자 /일정백필", e)
+            _admin_reply(f"⚠️ [통제소] 일정 백필 중 오류가 발생했습니다: {html.escape(str(e)[:200])}")
+        finally:
+            with _ENGINE_SCHEDULE_BACKFILL_LOCK:
+                _ENGINE_SCHEDULE_BACKFILL_RUNNING = False
+
+    threading.Thread(target=_worker, name="admin-schedule-backfill", daemon=True).start()
+    return "⏳ [통제소] 일정DB 1년 백필을 시작했습니다 (요청 간 딜레이 있어 몇 분 소요). 완료되면 결과를 보내드립니다."
+
+
 # 새 관리자 명령을 추가하려면 아래 딕셔너리에 "/명령어": 핸들러함수(arg) 형태로 등록만 하면 된다.
 # 핸들러는 문자열을 반환하면 그대로 관리자에게 회신된다.
 _ADMIN_COMMANDS = {
@@ -306,6 +341,7 @@ _ADMIN_COMMANDS = {
     "/help": _admin_cmd_help,
     "/성과리포트": _admin_cmd_outcome_report,
     "/백필": _admin_cmd_backfill,
+    "/일정백필": _admin_cmd_schedule_backfill,
 }
 
 

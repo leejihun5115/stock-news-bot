@@ -48,6 +48,7 @@ SCHEDULE_LOOKBACK_DAYS = max(30, int(os.environ.get("NEWS_BOT_SCHEDULE_LOOKBACK_
 SCHEDULE_FORWARD_DAYS = max(7, int(os.environ.get("NEWS_BOT_SCHEDULE_FORWARD_DAYS", "120")))
 SCHEDULE_MAX_ITEMS = max(10, int(os.environ.get("NEWS_BOT_SCHEDULE_MAX_ITEMS", "80")))
 SCHEDULE_BOOTSTRAP_MAX_CHECKED = max(1000, int(os.environ.get("NEWS_BOT_SCHEDULE_BOOTSTRAP_MAX_CHECKED", "6000")))
+SCHEDULE_BOOTSTRAP_REQUEST_DELAY_SEC = max(0.0, float(os.environ.get("NEWS_BOT_SCHEDULE_BOOTSTRAP_DELAY_SEC", "2.0")))  # [버그 수정] 구글 RSS 연쇄차단 방지용 요청 간 최소 대기
 SCHEDULE_DAILY_FORWARD_DAYS = max(30, int(os.environ.get("NEWS_BOT_SCHEDULE_DAILY_FORWARD_DAYS", "180")))
 SCHEDULE_BOOTSTRAP_QUERIES = [
     '특징주 상한가 급등 일정 발표 예정',
@@ -225,6 +226,11 @@ def _schedule_bootstrap_one_year():
         return
     # 최초 1회는 최근 1년을 월/주 단위로 잘게 나눠 최대한 빠짐없이 훑는다.
     # 특히 상한가·특징주·급등 재료를 별도 검색어로 넓게 수집한다.
+    # [버그 수정] 요청 사이 딜레이가 전혀 없어 최대 200회 이상의 Google News RSS
+    # 요청을 그대로 연달아 쐈다. 이게 구글 쪽 일시 차단을 유발해, 같은 프로세스가
+    # 쓰는 정상적인 국내 Google RSS 수집(_engine_run_google_and_domestic)까지
+    # 함께 막혀 "뉴스가 하나도 안 내려온다"는 증상으로 이어졌다. 요청마다
+    # 짧은 텀을 둬서 이런 연쇄 차단을 막는다.
     from urllib.parse import quote_plus
     today=_now_kst().date()
     start=today-datetime.timedelta(days=SCHEDULE_LOOKBACK_DAYS)
@@ -237,6 +243,7 @@ def _schedule_bootstrap_one_year():
             url=f'https://news.google.com/rss/search?q={quote_plus(q)}%20after%3A{cursor.isoformat()}%20before%3A{end.isoformat()}&hl=ko&gl=KR&ceid=KR:ko'
             entries=_engine_fetch_rss(url,'일정DB/1년초기검색')
             requests_count += 1
+            time.sleep(SCHEDULE_BOOTSTRAP_REQUEST_DELAY_SEC)  # [버그 수정] 구글 RSS 연쇄 차단 방지용 요청 간 딜레이
             for e in entries:
                 if checked >= SCHEDULE_BOOTSTRAP_MAX_CHECKED: break
                 checked += 1
