@@ -60,6 +60,7 @@ Reusable central decision-logic module for news / stock analysis programs.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
+import os
 import re
 import difflib
 from typing import Any, Dict, Iterable, List, Optional
@@ -357,9 +358,15 @@ class MasterConditionManager:
         "최종 최대 3종목",
     ]
 
-    def __init__(self, max_related=3, min_score=40.0):
+    # [디버그 완화] 뉴스가 전혀 안 내려올 때 파이프라인이 살아있는지부터 확인하기
+    # 위해, 관련주 점수 최소기준을 환경변수로 크게 낮출 수 있게 한다. 기본값도
+    # 40.0 → 5.0으로 낮췄다. 원래대로 되돌리려면 NEWS_BOT_MASTER_MIN_SCORE=40으로
+    # 설정하거나 이 기본값을 다시 40.0으로 바꾸면 된다.
+    _MIN_SCORE_ENV_DEFAULT = float(os.environ.get("NEWS_BOT_MASTER_MIN_SCORE", "5.0"))
+
+    def __init__(self, max_related=3, min_score=None):
         self.max_related = max_related
-        self.min_score = min_score
+        self.min_score = self._MIN_SCORE_ENV_DEFAULT if min_score is None else min_score
         # CONDITION_RULES는 더 이상 실행 순서를 결정하지 않는다(참조 문서용).
         # 실제 실행 순서는 PIPELINE_STEPS + analyze() 본문이 유일한 출처다.
         self._rules = sorted(CONDITION_RULES, key=lambda x: int(x["order"]))

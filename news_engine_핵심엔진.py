@@ -121,7 +121,14 @@ HISTORICAL_MATCH_THRESHOLD = float(os.environ.get("NEWS_BOT_HISTORICAL_MATCH_THR
 _HISTORICAL_CACHE_MAX = int(os.environ.get("NEWS_BOT_HISTORICAL_CACHE_MAX", "5000"))
 _engine_historical_cache = []  # [{"text","title","link","published_dt","source"}, ...]
 
-RECENT_WINDOW_MIN = int(os.environ.get("NEWS_BOT_RECENT_WINDOW_MIN", "60"))
+RECENT_WINDOW_MIN = int(os.environ.get("NEWS_BOT_RECENT_WINDOW_MIN", "0"))  # [수정] 사용자 요청으로 시간제한 완전 해제(0=제한없음). 되돌리려면 NEWS_BOT_RECENT_WINDOW_MIN을 원하는 분 단위로 설정.
+
+# [디버그 완화] 뉴스가 전혀 안 내려올 때 "수집·번역·MASTER 파이프라인 자체가 살아있는지"부터
+# 확인하기 위한 완화 모드. 기본 ON. 켜져 있으면 MASTER의 macro/광고성 키워드 필터,
+# 뉴스가치낮음 필터, 관련주없음 필터를 모두 건너뛰고 MASTER 파이프라인을 통과한 뉴스는
+# 거의 다 송출한다. 문제 확인 후 정상 필터링으로 되돌리려면 환경변수
+# NEWS_BOT_LOOSE_FILTER=false 로 설정할 것.
+NEWS_BOT_LOOSE_FILTER = os.environ.get("NEWS_BOT_LOOSE_FILTER", "true").strip().lower() in ("true", "1", "yes", "on")
 
 SEEN_DB_FILE = os.environ.get("NEWS_BOT_SEEN_DB", "news_bot_seen.txt")
 EXTENDED_STATE_FILE = os.environ.get("NEWS_BOT_EXTENDED_STATE", "news_bot_extended_state.json")
@@ -416,11 +423,17 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
 
         # 최근성 게이트: 발행시각을 알 수 없는 소스(DART 등)는 게이트를 건너뛰고
         # 수집 단계의 날짜 범위 제한 + 중복방지에 의존한다.
+        # [수정] RECENT_WINDOW_MIN<=0이면 "얼마나 오래된 뉴스든 통과"로 완전히 해제한다.
+        # 단, 시계 오차/파싱 오류로 미래 시각(-10분 초과)이 찍히는 명백한 이상값은
+        # 시간제한 해제 여부와 무관하게 항상 걸러 잘못된 데이터가 섞이는 것을 막는다.
         pub_dt = _engine_parse_datetime(published) if published else None
         now = _now_kst()
         if pub_dt is not None:
             age_min = (now - pub_dt).total_seconds() / 60.0
-            if age_min > RECENT_WINDOW_MIN or age_min < -10:
+            if age_min < -10:
+                _engine_mark_seen(item_hash)
+                return False
+            if RECENT_WINDOW_MIN > 0 and age_min > RECENT_WINDOW_MIN:
                 _engine_mark_seen(item_hash)
                 return False
 
@@ -484,7 +497,6 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         news_value_low = result.get("news_value") == "낮음"
         category = str(source)
         reason = result.get("analysis") or " ".join(result.get("outlook") or [])[:300] or "MASTER 분석 결과"
-
         # 과거사례 캐시 누적 (macro/ad 여부와 무관하게 브리핑 근거자료로 계속 쌓는다)
         cache_row = {
             "text": full_text[:600], "title": ko_title, "link": link,
@@ -509,6 +521,11 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
             log_error("미장 브리핑 뉴스메모리 갱신 실패", e)
 
         is_macro_or_ad = macro_kw_hit or news_value_low or not related_names
+        if NEWS_BOT_LOOSE_FILTER:
+            # [디버그 완화] 관련주 매칭 리스트(GLOBAL_AND_DOMESTIC_GIANTS)가 짧아서
+            # 대부분의 뉴스가 "관련주 없음"으로 걸러지고 있었을 가능성이 있어,
+            # 뉴스가 실제로 내려오는지부터 확인하기 위해 이 필터를 통째로 끈다.
+            is_macro_or_ad = False
         if is_macro_or_ad and not force_send:
             # 필터링되더라도 성과추적 DB에는 "필터링됨" 이력으로 남겨 학습 데이터로 쓴다.
             try:
