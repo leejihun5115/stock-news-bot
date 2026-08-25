@@ -171,9 +171,11 @@ def _engine_retry_translation_queue():
                    if float(e.get("next_retry_at", 0) or 0) <= now]
     if not pending:
         return
-    # 번역 재시도가 한 사이클 전체를 붙잡지 않도록 최대 2건만 처리한다.
-    pending = pending[:2]
-    _engine_log("info", "[번역 재시도 큐] 대기=%d건 | 이번 주기 최대 2건 처리", len(pending))
+    # [완화] 기존 2건/주기로는 429가 몰리는 시간대에 재시도 큐가 계속 쌓이기만
+    # 했다(예: 이번 주기 번역실패=6인데 2건만 풀림 → 4건은 다음 주기로 이월).
+    # 요청 간 최소 간격(4.5초)은 그대로 유지되므로 동시 폭주 위험 없이 처리량만 늘린다.
+    pending = pending[:5]
+    _engine_log("info", "[번역 재시도 큐] 대기=%d건 | 이번 주기 최대 5건 처리", len(pending))
     for entry in pending:
         try:
             _engine_process_item(entry["source"], entry["title"], entry["link"],
