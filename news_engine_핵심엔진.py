@@ -42,6 +42,7 @@ from common_공용유틸 import (
 from config_환경설정 import USER_AGENT
 from master_condition_manager_MASTER엔진 import analyze_news
 from translation_번역 import _engine_translate_foreign_item
+from 정책_최상위통제 import get_directive_overrides
 
 try:
     import psutil
@@ -446,9 +447,13 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         evidence = [ln.strip() for ln in re.split(r"(?<=[.!?])\s+|\n", body_text) if ln.strip()][:5]
 
         try:
+            # 🔒 최상위 정책 통제소: 모든 수집원은 동일한 최신 정책을 MASTER에 전달한다.
+            # 정책이 비어 있으면 빈 override를 넘겨 MASTER 기본판정을 사용한다.
+            directive_overrides = get_directive_overrides()
             result = analyze_news(
                 title=ko_title, body=body_text, source=str(source), link=link,
                 candidates=candidates, schedule="", evidence=evidence,
+                directive_overrides=directive_overrides,
             )
         except Exception as e:
             log_error("MASTER 분석 실패", e, source=source, title=ko_title[:80])

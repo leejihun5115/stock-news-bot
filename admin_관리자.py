@@ -36,6 +36,7 @@ from news_engine_핵심엔진 import _engine_force_end_cold_start
 from outcome_tracking_성과추적 import _outcome_aggregate_report
 from sources_external_외부연동 import _engine_backfill_dart_historical
 from ml_learning_기계학습 import _ml_status_report
+from 정책_최상위통제 import get_runtime_policy, set_runtime_policy, reset_runtime_policy, format_policy
 import engine_state_공유상태
 import news_engine_핵심엔진  # 실시간 값(콜드스타트 플래그 등) 읽기용 — 값은 반드시 모듈 경로로 접근
 
@@ -196,10 +197,35 @@ def _admin_cmd_help(arg=""):
               "/워밍업해제 : 콜드스타트 송출금지 워밍업을 강제로 즉시 해제",
               "/성과리포트 : 송출된 뉴스의 실제 등락률 집계(키워드별 적중률)",
               "/학습현황 : 누적 데이터 학습형 AI의 학습량·예측 적중률 확인",
+              "/정책 : 현재 최상위 정책 조회",
+              "/정책 {JSON} : 마지막 정책으로 전체 뉴스에 강제 적용",
+              "/정책 초기화 : 최상위 정책을 MASTER 기본판정으로 복귀",
               "/재진단 : 회로차단으로 자동 비활성화된 단계를 즉시 재시도",
               "/백필 [일수] : DART 과거 공시를 소급해 과거DB에 적재(기본 365일)",
               "/help : 이 목록 표시"]
     return "\n".join(lines)
+
+
+def _admin_cmd_policy(arg=""):
+    """최상위 정책을 조회/변경한다. JSON으로 지정한 값이 이후 모든 뉴스에 공통 적용된다."""
+    arg = (arg or "").strip()
+    if not arg:
+        return format_policy() + "\n사용법: /정책 {\"title\":\"...\",\"outlook\":[\"...\"]}"
+    if arg in {"초기화", "reset", "RESET"}:
+        reset_runtime_policy(source="admin:/정책 초기화")
+        return "♻️ [최상위 정책] 초기화 완료. 다음 뉴스부터 MASTER 기본판정으로 돌아갑니다."
+    try:
+        payload = json.loads(arg)
+        if not isinstance(payload, dict):
+            raise ValueError("JSON 객체가 아닙니다.")
+    except Exception as e:
+        return "❓ 사용법: /정책 {\"title\":\"...\",\"key_points\":[\"...\"],\"outlook\":[\"...\"],\"schedule\":\"...\"}"
+    allowed = {"title", "key_points", "outlook", "schedule"}
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        return f"❌ 허용되지 않은 정책 필드: {', '.join(unknown)}"
+    state = set_runtime_policy(payload, source="admin:/정책")
+    return "✅ [최상위 정책] 변경 즉시 저장/적용\n" + format_policy(state)
 
 
 def _admin_cmd_outcome_report(arg=""):
@@ -266,6 +292,7 @@ _ADMIN_COMMANDS = {
     "/워밍업해제": _admin_cmd_end_warmup,
     "/성과리포트": _admin_cmd_outcome_report,
     "/학습현황": _admin_cmd_ml_status,
+    "/정책": _admin_cmd_policy,
     "/재진단": _admin_cmd_reset_stages,
     "/백필": _admin_cmd_backfill,
 }
