@@ -334,7 +334,7 @@ def _accumulated_block_to_bullets(accumulated_summary_msg):
             continue
         is_sub_bullet = bool(re.match(r"^\s{2,}-\s*", raw))  # 들여쓰기 판별은 strip 전에 해야 한다
         line = raw.strip()
-        if line.startswith(("🤖", "📊")):
+        if line.startswith(("🤖", "📊", "⚙️", "💡")):
             out.append(f"\n{line}")
             continue
         if is_sub_bullet:
@@ -344,6 +344,37 @@ def _accumulated_block_to_bullets(accumulated_summary_msg):
             line = re.sub(r"^[•\-]\s*", "", line)
             out.append(f"✔️ {line}")
     return out
+
+
+_PROMINENCE_MEDALS = ["🥇", "🥈", "🥉"]
+
+
+def _format_related_prominence(related):
+    """MASTER 엔진(master_condition_manager)이 관련주 선정 단계에서 이미 계산해둔
+    score(0~100 관련도)와 reason(선정 근거)을 그대로 별점(돌출도)으로 변환한다.
+    새로운 판단·수치를 만들어내지 않고 기존 판정 결과를 다른 형태로 보여줄 뿐이다."""
+    entries = [r for r in (related or []) if r.get("name")]
+    if not entries:
+        return []
+    lines = ["🔗 [관련주 돌출도 및 매매 팁]"]
+    for i, r in enumerate(entries[:3]):
+        name = r.get("name", "")
+        try:
+            score = float(r.get("score"))
+        except (TypeError, ValueError):
+            score = None
+        if score is not None:
+            stars = max(1, min(5, round(score / 20)))
+            pct_text = f" ({score:.0f}%)"
+        else:
+            stars = 3
+            pct_text = ""
+        medal = _PROMINENCE_MEDALS[i] if i < len(_PROMINENCE_MEDALS) else "▪️"
+        lines.append(f"{i+1}. {medal} {name} - 돌출도: {'⭐' * stars}{pct_text}")
+        reason = str(r.get("reason") or "").strip()
+        if reason:
+            lines.append(f"   - 근거: {reason}")
+    return lines
 
 
 def _format_news_message(source, title, result, related_names, accumulated_summary_msg):
@@ -381,6 +412,12 @@ def _format_news_message(source, title, result, related_names, accumulated_summa
         lines.append("🧠 시장 전망")
         for o in outlook:
             lines.append(f"✔️ {o}")
+
+    prominence_block = _format_related_prominence(result.get("related"))
+    if prominence_block:
+        lines.append("")
+        lines.append("──────────────────")
+        lines.extend(prominence_block)
 
     bullet_block = _accumulated_block_to_bullets(accumulated_summary_msg)
     if bullet_block:

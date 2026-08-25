@@ -267,6 +267,24 @@ def _ml_find_similar_cases(model, query_tokens, related_stocks, top_k=3):
     return scored[:top_k]
 
 
+def _ml_model_status_line(model=None):
+    """전체 학습 모델의 누적 표본과 최근 예측 적중률을 한 줄로 요약한다.
+    /학습현황(_ml_status_report)과 같은 데이터를 쓰되, 개별 뉴스 메시지 하단에
+    붙일 수 있게 압축한 버전이다. 검증 가능한 표본(prediction_log)이 5건 미만이면
+    적중률을 단정하지 않고 '학습 초기 단계'라고 정직하게 표시한다."""
+    try:
+        model = model or _ml_load_model()
+        total = model.get("total_docs_seen", 0)
+        log = model.get("prediction_log") or []
+        if len(log) < 5:
+            return f"⚙️ 모델 상태: 학습 초기 단계 (누적 표본: {total:,}건 | 적중률 검증표본 부족)"
+        hits = sum(1 for e in log if (e["predicted_positive_prob"] >= 0.5) == e["actual_positive"])
+        acc = hits / len(log) * 100
+        return f"⚙️ 모델 상태: 정상 작동 중 (누적 표본: {total:,}건 | 최근 적중률: {acc:.1f}%)"
+    except Exception:
+        return ""
+
+
 def _ml_generate_analysis(title, category, related_stocks, reason, evidence):
     """뉴스 1건에 대한 학습 기반 비교분석을 생성한다.
     반환값: (텔레그램에 붙일 요약 문자열, 나중에 적중률 검증에 쓸 예측 스냅샷 dict)"""
@@ -331,12 +349,29 @@ def _ml_generate_analysis(title, category, related_stocks, reason, evidence):
                 else:
                     verdict = f"과거 사례 결과가 혼재({win_rate:.0f}% 상승) — 방향성 단정 어려움, 관련주 첫 반응으로 재확인 필요"
                 lines.append(f"• 방향성 제안: {verdict}.")
+
+                # [Pro Trader 노하우] 새로운 지표를 만들지 않고, 위에서 이미 계산한
+                # avg_change/win_rate를 매매 관점 문장으로 재구성해 보여준다.
+                tip_action = (
+                    "관련주 초반 반응 속도를 우선 확인한 뒤 분할 진입하는 접근이 과거 데이터상 유리했습니다."
+                    if avg_change > 0 else
+                    "재료 소멸 가능성을 감안해 관련주 반응이 약하면 진입을 보류하는 접근이 과거 데이터상 유리했습니다."
+                )
+                lines.append("")
+                lines.append("💡 [Pro Trader's 노하우 적용 포인트]")
+                lines.append(f"- 유사 재료 {len(changes)}건 기준 평균 {avg_change:+.2f}% · 상승비율 {win_rate:.0f}% "
+                              f"— {tip_action}")
             else:
                 lines.append(f"• 방향성 제안: 과거 사례와 유사도가 낮은 신규 유형 소재(최고 유사도 {best_sim*100:.0f}%) "
                               f"— 위 실측 평균({avg_change:+.2f}%)은 참고치일 뿐, 이번 결과부터 새로 학습 데이터로 축적됩니다.")
         else:
             lines.append("• 비교할 수 있는 과거 유사 사례가 아직 충분히 쌓이지 않았습니다(계속 누적 중) — "
                           "현재 이 소재 유형은 수치 근거 없이 판단 보류 권장.")
+
+        model_status = _ml_model_status_line(model)
+        if model_status:
+            lines.append("")
+            lines.append(model_status)
 
         prediction_snapshot = {
             "ts": _now_kst().isoformat(),
