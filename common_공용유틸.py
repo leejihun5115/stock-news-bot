@@ -119,9 +119,13 @@ if not _logger.handlers:
             base = super().format(record)
             return f"{icon} {base}"
 
+    # [로그 정리] 아이콘(🟢/🟠/🔴)이 이미 레벨을 나타내므로 "INFO/WARNING/ERROR"
+    # 텍스트는 중복이라 생략. 날짜도 실시간 로그 스트림에서는 매 줄 반복되는
+    # 잡음일 뿐이라 시:분:초만 남긴다. 정확한 날짜가 필요한 경우(예: 파일 로그
+    # 분석)는 파일 로그의 앞 줄이나 "[주기 시작] KST=..." 같은 명시적 로그로 확인.
     _fmt = _KSTFormatter(
-        "%(asctime)s | %(levelname)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        "%(asctime)s | %(message)s",
+        datefmt="%H:%M:%S"
     )
     _console = logging.StreamHandler(sys.stderr)
     _console.setLevel(logging.INFO)
