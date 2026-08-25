@@ -68,7 +68,7 @@ try:
     from config_환경설정 import ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_DOMESTIC_NEWS, ENABLE_NAVER_NEWS, ENABLE_OUTCOME_TRACKING, ENABLE_SCHEDULE_BOOTSTRAP, ENABLE_TELEGRAM_CHANNELS, ENABLE_US_INTRADAY_BRIEFING, ENABLE_US_NEWS, ENABLE_YOUTUBE
     from domestic_국내수집 import NAVER_APIHUB_CLIENT_ID, NAVER_APIHUB_CLIENT_SECRET, NAVER_API_MODE, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, _engine_krx_market_monitor, _engine_run_google_and_domestic, _engine_run_keyword_combinations, _engine_run_naver
     from engine_state_공유상태 import ENGINE_INTERVAL, _engine_cycle_lock, _engine_wake_event, _engine_watchdog_alert, _engine_run_stage, _engine_load_state, _engine_save_state
-    from news_engine_핵심엔진 import _engine_load_extended_state, _engine_load_seen, _engine_save_extended_state
+    from news_engine_핵심엔진 import _engine_cycle_stats_summary, _engine_load_extended_state, _engine_load_seen, _engine_reset_cycle_stats, _engine_save_extended_state
     from schedule_일정DB import _engine_schedule_daily_monitor, _schedule_bootstrap_one_year
     from outcome_tracking_성과추적 import _engine_load_outcome_tracking, _engine_outcome_tracking_cycle
     from overseas_해외수집 import _engine_us_market_close_monitor, _engine_us_market_monitor
@@ -96,6 +96,7 @@ def _engine_cycle():
         return
     started = time.time()
     engine_state_공유상태._engine_last_cycle_started = started
+    _engine_reset_cycle_stats()  # [진단] "신규 전송=0"이 왜 0인지 원인별로 추적하기 위한 사이클 카운터 리셋
     _engine_log("info", "[주기 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
     # [회로차단기 적용] 각 단계는 engine_state_공유상태._engine_run_stage를 통해 실행된다.
     # 기존과 동일하게 한 단계 실패가 다른 단계를 막지 않으며, 추가로 같은 단계가
@@ -121,7 +122,7 @@ def _engine_cycle():
     # 과거사례 캐시(_engine_historical_cache)가 재배포/재시작마다 소실되던 문제를 고친다.
     _engine_run_stage("확장상태 저장", _engine_save_extended_state)
     engine_state_공유상태._engine_last_cycle_finished = time.time()
-    _engine_log("info", "[주기 완료] %.2f초 | Telegram 즉시송출 구조", time.time()-started)
+    _engine_log("info", "[주기 완료] %.2f초 | %s | Telegram 즉시송출 구조", time.time()-started, _engine_cycle_stats_summary())
 
 
 

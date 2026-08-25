@@ -25,6 +25,7 @@ import time
 import datetime
 import hashlib
 import logging
+import threading
 from collections import deque
 
 import requests
@@ -129,6 +130,36 @@ RECENT_WINDOW_MIN = int(os.environ.get("NEWS_BOT_RECENT_WINDOW_MIN", "0"))  # [�
 # 거의 다 송출한다. 문제 확인 후 정상 필터링으로 되돌리려면 환경변수
 # NEWS_BOT_LOOSE_FILTER=false 로 설정할 것.
 NEWS_BOT_LOOSE_FILTER = os.environ.get("NEWS_BOT_LOOSE_FILTER", "true").strip().lower() in ("true", "1", "yes", "on")
+
+# [진단용] "신규 전송=0"이 왜 0인지 원인별로 구분하기 위한 사이클 단위 카운터.
+# "이미 본 뉴스라서 처음부터 걸렀는지"와 "MASTER/필터에서 걸렀는지"를 구분해야
+# 필터를 풀어도 계속 0건이 나오는 게 정상(이미 seen 처리된 옛 기사라서)인지,
+# 아니면 실제로 새 필터링 로직에 문제가 있는지 판단할 수 있다.
+_engine_cycle_stats = {"checked": 0, "already_seen": 0, "cold_start": 0, "recency_filtered": 0,
+                        "translate_failed": 0, "master_error": 0, "master_unlocked": 0,
+                        "filtered": 0, "sent": 0, "send_failed": 0}
+_engine_cycle_stats_lock = threading.Lock()
+
+
+def _engine_reset_cycle_stats():
+    with _engine_cycle_stats_lock:
+        for k in _engine_cycle_stats:
+            _engine_cycle_stats[k] = 0
+
+
+def _engine_bump_stat(key):
+    with _engine_cycle_stats_lock:
+        _engine_cycle_stats[key] = _engine_cycle_stats.get(key, 0) + 1
+
+
+def _engine_cycle_stats_summary():
+    with _engine_cycle_stats_lock:
+        s = dict(_engine_cycle_stats)
+    return ("확인=%d | 이미본뉴스=%d | 콜드스타트=%d | 시간초과=%d | 번역실패=%d | "
+            "MASTER오류=%d | MASTER미확정=%d | 필터링=%d | 전송성공=%d | 전송실패=%d") % (
+        s["checked"], s["already_seen"], s["cold_start"], s["recency_filtered"],
+        s["translate_failed"], s["master_error"], s["master_unlocked"],
+        s["filtered"], s["sent"], s["send_failed"])
 
 SEEN_DB_FILE = os.environ.get("NEWS_BOT_SEEN_DB", "news_bot_seen.txt")
 EXTENDED_STATE_FILE = os.environ.get("NEWS_BOT_EXTENDED_STATE", "news_bot_extended_state.json")
@@ -409,8 +440,10 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         if not title:
             return False
 
+        _engine_bump_stat("checked")
         item_hash = _engine_item_hash(source, title, link)
         if item_hash in _engine_seen_hashes:
+            _engine_bump_stat("already_seen")
             return False
 
         if _engine_cold_start_check():
@@ -418,6 +451,7 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
             # 예외 없이 막는다. 이력만 쌓아서, 워밍업이 끝난 뒤에는 이 항목을
             # "이미 처리한 뉴스"로 정상 인식하게 만든다(재송출 방지).
             _engine_mark_seen(item_hash)
+            _engine_bump_stat("cold_start")
             _engine_log("debug", "[콜드스타트 워밍업] 송출 보류·이력만 기록 | %s", title[:60])
             return False
 
@@ -432,9 +466,11 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
             age_min = (now - pub_dt).total_seconds() / 60.0
             if age_min < -10:
                 _engine_mark_seen(item_hash)
+                _engine_bump_stat("recency_filtered")
                 return False
             if RECENT_WINDOW_MIN > 0 and age_min > RECENT_WINDOW_MIN:
                 _engine_mark_seen(item_hash)
+                _engine_bump_stat("recency_filtered")
                 return False
 
         # 외신 번역 게이트: 실패하면 원문을 절대 송출하지 않는다(translation_번역.py 원칙).
@@ -446,6 +482,7 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
             # 영구 유실로 이어졌다. 대신 재시도 큐에 등록하고, item_hash는 아직
             # seen 처리하지 않아 다음 주기 재시도가 정상적으로 이 함수를 다시 탈 수 있게 한다.
             _engine_queue_translation_retry(source, title, link, published, extra)
+            _engine_bump_stat("translate_failed")
             return False
         _engine_clear_translation_retry(link, title, source)
 
@@ -472,11 +509,13 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         except Exception as e:
             log_error("MASTER 분석 실패", e, source=source, title=ko_title[:80])
             _engine_mark_seen(item_hash)
+            _engine_bump_stat("master_error")
             return False
 
         if not result.get("locked") and not force_send:
             _engine_log("debug", "[MASTER 검증 미통과] %s | %s", ko_title[:60], result.get("validation_errors"))
             _engine_mark_seen(item_hash)
+            _engine_bump_stat("master_unlocked")
             return False
 
         leader = result.get("leader") or {}
@@ -537,6 +576,7 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
             except Exception as e:
                 log_error("성과추적 기록 실패(필터링)", e, title=ko_title[:80])
             _engine_mark_seen(item_hash)
+            _engine_bump_stat("filtered")
             _engine_log("debug", "[필터링] Macro/Ad 또는 관련주 없음 | %s", ko_title[:60])
             return False
 
@@ -554,6 +594,7 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         sent = _engine_send_telegram(message)
         _engine_mark_seen(item_hash)
         if sent:
+            _engine_bump_stat("sent")
             _engine_log("info", "[송출] %s | %s", source, ko_title[:80])
             # [버그 수정] 일정DB(schedule_일정DB.py)가 어디서도 호출되지 않아
             # 죽은 코드였다. 실시간 확정 송출 시점에 미래 일정 후보를 추출해 누적한다.
@@ -564,6 +605,7 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
             except Exception as e:
                 log_error("일정DB 누적 실패", e, title=ko_title[:80])
             return True
+        _engine_bump_stat("send_failed")
         return False
     except Exception as e:
         log_error("뉴스 항목 처리 중 미확인 오류", e, source=source, title=str(title)[:80])
