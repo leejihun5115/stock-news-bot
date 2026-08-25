@@ -96,7 +96,7 @@ def _engine_cycle():
         return
     started = time.time()
     engine_state_공유상태._engine_last_cycle_started = started
-    _engine_reset_cycle_stats()  # [진단] "신규 전송=0"이 왜 0인지 원인별로 추적하기 위한 사이클 카운터 리셋
+    _engine_reset_cycle_stats()
     _engine_log("info", "[주기 시작] KST=%s", _now_kst().strftime("%Y-%m-%d %H:%M:%S"))
     # [회로차단기 적용] 각 단계는 engine_state_공유상태._engine_run_stage를 통해 실행된다.
     # 기존과 동일하게 한 단계 실패가 다른 단계를 막지 않으며, 추가로 같은 단계가
