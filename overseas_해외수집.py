@@ -30,7 +30,7 @@ except Exception:
 
 # ==== module: overseas (auto-split from original main.py) ====
 
-from common_공용유틸 import _KST, _engine_log, _engine_send_telegram, _google_news_rss_url, _now_kst
+from common_공용유틸 import _KST, _engine_log, _engine_send_telegram, _google_news_rss_url, _now_kst, log_error
 from config_환경설정 import ENABLE_US_CLOSE_BRIEFING, ENABLE_US_INTRADAY_BRIEFING, USER_AGENT
 from news_engine_핵심엔진 import GLOBAL_COMPANY_KEYWORDS, UNIQUE_TARGET
 
@@ -556,10 +556,69 @@ def _engine_us_market_monitor():
         _engine_us_market_monitor._last_slot_key = slot_key
         _US_BRIEFING_LAST_OPEN_SENT = et.date() if slot_index == 1 else _US_BRIEFING_LAST_OPEN_SENT
         _US_BRIEFING_LAST_INTRADAY_SENT = now
+        _overseas_brief_state_save()
         _engine_log("info", "[미장브리핑] %s 송출 | slot=%s", "개장30분" if slot_index == 1 else "장중변동", slot_key)
     _US_BRIEFING_LAST_SNAPSHOT = snapshot
 US_CLOSE_BRIEF_DELAY_MIN = int(os.environ.get("US_CLOSE_BRIEF_DELAY_MIN", "5"))
 _US_CLOSE_BRIEF_LAST_SENT = None
+
+
+# ============================================================
+# 🧭 [버그 수정] 해외 브리핑(개장30분/장중/마감) 중복방지 플래그 영속화
+# ------------------------------------------------------------
+# 기존에는 _US_CLOSE_BRIEF_LAST_SENT / _engine_us_market_monitor._last_slot_key가
+# 전부 메모리 변수였다. 재배포·재시작이 일어나면(예: 관리자 명령/헬스체크로 인한
+# 재시작, Render 재배포) "오늘 이미 마감 브리핑을 보냈다"는 기억이 사라져서,
+# 같은 날 마감 브리핑이 재시작할 때마다 중복 송출되는 사고가 있었다. 관리자
+# 일시정지 상태를 파일로 영속화한 engine_state_공유상태._engine_save_state와
+# 같은 원리로, 이 플래그들도 파일에 즉시 저장하고 부팅 시 복원한다.
+# ============================================================
+_OVERSEAS_BRIEF_STATE_FILE = os.environ.get("NEWS_BOT_OVERSEAS_BRIEF_STATE_FILE", "overseas_briefing_state.json")
+
+
+def _overseas_brief_state_save():
+    try:
+        payload = {
+            "close_brief_last_sent": _US_CLOSE_BRIEF_LAST_SENT.isoformat() if _US_CLOSE_BRIEF_LAST_SENT else None,
+            "intraday_last_slot_key": getattr(_engine_us_market_monitor, "_last_slot_key", None),
+        }
+        directory = os.path.dirname(os.path.abspath(_OVERSEAS_BRIEF_STATE_FILE)) or "."
+        os.makedirs(directory, exist_ok=True)
+        tmp = _OVERSEAS_BRIEF_STATE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, _OVERSEAS_BRIEF_STATE_FILE)
+    except Exception as e:
+        log_error("해외 브리핑 상태 저장", e)
+
+
+def _overseas_brief_state_load():
+    """부팅 시 1회 호출. 마지막으로 저장된 '오늘 이미 보냈음' 기록을 복원한다."""
+    global _US_CLOSE_BRIEF_LAST_SENT
+    if not os.path.exists(_OVERSEAS_BRIEF_STATE_FILE):
+        return
+    try:
+        with open(_OVERSEAS_BRIEF_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+        last_sent = data.get("close_brief_last_sent")
+        if last_sent:
+            _US_CLOSE_BRIEF_LAST_SENT = datetime.date.fromisoformat(last_sent)
+        slot_key = data.get("intraday_last_slot_key")
+        if slot_key:
+            _engine_us_market_monitor._last_slot_key = slot_key
+        _engine_log("info", "[해외브리핑] 상태 복원 완료 | 마감브리핑 마지막 발송일=%s | 장중 마지막 슬롯=%s",
+                    _US_CLOSE_BRIEF_LAST_SENT, slot_key)
+    except Exception as e:
+        log_error("해외 브리핑 상태 복원", e)
+
+
+# 모듈 최초 import 시점(=봇 부팅 시)에 1회 복원한다. main_메인.py의 다른
+# 상태 로드(_engine_load_state 등)와 마찬가지로 부팅 초기에 반드시 실행돼야
+# 하고, 이 파일은 항상 부팅 시 import되므로 여기서 직접 호출해도 안전하다.
+try:
+    _overseas_brief_state_load()
+except Exception as _e:
+    log_error("해외 브리핑 상태 복원(초기화)", _e)
 
 def _us_close_reason(name, theme):
     """최근 24시간 수집 뉴스에서 확인된 원인만 반환. 없으면 추정하지 않는다."""
@@ -756,4 +815,5 @@ def _engine_us_market_close_monitor():
     msg = _us_close_briefing(snapshot, et)
     if msg and _engine_send_telegram(msg):
         _US_CLOSE_BRIEF_LAST_SENT = et.date()
+        _overseas_brief_state_save()
         _engine_log("info", "[미장마감] 장마감 브리핑 송출 완료")
