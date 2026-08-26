@@ -310,7 +310,17 @@ def _format_news_message(source, title, result, related_names, accumulated_summa
     outlook = result.get("outlook") or []
     schedule = result.get("schedule") or ""
     evidence = result.get("evidence") or []
-    related_str = ", ".join(related_names) if related_names else "관련 종목 확인 필요"
+    related_items = result.get("related") or []
+
+    # 관련주는 MASTER가 최종 확정한 후보만 사용한다. 송출 단계에서 회사명을
+    # 새로 찾거나 "Big issue" 같은 분류값을 종목으로 바꾸지 않는다.
+    related_lines = []
+    for stock in related_items:
+        name = str(stock.get("name") or "").strip()
+        reason = str(stock.get("reason") or "").strip()
+        if not name or not reason:
+            continue
+        related_lines.append(f"✔ {name} — {reason}")
 
     # 📌 제목 뒤에 붙는 한줄 설명: MASTER가 뽑은 핵심포인트/근거문장 중 첫 문장을
     # 그대로 쓴다(제목 재진술 방지 로직은 MASTER가 이미 처리했으므로 신뢰).
@@ -320,9 +330,12 @@ def _format_news_message(source, title, result, related_names, accumulated_summa
         f"📰 [{source}] 신규 🕐 {_now_kst().strftime('%H:%M')}",
         "",
         f"📌 {title}" + (f" : {lead_sentence}" if lead_sentence else ""),
-        "",
-        f"🏷 관련종목 : {related_str}",
     ]
+
+    # 실제 관련주가 있을 때만 카테고리를 노출한다.
+    if related_lines:
+        lines.extend(["", "🎯 [관련주]"])
+        lines.extend(related_lines)
 
     if key_points:
         lines.append("")

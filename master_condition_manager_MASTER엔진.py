@@ -699,6 +699,18 @@ class MasterConditionManager:
             return True
         return False
 
+    def _looks_like_body_as_title(self, title, body):
+        """본문 문장/설명문이 제목 자리에 들어온 경우를 감지한다."""
+        t = self._norm(title)
+        if not t or len(t) < 35:
+            return False
+        body_n = self._norm(body)
+        if body_n and len(body_n) >= 40 and t in body_n:
+            return True
+        if re.search(r"(?:지원한다|추진한다|예정이다|전망이다|밝혔다|전했다|설명했다|확인됐다|나타났다)[.!]?$", title):
+            return True
+        return False
+
     def _synthesize_title(self, title, body):
         """원문 제목 보존을 최우선으로 한다.
 
@@ -718,10 +730,14 @@ class MasterConditionManager:
                 title = cleaned
         title = title[:220].strip()
 
-        # [제목 규칙] 원문 제목은 우선 보존하되, 서술형 제목이면 기자식 제목으로
-        # 핵심 사건만 남긴다. 제목을 새 사실로 창작하지 않고 원문/본문의 확인된
-        # 문장 안에서만 축약한다.
-        if self._is_narrative_title(title):
+        # [제목 규칙] RSS/Google News 등에서 붙는 매체명·중복 제목 꼬리를 제거한다.
+        # 예: "... - 이투데이 : ... 이투데이" 같은 수집 메타데이터는 제목으로 사용하지 않는다.
+        title = re.sub(r"\s*[-–—]\s*[^:：]{1,40}\s*[:：]\s*.*$", "", title).strip() or title
+        title = re.sub(r"\s*[:：]\s*(?:이투데이|연합뉴스|매일경제|한국경제|조선비즈|뉴스1|서울경제|머니투데이)\s*$", "", title, flags=re.I).strip()
+
+        # [제목 규칙] 원문 제목이 서술형/중계형/본문 반복형이면 본문을 확인해
+        # 기자식 제목을 다시 만든다. 제목에 없는 사실을 추가하지 않는다.
+        if self._is_narrative_title(title) or self._looks_like_body_as_title(title, body):
             headline = re.split(r"[,，:：]", title, maxsplit=1)[0].strip()
             headline = re.sub(
                 r"(?:라고|다고\s*)?(?:밝혔다|전했다|전해졌다|나타났다|드러났다|확인됐다|알려졌다|설명했다|덧붙였다|밝혀졌다)\.?$",
@@ -855,7 +871,11 @@ class MasterConditionManager:
                 if not overlap and self._norm(name) not in self._norm(text):
                     continue
             c["score"] = round(self._score(c), 2)
+            # 송출용 관련주 근거는 반드시 구체적인 사업/사건 연결을 유지한다.
             if c["score"] >= self.min_score:
+                if not any(c.get(k) for k in ("event_link", "supply_chain", "commercial_link")):
+                    # 단순 회사명 언급만으로 들어온 후보는 최종 관련주에서 제외한다.
+                    continue
                 scored.append(c)
         scored.sort(key=lambda x: (-x["score"], -int(bool(x.get("direct"))), -int(bool(x.get("event_link")))))
         related = scored[:self.max_related]
