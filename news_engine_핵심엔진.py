@@ -1101,7 +1101,10 @@ def _engine_classify(source, title, extra=""):
     # 국내 관련주가 없어도 의미 있는 글로벌 시황은 보존한다.
     if _engine_is_global_market_news(text):
         return True, "🌐시황", [], k1, k2, market_hits
-    return False, "일반", [], k1, k2, market_hits
+    # [완화] 관련종목/시장재료가 안 잡혀도, 위에서 이미 걸러진
+    # _engine_is_weak_nonstock_news / _engine_is_lagging_interpretive_news /
+    # 외부콘텐츠 필터만 통과했다면 일단 내보낸다.
+    return True, "📰일반", [], k1, k2, market_hits
 
 
 # 국내 상장기업/관련주 연결 문구. 단순 산업 키워드만으로 종목을 억지 연결하지 않는다.
