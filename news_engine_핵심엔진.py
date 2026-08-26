@@ -117,20 +117,7 @@ except ModuleNotFoundError:
     MasterConditionManager = _mcm_mod.MasterConditionManager
 # === MASTER 65-CONDITION ENGINE ===
 # 모든 최종 뉴스 판단은 이 엔진을 통과하도록 연결할 수 있다.
-# 뉴스 강도 설정은 news_strength_config_뉴스강도설정.py 한 곳에서만 관리한다.
-try:
-    from news_strength_config_뉴스강도설정 import NEWS_VALUE_MID, NEWS_VALUE_HIGH
-except ImportError as _exc:
-    raise ImportError(
-        "news_strength_config_뉴스강도설정.py 파일이 프로젝트 루트에 필요합니다."
-    ) from _exc
-
-_MASTER_MANAGER = MasterConditionManager(
-    max_related=3,
-    min_score=40.0,
-    news_value_mid=NEWS_VALUE_MID,
-    news_value_high=NEWS_VALUE_HIGH,
-)
+_MASTER_MANAGER = MasterConditionManager(max_related=3, min_score=40.0)
 
 def master_finalize_news(
     title,
