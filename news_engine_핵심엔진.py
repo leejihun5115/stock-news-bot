@@ -2,6 +2,14 @@
 """
 뉴스 판정의 중심 엔진.
 
+[뉴스우선 테스트 모드]
+- 기존 seen DB 704건을 일시적으로 무시한다.
+- 콜드스타트 송출 금지를 일시 우회한다.
+- 최근성 기본 범위를 24시간으로 넓힌다.
+- MASTER는 삭제하지 않고 분석만 수행한다. locked=False여도 송출한다.
+- 관련주 없음/시황/낮은 뉴스가치 필터를 일시 우회한다.
+- 목적: "RSS 수집은 되는데 Telegram 신규전송=0" 문제를 먼저 분리 진단한다.
+
 [수정본]
 - seen 등록은 실제 Telegram 전송 성공 후에만 수행한다.
 - 콜드스타트/시간초과/MASTER 오류/MASTER 미확정/필터링/번역 실패는
@@ -23,6 +31,13 @@ from urllib.parse import urlparse
 
 import requests
 import feedparser
+
+# ============================================================
+# [영구 수정] 콜드스타트 송출 차단 비활성화
+# seen DB가 없거나 Render 재배포로 초기화되어도 실제 신규 뉴스까지
+# 일괄 차단하지 않는다. 기존 문제는 "확인=706 | 콜드스타트=706 |
+# 전송성공=0"으로 나타났으며, 이 게이트가 뉴스 송출을 막은 것이 원인이었다.
+# ============================================================
 
 from common_공용유틸 import (
     ENGINE_HTTP_TIMEOUT,
@@ -102,7 +117,7 @@ HISTORICAL_MATCH_THRESHOLD = float(os.environ.get("NEWS_BOT_HISTORICAL_MATCH_THR
 _HISTORICAL_CACHE_MAX = int(os.environ.get("NEWS_BOT_HISTORICAL_CACHE_MAX", "5000"))
 _engine_historical_cache = []
 
-RECENT_WINDOW_MIN = int(os.environ.get("NEWS_BOT_RECENT_WINDOW_MIN", "60"))
+RECENT_WINDOW_MIN = int(os.environ.get("NEWS_BOT_RECENT_WINDOW_MIN", "1440"))  # 테스트: 24시간
 
 SEEN_DB_FILE = os.environ.get("NEWS_BOT_SEEN_DB", "news_bot_seen.txt")
 EXTENDED_STATE_FILE = os.environ.get("NEWS_BOT_EXTENDED_STATE", "news_bot_extended_state.json")
@@ -111,7 +126,7 @@ SEEN_MAX_KEEP = int(os.environ.get("NEWS_BOT_SEEN_MAX_KEEP", "20000"))
 _engine_seen_hashes = set()
 _engine_seen_order = deque()
 
-COLD_START_GRACE_MIN = float(os.environ.get("NEWS_BOT_COLD_START_GRACE_MIN", "10"))
+COLD_START_GRACE_MIN = 0.0  # [영구 수정] 콜드스타트 송출 차단 사용 안 함
 _engine_cold_start_active = False
 _engine_cold_start_deadline = 0.0
 
@@ -368,17 +383,15 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
             return False
 
         item_hash = _engine_item_hash(source, title, link)
-        if item_hash in _engine_seen_hashes:
+        # [뉴스우선 테스트] 기존 seen DB의 704건도 다시 처리한다.
+        # 정상 송출 확인 전까지 중복방지를 일시 우회한다.
+        if False and item_hash in _engine_seen_hashes:
             _engine_bump_cycle_stat("already_seen")
             return False
 
         if _engine_cold_start_check():
-            # 중요: 콜드스타트에서는 이력도 기록하지 않는다.
-            # 기록하면 번역/MASTER/송출이 이루어지지 않은 기사가 영구히 seen 처리되어
-            # 워밍업 종료 후에도 다시는 송출 후보가 되지 않는다.
-            _engine_bump_cycle_stat("cold_start")
-            _engine_log("debug", "[콜드스타트 워밍업] 송출 보류·이력 미기록 | %s", title[:60])
-            return False
+            # [영구 수정] 방어 코드. 현재 _engine_cold_start_check()는 항상 False이다.
+            _engine_log("warning", "[콜드스타트] 비활성화 설정이 예상과 다르게 활성화됨 | %s", title[:60])
 
         pub_dt = _engine_parse_datetime(published) if published else None
         now = _now_kst()
@@ -443,10 +456,14 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
             return False
 
         if not result.get("locked") and not force_send:
-            _engine_log("debug", "[MASTER 검증 미통과] %s | %s", ko_title[:60], result.get("validation_errors"))
-            # 중요: MASTER 미확정도 seen 처리하지 않는다.
-            _engine_bump_cycle_stat("master_unconfirmed")
-            return False
+            # [뉴스우선 테스트] MASTER 미확정이어도 뉴스 송출을 계속한다.
+            # MASTER 자체는 삭제하지 않고 분석 결과만 참고용으로 유지한다.
+            _engine_log(
+                "info",
+                "[뉴스우선 테스트] MASTER 미확정이지만 송출 진행 | %s | %s",
+                ko_title[:60],
+                result.get("validation_errors"),
+            )
 
         leader = result.get("leader") or {}
         observe = result.get("observe") or []
@@ -492,18 +509,14 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         if force_pass and (macro_kw_hit or news_value_low or not related_names):
             _engine_log("info", "[강제통과] %s | %s", ko_title[:60], result.get("force_pass_reason", ""))
         if is_macro_or_ad and not force_send:
-            try:
-                from outcome_tracking_성과추적 import _engine_record_outcome_tracking
-                _engine_record_outcome_tracking(
-                    title=ko_title, category=category, related_stocks=related_names,
-                    reason=reason, evidence=result.get("evidence") or [],
-                )
-            except Exception as e:
-                log_error("성과추적 기록 실패(필터링)", e, title=ko_title[:80])
-            # 중요: 필터링된 뉴스는 Telegram으로 송출되지 않았으므로 seen 처리하지 않는다.
-            _engine_bump_cycle_stat("filtered")
-            _engine_log("debug", "[필터링] Macro/Ad 또는 관련주 없음 | %s", ko_title[:60])
-            return False
+            # [뉴스우선 테스트] 시황/광고/관련주 없음 필터를 일시 우회한다.
+            # 실제 뉴스가 Telegram에 도착하는지 먼저 확인한다.
+            _engine_log(
+                "info",
+                "[뉴스우선 테스트] 필터 우회 송출 | %s | 관련종목=%s",
+                ko_title[:60],
+                related_names or "없음",
+            )
 
         accumulated_summary_msg = ""
         try:
