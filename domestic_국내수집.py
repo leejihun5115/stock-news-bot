@@ -33,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from common_공용유틸 import ENGINE_HTTP_TIMEOUT, _clean_secret_env, _engine_clean, _engine_log, _engine_send_telegram, _now_kst, log_error
 from config_환경설정 import ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_DOMESTIC_NEWS, ENABLE_NAVER_NEWS, ENABLE_US_NEWS, KRX_HOLIDAYS_2026, USER_AGENT
-from news_engine_핵심엔진 import GLOBAL_AND_DOMESTIC_GIANTS, _engine_entry_published, _engine_fetch_rss, _engine_item_hash, _engine_process_item, _engine_seen_hashes
+from news_engine_핵심엔진 import GLOBAL_AND_DOMESTIC_GIANTS, _engine_entry_published, _engine_fetch_rss, _engine_item_hash, _engine_process_item, _engine_seen_hashes_has
 from overseas_해외수집 import US_RSS_URLS, _us_direction, _us_display_name, _us_format_pct, _us_format_price, _yahoo_chart_quote
 from sources_external_외부연동 import _dart_stock_code_for_name
 
@@ -187,7 +187,7 @@ def _engine_run_google_and_domestic():
                 # "이 항목이 이 소스에서 이번이 처음 보는 것인가"만 해시로 먼저 센다.
                 # 이게 늘 0에 가까우면 피드 자체가 갱신 안 되는 것이고, 여기는
                 # 늘어나는데 실제 전송(source_new)만 0이면 필터/게이트 쪽 문제다.
-                if _engine_item_hash(source, title, link) not in _engine_seen_hashes:
+                if not _engine_seen_hashes_has(_engine_item_hash(source, title, link)):
                     unseen += 1
                 if _engine_process_item(source, title, link, _engine_entry_published(e), e.get("summary", "")):
                     source_new += 1
@@ -206,7 +206,7 @@ def _engine_run_google_and_domestic():
             for e in entries[:50]:
                 title = e.get("title", "")
                 link = e.get("link", "")
-                if _engine_item_hash("Google-US", title, link) not in _engine_seen_hashes:
+                if not _engine_seen_hashes_has(_engine_item_hash("Google-US", title, link)):
                     unseen += 1
                 if _engine_process_item("Google-US", title, link, _engine_entry_published(e), e.get("summary", "")):
                     source_new += 1

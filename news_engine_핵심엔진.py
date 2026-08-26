@@ -451,6 +451,14 @@ DISABLE_LEGACY_SUBCOMMAND_OVERRIDES = True
 # (엔진은 기본 60초 주기로 돌므로, 값이 클수록 분당 최대 발송량도 커진다.)
 ENGINE_MAX_SEND_PER_CYCLE = int(os.environ.get("NEWS_BOT_MAX_SEND_PER_CYCLE", "6"))
 ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
+# [중복판정 TTL] 예전엔 한 번 본 링크를 영구히 기억해서, 재시작할 때 파일에 쌓여있던
+# 과거 기록 때문에 실제로는 새 기사인데도 계속 '이미처리'로 막히는 문제가 있었다.
+# 이 시간(시간 단위)이 지나면 같은 링크도 다시 신규로 취급한다. 0이면 예전처럼 영구 차단.
+ENGINE_SEEN_TTL_HOURS = float(os.environ.get("NEWS_BOT_SEEN_TTL_HOURS", "6"))
+# [즉시 리셋] 이 값을 1로 두고 재배포/재시작하면 부팅 시 상태파일을 비우고 새로 시작한다.
+# 지금처럼 막혀버린 상태를 코드 수정 없이 환경변수만으로 즉시 풀 때 쓴다.
+# 한 번 리셋한 뒤에는 다시 0으로 돌려놓는 걸 권장한다(계속 1이면 재시작할 때마다 초기화됨).
+ENGINE_RESET_SEEN_ON_BOOT = os.environ.get("NEWS_BOT_RESET_SEEN", "0") == "1"
 
 # 외부채널(텔레그램/유튜브)은 60분을 기본으로 하며, 시장 마감 후/휴무의 강한 국내 상장기업 재료만 예외 허용한다.
 
@@ -510,7 +518,7 @@ BREAKING_WORDS = {"속보"}
 FEATURE_WORDS = {"특징주"}
 EXCLUSIVE_WORDS = {"단독"}
 
-_engine_seen = set()
+_engine_seen = {}  # {key: 마지막으로 본 시각(epoch)} — TTL 기반 중복판정
 _engine_lock = threading.Lock()
 
 
@@ -693,11 +701,46 @@ def _engine_telegram_mark_sent(item):
 
 def _engine_load_seen():
     global _engine_seen
+    # [즉시 리셋] NEWS_BOT_RESET_SEEN=1 이면 부팅 시 과거 기록을 버리고 새로 시작한다.
+    if ENGINE_RESET_SEEN_ON_BOOT:
+        try:
+            if os.path.exists(ENGINE_STATE_FILE):
+                os.remove(ENGINE_STATE_FILE)
+            _engine_log("info", "[상태] NEWS_BOT_RESET_SEEN=1 → 중복판정 상태파일 초기화함")
+        except Exception as e:
+            log_error("상태파일 초기화", e, file=ENGINE_STATE_FILE)
+        _engine_seen = {}
+        return
+    now = time.time()
+    ttl_sec = ENGINE_SEEN_TTL_HOURS * 3600 if ENGINE_SEEN_TTL_HOURS > 0 else None
     try:
         if os.path.exists(ENGINE_STATE_FILE):
+            loaded = {}
             with open(ENGINE_STATE_FILE, "r", encoding="utf-8") as f:
-                _engine_seen = {x.strip() for x in f if x.strip()}
-        _engine_log("info", "[상태] 이미 처리한 기사=%d건", len(_engine_seen))
+                for line in f:
+                    line = line.rstrip("\n")
+                    if not line:
+                        continue
+                    if "\t" in line:
+                        key, ts_raw = line.rsplit("\t", 1)
+                        try:
+                            ts = float(ts_raw)
+                        except ValueError:
+                            key, ts = line, now
+                    else:
+                        # 예전 포맷(타임스탬프 없이 키만 저장) 하위호환: 지금 시각으로 채워
+                        # TTL이 지금부터 다시 흐르게 한다(과거 기록 때문에 즉시 만료되지 않게).
+                        key, ts = line, now
+                    if not key:
+                        continue
+                    if ttl_sec is None or (now - ts) <= ttl_sec:
+                        loaded[key] = ts
+            _engine_seen = loaded
+        _engine_log(
+            "info", "[상태] 이미 처리한 기사=%d건 (TTL=%s)",
+            len(_engine_seen),
+            f"{ENGINE_SEEN_TTL_HOURS}시간" if ENGINE_SEEN_TTL_HOURS > 0 else "무제한(영구)",
+        )
     except Exception as e:
         log_error("상태파일 읽기", e, file=ENGINE_STATE_FILE)
 
@@ -706,16 +749,19 @@ def _engine_mark_seen(key):
     global _engine_seen
     if not key:
         return False
+    now = time.time()
+    ttl_sec = ENGINE_SEEN_TTL_HOURS * 3600 if ENGINE_SEEN_TTL_HOURS > 0 else None
     with _engine_lock:
-        if key in _engine_seen:
+        prev_ts = _engine_seen.get(key)
+        if prev_ts is not None and (ttl_sec is None or (now - prev_ts) <= ttl_sec):
             return False
-        _engine_seen.add(key)
-        # 메모리 폭주 방지
+        _engine_seen[key] = now
+        # 메모리 폭주 방지: 오래된 것부터 정리
         if len(_engine_seen) > 20000:
-            _engine_seen = set(list(_engine_seen)[-15000:])
+            _engine_seen = dict(sorted(_engine_seen.items(), key=lambda kv: kv[1])[-15000:])
         try:
             with open(ENGINE_STATE_FILE, "a", encoding="utf-8") as f:
-                f.write(key + "\n")
+                f.write(f"{key}\t{now}\n")
         except Exception as e:
             log_error("상태파일 저장", e, file=ENGINE_STATE_FILE)
         return True
@@ -2149,7 +2195,18 @@ def _engine_format_message(item):
     if analysis:
         analysis_lines.append(analysis)
     analysis_lines.extend(str(x).strip() for x in outlook if str(x).strip())
-    analysis_lines = [x for x in analysis_lines if not _engine_line_is_duplicate(x, shown)]
+    # [수정: outlook 자기중복 제거] 기존에는 analysis_lines를 '요약(shown)'과만
+    # 비교했다. outlook 리스트 자체에 같은 문장이 두 번 들어있는 경우(예:
+    # OUTLOOK_PATTERNS의 서로 다른 정규식이 같은 문구로 매칭되는 경우)를
+    # 걸러내지 못해 "🧠 시장 영향/전망" 아래 같은 줄이 반복 출력되는 문제가
+    # 있었다. deduped_analysis에 누적하며 shown과 "자기 자신(누적본)" 양쪽
+    # 모두와 비교해 완전히 같은 결과를 얻는다.
+    deduped_analysis = []
+    for x in analysis_lines:
+        if _engine_line_is_duplicate(x, shown) or _engine_line_is_duplicate(x, deduped_analysis):
+            continue
+        deduped_analysis.append(x)
+    analysis_lines = deduped_analysis
     if analysis_lines:
         lines.append('🧠 <b>시장 영향/전망</b>')
         for x in analysis_lines[:3]:
@@ -2159,6 +2216,14 @@ def _engine_format_message(item):
     if commercial:
         lines.append('🏭 <b>상용화/사업진행</b>')
         lines.append('✔ ' + html.escape(commercial[:220]))
+
+    # [수정: 원문 링크 누락] item['link']가 존재하는데도 이 함수가 한 번도
+    # 참조하지 않아, 원칙 문서의 "출처보존"(뉴스 링크를 보존한다)과 달리
+    # 모든 메시지에서 원문 링크가 통째로 빠져 있었다. 텔레그램 HTML 파싱은
+    # 이미 <b> 태그로 켜져 있으므로 <a href="...">도 그대로 렌더링된다.
+    link = str(item.get('link', '')).strip()
+    if link.startswith('http'):
+        lines.append(f'🔗 <a href="{html.escape(link, quote=True)}">원문 보기</a>')
 
     return '\n'.join(lines)
 
@@ -2189,10 +2254,31 @@ def _engine_item_hash(source, title, link):
 
 
 # [진단용] domestic_국내수집.py가 "이 소스에서 이번이 처음 보는 항목인가"를
-# 세는 용도로만 참조하는 집합. 실제 중복차단 권한은 _engine_mark_seen()
-# (디스크에 영속 저장됨)이 갖고 있고, 이 집합은 그 결과를 함께 반영해
-# 로그 카운트가 실제 상태와 어긋나지 않게 한다.
-_engine_seen_hashes = set()
+# 세는 용도로만 참조하는 딕셔너리({key: 마지막으로 본 시각}). 실제 중복차단 권한은
+# _engine_mark_seen()(디스크에 영속 저장, TTL 적용됨)이 갖고 있고, 이 딕셔너리는
+# 그 결과와 같은 TTL로 맞춰 로그 카운트가 실제 상태와 어긋나지 않게 한다.
+# 주의: 다른 모듈이 이 객체를 import로 직접 참조하므로 절대 재할당(=) 하지 말고
+# 항상 in-place로만(add/pop 대신 아래 헬퍼 함수 사용) 갱신한다.
+_engine_seen_hashes = {}
+
+
+def _engine_seen_hashes_has(key):
+    """[진단용] key가 TTL 이내에 최근 관측된 적 있는지 여부. 실제 중복차단과는 무관."""
+    ttl_sec = ENGINE_SEEN_TTL_HOURS * 3600 if ENGINE_SEEN_TTL_HOURS > 0 else None
+    ts = _engine_seen_hashes.get(key)
+    if ts is None:
+        return False
+    if ttl_sec is not None and (time.time() - ts) > ttl_sec:
+        return False
+    return True
+
+
+def _engine_seen_hashes_touch(key):
+    """[진단용] key를 지금 시각으로 갱신. 객체를 재할당하지 않고 in-place로만 수정한다."""
+    _engine_seen_hashes[key] = time.time()
+    if len(_engine_seen_hashes) > 20000:
+        for k, _ in sorted(_engine_seen_hashes.items(), key=lambda kv: kv[1])[:5000]:
+            _engine_seen_hashes.pop(k, None)
 
 
 def _engine_entry_published(entry):
@@ -2333,7 +2419,7 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
 
         # 0) 중복 처리 방지 (force_send 채널은 매번 새로 평가해도 되므로 통과)
         item_hash = _engine_item_hash(source, title, link)
-        _engine_seen_hashes.add(item_hash)
+        _engine_seen_hashes_touch(item_hash)
         if not force_send:
             if not _engine_mark_seen(item_hash):
                 _bump_stat("이미처리")
