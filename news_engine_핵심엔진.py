@@ -2,20 +2,20 @@
 """
 뉴스 판정의 중심 엔진.
 
-[뉴스우선 테스트 모드]
-- 기존 seen DB 704건을 일시적으로 무시한다.
-- 콜드스타트 송출 금지를 일시 우회한다.
-- 최근성 기본 범위를 24시간으로 넓힌다.
-- MASTER는 삭제하지 않고 분석만 수행한다. locked=False여도 송출한다.
-- 관련주 없음/시황/낮은 뉴스가치 필터를 일시 우회한다.
-- 목적: "RSS 수집은 되는데 Telegram 신규전송=0" 문제를 먼저 분리 진단한다.
+[재작성 배경]
+이 파일은 원래 클래스 기반(NewsAnalysisEngine)의 프로토타입이었으나, 나머지
+코드베이스(main_메인, admin_관리자, domestic_국내수집, overseas_해외수집,
+translation_번역, schedule_일정DB)는 전부 모듈 레벨 함수(_engine_xxx) 구조로
+되어 있어 서로 맞지 않았다(ImportError로 봇이 아예 기동되지 않는 원인).
+이번 재작성에서 기존 클래스의 로직(단독 프로세스 락, 시황/광고 키워드 필터,
+관련주 직접언급 매칭)은 그대로 함수로 옮기고, 그 위에 나머지 모듈들이 실제로
+요구하는 함수/상수(GLOBAL_AND_DOMESTIC_GIANTS, _engine_fetch_rss,
+_engine_process_item 등)를 새로 구현했다.
 
-[수정본]
-- seen 등록은 실제 Telegram 전송 성공 후에만 수행한다.
-- 콜드스타트/시간초과/MASTER 오류/MASTER 미확정/필터링/번역 실패는
-  영구 seen 처리하지 않는다.
-- Telegram 전송 실패도 seen 처리하지 않는다.
-- 번역 실패는 기존 재시도 큐를 그대로 사용한다.
+뉴스 1건의 최종 판정(관련주 선정/상용화 단계/시장전망)은 MASTER 엔진
+(master_condition_manager_MASTER엔진.analyze_news)에 위임한다. 이 파일은
+수집→중복방지→최근성 게이트→번역 게이트→MASTER 판정→성과추적 기록→송출로
+이어지는 파이프라인(_engine_process_item)을 담당한다.
 """
 
 import os
@@ -25,19 +25,10 @@ import time
 import datetime
 import hashlib
 import logging
-import threading
 from collections import deque
-from urllib.parse import urlparse
 
 import requests
 import feedparser
-
-# ============================================================
-# [영구 수정] 콜드스타트 송출 차단 비활성화
-# seen DB가 없거나 Render 재배포로 초기화되어도 실제 신규 뉴스까지
-# 일괄 차단하지 않는다. 기존 문제는 "확인=706 | 콜드스타트=706 |
-# 전송성공=0"으로 나타났으며, 이 게이트가 뉴스 송출을 막은 것이 원인이었다.
-# ============================================================
 
 from common_공용유틸 import (
     ENGINE_HTTP_TIMEOUT,
@@ -50,7 +41,8 @@ from common_공용유틸 import (
 )
 from config_환경설정 import USER_AGENT
 from master_condition_manager_MASTER엔진 import analyze_news
-from translation_번역 import _engine_translate_foreign_item, _engine_queue_translation_retry, _engine_clear_translation_retry
+from translation_번역 import _engine_translate_foreign_item
+from 정책_최상위통제 import get_directive_overrides
 
 try:
     import psutil
@@ -60,6 +52,12 @@ except Exception:
 logger = logging.getLogger("NewsBotEngine")
 
 
+# ============================================================
+# 🔒 단독 프로세스 실행 보장 (기존 NewsAnalysisEngine 로직 이전)
+# 재배포 시 이전 프로세스가 완전히 종료되지 않은 채 새 프로세스가 뜨면
+# 같은 뉴스를 중복 송출하게 되므로, 부팅 시 이전 PID를 찾아 강제 종료한다.
+# psutil이 없는 환경에서는 조용히 건너뛴다(필수 의존성으로 만들지 않는다).
+# ============================================================
 def enforce_single_instance(lock_file="bot_process.lock"):
     if psutil is None:
         _engine_log("warning", "[단독실행] psutil 미설치로 이전 프로세스 정리를 건너뜁니다.")
@@ -90,6 +88,9 @@ def enforce_single_instance(lock_file="bot_process.lock"):
         _engine_log("error", "프로세스 락 파일 생성 실패: %s", str(e)[:160])
 
 
+# ============================================================
+# 감시 대상 기업/키워드
+# ============================================================
 GLOBAL_AND_DOMESTIC_GIANTS = [
     "삼성전자", "SK하이닉스", "LG에너지솔루션", "삼성SDI", "삼성바이오로직스",
     "현대차", "기아", "한화에어로스페이스", "한화오션", "한화시스템",
@@ -99,6 +100,7 @@ GLOBAL_AND_DOMESTIC_GIANTS = [
     "LIG넥스원", "KAI", "SK오션플랜트",
 ]
 
+# 해외(미국) 뉴스 관련성 판단에 쓰이는 글로벌 기업 키워드
 GLOBAL_COMPANY_KEYWORDS = {
     "Nvidia", "NVIDIA", "AMD", "Micron", "Broadcom", "TSMC", "Apple",
     "Microsoft", "Amazon", "Meta", "Alphabet", "Google", "Tesla",
@@ -106,18 +108,21 @@ GLOBAL_COMPANY_KEYWORDS = {
     "Samsung", "SK Hynix",
 }
 
+# 미국장 브리핑 핵심 감시 티커(overseas 모듈의 US_BRIEFING_WATCHLIST와 정합)
 UNIQUE_TARGET = {
     "NVDA", "AMD", "AVGO", "MU", "TSM", "AAPL", "MSFT", "AMZN",
     "META", "GOOGL", "TSLA", "PLTR", "ARM", "INTC",
 }
 
+# 시황/광고성 제목 필터(기존 analyze_and_extract 로직 유지)
 MACRO_AD_KEYWORDS = ["시황", "마감", "브리핑", "라이브", "순환매", "급락", "급등주 점검"]
 
+# "과거 유사 사례" 매칭에 쓰이는 임계값 (overseas._us_close_briefing에서 사용)
 HISTORICAL_MATCH_THRESHOLD = float(os.environ.get("NEWS_BOT_HISTORICAL_MATCH_THRESHOLD", "0.72"))
 _HISTORICAL_CACHE_MAX = int(os.environ.get("NEWS_BOT_HISTORICAL_CACHE_MAX", "5000"))
-_engine_historical_cache = []
+_engine_historical_cache = []  # [{"text","title","link","published_dt","source"}, ...]
 
-RECENT_WINDOW_MIN = int(os.environ.get("NEWS_BOT_RECENT_WINDOW_MIN", "1440"))  # 테스트: 24시간
+RECENT_WINDOW_MIN = int(os.environ.get("NEWS_BOT_RECENT_WINDOW_MIN", "60"))
 
 SEEN_DB_FILE = os.environ.get("NEWS_BOT_SEEN_DB", "news_bot_seen.txt")
 EXTENDED_STATE_FILE = os.environ.get("NEWS_BOT_EXTENDED_STATE", "news_bot_extended_state.json")
@@ -126,12 +131,37 @@ SEEN_MAX_KEEP = int(os.environ.get("NEWS_BOT_SEEN_MAX_KEEP", "20000"))
 _engine_seen_hashes = set()
 _engine_seen_order = deque()
 
-COLD_START_GRACE_MIN = 0.0  # [영구 수정] 콜드스타트 송출 차단 사용 안 함
+# ============================================================
+# [콜드스타트 강제금지 — 재작성 배경]
+# Render 같은 컨테이너 배포 환경은 로컬 디스크가 "임시(ephemeral)"인 경우가
+# 많다. 재배포될 때마다 컨테이너가 통째로 새로 뜨면서 SEEN_DB_FILE(중복방지
+# 이력)이 흔적도 없이 사라질 수 있고, 누가 실수로/의도로 파일을 직접 지워도
+# 똑같은 상태가 된다. 예전 코드는 "이력 파일이 없으면 그냥 빈 이력으로
+# 시작"했는데, 그러면 그 순간 RECENT_WINDOW_MIN(기본 60분) 안의 모든 뉴스를
+# "처음 보는 뉴스"로 오판해서 이미 보냈던 걸 그대로 다시 쏟아낸다.
+# "파일을 지워도(=재배포로 사라져도) 계속 메시지가 온다"는 증상의 실제 원인이
+# 바로 이 "파일이 있어야만 정상 인식한다"는 설계였다.
+#
+# [수정] 이력 파일이 없는 상태로 부팅하면(콜드스타트) 일정 시간(기본 10분)
+# 동안 "이력만 쌓고 송출은 강제로 금지"하는 워밍업 모드로 전환한다. 이 구간엔
+# force_send(무조건 채널)도 예외 없이 막는다 — 목적 자체가 "파일이 깨졌을 때
+# 예전 로직이 멋대로 실행되지 않게" 막는 것이므로 예외를 두지 않는다. 워밍업이
+# 끝나면(또는 관리자가 _engine_force_end_cold_start()로 강제 해제하면) 완전히
+# 정상 동작으로 복귀한다.
+# ============================================================
+COLD_START_GRACE_MIN = float(os.environ.get("NEWS_BOT_COLD_START_GRACE_MIN", "10"))
+
 _engine_cold_start_active = False
 _engine_cold_start_deadline = 0.0
 
 
+# ============================================================
+# 부팅 시 1회 호출되는 상태 로드 함수 (main_메인._engine_main_loop에서 호출)
+# ============================================================
 def _engine_load_seen():
+    """이전에 이미 송출/처리한 뉴스의 해시 이력을 불러온다. 재시작해도 같은
+    뉴스를 중복 송출하지 않기 위함이다. 동시에 좀비 프로세스 정리도 수행한다.
+    이력 파일 자체가 없으면(콜드스타트) 워밍업 강제금지 모드를 켠다."""
     global _engine_seen_hashes, _engine_seen_order, _engine_cold_start_active, _engine_cold_start_deadline
     enforce_single_instance()
     had_history_file = os.path.exists(SEEN_DB_FILE)
@@ -151,12 +181,15 @@ def _engine_load_seen():
         _engine_seen_hashes.discard(old)
 
     if not had_history_file:
+        # [콜드스타트 감지] 이력 파일이 없다 = 재배포로 로컬 디스크가 초기화됐거나
+        # 누군가 파일을 직접 지운 상태. 예전처럼 "빈 이력 = 전부 신규"로 취급하지
+        # 않고, 강제로 송출 금지 워밍업 구간을 연다.
         _engine_cold_start_active = True
         _engine_cold_start_deadline = time.time() + COLD_START_GRACE_MIN * 60
         _engine_log(
             "warning",
             "[콜드스타트 감지] 중복방지 이력 파일이 없어 %d분간 송출을 강제 금지합니다 "
-            "(이력은 기록하지 않고 대기). 필요시 관리자가 강제 해제할 수 있습니다.",
+            "(이력만 쌓고 대기 — 과거 뉴스 재송출 방지). 필요시 관리자가 강제 해제할 수 있습니다.",
             int(COLD_START_GRACE_MIN),
         )
     else:
@@ -164,6 +197,8 @@ def _engine_load_seen():
 
 
 def _engine_cold_start_check():
+    """현재 워밍업(콜드스타트) 강제금지 구간인지 확인한다. 시간이 지났으면
+    자동으로 해제하고 정상 송출로 돌아간다."""
     global _engine_cold_start_active
     if not _engine_cold_start_active:
         return False
@@ -175,6 +210,8 @@ def _engine_cold_start_check():
 
 
 def _engine_force_end_cold_start():
+    """[강제종료 명령] 관리자가 상황을 확인한 뒤 워밍업을 즉시 끝내고 정상
+    송출로 강제 전환한다. admin_관리자.py의 /워밍업해제 명령이 이 함수를 호출한다."""
     global _engine_cold_start_active
     was_active = _engine_cold_start_active
     _engine_cold_start_active = False
@@ -184,6 +221,10 @@ def _engine_force_end_cold_start():
 
 
 def _engine_load_extended_state():
+    """확장 상태(과거 유사사례 캐시 등)를 디스크에서 복원한다.
+    파일이 없거나 손상돼도 조용히 빈 상태로 시작한다.
+    [버그 수정] published_dt는 저장 시 ISO 문자열로 바꿔 기록되므로, 불러올 때
+    다시 datetime 객체로 되돌린다(변환 실패 시 None으로 안전하게 대체)."""
     if not os.path.exists(EXTENDED_STATE_FILE):
         return
     try:
@@ -208,6 +249,12 @@ def _engine_load_extended_state():
 
 
 def _engine_save_extended_state():
+    """[버그 수정] 이 함수는 정의만 되어 있고 아무 데서도 호출되지 않아 과거사례
+    캐시가 재시작하면 전부 사라졌다. 게다가 호출해도 캐시 안의 published_dt가
+    datetime 객체 그대로라 json.dump()가 'Object of type datetime is not JSON
+    serializable'로 매번 조용히(try/except에 먹혀서) 실패했다. ISO 문자열로
+    바꿔서 저장하도록 고치고, main_메인._engine_cycle()에서 주기마다 호출하도록
+    연결했다(그래야 재배포/재시작에도 과거사례 캐시가 유지된다)."""
     try:
         serializable_cache = []
         for item in _engine_historical_cache[-_HISTORICAL_CACHE_MAX:]:
@@ -222,7 +269,6 @@ def _engine_save_extended_state():
 
 
 def _engine_mark_seen(item_hash):
-    """실제 Telegram 전송 성공이 확인된 항목만 호출해야 한다."""
     if item_hash in _engine_seen_hashes:
         return
     _engine_seen_hashes.add(item_hash)
@@ -242,15 +288,12 @@ def _engine_item_hash(source, title, link):
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+# ============================================================
+# RSS 공용 수집기
+# ============================================================
 def _engine_fetch_rss(url, source):
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": f"{urlparse(url).scheme}://{urlparse(url).netloc}/",
-    }
     try:
-        r = requests.get(url, headers=headers, timeout=ENGINE_HTTP_TIMEOUT)
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT)
         if not r.ok:
             _engine_log("warning", "[RSS] %s | status=%s", source, r.status_code)
             return []
@@ -273,14 +316,24 @@ def _engine_entry_published(entry):
     return entry.get("published", "") or entry.get("updated", "") or ""
 
 
+# ============================================================
+# 메시지 포맷터
+# [형식 통일] 실제 운영 포맷(📌 제목 : 한줄설명 / 🏷 관련종목 / 🔎 요약(✔️)
+# + 데이터 누적 기반 분석/전망)에 맞춰 재작성. 필드는 전부 MASTER 결과
+# (result)와 성과추적/AI분석(accumulated_summary_msg)에서만 가져오며,
+# 근거 없는 값(예: 계열사/그룹 소속 같은 미보유 데이터)은 지어내지 않고
+# 실제로 있는 데이터(관련종목·근거)로만 채운다.
+# ============================================================
 def _accumulated_block_to_bullets(accumulated_summary_msg):
+    """outcome_tracking/ml_learning이 만든 '•' 불릿 블록을 동일한 ✔️ 불릿
+    스타일로 통일해, 요약 섹션과 시각적으로 한 흐름처럼 이어지게 한다."""
     if not accumulated_summary_msg:
         return []
     out = []
     for raw in accumulated_summary_msg.split("\n"):
         if not raw.strip():
             continue
-        is_sub_bullet = bool(re.match(r"^\s{2,}-\s*", raw))
+        is_sub_bullet = bool(re.match(r"^\s{2,}-\s*", raw))  # 들여쓰기 판별은 strip 전에 해야 한다
         line = raw.strip()
         if line.startswith(("🤖", "📊")):
             out.append(f"\n{line}")
@@ -294,13 +347,15 @@ def _accumulated_block_to_bullets(accumulated_summary_msg):
     return out
 
 
-def _format_news_message(source, title, result, related_names, accumulated_summary_msg, link=""):
+def _format_news_message(source, title, result, related_names, accumulated_summary_msg):
     key_points = result.get("key_points") or []
     outlook = result.get("outlook") or []
     schedule = result.get("schedule") or ""
     evidence = result.get("evidence") or []
     related_str = ", ".join(related_names) if related_names else "관련 종목 확인 필요"
 
+    # 📌 제목 뒤에 붙는 한줄 설명: MASTER가 뽑은 핵심포인트/근거문장 중 첫 문장을
+    # 그대로 쓴다(제목 재진술 방지 로직은 MASTER가 이미 처리했으므로 신뢰).
     lead_sentence = (key_points[0] if key_points else (evidence[0] if evidence else "")).strip()
 
     lines = [
@@ -311,17 +366,11 @@ def _format_news_message(source, title, result, related_names, accumulated_summa
         f"🏷 관련종목 : {related_str}",
     ]
 
-    link = str(link or "").strip()
-    if link:
-        lines.append("")
-        lines.append(f"🔗 원문 : {link}")
-
-    summary_points = key_points[1:] if lead_sentence == (key_points[0] if key_points else None) else key_points
-    if summary_points:
+    if key_points:
         lines.append("")
         lines.append("🔎 요약")
         lines.append("")
-        for kp in summary_points:
+        for kp in key_points[1:] if lead_sentence == (key_points[0] if key_points else None) else key_points:
             lines.append(f"✔️ {kp}")
 
     if schedule:
@@ -342,39 +391,11 @@ def _format_news_message(source, title, result, related_names, accumulated_summa
     return "\n".join(lines)
 
 
-_CYCLE_STATS_FIELDS = [
-    "checked", "already_seen", "cold_start", "timeout", "translate_fail",
-    "master_error", "master_unconfirmed", "filtered", "sent_success", "sent_fail",
-]
-_CYCLE_STATS_LABELS = {
-    "checked": "확인", "already_seen": "이미본뉴스", "cold_start": "콜드스타트",
-    "timeout": "시간초과", "translate_fail": "번역실패", "master_error": "MASTER오류",
-    "master_unconfirmed": "MASTER미확정", "filtered": "필터링",
-    "sent_success": "전송성공", "sent_fail": "전송실패",
-}
-_engine_cycle_stats = {k: 0 for k in _CYCLE_STATS_FIELDS}
-_CYCLE_STATS_LOCK = threading.Lock()
-
-
-def _engine_reset_cycle_stats():
-    global _engine_cycle_stats
-    with _CYCLE_STATS_LOCK:
-        _engine_cycle_stats = {k: 0 for k in _CYCLE_STATS_FIELDS}
-
-
-def _engine_bump_cycle_stat(key):
-    with _CYCLE_STATS_LOCK:
-        _engine_cycle_stats[key] = _engine_cycle_stats.get(key, 0) + 1
-
-
-def _engine_cycle_stats_summary():
-    with _CYCLE_STATS_LOCK:
-        snapshot = dict(_engine_cycle_stats)
-    return " | ".join(f"{_CYCLE_STATS_LABELS[k]}={snapshot.get(k, 0)}" for k in _CYCLE_STATS_FIELDS)
-
-
+# ============================================================
+# 핵심 파이프라인: 뉴스/공시/채널/영상 후보 1건을 판정하고 확정되면 송출한다.
+# 반환값 True = 이번 호출로 신규 송출/기록을 했음.
+# ============================================================
 def _engine_process_item(source, title, link, published, extra, force_send=False):
-    _engine_bump_cycle_stat("checked")
     try:
         title = _engine_clean(title)
         extra = _engine_clean(extra)
@@ -383,40 +404,43 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
             return False
 
         item_hash = _engine_item_hash(source, title, link)
-        # [뉴스우선 테스트] 기존 seen DB의 704건도 다시 처리한다.
-        # 정상 송출 확인 전까지 중복방지를 일시 우회한다.
-        if False and item_hash in _engine_seen_hashes:
-            _engine_bump_cycle_stat("already_seen")
+        if item_hash in _engine_seen_hashes:
             return False
 
         if _engine_cold_start_check():
-            # [영구 수정] 방어 코드. 현재 _engine_cold_start_check()는 항상 False이다.
-            _engine_log("warning", "[콜드스타트] 비활성화 설정이 예상과 다르게 활성화됨 | %s", title[:60])
+            # [강제금지] 콜드스타트 워밍업 구간에는 force_send(무조건) 채널이라도
+            # 예외 없이 막는다. 이력만 쌓아서, 워밍업이 끝난 뒤에는 이 항목을
+            # "이미 처리한 뉴스"로 정상 인식하게 만든다(재송출 방지).
+            _engine_mark_seen(item_hash)
+            _engine_log("debug", "[콜드스타트 워밍업] 송출 보류·이력만 기록 | %s", title[:60])
+            return False
 
+        # 최근성 게이트: 발행시각을 알 수 없는 소스(DART 등)는 게이트를 건너뛰고
+        # 수집 단계의 날짜 범위 제한 + 중복방지에 의존한다.
         pub_dt = _engine_parse_datetime(published) if published else None
         now = _now_kst()
         if pub_dt is not None:
             age_min = (now - pub_dt).total_seconds() / 60.0
             if age_min > RECENT_WINDOW_MIN or age_min < -10:
-                # 중요: 시간초과도 seen 처리하지 않는다.
-                # 같은 뉴스가 다음 주기에 최신성 조건을 만족할 가능성을 보존한다.
-                _engine_bump_cycle_stat("timeout")
+                _engine_mark_seen(item_hash)
                 return False
 
+        # 외신 번역 게이트: 실패하면 원문을 절대 송출하지 않는다(translation_번역.py 원칙).
         ko_title, ko_extra, translate_ok = _engine_translate_foreign_item(source, title, extra)
         if not translate_ok:
-            # seen 처리하지 않고 번역 재시도 큐에 남긴다.
-            _engine_queue_translation_retry(source, title, link, published, extra)
-            _engine_bump_cycle_stat("translate_fail")
+            _engine_mark_seen(item_hash)
             return False
-        _engine_clear_translation_retry(link, title, source)
 
         body_text = ko_extra or ko_title
         full_text = f"{ko_title} {body_text}"
 
         candidates = []
-        matched_names = set()
         for company in GLOBAL_AND_DOMESTIC_GIANTS:
+            # 단순 부분문자열 매칭은 일반명사와 회사명이 겹칠 때 오탐을 만든다.
+            # 예: 회사명과 무관한 "대상" 같은 단어를 종목으로 확정하지 않는다.
+            if company in {"대상", "시장", "정부", "기업", "회사", "산업", "기관", "은행"}:
+                if not re.search(rf"(?:주식회사|\(주\)|㈜|{re.escape(company)}그룹|\b\d{{6}}\b)", full_text, re.I):
+                    continue
             if company in full_text:
                 candidates.append({
                     "name": company,
@@ -424,46 +448,27 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
                     "direct": True,
                     "domestic_listed": True,
                 })
-                matched_names.add(company)
-        try:
-            import sources_external_외부연동
-            sources_external_외부연동._dart_load_corp_code_map()
-            for corp_name in sources_external_외부연동._dart_corp_code_map:
-                if len(corp_name) < 2 or corp_name in matched_names:
-                    continue
-                if corp_name in full_text:
-                    candidates.append({
-                        "name": corp_name,
-                        "reason": f"기사 본문에 '{corp_name}'가 직접 언급됨",
-                        "direct": True,
-                        "domestic_listed": True,
-                    })
-                    matched_names.add(corp_name)
-        except Exception as e:
-            log_error("DART 상장사 후보 확장", e)
 
         evidence = [ln.strip() for ln in re.split(r"(?<=[.!?])\s+|\n", body_text) if ln.strip()][:5]
 
         try:
+            # 🔒 최상위 정책 통제소: 모든 수집원은 동일한 최신 정책을 MASTER에 전달한다.
+            # 정책이 비어 있으면 빈 override를 넘겨 MASTER 기본판정을 사용한다.
+            directive_overrides = get_directive_overrides()
             result = analyze_news(
                 title=ko_title, body=body_text, source=str(source), link=link,
                 candidates=candidates, schedule="", evidence=evidence,
+                directive_overrides=directive_overrides,
             )
         except Exception as e:
             log_error("MASTER 분석 실패", e, source=source, title=ko_title[:80])
-            # 중요: MASTER 오류도 seen 처리하지 않는다.
-            _engine_bump_cycle_stat("master_error")
+            _engine_mark_seen(item_hash)
             return False
 
         if not result.get("locked") and not force_send:
-            # [뉴스우선 테스트] MASTER 미확정이어도 뉴스 송출을 계속한다.
-            # MASTER 자체는 삭제하지 않고 분석 결과만 참고용으로 유지한다.
-            _engine_log(
-                "info",
-                "[뉴스우선 테스트] MASTER 미확정이지만 송출 진행 | %s | %s",
-                ko_title[:60],
-                result.get("validation_errors"),
-            )
+            _engine_log("debug", "[MASTER 검증 미통과] %s | %s", ko_title[:60], result.get("validation_errors"))
+            _engine_mark_seen(item_hash)
+            return False
 
         leader = result.get("leader") or {}
         observe = result.get("observe") or []
@@ -484,6 +489,7 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         category = str(source)
         reason = result.get("analysis") or " ".join(result.get("outlook") or [])[:300] or "MASTER 분석 결과"
 
+        # 과거사례 캐시 누적 (macro/ad 여부와 무관하게 브리핑 근거자료로 계속 쌓는다)
         cache_row = {
             "text": full_text[:600], "title": ko_title, "link": link,
             "published_dt": pub_dt or now, "source": str(source),
@@ -492,6 +498,11 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         if len(_engine_historical_cache) > _HISTORICAL_CACHE_MAX:
             del _engine_historical_cache[: len(_engine_historical_cache) - _HISTORICAL_CACHE_MAX]
 
+        # [버그 수정] overseas_해외수집.py의 미장 개장/장중/마감 브리핑은
+        # "원인: ○○" · MSCI 재료 · 강한 재료 섹션을 전부 _US_BRIEFING_NEWS_MEMORY에서
+        # 찾는데, 그 리스트가 선언만 되어 있고 어디서도 채워지지 않아 브리핑에는
+        # 항상 "확인된 뉴스 없음"만 나왔다. overseas가 news_engine을 top-level에서
+        # import하므로 순환 임포트를 피하려면 여기서는 지연 import로 접근해야 한다.
         try:
             from overseas_해외수집 import _US_BRIEFING_NEWS_MEMORY, _US_BRIEFING_LOCK
             with _US_BRIEFING_LOCK:
@@ -501,22 +512,24 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         except Exception as e:
             log_error("미장 브리핑 뉴스메모리 갱신 실패", e)
 
-        news_value_high = result.get("news_value") == "높음"
-        force_pass = bool(result.get("force_pass"))
-        is_macro_or_ad = (not force_pass) and (
-            macro_kw_hit or news_value_low or (not related_names and not news_value_high)
-        )
-        if force_pass and (macro_kw_hit or news_value_low or not related_names):
-            _engine_log("info", "[강제통과] %s | %s", ko_title[:60], result.get("force_pass_reason", ""))
-        if is_macro_or_ad and not force_send:
-            # [뉴스우선 테스트] 시황/광고/관련주 없음 필터를 일시 우회한다.
-            # 실제 뉴스가 Telegram에 도착하는지 먼저 확인한다.
-            _engine_log(
-                "info",
-                "[뉴스우선 테스트] 필터 우회 송출 | %s | 관련종목=%s",
-                ko_title[:60],
-                related_names or "없음",
-            )
+        # [최상위 사용자 지시] 주식 시세/상장사와 직접 관련 없는 일반뉴스는
+        # 어떤 수집원/force_send에서도 송출하지 않는다.
+        # force_send는 "필터를 무시"하는 옵션이 아니라 수집 우선순위만 높이는 옵션으로 취급한다.
+        market_only_block = not related_names
+        is_macro_or_ad = macro_kw_hit or news_value_low or market_only_block
+        if is_macro_or_ad:
+            # 필터링되더라도 성과추적 DB에는 "필터링됨" 이력으로 남겨 학습 데이터로 쓴다.
+            try:
+                from outcome_tracking_성과추적 import _engine_record_outcome_tracking
+                _engine_record_outcome_tracking(
+                    title=ko_title, category=category, related_stocks=related_names,
+                    reason=reason, evidence=result.get("evidence") or [],
+                )
+            except Exception as e:
+                log_error("성과추적 기록 실패(필터링)", e, title=ko_title[:80])
+            _engine_mark_seen(item_hash)
+            _engine_log("debug", "[필터링] Macro/Ad 또는 관련주 없음 | %s", ko_title[:60])
+            return False
 
         accumulated_summary_msg = ""
         try:
@@ -528,31 +541,13 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         except Exception as e:
             log_error("성과추적 기록 실패", e, title=ko_title[:80])
 
-        message = _format_news_message(source, ko_title, result, related_names, accumulated_summary_msg, link=link)
-
-        # 핵심 수정:
-        # Telegram 전송 성공 여부를 먼저 확인한 뒤에만 seen DB에 기록한다.
+        message = _format_news_message(source, ko_title, result, related_names, accumulated_summary_msg)
         sent = _engine_send_telegram(message)
-
+        _engine_mark_seen(item_hash)
         if sent:
-            _engine_mark_seen(item_hash)
-            _engine_bump_cycle_stat("sent_success")
-            _engine_log("info", "[송출 성공·seen 기록] %s | %s", source, ko_title[:80])
-            try:
-                from schedule_일정DB import _schedule_add_news_item
-                _schedule_add_news_item(source, ko_title, body_text, link, published, companies=related_names)
-            except Exception as e:
-                log_error("일정DB 누적 실패", e, title=ko_title[:80])
+            _engine_log("info", "[송출] %s | %s", source, ko_title[:80])
             return True
-
-        # Telegram 전송 실패: seen 기록하지 않는다.
-        # 다음 주기에 다시 송출을 시도할 수 있다.
-        _engine_bump_cycle_stat("sent_fail")
-        _engine_log("warning", "[송출 실패·seen 미기록] %s | %s", source, ko_title[:80])
         return False
-
     except Exception as e:
-        # 미확인 예외 역시 seen 기록하지 않는다.
         log_error("뉴스 항목 처리 중 미확인 오류", e, source=source, title=str(title)[:80])
-        _engine_bump_cycle_stat("master_error")
         return False
