@@ -42,7 +42,6 @@ from common_공용유틸 import (
 from config_환경설정 import USER_AGENT
 from master_condition_manager_MASTER엔진 import analyze_news
 from translation_번역 import _engine_translate_foreign_item
-from 정책_최상위통제 import get_directive_overrides
 
 try:
     import psutil
@@ -122,7 +121,7 @@ HISTORICAL_MATCH_THRESHOLD = float(os.environ.get("NEWS_BOT_HISTORICAL_MATCH_THR
 _HISTORICAL_CACHE_MAX = int(os.environ.get("NEWS_BOT_HISTORICAL_CACHE_MAX", "5000"))
 _engine_historical_cache = []  # [{"text","title","link","published_dt","source"}, ...]
 
-RECENT_WINDOW_MIN = int(os.environ.get("NEWS_BOT_RECENT_WINDOW_MIN", "60"))
+RECENT_WINDOW_MIN = int(os.environ.get("NEWS_BOT_RECENT_WINDOW_MIN", "180"))
 
 SEEN_DB_FILE = os.environ.get("NEWS_BOT_SEEN_DB", "news_bot_seen.txt")
 EXTENDED_STATE_FILE = os.environ.get("NEWS_BOT_EXTENDED_STATE", "news_bot_extended_state.json")
@@ -132,40 +131,24 @@ _engine_seen_hashes = set()
 _engine_seen_order = deque()
 
 # ============================================================
-# [콜드스타트 강제금지 — 재작성 배경]
-# Render 같은 컨테이너 배포 환경은 로컬 디스크가 "임시(ephemeral)"인 경우가
-# 많다. 재배포될 때마다 컨테이너가 통째로 새로 뜨면서 SEEN_DB_FILE(중복방지
-# 이력)이 흔적도 없이 사라질 수 있고, 누가 실수로/의도로 파일을 직접 지워도
-# 똑같은 상태가 된다. 예전 코드는 "이력 파일이 없으면 그냥 빈 이력으로
-# 시작"했는데, 그러면 그 순간 RECENT_WINDOW_MIN(기본 60분) 안의 모든 뉴스를
-# "처음 보는 뉴스"로 오판해서 이미 보냈던 걸 그대로 다시 쏟아낸다.
-# "파일을 지워도(=재배포로 사라져도) 계속 메시지가 온다"는 증상의 실제 원인이
-# 바로 이 "파일이 있어야만 정상 인식한다"는 설계였다.
-#
-# [수정] 이력 파일이 없는 상태로 부팅하면(콜드스타트) 일정 시간(기본 10분)
-# 동안 "이력만 쌓고 송출은 강제로 금지"하는 워밍업 모드로 전환한다. 이 구간엔
-# force_send(무조건 채널)도 예외 없이 막는다 — 목적 자체가 "파일이 깨졌을 때
-# 예전 로직이 멋대로 실행되지 않게" 막는 것이므로 예외를 두지 않는다. 워밍업이
-# 끝나면(또는 관리자가 _engine_force_end_cold_start()로 강제 해제하면) 완전히
-# 정상 동작으로 복귀한다.
+# 부팅 즉시 송출
 # ============================================================
-COLD_START_GRACE_MIN = float(os.environ.get("NEWS_BOT_COLD_START_GRACE_MIN", "10"))
-
+# 이력 파일이 없어도 부팅 후 즉시 정상 송출한다.
+# 중복 방지는 _engine_seen_hashes / SEEN_DB_FILE로만 처리한다.
 _engine_cold_start_active = False
 _engine_cold_start_deadline = 0.0
 
 
-# ============================================================
-# 부팅 시 1회 호출되는 상태 로드 함수 (main_메인._engine_main_loop에서 호출)
-# ============================================================
 def _engine_load_seen():
-    """이전에 이미 송출/처리한 뉴스의 해시 이력을 불러온다. 재시작해도 같은
-    뉴스를 중복 송출하지 않기 위함이다. 동시에 좀비 프로세스 정리도 수행한다.
-    이력 파일 자체가 없으면(콜드스타트) 워밍업 강제금지 모드를 켠다."""
+    """이전에 이미 송출/처리한 뉴스의 해시 이력을 불러온다.
+    이력 파일이 없어도 부팅 즉시 정상 송출하며, 중복방지는 해시 이력으로만 처리한다."""
     global _engine_seen_hashes, _engine_seen_order, _engine_cold_start_active, _engine_cold_start_deadline
     enforce_single_instance()
-    had_history_file = os.path.exists(SEEN_DB_FILE)
-    if had_history_file:
+
+    _engine_cold_start_active = False
+    _engine_cold_start_deadline = 0.0
+
+    if os.path.exists(SEEN_DB_FILE):
         try:
             with open(SEEN_DB_FILE, "r", encoding="utf-8") as f:
                 for line in f:
@@ -176,47 +159,22 @@ def _engine_load_seen():
             _engine_log("info", "[중복방지] 과거 처리이력 로드 완료 | %d건", len(_engine_seen_hashes))
         except Exception as e:
             log_error("중복방지 DB 로드", e)
+
     while len(_engine_seen_order) > SEEN_MAX_KEEP:
         old = _engine_seen_order.popleft()
         _engine_seen_hashes.discard(old)
 
-    if not had_history_file:
-        # [콜드스타트 감지] 이력 파일이 없다 = 재배포로 로컬 디스크가 초기화됐거나
-        # 누군가 파일을 직접 지운 상태. 예전처럼 "빈 이력 = 전부 신규"로 취급하지
-        # 않고, 강제로 송출 금지 워밍업 구간을 연다.
-        _engine_cold_start_active = True
-        _engine_cold_start_deadline = time.time() + COLD_START_GRACE_MIN * 60
-        _engine_log(
-            "warning",
-            "[콜드스타트 감지] 중복방지 이력 파일이 없어 %d분간 송출을 강제 금지합니다 "
-            "(이력만 쌓고 대기 — 과거 뉴스 재송출 방지). 필요시 관리자가 강제 해제할 수 있습니다.",
-            int(COLD_START_GRACE_MIN),
-        )
-    else:
-        _engine_cold_start_active = False
-
 
 def _engine_cold_start_check():
-    """현재 워밍업(콜드스타트) 강제금지 구간인지 확인한다. 시간이 지났으면
-    자동으로 해제하고 정상 송출로 돌아간다."""
-    global _engine_cold_start_active
-    if not _engine_cold_start_active:
-        return False
-    if time.time() >= _engine_cold_start_deadline:
-        _engine_cold_start_active = False
-        _engine_log("info", "[콜드스타트 해제] 워밍업 시간 종료 | 정상 송출 재개")
-        return False
-    return True
+    """레거시 호환용. 부팅 지연 송출은 사용하지 않는다."""
+    return False
 
 
 def _engine_force_end_cold_start():
-    """[강제종료 명령] 관리자가 상황을 확인한 뒤 워밍업을 즉시 끝내고 정상
-    송출로 강제 전환한다. admin_관리자.py의 /워밍업해제 명령이 이 함수를 호출한다."""
+    """레거시 호환용. 이미 부팅 즉시 송출이므로 항상 비활성 상태다."""
     global _engine_cold_start_active
     was_active = _engine_cold_start_active
     _engine_cold_start_active = False
-    if was_active:
-        _engine_log("warning", "[콜드스타트 강제해제] 관리자 명령으로 예정 시간 전에 워밍업을 종료했습니다.")
     return was_active
 
 
@@ -407,14 +365,6 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         if item_hash in _engine_seen_hashes:
             return False
 
-        if _engine_cold_start_check():
-            # [강제금지] 콜드스타트 워밍업 구간에는 force_send(무조건) 채널이라도
-            # 예외 없이 막는다. 이력만 쌓아서, 워밍업이 끝난 뒤에는 이 항목을
-            # "이미 처리한 뉴스"로 정상 인식하게 만든다(재송출 방지).
-            _engine_mark_seen(item_hash)
-            _engine_log("debug", "[콜드스타트 워밍업] 송출 보류·이력만 기록 | %s", title[:60])
-            return False
-
         # 최근성 게이트: 발행시각을 알 수 없는 소스(DART 등)는 게이트를 건너뛰고
         # 수집 단계의 날짜 범위 제한 + 중복방지에 의존한다.
         pub_dt = _engine_parse_datetime(published) if published else None
@@ -436,11 +386,6 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
 
         candidates = []
         for company in GLOBAL_AND_DOMESTIC_GIANTS:
-            # 단순 부분문자열 매칭은 일반명사와 회사명이 겹칠 때 오탐을 만든다.
-            # 예: 회사명과 무관한 "대상" 같은 단어를 종목으로 확정하지 않는다.
-            if company in {"대상", "시장", "정부", "기업", "회사", "산업", "기관", "은행"}:
-                if not re.search(rf"(?:주식회사|\(주\)|㈜|{re.escape(company)}그룹|\b\d{{6}}\b)", full_text, re.I):
-                    continue
             if company in full_text:
                 candidates.append({
                     "name": company,
@@ -452,13 +397,9 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         evidence = [ln.strip() for ln in re.split(r"(?<=[.!?])\s+|\n", body_text) if ln.strip()][:5]
 
         try:
-            # 🔒 최상위 정책 통제소: 모든 수집원은 동일한 최신 정책을 MASTER에 전달한다.
-            # 정책이 비어 있으면 빈 override를 넘겨 MASTER 기본판정을 사용한다.
-            directive_overrides = get_directive_overrides()
             result = analyze_news(
                 title=ko_title, body=body_text, source=str(source), link=link,
                 candidates=candidates, schedule="", evidence=evidence,
-                directive_overrides=directive_overrides,
             )
         except Exception as e:
             log_error("MASTER 분석 실패", e, source=source, title=ko_title[:80])
@@ -512,12 +453,8 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         except Exception as e:
             log_error("미장 브리핑 뉴스메모리 갱신 실패", e)
 
-        # [최상위 사용자 지시] 주식 시세/상장사와 직접 관련 없는 일반뉴스는
-        # 어떤 수집원/force_send에서도 송출하지 않는다.
-        # force_send는 "필터를 무시"하는 옵션이 아니라 수집 우선순위만 높이는 옵션으로 취급한다.
-        market_only_block = not related_names
-        is_macro_or_ad = macro_kw_hit or news_value_low or market_only_block
-        if is_macro_or_ad:
+        is_macro_or_ad = macro_kw_hit or news_value_low or not related_names
+        if is_macro_or_ad and not force_send:
             # 필터링되더라도 성과추적 DB에는 "필터링됨" 이력으로 남겨 학습 데이터로 쓴다.
             try:
                 from outcome_tracking_성과추적 import _engine_record_outcome_tracking
