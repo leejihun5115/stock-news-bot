@@ -81,6 +81,7 @@ IMPLEMENTED_CONDITION_NAMES = frozenset({
     "대장주선정", "대장주이유", "관찰후보", "관련주없음", "점수화",
     "조건중앙관리", "FINAL_LOCK",
     "Formatter무판단", "Telegram무판단", "재호출금지",
+    "강한재료무조건통과", "특징주단독속보무조건통과",
 })
 
 CONDITION_RULES = [
@@ -155,6 +156,8 @@ CONDITION_RULES = [
     {"order": 63, "name": "실제송출검증", "rule": "Telegram 결과와 MASTER 결과가 동일한지 확인한다."},
     {"order": 64, "name": "문제국소수정", "rule": "문제 조건만 수정하고 정상 조건은 건드리지 않는다."},
     {"order": 65, "name": "조건중앙관리", "rule": "모든 핵심 조건값과 판단 순서를 이 모듈 한 곳에서 관리한다."},
+    {"order": 66, "name": "강한재료무조건통과", "rule": "수주·계약·기술이전·특허·M&A·유무상증자·자사주·역대실적·품목허가 등 신선하고 시장반응 가능성이 높은 정해진 키워드 패턴이 확인되면, 뉴스가치 점수·관련종목 매칭 여부와 무관하게 시황/광고 필터를 통과시킨다."},
+    {"order": 67, "name": "특징주단독속보무조건통과", "rule": "제목에 '특징주' 또는 '단독속보'(단독+속보) 표현이 있고 주식시장 문맥이 확인되면 무조건 통과시킨다."},
 ]
 
 # [문서용 자동 태깅] 각 원칙에 "전용 파이프라인 스텝이 있는가"를 표시한다.
@@ -183,6 +186,7 @@ PIPELINE_STEPS = (
     ("related_none_reason", ("related_none_reason",), True),
     ("outlook", ("outlook",), True),
     ("news_value", ("news_value", "master_confirmed"), True),
+    ("force_pass", ("force_pass", "force_pass_reason"), True),
     ("evidence", ("evidence",), True),
     # user_directive: directive_overrides가 실제로 넘어왔을 때만 도는 선택적 스텝
     # (유일하게 이미 확정된 필드를 덮어쓸 수 있는 예외 경로 — 최종사용자지시우선).
@@ -222,6 +226,9 @@ class MasterResult:
     # [수정] Formatter(main.py)가 '🧠 분석' 섹션에 사용하는 필드인데 기존에는
     # MasterResult에 정의조차 되어 있지 않아 항상 빈 값으로만 읽혔다.
     analysis: str = ""
+    # [강한 재료 / 특징주·단독속보 무조건 통과] 유일한 소유자: _force_pass
+    force_pass: bool = False
+    force_pass_reason: str = ""
 
     def as_dict(self):
         return self.__dict__.copy()
@@ -275,6 +282,40 @@ DISABLE_LEGACY_SUBCOMMAND_OVERRIDES = True
 # 7) 위 원칙과 충돌하는 하위 출력 규칙은 적용하지 않는다.
 # ============================================================
 FIXED_OUTPUT_PRINCIPLE = True
+
+# ============================================================
+# [강한 재료 / 특징주·단독속보 무조건 통과]
+# ------------------------------------------------------------
+# 배경: 기존엔 news_value 점수(_news_value)가 40~65점을 못 넘거나 관련종목이
+# 안 잡히면, 실제로는 시장이 반응할 만한 신선한 소재(수주·계약·기술이전·특허·
+# M&A·유무상증자·자사주·역대 실적 등)도 "낮음"으로 밀려 필터링됐다. 점수제는
+# 여러 요소를 종합 평가하는 데는 맞지만, "이 키워드 자체가 곧 시장 반응 신호"인
+# 강한 재료까지 점수 합산 로직에 묻히면 안 된다. 이런 패턴은 점수와 무관하게
+# 별도 스텝(_force_pass)에서 독립적으로 판정하고, 걸리면 news_engine 단의
+# 시황/광고 필터를 무조건 통과시킨다(단, 파이프라인 검증 자체는 그대로 거친다).
+#
+# 특징주/단독속보도 같은 이유로 별도 처리한다: 이 두 표현은 그 자체가 "지금 이
+# 종목/이슈에 시장이 반응하고 있다"는 편집자의 실시간 판단이 이미 담긴 표현이라,
+# MASTER의 사후 점수화보다 신뢰도가 높다고 보고 주식시장 문맥이 확인되면 무조건
+# 통과시킨다.
+# ============================================================
+STRONG_MATERIAL_PATTERN = re.compile(
+    r"수주|공급계약|공급\s*계약|장기\s*공급계약|계약\s*체결|납품\s*계약|양해각서|MOU|"
+    r"기술\s*이전|라이선스\s*(?:인|아웃|계약)|특허\s*(?:등록|출원|취득)|"
+    r"인수\s*합병|M&A|지분\s*인수|경영권\s*인수|"
+    r"유상\s*증자|무상\s*증자|자사주\s*(?:매입|소각)|"
+    r"사상\s*최대|역대\s*최대|최대\s*실적|어닝\s*서프라이즈|깜짝\s*실적|흑자\s*전환|"
+    r"FDA\s*승인|품목\s*허가|식약처\s*승인|임상\s*(?:1상|2상|3상)\s*(?:승인|성공|완료|개시)?|"
+    r"신규\s*상장|공모가|상한가|하한가|급등|급락",
+    re.I,
+)
+FEATURED_STOCK_PATTERN = re.compile(r"특징주")
+EXCLUSIVE_BREAKING_PATTERN = re.compile(r"단독\s*속보|속보.{0,10}단독|단독.{0,10}속보")
+# 특징주/단독속보가 "주식시장 관련 기사"인지 최소 확인하는 문맥 키워드
+# (관련종목이 하나도 안 잡혀도 이 중 하나만 있으면 증권 기사로 인정한다)
+STOCK_MARKET_CONTEXT_PATTERN = re.compile(
+    r"코스피|코스닥|증시|주가|주식|상장사|종목|매수|매도|시가총액|투자자|증권가|애널리스트",
+)
 
 class MasterConditionManager:
     """
@@ -939,6 +980,29 @@ class MasterConditionManager:
         if score >= 40: return "중간"
         return "낮음"
 
+    def _force_pass(self, text, title, related):
+        """[강한재료무조건통과 / 특징주단독속보무조건통과] 유일한 소유자.
+        news_value 점수화(_news_value)와는 완전히 별도 판정이다. 점수는 여러
+        약한 신호를 종합하는 데는 맞지만, 그 자체로 이미 시장 반응 신호인
+        키워드(수주·계약·M&A·특허·역대실적 등)나 '특징주'/'단독속보'처럼 편집자가
+        이미 실시간성을 판단해 붙인 표현까지 점수 합산에 묻혀 낮음으로 밀려나면
+        안 된다. 여기서 True가 나오면 news_engine 쪽 시황/광고 필터를 무조건
+        통과한다(파이프라인 검증 자체는 그대로 거친다)."""
+        m = STRONG_MATERIAL_PATTERN.search(text)
+        if m:
+            return True, f"강한 재료 키워드 감지: '{m.group(0)}'"
+
+        title_has_featured = bool(FEATURED_STOCK_PATTERN.search(title))
+        title_has_exclusive = bool(EXCLUSIVE_BREAKING_PATTERN.search(title))
+        if title_has_featured or title_has_exclusive:
+            # 주식시장 관련 기사인지 최소 확인: 관련종목이 이미 하나라도 잡혔거나,
+            # 본문에 증권 문맥 키워드가 있으면 인정한다.
+            is_stock_market_context = bool(related) or bool(STOCK_MARKET_CONTEXT_PATTERN.search(text))
+            if is_stock_market_context:
+                label = "특징주" if title_has_featured else "단독속보"
+                return True, f"{label} 표현 + 주식시장 문맥 확인"
+        return False, ""
+
     def _own(self, state, owner, **fields):
         """[노하우: 소유권 가드] 판단 필드는 파이프라인에서 정확히 한 스텝만 써야 한다.
         이미 다른 스텝(owner)이 확정한 필드를 또 다른 스텝이 쓰려고 하면, 예전처럼
@@ -1042,6 +1106,10 @@ class MasterConditionManager:
         )
         self._own(state, "news_value", news_value=news_value, master_confirmed=master_confirmed)
 
+        # 9-1) 강한재료무조건통과/특징주단독속보무조건통과 — 유일한 소유자: _force_pass
+        force_pass, force_pass_reason = self._force_pass(text, state["title"], state["related"])
+        self._own(state, "force_pass", force_pass=force_pass, force_pass_reason=force_pass_reason)
+
         # 10) 증거 — 원문 근거 문장과 핵심요약을 합쳐 중복 제거
         self._own(state, "evidence", evidence=list(dict.fromkeys(state["evidence_seed"] + state["key_points"])))
 
@@ -1086,6 +1154,8 @@ class MasterConditionManager:
             related_none_reason=state["related_none_reason"],
             news_value=state["news_value"],
             master_confirmed=state["master_confirmed"],
+            force_pass=state["force_pass"],
+            force_pass_reason=state["force_pass_reason"],
             priority_trace=state["priority_trace"],
             executed_orders=[],  # [폐기 예정] 더 이상 실행 게이트로 쓰이지 않는다 — 실제 기록은 executed_steps 참조
             executed_steps=list(state["executed_steps"]),

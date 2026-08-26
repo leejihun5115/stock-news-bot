@@ -358,7 +358,7 @@ def _accumulated_block_to_bullets(accumulated_summary_msg):
     return out
 
 
-def _format_news_message(source, title, result, related_names, accumulated_summary_msg):
+def _format_news_message(source, title, result, related_names, accumulated_summary_msg, link=""):
     key_points = result.get("key_points") or []
     outlook = result.get("outlook") or []
     schedule = result.get("schedule") or ""
@@ -377,11 +377,22 @@ def _format_news_message(source, title, result, related_names, accumulated_summa
         f"🏷 관련종목 : {related_str}",
     ]
 
-    if key_points:
+    # [버그 수정] link 인자가 아예 없어 원문 링크가 어떤 메시지에도 붙지 못했다.
+    # 이제 실제 기사 링크가 있을 때만 노출한다(없으면 줄 자체를 생략).
+    link = str(link or "").strip()
+    if link:
+        lines.append("")
+        lines.append(f"🔗 원문 : {link}")
+
+    # [버그 수정] key_points가 1개뿐이면 그 1개는 이미 위 lead_sentence로 다 써버려서
+    # key_points[1:]가 빈 리스트가 되는데, 그래도 "🔎 요약" 헤더는 무조건 찍혀서
+    # 내용 없는 요약란이 노출됐다. 실제로 보여줄 불릿이 있을 때만 헤더를 붙인다.
+    summary_points = key_points[1:] if lead_sentence == (key_points[0] if key_points else None) else key_points
+    if summary_points:
         lines.append("")
         lines.append("🔎 요약")
         lines.append("")
-        for kp in key_points[1:] if lead_sentence == (key_points[0] if key_points else None) else key_points:
+        for kp in summary_points:
             lines.append(f"✔️ {kp}")
 
     if schedule:
@@ -499,7 +510,18 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         body_text = ko_extra or ko_title
         full_text = f"{ko_title} {body_text}"
 
+        # [필터 확장] 기존엔 GLOBAL_AND_DOMESTIC_GIANTS(하드코딩 27개 대형주)에 이름이
+        # 있어야만 후보로 잡혀서, 중소형주 위주 소스(CS타임즈/더구루/폴리트폴 등) 기사는
+        # 관련종목이 거의 안 잡히고 그대로 필터링됐다. DART 상장사 전체 명단
+        # (sources_external_외부연동._dart_corp_code_map, 약 2천여 개)을 후보 추출에
+        # 사용해 코스피/코스닥 상장사 전체로 커버리지를 넓힌다. 27개 리스트 자체는
+        # 다른 곳(네이버 검색 쿼리 등)에서 계속 쓰이므로 상수는 남겨두되, 후보 판정에는
+        # 더 이상 그 27개로 제한하지 않는다.
+        # 순환 임포트 회피를 위해 모듈째 지연 임포트하고, 매번 모듈 속성으로 접근한다
+        # (from ... import _dart_corp_code_map 형태는 딕셔너리가 나중에 재할당되면
+        # 이 시점의 옛 빈 딕셔너리를 계속 참조하게 되어 최신 매핑을 못 본다).
         candidates = []
+        matched_names = set()
         for company in GLOBAL_AND_DOMESTIC_GIANTS:
             if company in full_text:
                 candidates.append({
@@ -508,6 +530,25 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
                     "direct": True,
                     "domestic_listed": True,
                 })
+                matched_names.add(company)
+        try:
+            import sources_external_외부연동
+            sources_external_외부연동._dart_load_corp_code_map()
+            for corp_name in sources_external_외부연동._dart_corp_code_map:
+                # 한두 글자짜리 이름은 본문 다른 단어 속에 우연히 포함돼 오탐을 낼
+                # 위험이 커서 제외한다.
+                if len(corp_name) < 2 or corp_name in matched_names:
+                    continue
+                if corp_name in full_text:
+                    candidates.append({
+                        "name": corp_name,
+                        "reason": f"기사 본문에 '{corp_name}'가 직접 언급됨",
+                        "direct": True,
+                        "domestic_listed": True,
+                    })
+                    matched_names.add(corp_name)
+        except Exception as e:
+            log_error("DART 상장사 후보 확장", e)
 
         evidence = [ln.strip() for ln in re.split(r"(?<=[.!?])\s+|\n", body_text) if ln.strip()][:5]
 
@@ -570,7 +611,20 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         except Exception as e:
             log_error("미장 브리핑 뉴스메모리 갱신 실패", e)
 
-        is_macro_or_ad = macro_kw_hit or news_value_low or not related_names
+        # [필터 완화] 기존엔 related_names(관련종목)가 하나도 없으면 뉴스가치와 무관하게
+        # 무조건 필터링했다. 이제 관련종목이 없어도 MASTER가 뉴스가치를 "높음"으로
+        # 판정했다면(정책/산업 이슈 등 종목 콕 집기 어려운 굵직한 소재) 통과시킨다.
+        news_value_high = result.get("news_value") == "높음"
+        # [강한재료무조건통과 / 특징주단독속보무조건통과] MASTER._force_pass가 True면
+        # (수주·계약·특허·M&A 등 강한 재료 키워드, 또는 특징주/단독속보 + 주식시장 문맥)
+        # 관련종목 매칭 여부·뉴스가치 점수·macro_kw_hit(시황/마감 등)과 무관하게
+        # 무조건 통과시킨다.
+        force_pass = bool(result.get("force_pass"))
+        is_macro_or_ad = (not force_pass) and (
+            macro_kw_hit or news_value_low or (not related_names and not news_value_high)
+        )
+        if force_pass and (macro_kw_hit or news_value_low or not related_names):
+            _engine_log("info", "[강제통과] %s | %s", ko_title[:60], result.get("force_pass_reason", ""))
         if is_macro_or_ad and not force_send:
             # 필터링되더라도 성과추적 DB에는 "필터링됨" 이력으로 남겨 학습 데이터로 쓴다.
             try:
@@ -596,7 +650,7 @@ def _engine_process_item(source, title, link, published, extra, force_send=False
         except Exception as e:
             log_error("성과추적 기록 실패", e, title=ko_title[:80])
 
-        message = _format_news_message(source, ko_title, result, related_names, accumulated_summary_msg)
+        message = _format_news_message(source, ko_title, result, related_names, accumulated_summary_msg, link=link)
         sent = _engine_send_telegram(message)
         _engine_mark_seen(item_hash)
         if sent:

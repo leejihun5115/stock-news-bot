@@ -87,7 +87,12 @@ def _engine_translate_to_korean(text: str) -> str:
         _TRANSLATION_CACHE[text] = text
         return text
 
-    for attempt in range(1):
+    # [버그 수정] 기존에는 for attempt in range(1) + "if attempt < 0: continue" 조합 때문에
+    # attempt가 항상 0이라 이 조건이 절대 참이 될 수 없었다. 즉 주석과 달리 429/5xx가
+    # 뜨면 실제로는 단 한 번도 재시도하지 않고 바로 포기하고 있었다. 이제 최대 3회
+    # 시도하며, 429/5xx는 지수 백오프(1초 → 2초)로 재시도한다.
+    max_attempts = 3
+    for attempt in range(max_attempts):
         # [요청 간격 강제] 마지막 호출 이후 최소 간격이 지나지 않았으면 대기한다.
         # 이걸 안 하면 같은 사이클에서 뉴스 여러 건이 몰릴 때 Google이 429로 막는다.
         with _TRANSLATE_LOCK:
@@ -108,8 +113,12 @@ def _engine_translate_to_korean(text: str) -> str:
             )
             if r.status_code == 429 or r.status_code >= 500:
                 # [429/일시적 오류] 즉시 포기하지 않고 짧게 대기 후 재시도한다
-                # (1차 1초, 2차 2초 백오프). 마지막 시도까지 실패하면 아래에서 빈 문자열 반환.
-                if attempt < 0:
+                # (1차 1초, 2차 2초 백오프). 마지막 시도까지 실패하면 재시도 큐로 넘긴다.
+                if attempt < max_attempts - 1:
+                    backoff = 1.0 * (2 ** attempt)
+                    _engine_log("warning", "[번역 재시도] 외신 | status=%s | %.1f초 후 %d번째 재시도",
+                                r.status_code, backoff, attempt + 2)
+                    time.sleep(backoff)
                     continue
                 _engine_log("warning", "[번역 실패] 외신 | status=%s | 이번 주기는 스킵하고 재시도 큐로 이동", r.status_code)
                 break
@@ -123,7 +132,7 @@ def _engine_translate_to_korean(text: str) -> str:
                     return translated
             break
         except Exception as e:
-            if attempt < 2:
+            if attempt < max_attempts - 1:
                 _engine_log("warning", "[번역 재시도] 외신 | 원인=%s | %d번째 재시도 예정", str(e)[:120], attempt + 2)
                 time.sleep(1.0 * (attempt + 1))
                 continue
@@ -171,9 +180,12 @@ def _engine_retry_translation_queue():
                    if float(e.get("next_retry_at", 0) or 0) <= now]
     if not pending:
         return
-    # 번역 재시도가 한 사이클 전체를 붙잡지 않도록 최대 2건만 처리한다.
-    pending = pending[:2]
-    _engine_log("info", "[번역 재시도 큐] 대기=%d건 | 이번 주기 최대 2건 처리", len(pending))
+    # [조정] 기존엔 한 사이클(60초)에 최대 2건만 처리해, 한 번에 6건이 몰리면
+    # 나머지 4건이 몇 분씩 밀리다 최대 재시도(5회) 초과로 영구 폐기되는 경우가
+    # 있었다. 번역 자체에 이미 요청 간격(4.5초)이 있어 한 사이클 안에서도
+    # 5건 정도는 안전하게 처리 가능하므로 5건으로 늘린다.
+    pending = pending[:5]
+    _engine_log("info", "[번역 재시도 큐] 대기=%d건 | 이번 주기 최대 5건 처리", len(pending))
     for entry in pending:
         try:
             _engine_process_item(entry["source"], entry["title"], entry["link"],
