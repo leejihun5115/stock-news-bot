@@ -34,7 +34,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from common_공용유틸 import ENGINE_HTTP_TIMEOUT, _clean_secret_env, _engine_clean, _engine_log, _engine_send_telegram, _now_kst, log_error
 from config_환경설정 import ENABLE_DOMESTIC_INTRADAY_BRIEFING, ENABLE_DOMESTIC_NEWS, ENABLE_NAVER_NEWS, ENABLE_US_NEWS, KRX_HOLIDAYS_2026, USER_AGENT
 from news_engine_핵심엔진 import GLOBAL_AND_DOMESTIC_GIANTS, _engine_entry_published, _engine_fetch_rss, _engine_item_hash, _engine_process_item, _engine_seen_hashes
-from overseas_해외수집 import US_RSS_URLS, _us_direction, _us_display_name, _us_format_pct, _yahoo_chart_quote
+from overseas_해외수집 import US_RSS_URLS, _us_direction, _us_display_name, _us_format_pct, _us_format_price, _yahoo_chart_quote
 from sources_external_외부연동 import _dart_stock_code_for_name
 
 
@@ -682,13 +682,17 @@ def _krx_rank_themes(snapshot):
     ranked = []
     for theme, qs in groups.items():
         total_value = sum(float(q.get("trade_value") or 0) for q in qs)
+        avg_pct = sum(float(q.get("change_pct") or 0) for q in qs) / max(1, len(qs))
         leader_by_value = max(qs, key=lambda q: float(q.get("trade_value") or 0))
         leader_by_pct = max(qs, key=lambda q: abs(float(q.get("change_pct") or 0)))
         ranked.append({
-            "theme": theme, "total_value": total_value, "members": qs,
+            "theme": theme, "total_value": total_value, "avg_pct": avg_pct, "members": qs,
             "leader_by_value": leader_by_value, "leader_by_pct": leader_by_pct,
         })
-    ranked.sort(key=lambda x: x["total_value"], reverse=True)
+    # [변경] 기존에는 거래대금 합산 1위 순으로 테마를 나열했다. 요청에 따라
+    # "시장에서 가장 핫한 테마 = 상승률이 가장 높은 테마"가 먼저 오도록,
+    # 테마 평균 등락률(avg_pct) 기준 내림차순으로 정렬한다.
+    ranked.sort(key=lambda x: x["avg_pct"], reverse=True)
     return ranked
 
 
@@ -771,10 +775,17 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     else:
         lines.append("• 기관 수급 · 확인불가")
 
+    # [변경] 등락률만으로는 감이 안 와 실제 가격도 함께 표기한다.
     fx = snapshot.get("USDKRW=X")
-    lines.append(f"<b>💱 원/달러</b> · {_us_format_pct(fx.get('change_pct')) if fx else '확인불가'}")
+    if fx and fx.get("price") is not None:
+        lines.append(f"<b>💱 원/달러</b> · {_us_format_price(fx.get('price'), '원')} ({_us_format_pct(fx.get('change_pct'))})")
+    else:
+        lines.append("<b>💱 원/달러</b> · 확인불가")
     oil = snapshot.get("CL=F")
-    lines.append(f"<b>💱 유가</b> · WTI {_us_format_pct(oil.get('change_pct')) if oil else '확인불가'}")
+    if oil and oil.get("price") is not None:
+        lines.append(f"<b>💱 유가</b> · WTI {_us_format_price(oil.get('price'), '달러')} ({_us_format_pct(oil.get('change_pct'))})")
+    else:
+        lines.append("<b>💱 유가</b> · WTI 확인불가")
 
     # ------------------------------------------------------------
     # 📊 시장 분석: 거래대금 1/2/3등 테마 + 대장주/급등종목 + 특이종목 +
@@ -797,10 +808,9 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
             covered_symbols.add(lead_p.get("name"))
 
             reason_title, reason_link = _krx_recent_reason(lead_v.get("name", ""), r["theme"])
+            # [변경] 근거를 못 찾으면 "확인된 관련 뉴스 없음" 문구를 넣지 않고 줄 자체를 생략한다.
             if reason_title:
                 lines.append(f"  ↳ 이유: {html.escape(reason_title)}")
-            else:
-                lines.append("  ↳ 이유: 확인된 관련 뉴스 없음")
 
             past = _krx_similar_past_move(r["theme"])
             if past:
@@ -808,25 +818,38 @@ def _krx_briefing_message(snapshot, et, events=None, opening=False):
     else:
         lines.append("• 테마별 유의미한 거래대금 데이터 없음")
 
-    # 테마 상위 3개에 포함되지 않은 종목 중 변동폭이 큰 "특이 종목"만 별도 언급
-    notable = []
+    # ------------------------------------------------------------
+    # ⭐ 특이 종목: 위 시장분석(테마 랭킹)과 서로 무관하게 뽑던 기존 로직을
+    # 바꿔, "이미 랭킹된 테마에 속해 있고(관련성) + 거래대금이 크고 +
+    # 상승률이 높은" 종목을 우선하도록 중요도 점수를 매긴다. 그리고
+    # 근거(관련 뉴스)를 확인하지 못한 종목은 "이유 없음"으로 채우지 않고
+    # 아예 후보에서 제외한다 — 이유가 명백한 종목만 언급한다는 요청 반영.
+    # ------------------------------------------------------------
+    theme_rank_index = {r["theme"]: i for i, r in enumerate(ranked)}
+    notable_candidates = []
     for s, q in snapshot.items():
         if s in {"^KS11", "^KQ11", "USDKRW=X", "CL=F"}:
             continue
         pct = q.get("change_pct")
         if pct is None or q.get("name") in covered_symbols:
             continue
-        if abs(pct) >= KRX_STOCK_MOVE_THRESHOLD:
-            notable.append(q)
-    notable.sort(key=lambda q: abs(q.get("change_pct") or 0), reverse=True)
-    if notable:
+        if abs(pct) < KRX_STOCK_MOVE_THRESHOLD:
+            continue
+        reason_title, _ = _krx_recent_reason(q.get("name", ""), q.get("theme", ""))
+        if not reason_title:
+            continue
+        trade_value = float(q.get("trade_value") or 0)
+        theme_pos = theme_rank_index.get(q.get("theme"))
+        # 시장분석에서 이미 상위로 랭킹된(더 핫한) 테마에 속한 종목일수록 가산점을 준다.
+        theme_bonus = max(0, 3 - theme_pos) * 5.0 if theme_pos is not None else 0.0
+        importance = abs(pct) + (trade_value / 1_000_000.0) + theme_bonus
+        notable_candidates.append((importance, q, reason_title))
+    notable_candidates.sort(key=lambda x: x[0], reverse=True)
+    if notable_candidates:
         lines += ["", "<b>⭐ 특이 종목</b>"]
-        for q in notable[:5]:
+        for importance, q, reason_title in notable_candidates[:5]:
             pct = q.get("change_pct")
-            reason_title, _ = _krx_recent_reason(q.get("name", ""), q.get("theme", ""))
-            line = f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
-            line += f" · 이유: {html.escape(reason_title)}" if reason_title else " · 이유: 확인된 관련 뉴스 없음"
-            lines.append(line)
+            lines.append(f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']} · 이유: {html.escape(reason_title)}")
 
     if events:
         lines += ["", "<b>🚨 장중 구조 변화</b>"]

@@ -204,6 +204,9 @@ US_BRIEFING_WATCHLIST = {
     "PLTR": ("팔란티어", "AI"),
     "ARM": ("ARM", "반도체"),
     "INTC": ("인텔", "반도체"),
+    # [2026-07-10] SK하이닉스 나스닥 ADR 상장(SKHY) — 국내 대장주의 미국시간
+    # 반응을 직접 확인할 수 있게 되어 감시종목에 추가한다.
+    "SKHY": ("SK하이닉스 ADR", "메모리·HBM"),
 }
 
 _US_BRIEFING_LAST_RUN_DATE = None
@@ -334,7 +337,7 @@ US_TICKER_NAME = {
     "NVDA": "엔비디아", "AMD": "AMD", "AVGO": "브로드컴", "MU": "마이크론",
     "TSM": "TSMC", "AAPL": "애플", "MSFT": "마이크로소프트", "AMZN": "아마존",
     "META": "메타", "GOOGL": "알파벳", "TSLA": "테슬라", "PLTR": "팔란티어",
-    "ARM": "암 홀딩스", "INTC": "인텔",
+    "ARM": "암 홀딩스", "INTC": "인텔", "SKHY": "SK하이닉스",
 }
 
 def _us_display_name(symbol, name):
@@ -355,6 +358,19 @@ def _us_format_pct(pct):
     return f"{pct:+.2f}%"
 
 
+# ============================================================
+# [기능 추가] 원/달러·유가처럼 등락률만으로는 감이 안 오는 항목은 실제 가격도
+# 함께 보여준다. 가격이 없으면(시세 확인 실패) 추정하지 않고 "확인불가"로 남긴다.
+# ============================================================
+def _us_format_price(price, unit=""):
+    if price is None:
+        return "확인불가"
+    try:
+        return f"{float(price):,.2f}{unit}"
+    except Exception:
+        return "확인불가"
+
+
 def _us_open_briefing(snapshot, et):
     indices = ["^IXIC", "^GSPC", "^DJI", "^SOX", "^VIX"]
     macro = ["USDKRW=X", "CL=F", "GC=F"]
@@ -368,40 +384,52 @@ def _us_open_briefing(snapshot, et):
         q = snapshot.get(s)
         if q:
             lines.append(f"• {_us_display_name(s, q['name'])} {_us_direction(q.get('change_pct'))} {_us_format_pct(q.get('change_pct'))}")
+    # [버그 수정] 기존에는 for문 밖에서 남은 루프 변수 s를 그대로 써서
+    # _us_display_name에 엉뚱한 심볼이 들어가고 있었다. 종목별 심볼을 함께
+    # 들고 다녀 정확한 표기명이 나오게 한다.
     movers = []
     for s, q in snapshot.items():
         if s in indices or s in macro:
             continue
         if q.get("change_pct") is not None:
-            movers.append(q)
-    movers.sort(key=lambda x: abs(x.get("change_pct") or 0), reverse=True)
-    lines += ["", "<b>🔥 강한 종목/테마</b>"]
-    for q in movers[:6]:
+            movers.append((s, q))
+    movers.sort(key=lambda x: abs(x[1].get("change_pct") or 0), reverse=True)
+    # [변경] "이유를 못 찾으면 이유 없음" 문구 대신, 근거가 확인된 종목만
+    # 특이 종목으로 언급한다. 근거 없는 종목은 후보에서 제외한다.
+    mover_lines = []
+    for sym, q in movers:
         pct = q.get("change_pct")
         if pct is None or abs(pct) < 1.0:
             continue
         reason = _us_briefing_reason(q["name"], q["theme"])
-        line = f"• {_us_display_name(s, q['name'])} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']}"
-        if reason:
-            line += f" · 원인: {html.escape(reason)}"
-        lines.append(line)
+        if not reason:
+            continue
+        line = f"• {_us_display_name(sym, q['name'])} {_us_direction(pct)} {_us_format_pct(pct)} · {q['theme']} · 원인: {html.escape(reason)}"
+        mover_lines.append(line)
+        if len(mover_lines) >= 6:
+            break
+    if mover_lines:
+        lines += ["", "<b>🔥 강한 종목/테마</b>"] + mover_lines
+
     lines += ["", "<b>🛢️ 환율·원자재</b>"]
     for s in macro:
         q = snapshot.get(s)
         if q:
             pct = q.get("change_pct")
-            lines.append(f"• {q['name']} {_us_direction(pct)} {_us_format_pct(pct)}")
+            unit = "원" if s == "USDKRW=X" else "달러"
+            lines.append(f"• {q['name']} {_us_format_price(q.get('price'), unit)} ({_us_direction(pct)} {_us_format_pct(pct)})")
 
     # 미국장 개장 30분 브리핑에도 국내 시장 대응용 ADR을 반드시 포함한다.
     lines += ["", "<b>🇰🇷 ADR</b>"]
-    adr_symbols = ["PKX", "LPL", "KEP", "KB", "SHG", "SKM"]
+    adr_symbols = ["PKX", "LPL", "KEP", "KB", "SHG", "SKM", "SKHY"]
     found_adr = False
     for s in adr_symbols:
         q = snapshot.get(s)
         if q:
             found_adr = True
             pct = q.get("change_pct")
-            lines.append(f"• {html.escape(q.get('name', s))} {_us_direction(pct)} {_us_format_pct(pct)}")
+            price_txt = _us_format_price(q.get("price"), "달러")
+            lines.append(f"• {html.escape(q.get('name', s))} {price_txt} ({_us_direction(pct)} {_us_format_pct(pct)})")
     if not found_adr:
         lines.append("• ADR 시세 확인불가")
 
@@ -487,21 +515,29 @@ def _us_intraday_briefing(snapshot, events, et):
         for _, q, delta in sector_moves[:5]:
             lines.append(f"• {q['name']} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}%")
         lines.append("")
+    # [변경] 근거가 확인된 종목만 언급한다. "원인: 확인된 뉴스 없음" 같은
+    # 문구는 더 이상 쓰지 않고, 근거 없는 종목은 후보에서 제외한다.
     if stock_moves:
-        lines.append("<b>📈📉 개별종목 변화</b>")
-        for _, symbol, q, delta in [(abs(d), s, q, d) for _, s, q, d in stock_moves[:6]]:
+        stock_lines = []
+        for _, symbol, q, delta in sorted(stock_moves, key=lambda x: abs(x[0]), reverse=True)[:8]:
             reason = _us_briefing_reason(q["name"], q["theme"])
-            line = f"• {q['name']} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% · {q['theme']}"
-            if reason:
-                line += f" · 원인: {html.escape(reason)}"
-            else:
-                line += " · 원인: 확인된 뉴스 없음"
-            lines.append(line)
-        lines.append("")
+            if not reason:
+                continue
+            stock_lines.append(
+                f"• {q['name']} {_us_direction(delta)} 단기변화 {delta:+.2f}% · 현재 {q['change_pct']:+.2f}% · {q['theme']} · 원인: {html.escape(reason)}"
+            )
+            if len(stock_lines) >= 6:
+                break
+        if stock_lines:
+            lines.append("<b>📈📉 개별종목 변화</b>")
+            lines.extend(stock_lines)
+            lines.append("")
     if macro_moves:
         lines.append("<b>🛢️ 환율·원자재 변화</b>")
         for _, q, delta in macro_moves:
-            lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q['change_pct'])}")
+            unit = "원" if q.get("name") == "원/달러" else "달러"
+            price_txt = _us_format_price(q.get("price"), unit)
+            lines.append(f"• {q['name']} 단기변화 {delta:+.2f}% · 현재 {_us_format_pct(q['change_pct'])} · {price_txt}")
         lines.append("")
     if not events:
         return ""
@@ -701,11 +737,10 @@ def _us_close_briefing(snapshot, et):
 
             lead = members[0] if members else {}
             reason = _us_close_reason(lead.get("name",""), theme)
+            # [변경] 근거를 못 찾으면 "확인된 뉴스 없음" 문구를 넣지 않고 줄 자체를 생략한다.
             if reason:
                 rtitle = html.escape(str(reason.get("title",""))[:220])
                 lines.append(f"  ↳ 움직인 이유: {rtitle}")
-            else:
-                lines.append("  ↳ 움직인 이유: 확인된 뉴스 없음")
 
             # 관련주/테마 판단은 MASTER에서만 수행한다.
 
@@ -739,16 +774,19 @@ def _us_close_briefing(snapshot, et):
     for s in ["USDKRW=X","CL=F","GC=F"]:
         q = snapshot.get(s)
         if q:
-            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
+            unit = "원" if s == "USDKRW=X" else "달러"
+            price_txt = _us_format_price(q.get("price"), unit)
+            lines.append(f"• {html.escape(q['name'])} {price_txt} ({_us_format_pct(q.get('change_pct'))})")
 
     lines += ["", "<b>🇰🇷 ADR</b>"]
-    adr_symbols = ["PKX","LPL","KEP","KB","SHG","SKM"]
+    adr_symbols = ["PKX","LPL","KEP","KB","SHG","SKM","SKHY"]
     found = False
     for s in adr_symbols:
         q = snapshot.get(s)
         if q:
             found = True
-            lines.append(f"• {html.escape(q['name'])} {_us_format_pct(q.get('change_pct'))}")
+            price_txt = _us_format_price(q.get("price"), "달러")
+            lines.append(f"• {html.escape(q['name'])} {price_txt} ({_us_format_pct(q.get('change_pct'))})")
     if not found:
         lines.append("• ADR 시세 확인불가")
 
