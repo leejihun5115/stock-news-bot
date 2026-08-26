@@ -66,6 +66,12 @@ import json
 import os
 import uuid
 from typing import Any, Dict, Iterable, List, Optional
+try:
+    from news_strength_config_뉴스강도설정 import NEWS_VALUE_MID, NEWS_VALUE_HIGH
+except ImportError as _exc:
+    raise ImportError(
+        "news_strength_config_뉴스강도설정.py 파일이 프로젝트 루트에 필요합니다."
+    ) from _exc
 
 RULE_VERSION = "MASTER_CONDITION_MANAGER_V1"
 
@@ -589,7 +595,7 @@ class MasterConditionManager:
         "최종 최대 3종목",
     ]
 
-    def __init__(self, max_related=3, min_score=40.0, news_value_high=65.0, news_value_mid=40.0,
+    def __init__(self, max_related=3, min_score=40.0, news_value_high=NEWS_VALUE_HIGH, news_value_mid=NEWS_VALUE_MID,
                  history_store_path=None, history_min_count=30):
         self.max_related = max_related
         self.min_score = min_score          # [관련종목 선정 전용] 후보 점수 필터. news_value와는 무관.
@@ -1536,7 +1542,7 @@ class MasterConditionManager:
         return result
 
 
-def analyze_news(max_related=3, min_score=40.0, news_value_high=65.0, news_value_mid=40.0,
+def analyze_news(max_related=3, min_score=40.0, news_value_high=NEWS_VALUE_HIGH, news_value_mid=NEWS_VALUE_MID,
                   history_store_path=None, history_min_count=30, **kwargs):
     """[수정] 검증 오류가 있어도 예외로 결과를 날리지 않고, 계산된 내용을
     locked=False 상태로 그대로 반환한다. (main.py의 master_finalize_news와 동일한 정책)
