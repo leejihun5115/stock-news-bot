@@ -93,6 +93,34 @@ def _load_historical_records():
         return []
 
 
+def _engine_company_history_score(name):
+    """이 종목이 과거 뉴스 송출 이후 실제로 얼마나 자주/크게 움직였는지를
+    하나의 점수로 요약한다. news_engine_핵심엔진._engine_master_result()가
+    관련종목 후보 순위를 매길 때 보조 점수로 사용한다.
+    (결과가 확정된 change_pct 기록만 사용하며, 표본이 아예 없으면 0을 반환한다 —
+    경험치가 없다는 뜻이지 부정적 신호는 아니다.)"""
+    name = str(name or "").strip()
+    if not name:
+        return 0.0
+    try:
+        records = _load_historical_records()
+    except Exception:
+        return 0.0
+    changes = []
+    for r in records:
+        if not r.get("checked") or r.get("is_macro_or_ad"):
+            continue
+        pct = (r.get("change_pct") or {}).get(name)
+        if pct is not None:
+            changes.append(pct)
+    if not changes:
+        return 0.0
+    avg = sum(changes) / len(changes)
+    hit_rate = sum(1 for c in changes if c > 0) / len(changes)
+    sample_bonus = min(len(changes), 10) * 2  # 표본이 많을수록 신뢰도 가산(최대 20점)
+    return round(max(0.0, avg) * 5 + hit_rate * 30 + sample_bonus, 2)
+
+
 def _analyze_historical_pattern(category, title, related_stocks):
     """데이터 누적 기반 학습 및 분석(기존 로직 유지):
     과거에 유사한 카테고리·키워드로 처리된 데이터를 분석해 이번 뉴스가

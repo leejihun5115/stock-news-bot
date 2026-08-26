@@ -32,7 +32,6 @@ except Exception:
 
 from common_공용유틸 import ENGINE_HTTP_TIMEOUT, _KST, _engine_atomic_append_jsonl, _engine_clean, _engine_log, _engine_parse_datetime, _engine_send_telegram, _logger, _now_kst, log_error
 from config_환경설정 import ENABLE_GLOBAL_BRIEFING_DB, ENABLE_HISTORICAL_SURGE_DB, KRX_HOLIDAYS_2026, KRX_WEEKDAY_CLOSE, KRX_WEEKDAY_OPEN, USER_AGENT, _env_flag
-from outcome_tracking_성과추적 import _engine_company_history_detail, _engine_company_history_score, _engine_company_outcome_stats, _engine_record_outcome_tracking
 from schedule_일정DB import _schedule_add_news_item
 from translation_번역 import _engine_clear_translation_retry, _engine_queue_translation_retry, _engine_strip_foreign_publisher_suffix, _engine_translate_foreign_item
 
@@ -446,7 +445,11 @@ LATEST_USER_COMMAND_WINS = True
 COMMAND_PRIORITY_POLICY = ("LATEST_USER_COMMAND",)
 # 하위 명령/출력 레이어는 사용자 최우선 명령을 덮어쓸 수 없다.
 DISABLE_LEGACY_SUBCOMMAND_OVERRIDES = True
-ENGINE_MAX_SEND_PER_CYCLE = 20
+
+# [뉴스 볼륨 제어] 처음엔 뉴스를 검토하면서 조절해야 하므로 기본값을 낮게 잡는다.
+# Render 환경변수 NEWS_BOT_MAX_SEND_PER_CYCLE 로 언제든 늘리거나 줄일 수 있다.
+# (엔진은 기본 60초 주기로 돌므로, 값이 클수록 분당 최대 발송량도 커진다.)
+ENGINE_MAX_SEND_PER_CYCLE = int(os.environ.get("NEWS_BOT_MAX_SEND_PER_CYCLE", "6"))
 ENGINE_STATE_FILE = os.environ.get("NEWS_BOT_STATE_FILE", "news_bot_seen.txt")
 
 # 외부채널(텔레그램/유튜브)은 60분을 기본으로 하며, 시장 마감 후/휴무의 강한 국내 상장기업 재료만 예외 허용한다.
@@ -1905,6 +1908,7 @@ def _engine_master_result(item):
     레거시 _engine_news_insight() 결과를 MASTER 입력으로 재사용하지 않는다.
     (MASTER는 title/body만으로 자체적으로 제목 재구성·핵심요약·근거를 계산한다.)
     """
+    from outcome_tracking_성과추적 import _engine_company_history_score
     try:
         rows = _engine_domestic_watchlist(item)
         candidates = []
@@ -2156,3 +2160,298 @@ def _engine_format_message(item):
     return '\n'.join(lines)
 
 
+
+
+# ============================================================
+# 🧩 [복구] 이 아래 블록은 원래 news_engine_핵심엔진.py에 있어야 했지만
+# 파일 분리(auto-split) 과정에서 통째로 누락되어 있던 부분이다.
+# domestic_국내수집.py / sources_external_외부연동.py / translation_번역.py가
+# 전부 이 이름들을 import해서 쓰고 있었으므로, 이게 없으면:
+#   - RSS를 아예 못 가져오고 (_engine_fetch_rss 없음)
+#   - 기사 1건을 "보낼지 말지" 최종 결정하는 함수 자체가 없어서
+#     (_engine_process_item 없음) 위에서 애써 만든 분류/중복차단/시간게이트/
+#     도배방지 로직이 전부 호출되지 않는 죽은 코드였다.
+# 아래 구현은 파일 상단 주석의 "핵심 원칙"과 각 함수의 docstring이 설명하는
+# 순서(분류 → 과거DB 무조건 적재 → 시간게이트 → 도배방지 → 중복차단 →
+# MASTER 확정 → 포맷 → 텔레그램 발송)를 그대로 따른다.
+# ============================================================
+
+import hashlib as _hashlib
+
+
+def _engine_item_hash(source, title, link):
+    """기사 1건을 식별하는 고유 키. link가 있으면 link를, 없으면 title을 쓴다."""
+    base = f"{str(source or '')}|{str(link or '').strip() or str(title or '').strip()}"
+    return _hashlib.sha256(base.encode("utf-8", "ignore")).hexdigest()
+
+
+# [진단용] domestic_국내수집.py가 "이 소스에서 이번이 처음 보는 항목인가"를
+# 세는 용도로만 참조하는 집합. 실제 중복차단 권한은 _engine_mark_seen()
+# (디스크에 영속 저장됨)이 갖고 있고, 이 집합은 그 결과를 함께 반영해
+# 로그 카운트가 실제 상태와 어긋나지 않게 한다.
+_engine_seen_hashes = set()
+
+
+def _engine_entry_published(entry):
+    """feedparser 엔트리에서 발행시각 문자열을 뽑는다. 형식이 다양해도
+    _engine_parse_datetime()이 최종 파싱하므로 여기서는 원문 문자열만 최대한
+    확보하면 된다."""
+    try:
+        for key in ("published", "updated", "pubDate", "created"):
+            val = entry.get(key)
+            if val:
+                return str(val)
+        for key in ("published_parsed", "updated_parsed"):
+            st = entry.get(key)
+            if st:
+                try:
+                    dt = datetime.datetime(*st[:6])
+                    return dt.strftime("%a, %d %b %Y %H:%M:%S +0000")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return ""
+
+
+def _engine_fetch_rss(url, source=""):
+    """RSS/Atom 피드를 받아 feedparser 엔트리 리스트를 반환한다.
+    실패해도 예외를 던지지 않고 빈 리스트를 반환해 다른 소스 수집을 막지 않는다."""
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=ENGINE_HTTP_TIMEOUT)
+        if not r.ok:
+            _engine_log("warning", "[RSS 조회 실패] %s | status=%s | url=%s", source, r.status_code, url[:120])
+            return []
+        parsed = feedparser.parse(r.content)
+        return list(parsed.entries or [])
+    except Exception as e:
+        log_error("RSS 수집", e, source=source, url=url[:160])
+        return []
+
+
+# ------------------------------------------------------------
+# 사이클 통계 (관리자 /status, 부팅 로그 등에서 이번 주기에 무슨 일이
+# 있었는지 한눈에 보기 위함). 뉴스 볼륨을 눈으로 보면서 조절해야 하므로
+# 어느 단계에서 몇 건이 걸러졌는지 남긴다.
+# ------------------------------------------------------------
+_engine_cycle_stats = {}
+_engine_cycle_sent_count = [0]  # 리스트로 감싸 클로저/여러 스레드에서 참조 공유
+
+
+# ------------------------------------------------------------
+# [콜드스타트 워밍업] admin_관리자.py가 이미 참조하고 있었지만(/status, /워밍업해제)
+# 실제 구현이 빠져 있던 기능. 프로세스가 새로 시작되면(배포/재시작) RSS가 그동안
+# 쌓인 기사를 한꺼번에 "미확인"으로 반환할 수 있어, 부팅 직후 일정 시간(기본 10분)
+# 동안은 과거DB 적재는 그대로 하되 실시간 Telegram 발송만 보류해 초반 도배를 막는다.
+# 관리자가 /워밍업해제 로 즉시 끝낼 수 있다. 뉴스 볼륨을 눈으로 보며 조절할 때도
+# NEWS_BOT_COLD_START_MIN 환경변수로 시작 시 워밍업 시간을 늘리거나(0이면 즉시 정상 송출)
+# 줄일 수 있다.
+# ------------------------------------------------------------
+_ENGINE_COLD_START_UNTIL = [time.time() + float(os.environ.get("NEWS_BOT_COLD_START_MIN", "10")) * 60]
+
+
+def _engine_cold_start_check():
+    """지금이 아직 워밍업(송출 보류) 구간인지 여부."""
+    return time.time() < _ENGINE_COLD_START_UNTIL[0]
+
+
+def _engine_force_end_cold_start():
+    """관리자가 /워밍업해제 로 즉시 정상 송출로 전환한다.
+    반환값: 호출 전에 실제로 워밍업 상태였는지 여부."""
+    was_active = _engine_cold_start_check()
+    _ENGINE_COLD_START_UNTIL[0] = 0.0
+    return was_active
+
+
+def _bump_stat(key):
+    _engine_cycle_stats[key] = _engine_cycle_stats.get(key, 0) + 1
+
+
+def _engine_reset_cycle_stats():
+    global _engine_cycle_stats
+    _engine_cycle_sent_count[0] = 0
+    _engine_cycle_stats = {
+        "received": 0, "sent": 0, "이미처리": 0, "번역실패": 0,
+        "비주식뉴스차단": 0, "워밍업차단": 0, "시간초과차단": 0, "도배방지차단": 0,
+        "중복기사차단": 0, "사이클상한차단": 0,
+    }
+
+
+def _engine_cycle_stats_summary():
+    s = _engine_cycle_stats or {}
+    return (
+        f"수신 {s.get('received', 0)} | 발송 {s.get('sent', 0)} | "
+        f"이미처리 {s.get('이미처리', 0)} | 번역실패 {s.get('번역실패', 0)} | "
+        f"비주식뉴스차단 {s.get('비주식뉴스차단', 0)} | 워밍업차단 {s.get('워밍업차단', 0)} | "
+        f"시간초과차단 {s.get('시간초과차단', 0)} | "
+        f"도배방지차단 {s.get('도배방지차단', 0)} | 중복기사차단 {s.get('중복기사차단', 0)} | "
+        f"사이클상한(={ENGINE_MAX_SEND_PER_CYCLE}) {s.get('사이클상한차단', 0)}"
+    )
+
+
+def _engine_save_extended_state():
+    """과거DB/글로벌브리핑DB/송출핑거프린트DB는 매 건마다 즉시 append로
+    저장되므로, 여기서는 텔레그램 소스별 발송 카운터만 한 번 더 안전하게
+    flush한다(누락 방지용 안전장치)."""
+    try:
+        with open(TELEGRAM_SPAM_STATE + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(_engine_telegram_counts, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(TELEGRAM_SPAM_STATE + ".tmp", TELEGRAM_SPAM_STATE)
+    except Exception as e:
+        log_error("확장상태 저장", e, file=TELEGRAM_SPAM_STATE)
+
+
+def _engine_process_item(source, title, link, published, extra, force_send=False):
+    """뉴스/공시/텔레그램 게시글 1건을 받아 최종적으로 Telegram에 보낼지 결정한다.
+
+    처리 순서 (파일 상단 "핵심 원칙" 주석과 동일):
+      0) 이미 처리한 기사면 즉시 중단 (해시 dedupe, 서버 재시작해도 유지됨)
+      1) 외신(영문 위주)이면 한국어로 번역. 실패하면 재시도 큐에 넣고 이번엔 보류.
+      2) 분류(_engine_classify) — 주식/시장과 무관한 뉴스(광고·스포츠·부고 등)는
+         여기서 걸러진다. force_send=True(강제 채널)는 이 결과와 무관하게 진행.
+      3) [절대 원칙] 분류가 확정되면 과거DB에는 실시간 송출 여부와 무관하게
+         무조건 먼저 기록한다(시간 게이트보다 앞서야 함).
+      4) 텔레그램/유튜브 전용 60분 시간 게이트 (강한 재료는 마감후/휴무 예외).
+      5) 같은 소스 시간당 발송 제한 (텔레그램 도배 방지).
+      6) 유사도 80%+ 동일 뉴스 재송출 차단.
+      7) 이번 사이클 최대 발송 개수(ENGINE_MAX_SEND_PER_CYCLE) 초과 시 보류.
+      8) MASTER 65-조건 엔진으로 최종 확정.
+      9) 메시지 조립 후 실제 Telegram 발송.
+
+    반환값: 실제로 새로 Telegram에 발송했으면 True, 그 외(중복/차단/보류)는 False.
+    """
+    try:
+        title = str(title or "").strip()
+        extra_raw = str(extra or "")
+        if not title and not extra_raw:
+            return False
+
+        _bump_stat("received")
+
+        # 0) 중복 처리 방지 (force_send 채널은 매번 새로 평가해도 되므로 통과)
+        item_hash = _engine_item_hash(source, title, link)
+        _engine_seen_hashes.add(item_hash)
+        if not force_send:
+            if not _engine_mark_seen(item_hash):
+                _bump_stat("이미처리")
+                return False
+
+        # 1) 외신 번역 게이트 — 번역 실패한 영문 원문은 절대 그대로 내보내지 않는다.
+        extra_clean = _engine_clean(extra_raw)
+        title, extra_clean, translate_ok = _engine_translate_foreign_item(source, title, extra_clean)
+        if not translate_ok:
+            _bump_stat("번역실패")
+            _engine_queue_translation_retry(source, title, link, published, extra_clean)
+            return False
+        _engine_clear_translation_retry(link, title, source)
+
+        # 2) 분류 — 주식/시장과 실제로 관련 있는 뉴스만 통과시킨다.
+        ok, category, companies, k1, k2, market_hits = _engine_classify(source, title, extra_clean)
+        if not ok and not force_send:
+            _bump_stat("비주식뉴스차단")
+            return False
+        if not ok:
+            category = category or "강제전송"
+
+        market_state = _engine_market_state(source, published)
+        parsed_dt = _engine_parse_datetime(published)
+
+        item = {
+            "source": source, "title": title, "extra": extra_clean, "link": link,
+            "published": published, "category": category, "companies": companies,
+            "market_hits": market_hits, "market_state": market_state,
+            "time_text": parsed_dt.strftime("%H:%M") if parsed_dt else "",
+        }
+
+        # 3) [절대 원칙] 분류(category)가 확정된 이상, 실시간 송출 여부와
+        # 완전히 무관하게 과거DB/글로벌 시황DB/일정DB에 먼저 기록한다.
+        try:
+            _engine_record_historical_case(item)
+        except Exception as e:
+            log_error("과거DB 기록", e, title=title[:100])
+        try:
+            _engine_record_global_briefing(item)
+        except Exception as e:
+            log_error("글로벌 브리핑DB 기록", e, title=title[:100])
+        try:
+            _schedule_add_news_item(source, title, extra_clean, link,
+                                     published=published, companies=companies,
+                                     market_hits=market_hits)
+        except Exception as e:
+            log_error("일정DB 기록", e, title=title[:100])
+
+        # 3.5) 콜드스타트 워밍업 — 부팅 직후 일정 시간은 실시간 발송만 보류한다.
+        # (과거DB/일정DB 적재는 이미 위에서 끝났으므로 데이터 누적에는 영향 없음)
+        if _engine_cold_start_check():
+            _bump_stat("워밍업차단")
+            return False
+
+        # 4) 텔레그램/유튜브 전용 60분 시간 게이트 (그 외 소스는 항상 통과)
+        if not force_send:
+            allowed, _reason = _engine_external_time_gate(
+                source, published, title, extra_clean, market_state, market_hits
+            )
+            if not allowed:
+                _bump_stat("시간초과차단")
+                return False
+
+        # 5) 같은 소스 시간당 발송 제한 (텔레그램 채널 도배 방지)
+        if not force_send and not _engine_telegram_spam_allowed(item):
+            _bump_stat("도배방지차단")
+            return False
+
+        # 6) 유사 기사 재송출 차단 (다른 매체가 같은 사건을 재보도해도 잡아냄)
+        is_dup, _prev = _engine_is_duplicate_spam(item)
+        if is_dup and not force_send:
+            _bump_stat("중복기사차단")
+            return False
+
+        # 7) 이번 사이클 최대 발송 개수 제한 — 뉴스 볼륨을 직접 조절하는 지점.
+        # NEWS_BOT_MAX_SEND_PER_CYCLE 환경변수로 언제든 늘리거나 줄일 수 있다.
+        if _engine_cycle_sent_count[0] >= ENGINE_MAX_SEND_PER_CYCLE:
+            _bump_stat("사이클상한차단")
+            return False
+
+        # 8) MASTER 65-조건 엔진 → Validator → FINAL LOCK
+        result = _engine_master_result(item) or {}
+        item["_master_result"] = result
+
+        # 9) 최종 메시지 조립 후 실제 발송
+        msg = _engine_format_message(item)
+        if not msg:
+            return False
+        if not _engine_send_telegram(msg):
+            return False
+
+        # 10) 발송 성공 후처리 (도배방지 카운터/재송출 dedupe 기록/성과추적)
+        _engine_cycle_sent_count[0] += 1
+        _bump_stat("sent")
+        _engine_telegram_mark_sent(item)
+
+        fingerprint = {
+            "text": (title + " " + extra_clean)[:800],
+            "source": str(source), "title": title[:300],
+            "ts": _now_kst().isoformat(), "published": str(published or "")[:80],
+        }
+        _engine_sent_fingerprints.append(fingerprint)
+        if len(_engine_sent_fingerprints) > 3000:
+            del _engine_sent_fingerprints[:-3000]
+        _engine_atomic_append_jsonl(SENT_FINGERPRINT_DB, fingerprint)
+
+        try:
+            from outcome_tracking_성과추적 import _engine_record_outcome_tracking
+            related_names = [r.get("name") for r in (result.get("related") or []) if r.get("name")] or companies
+            _engine_record_outcome_tracking(
+                title=title, category=category, related_stocks=related_names,
+                reason=str(result.get("analysis") or ""),
+                evidence=list(result.get("key_points") or []),
+            )
+        except Exception as e:
+            log_error("성과추적 기록", e, title=title[:100])
+
+        _engine_log("info", "[발송 완료] %s | %s | %s", category, source, title[:120])
+        return True
+
+    except Exception as e:
+        log_error("_engine_process_item 처리 실패", e, source=str(source), title=str(title)[:120])
+        return False
