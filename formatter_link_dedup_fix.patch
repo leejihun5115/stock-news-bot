@@ -1,0 +1,39 @@
+--- a/news_engine_핵심엔진.py
++++ b/news_engine_핵심엔진.py
+@@ -1,17 +1,26 @@
+     analysis_lines = []
+     if analysis:
+         analysis_lines.append(analysis)
+     analysis_lines.extend(str(x).strip() for x in outlook if str(x).strip())
+-    analysis_lines = [x for x in analysis_lines if not _engine_line_is_duplicate(x, shown)]
++    # [수정: outlook 자기중복 제거] 기존에는 analysis_lines를 '요약(shown)'과만
++    # 비교했다. outlook 리스트 자체에 같은 문장이 두 번 들어있는 경우(예:
++    # OUTLOOK_PATTERNS의 서로 다른 정규식이 같은 문구로 매칭되는 경우)를
++    # 걸러내지 못해 "🧠 시장 영향/전망" 아래 같은 줄이 반복 출력되는 문제가
++    # 있었다. deduped_analysis에 누적하며 shown과 "자기 자신(누적본)" 양쪽
++    # 모두와 비교해 완전히 같은 결과를 얻는다.
++    deduped_analysis = []
++    for x in analysis_lines:
++        if _engine_line_is_duplicate(x, shown) or _engine_line_is_duplicate(x, deduped_analysis):
++            continue
++        deduped_analysis.append(x)
++    analysis_lines = deduped_analysis
+     if analysis_lines:
+         lines.append('🧠 <b>시장 영향/전망</b>')
+         for x in analysis_lines[:3]:
+             lines.append('✔ ' + html.escape(x[:240]))
+ 
+     commercial = str(master_result.get('commercial_evidence') or '').strip()
+     if commercial:
+         lines.append('🏭 <b>상용화/사업진행</b>')
+         lines.append('✔ ' + html.escape(commercial[:220]))
+ 
++    # [수정: 원문 링크 누락] item['link']가 존재하는데도 이 함수가 한 번도
++    # 참조하지 않아, 원칙 문서의 "출처보존"(뉴스 링크를 보존한다)과 달리
++    # 모든 메시지에서 원문 링크가 통째로 빠져 있었다. 텔레그램 HTML 파싱은
++    # 이미 <b> 태그로 켜져 있으므로 <a href="...">도 그대로 렌더링된다.
++    link = str(item.get('link', '')).strip()
++    if link.startswith('http'):
++        lines.append(f'🔗 <a href="{html.escape(link, quote=True)}">원문 보기</a>')
++
+     return '\n'.join(lines)
