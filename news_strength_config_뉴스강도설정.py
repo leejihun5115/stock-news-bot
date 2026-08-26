@@ -38,7 +38,7 @@ NEWS_VALUE_HIGH
 # 뉴스 강도 다이얼 — 여기 숫자만 수정하세요.
 # ============================================================
 
-NEWS_VALUE_MID = 40
+NEWS_VALUE_MID = 50
 NEWS_VALUE_HIGH = 65
 
 
