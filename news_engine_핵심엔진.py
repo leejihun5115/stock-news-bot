@@ -726,11 +726,15 @@ def _engine_load_seen():
                         try:
                             ts = float(ts_raw)
                         except ValueError:
-                            key, ts = line, now
+                            # 타임스탬프 파싱 실패 → 나이를 알 수 없으니 안전하게 버린다(=신규 취급).
+                            continue
                     else:
-                        # 예전 포맷(타임스탬프 없이 키만 저장) 하위호환: 지금 시각으로 채워
-                        # TTL이 지금부터 다시 흐르게 한다(과거 기록 때문에 즉시 만료되지 않게).
-                        key, ts = line, now
+                        # [버그였던 부분] 예전 포맷(타임스탬프 없이 키만 저장)을 만나면
+                        # "지금 시각"을 채워 넣었었는데, 이러면 몇 달치 예전 기록 전체가
+                        # "방금 막 처리됨"으로 재해석되어 오히려 앞으로 TTL만큼(기본 6시간)
+                        # 다시 차단되는 역효과가 났다(영구차단 → 6시간 재차단으로 형태만 바뀜).
+                        # 나이를 알 수 없는 기록은 안전한 쪽(=이미 만료됨)으로 처리해 버린다.
+                        continue
                     if not key:
                         continue
                     if ttl_sec is None or (now - ts) <= ttl_sec:
@@ -2330,13 +2334,13 @@ _engine_cycle_sent_count = [0]  # 리스트로 감싸 클로저/여러 스레드
 # ------------------------------------------------------------
 # [콜드스타트 워밍업] admin_관리자.py가 이미 참조하고 있었지만(/status, /워밍업해제)
 # 실제 구현이 빠져 있던 기능. 프로세스가 새로 시작되면(배포/재시작) RSS가 그동안
-# 쌓인 기사를 한꺼번에 "미확인"으로 반환할 수 있어, 부팅 직후 일정 시간(기본 10분)
+# 쌓인 기사를 한꺼번에 "미확인"으로 반환할 수 있어, 부팅 직후 일정 시간(기본 0분=즉시 송출)
 # 동안은 과거DB 적재는 그대로 하되 실시간 Telegram 발송만 보류해 초반 도배를 막는다.
 # 관리자가 /워밍업해제 로 즉시 끝낼 수 있다. 뉴스 볼륨을 눈으로 보며 조절할 때도
 # NEWS_BOT_COLD_START_MIN 환경변수로 시작 시 워밍업 시간을 늘리거나(0이면 즉시 정상 송출)
 # 줄일 수 있다.
 # ------------------------------------------------------------
-_ENGINE_COLD_START_UNTIL = [time.time() + float(os.environ.get("NEWS_BOT_COLD_START_MIN", "10")) * 60]
+_ENGINE_COLD_START_UNTIL = [time.time() + float(os.environ.get("NEWS_BOT_COLD_START_MIN", "0")) * 60]
 
 
 def _engine_cold_start_check():

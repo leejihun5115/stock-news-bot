@@ -122,7 +122,16 @@ def _engine_cycle():
     # 과거사례 캐시(_engine_historical_cache)가 재배포/재시작마다 소실되던 문제를 고친다.
     _engine_run_stage("확장상태 저장", _engine_save_extended_state)
     engine_state_공유상태._engine_last_cycle_finished = time.time()
-    _engine_log("info", "[주기 완료] %.2f초 | %s | Telegram 즉시송출 구조", time.time()-started, _engine_cycle_stats_summary())
+    # [재부팅 루프 진단용] "🚨 부팅 실패" 알림 없이 조용히 재부팅만 반복되면
+    # 파이썬 예외가 아니라 Render의 메모리 초과(OOM) 강제종료(SIGKILL)일 가능성이 높다.
+    # SIGKILL은 파이썬이 감지할 수 없어 이 로그가 재부팅 직전 마지막 단서가 된다.
+    try:
+        import resource
+        mem_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        mem_text = f"{mem_mb:.0f}MB"
+    except Exception:
+        mem_text = "확인불가"
+    _engine_log("info", "[주기 완료] %.2f초 | 메모리=%s | %s | Telegram 즉시송출 구조", time.time()-started, mem_text, _engine_cycle_stats_summary())
 
 
 
@@ -176,6 +185,12 @@ def _engine_main_loop():
     if ENABLE_SCHEDULE_BOOTSTRAP:
         threading.Thread(target=_schedule_bootstrap_one_year, name="schedule-bootstrap", daemon=True).start()
     _engine_log("info", "[엔진] 60초 주기 시작")
+    try:
+        import resource
+        boot_mem_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        _engine_log("info", "[진단] 부팅 직후(첫 사이클 전) 메모리=%.0fMB", boot_mem_mb)
+    except Exception:
+        pass
     while True:
         cycle_start = time.time()
         try:
@@ -197,6 +212,17 @@ def _engine_main_loop():
 
 if __name__ == "__main__":
     try:
+        # [재부팅 루프 진단용] 데몬 스레드(관리자 명령 리스너/실행기, 헬스서버 등)에서
+        # 처리 안 된 예외가 나면 기본적으로 그 스레드만 조용히 죽고 흔적도 안 남는다.
+        # 재부팅 원인이 스레드 크래시인지 OOM인지 구분하기 위해 반드시 로그+텔레그램
+        # 알림을 남기도록 후킹한다.
+        def _thread_excepthook(args):
+            try:
+                log_error(f"스레드 크래시({args.thread.name})", args.exc_value)
+            except Exception:
+                pass
+        threading.excepthook = _thread_excepthook
+
         # [부팅 자가진단 2단계] import는 성공했지만 명령 핸들러 등록이 깨졌을 수도
         # 있으므로(예: 핸들러가 함수가 아니라 실수로 값이 등록된 경우) 실제로
         # 명령을 받기 전에 한 번 더 점검한다.
