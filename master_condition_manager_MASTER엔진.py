@@ -66,13 +66,6 @@ from typing import Any, Dict, Iterable, List, Optional
 
 RULE_VERSION = "MASTER_CONDITION_MANAGER_V1"
 
-# 일반명사와 회사명이 겹치는 단어는 본문 단순 부분문자열만으로
-# 관련종목으로 확정하지 않는다. 예: "예비타당성조사 대상"의 "대상".
-GENERIC_NON_STOCK_NAMES = frozenset({
-    "대상", "시장", "정부", "기업", "회사", "산업", "기관", "은행",
-    "우리", "국민", "한국", "대한", "공사", "공단", "재단", "협회",
-})
-
 # [문서용] 아래 65개 원칙 중, 파이프라인에 전용 계산 스텝이 있어 "이 원칙이
 # 이 함수 하나에 대응된다"고 짚을 수 있는 이름들이다. 이 집합은 더 이상 실행
 # 여부를 좌우하는 게이트가 아니다 — CONDITION_RULES/PIPELINE_STEPS 어느 쪽을
@@ -88,6 +81,7 @@ IMPLEMENTED_CONDITION_NAMES = frozenset({
     "대장주선정", "대장주이유", "관찰후보", "관련주없음", "점수화",
     "조건중앙관리", "FINAL_LOCK",
     "Formatter무판단", "Telegram무판단", "재호출금지",
+    "강한재료무조건통과", "특징주단독속보무조건통과",
 })
 
 CONDITION_RULES = [
@@ -162,6 +156,8 @@ CONDITION_RULES = [
     {"order": 63, "name": "실제송출검증", "rule": "Telegram 결과와 MASTER 결과가 동일한지 확인한다."},
     {"order": 64, "name": "문제국소수정", "rule": "문제 조건만 수정하고 정상 조건은 건드리지 않는다."},
     {"order": 65, "name": "조건중앙관리", "rule": "모든 핵심 조건값과 판단 순서를 이 모듈 한 곳에서 관리한다."},
+    {"order": 66, "name": "강한재료무조건통과", "rule": "수주·계약·기술이전·특허·M&A·유무상증자·자사주·역대실적·품목허가 등 신선하고 시장반응 가능성이 높은 정해진 키워드 패턴이 확인되면, 뉴스가치 점수·관련종목 매칭 여부와 무관하게 시황/광고 필터를 통과시킨다."},
+    {"order": 67, "name": "특징주단독속보무조건통과", "rule": "제목에 '특징주' 또는 '단독속보'(단독+속보) 표현이 있고 주식시장 문맥이 확인되면 무조건 통과시킨다."},
 ]
 
 # [문서용 자동 태깅] 각 원칙에 "전용 파이프라인 스텝이 있는가"를 표시한다.
@@ -190,6 +186,7 @@ PIPELINE_STEPS = (
     ("related_none_reason", ("related_none_reason",), True),
     ("outlook", ("outlook",), True),
     ("news_value", ("news_value", "master_confirmed"), True),
+    ("force_pass", ("force_pass", "force_pass_reason"), True),
     ("evidence", ("evidence",), True),
     # user_directive: directive_overrides가 실제로 넘어왔을 때만 도는 선택적 스텝
     # (유일하게 이미 확정된 필드를 덮어쓸 수 있는 예외 경로 — 최종사용자지시우선).
@@ -229,6 +226,12 @@ class MasterResult:
     # [수정] Formatter(main.py)가 '🧠 분석' 섹션에 사용하는 필드인데 기존에는
     # MasterResult에 정의조차 되어 있지 않아 항상 빈 값으로만 읽혔다.
     analysis: str = ""
+    # [강한 재료 / 특징주·단독속보 무조건 통과] 유일한 소유자: _force_pass
+    force_pass: bool = False
+    force_pass_reason: str = ""
+    # [Tier 0 감사] 이번 실행에 적용된 최상위 명령(Directive)의 감사 정보.
+    # 값을 다시 담지 않는다 — 어떤 지시가 언제/어디서 왔는지 추적용일 뿐이다.
+    directive: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self):
         return self.__dict__.copy()
@@ -244,24 +247,62 @@ class MasterResult:
 IMMUTABLE_EMPTY_SECTION_RULE = True
 
 # ============================================================
-# [불변 명령체계] 최신 사용자 지시가 최우선이다.
+# [불변 명령체계 — 실행 가능한 코드로 승격] 최신 사용자 지시가 최우선이다.
 # 충돌하는 이전/하위 규칙·Formatter·레거시 출력 명령은 실행하지 않는다.
 # 충돌하지 않는 기존 정상 기능만 유지한다.
 #
 # [수정] 이 상수는 예전엔 정의 직후 바로 다음 줄에서 자기 자신을 다른 값으로
 # 덮어쓰고 있었다(6개짜리 튜플 → 곧바로 1개짜리 튜플로 재정의). 아무도 이 상수를
-# import하지 않아 실질적인 버그는 아니었지만, 지금 겪고 있는 "이중구조로 조용히
-# 덮어써짐" 문제의 축소판이 이 파일 안에 실제로 있었다는 뜻이라 그대로 두지 않는다.
-# 정의는 한 번만 하고, 실제 우선순위 개념은 analyze()의 directive_overrides
-# 파라미터로 실행 가능한 코드가 된다(위 PIPELINE_STEPS의 "directive_overrides" 스텝).
+# import하지 않아 실질적인 버그는 아니었지만, "이중구조로 조용히 덮어써짐" 문제의
+# 축소판이 이 파일 안에 실제로 있었다는 뜻이라 그대로 두지 않는다.
+#
+# [노하우] Command Bus / PriorityQueue를 새로 만들지 않는다. 이 엔진은 뉴스
+# 1건 = 실행 1회이므로 "명령이 여러 개 동시에 경합"하는 상황 자체가 없다.
+# 대신 아래 두 가지만 승격한다:
+#   1) CommandTier — 각 PIPELINE_STEPS 스텝이 실제로 어느 계층에 속하는지
+#      숫자로 명시(감사·검증용, 작을수록 상위).
+#   2) Directive — "최신 사용자 지시"를 단일 슬롯(큐 아님)으로 담는 값 객체.
+#      analyze() 호출 1회당 directive는 많아야 1개, 그게 곧 최상위 명령이다.
 # ============================================================
+class CommandTier:
+    """명령 계층. 숫자가 작을수록 상위(우선) 명령이며, 하위 계층은 상위가
+    이미 확정한 필드를 절대 다시 쓸 수 없다(LATEST_DIRECTIVE 계층 제외)."""
+    LATEST_DIRECTIVE = 0   # 사용자 최종 지시(Directive) — 유일한 override 경로
+    MASTER_DECISION = 1    # PIPELINE_STEPS 본계산 (title/key_points/stage/... )
+    VALIDATOR = 2          # 판단 금지, 통과/실패 거부권만 있음
+    FINAL_LOCK = 3         # 봉인 — 이후 어떤 계층도 값을 못 건드림
+    DISPLAY_ONLY = 4       # Formatter / Telegram — 판단 0, 표시·송출만
+
+
+# PIPELINE_STEPS 스텝 이름 → 명령 계층. user_directive 스텝만 예외적으로
+# 이미 확정된 필드를 다시 쓸 수 있는 LATEST_DIRECTIVE 계층에 속한다.
+STEP_TIER = {
+    _name: (CommandTier.LATEST_DIRECTIVE if _name == "user_directive" else CommandTier.MASTER_DECISION)
+    for _name, _fields, _required in PIPELINE_STEPS
+}
+
+
+@dataclass(frozen=True)
+class Directive:
+    """[최상위 명령 — Tier 0, 단일 슬롯]
+    사용자의 가장 최근 지시 1건만 담는 값 객체다. Command Bus의 우선순위 큐와
+    달리 "명령이 여러 개 쌓였을 때 어떤 걸 먼저 처리하나"라는 문제 자체가
+    생기지 않는다 — analyze() 호출마다 directive는 정확히 0개 또는 1개이고,
+    있으면 그게 곧 최상위 명령이다. issued_at/source는 감사(추적)용일 뿐
+    우선순위 계산에는 관여하지 않는다(계층 자체가 이미 최우선이므로).
+    """
+    fields: Dict[str, Any] = field(default_factory=dict)
+    issued_at: str = ""
+    source: str = "user"   # "user" | "external_api" | "system"
+
+
 COMMAND_PRIORITY_POLICY = (
-    "LATEST_USER_COMMAND",   # 파이프라인 실행 후, directive_overrides로 최종 덮어쓰기
-    "MASTER_DECISION",       # PIPELINE_STEPS 순차 실행 결과
-    "VALIDATOR",
-    "FINAL_LOCK",
-    "FORMATTER_DISPLAY_ONLY",
-    "TELEGRAM_SEND_ONLY",
+    "LATEST_USER_COMMAND",    # = CommandTier.LATEST_DIRECTIVE
+    "MASTER_DECISION",        # = CommandTier.MASTER_DECISION
+    "VALIDATOR",              # = CommandTier.VALIDATOR
+    "FINAL_LOCK",             # = CommandTier.FINAL_LOCK
+    "FORMATTER_DISPLAY_ONLY", # = CommandTier.DISPLAY_ONLY
+    "TELEGRAM_SEND_ONLY",     # = CommandTier.DISPLAY_ONLY
 )
 LATEST_USER_COMMAND_WINS = True
 DISABLE_LEGACY_SUBCOMMAND_OVERRIDES = True
@@ -282,6 +323,40 @@ DISABLE_LEGACY_SUBCOMMAND_OVERRIDES = True
 # 7) 위 원칙과 충돌하는 하위 출력 규칙은 적용하지 않는다.
 # ============================================================
 FIXED_OUTPUT_PRINCIPLE = True
+
+# ============================================================
+# [강한 재료 / 특징주·단독속보 무조건 통과]
+# ------------------------------------------------------------
+# 배경: 기존엔 news_value 점수(_news_value)가 40~65점을 못 넘거나 관련종목이
+# 안 잡히면, 실제로는 시장이 반응할 만한 신선한 소재(수주·계약·기술이전·특허·
+# M&A·유무상증자·자사주·역대 실적 등)도 "낮음"으로 밀려 필터링됐다. 점수제는
+# 여러 요소를 종합 평가하는 데는 맞지만, "이 키워드 자체가 곧 시장 반응 신호"인
+# 강한 재료까지 점수 합산 로직에 묻히면 안 된다. 이런 패턴은 점수와 무관하게
+# 별도 스텝(_force_pass)에서 독립적으로 판정하고, 걸리면 news_engine 단의
+# 시황/광고 필터를 무조건 통과시킨다(단, 파이프라인 검증 자체는 그대로 거친다).
+#
+# 특징주/단독속보도 같은 이유로 별도 처리한다: 이 두 표현은 그 자체가 "지금 이
+# 종목/이슈에 시장이 반응하고 있다"는 편집자의 실시간 판단이 이미 담긴 표현이라,
+# MASTER의 사후 점수화보다 신뢰도가 높다고 보고 주식시장 문맥이 확인되면 무조건
+# 통과시킨다.
+# ============================================================
+STRONG_MATERIAL_PATTERN = re.compile(
+    r"수주|공급계약|공급\s*계약|장기\s*공급계약|계약\s*체결|납품\s*계약|양해각서|MOU|"
+    r"기술\s*이전|라이선스\s*(?:인|아웃|계약)|특허\s*(?:등록|출원|취득)|"
+    r"인수\s*합병|M&A|지분\s*인수|경영권\s*인수|"
+    r"유상\s*증자|무상\s*증자|자사주\s*(?:매입|소각)|"
+    r"사상\s*최대|역대\s*최대|최대\s*실적|어닝\s*서프라이즈|깜짝\s*실적|흑자\s*전환|"
+    r"FDA\s*승인|품목\s*허가|식약처\s*승인|임상\s*(?:1상|2상|3상)\s*(?:승인|성공|완료|개시)?|"
+    r"신규\s*상장|공모가|상한가|하한가|급등|급락",
+    re.I,
+)
+FEATURED_STOCK_PATTERN = re.compile(r"특징주")
+EXCLUSIVE_BREAKING_PATTERN = re.compile(r"단독\s*속보|속보.{0,10}단독|단독.{0,10}속보")
+# 특징주/단독속보가 "주식시장 관련 기사"인지 최소 확인하는 문맥 키워드
+# (관련종목이 하나도 안 잡혀도 이 중 하나만 있으면 증권 기사로 인정한다)
+STOCK_MARKET_CONTEXT_PATTERN = re.compile(
+    r"코스피|코스닥|증시|주가|주식|상장사|종목|매수|매도|시가총액|투자자|증권가|애널리스트",
+)
 
 class MasterConditionManager:
     """
@@ -699,18 +774,6 @@ class MasterConditionManager:
             return True
         return False
 
-    def _looks_like_body_as_title(self, title, body):
-        """본문 문장/설명문이 제목 자리에 들어온 경우를 감지한다."""
-        t = self._norm(title)
-        if not t or len(t) < 35:
-            return False
-        body_n = self._norm(body)
-        if body_n and len(body_n) >= 40 and t in body_n:
-            return True
-        if re.search(r"(?:지원한다|추진한다|예정이다|전망이다|밝혔다|전했다|설명했다|확인됐다|나타났다)[.!]?$", title):
-            return True
-        return False
-
     def _synthesize_title(self, title, body):
         """원문 제목 보존을 최우선으로 한다.
 
@@ -729,30 +792,6 @@ class MasterConditionManager:
             if cleaned:
                 title = cleaned
         title = title[:220].strip()
-
-        # [제목 규칙] RSS/Google News 등에서 붙는 매체명·중복 제목 꼬리를 제거한다.
-        # 예: "... - 이투데이 : ... 이투데이" 같은 수집 메타데이터는 제목으로 사용하지 않는다.
-        title = re.sub(r"\s*[-–—]\s*[^:：]{1,40}\s*[:：]\s*.*$", "", title).strip() or title
-        title = re.sub(r"\s*[:：]\s*(?:이투데이|연합뉴스|매일경제|한국경제|조선비즈|뉴스1|서울경제|머니투데이)\s*$", "", title, flags=re.I).strip()
-
-        # [제목 규칙] 원문 제목이 서술형/중계형/본문 반복형이면 본문을 확인해
-        # 기자식 제목을 다시 만든다. 제목에 없는 사실을 추가하지 않는다.
-        if self._is_narrative_title(title) or self._looks_like_body_as_title(title, body):
-            headline = re.split(r"[,，:：]", title, maxsplit=1)[0].strip()
-            headline = re.sub(
-                r"(?:라고|다고\s*)?(?:밝혔다|전했다|전해졌다|나타났다|드러났다|확인됐다|알려졌다|설명했다|덧붙였다|밝혀졌다)\.?$",
-                "", headline,
-            ).strip()
-            headline = re.sub(r"(?:했다|됐다|졌다|한다)\.?$", "", headline).strip()
-            if len(headline) >= 12:
-                title = headline
-            else:
-                body_sentences = self._sentences(body)
-                if body_sentences:
-                    candidate = self._trim_for_readability(body_sentences[0])
-                    if len(candidate) >= 12:
-                        title = candidate
-
         return self._auto_shorten_title(title)
 
     def _auto_shorten_title(self, title, max_len=42):
@@ -837,12 +876,6 @@ class MasterConditionManager:
             reason = self._clean(c.get("reason"))
             if not name or not reason or c.get("domestic_listed") is False:
                 continue
-            # 일반명사와 회사명이 겹치는 후보는 단순 단어 등장만으로 종목 확정 금지.
-            if name in GENERIC_NON_STOCK_NAMES and not re.search(
-                rf"(?:주식회사|\(주\)|㈜|{re.escape(name)}그룹|\b\d{{6}}\b)", text or "", re.I
-            ):
-                continue
-                continue
             # [최종사용자지시우선 / MASTER 단일통제]
             # 하위 함수가 넣은 단순 테마 매핑만으로는 관련주를 확정하지 않는다.
             # 반드시 MASTER가 기사 본문에서 직접 사업연관/실제 사건/공급망/상용화 근거를
@@ -871,20 +904,30 @@ class MasterConditionManager:
                 if not overlap and self._norm(name) not in self._norm(text):
                     continue
             c["score"] = round(self._score(c), 2)
-            # 송출용 관련주 근거는 반드시 구체적인 사업/사건 연결을 유지한다.
             if c["score"] >= self.min_score:
-                if not any(c.get(k) for k in ("event_link", "supply_chain", "commercial_link")):
-                    # 단순 회사명 언급만으로 들어온 후보는 최종 관련주에서 제외한다.
-                    continue
                 scored.append(c)
         scored.sort(key=lambda x: (-x["score"], -int(bool(x.get("direct"))), -int(bool(x.get("event_link")))))
         related = scored[:self.max_related]
         if related:
             return related, related[0], related[1:]
 
-        # [관련종목 단일 원칙] 실제 국내 상장사 후보가 없으면 관련종목을 만들지 않는다.
-        # 테마명/Big issue 같은 분류값을 종목명처럼 송출하면 일반뉴스가 주식뉴스로
-        # 오인되므로 관련종목 필드에는 절대 넣지 않는다.
+        # 직접 종목이 없을 때만 MASTER가 본문 전체를 보고 실제 연결 테마를 선택한다.
+        theme_patterns = [
+            ("AI 반도체 테마", r"AI.{0,30}(?:반도체|칩)|반도체.{0,30}AI"),
+            ("원전 테마", r"원전|원자력|SMR"),
+            ("2차전지 테마", r"2차전지|배터리|전기차 배터리"),
+            ("방산 테마", r"방산|무기|미사일|군수"),
+            ("바이오 테마", r"바이오|신약|임상|항체|의약품"),
+            ("3D NAND 테마", r"3D\s*NAND|NAND|낸드"),
+        ]
+        for label, pattern in theme_patterns:
+            if re.search(pattern, text or "", re.I):
+                return [{"name": label, "reason": "기사 본문에서 해당 산업 테마가 확인됨", "score": 70, "direct": False, "theme": True, "domestic_listed": True}], None, []
+
+        # 시장 반응 가능성이 큰 빅이슈도 MASTER가 본문 근거로만 확정한다.
+        big_issue = re.search(r"(?:전쟁|제재|관세|금리|기준금리|대규모 인수|합병|M&A|대규모 계약|대규모 투자|정책 전환|규제 변화|시장 충격)", text or "", re.I)
+        if big_issue and len(text or "") >= 80:
+            return [{"name": "Big issue", "reason": "본문상 시장 반응 가능성이 큰 사건이 확인됨", "score": 75, "direct": False, "big_issue": True, "domestic_listed": True}], None, []
         return [], None, []
 
     def _related_none_reason(self, related, text, candidates):
@@ -978,6 +1021,29 @@ class MasterConditionManager:
         if score >= 40: return "중간"
         return "낮음"
 
+    def _force_pass(self, text, title, related):
+        """[강한재료무조건통과 / 특징주단독속보무조건통과] 유일한 소유자.
+        news_value 점수화(_news_value)와는 완전히 별도 판정이다. 점수는 여러
+        약한 신호를 종합하는 데는 맞지만, 그 자체로 이미 시장 반응 신호인
+        키워드(수주·계약·M&A·특허·역대실적 등)나 '특징주'/'단독속보'처럼 편집자가
+        이미 실시간성을 판단해 붙인 표현까지 점수 합산에 묻혀 낮음으로 밀려나면
+        안 된다. 여기서 True가 나오면 news_engine 쪽 시황/광고 필터를 무조건
+        통과한다(파이프라인 검증 자체는 그대로 거친다)."""
+        m = STRONG_MATERIAL_PATTERN.search(text)
+        if m:
+            return True, f"강한 재료 키워드 감지: '{m.group(0)}'"
+
+        title_has_featured = bool(FEATURED_STOCK_PATTERN.search(title))
+        title_has_exclusive = bool(EXCLUSIVE_BREAKING_PATTERN.search(title))
+        if title_has_featured or title_has_exclusive:
+            # 주식시장 관련 기사인지 최소 확인: 관련종목이 이미 하나라도 잡혔거나,
+            # 본문에 증권 문맥 키워드가 있으면 인정한다.
+            is_stock_market_context = bool(related) or bool(STOCK_MARKET_CONTEXT_PATTERN.search(text))
+            if is_stock_market_context:
+                label = "특징주" if title_has_featured else "단독속보"
+                return True, f"{label} 표현 + 주식시장 문맥 확인"
+        return False, ""
+
     def _own(self, state, owner, **fields):
         """[노하우: 소유권 가드] 판단 필드는 파이프라인에서 정확히 한 스텝만 써야 한다.
         이미 다른 스텝(owner)이 확정한 필드를 또 다른 스텝이 쓰려고 하면, 예전처럼
@@ -1003,17 +1069,24 @@ class MasterConditionManager:
         if fields:
             state["priority_trace"].append({
                 "step": owner,
+                "tier": STEP_TIER.get(owner, CommandTier.MASTER_DECISION),
                 "action": "USER_OVERRIDE" if owner == "user_directive" else "SET",
                 "fields": list(fields.keys()),
             })
 
     def analyze(self, title, body, source="", link="", candidates=None, schedule="", evidence=None,
-                directive_overrides=None):
+                directive_overrides=None, directive_source="user", directive_issued_at=None):
         """[선형 파이프라인] title → key_points → stage → related → schedule →
         outlook → news_value → (directive_overrides) → FINAL LOCK 준비, 순서로
         정확히 한 번씩만 계산한다. PIPELINE_STEPS에 그 순서와 소유 필드가 문서화돼
         있다. 각 대입은 self._own()을 거치므로, 이 순서를 어기고 같은 필드를 다시
         계산하는 코드를 추가하면 조용히 묻히지 않고 즉시 예외로 드러난다.
+
+        directive_overrides: [Tier 0 — 최상위 명령] 이 호출에서 넘어온 값 1세트가
+        곧 "가장 최근 사용자 지시"다. 큐가 아니라 단일 슬롯이므로 여러 지시를
+        누적하고 싶다면 호출부(main.py)가 미리 병합해 마지막 상태만 넘겨야 한다.
+        directive_source/directive_issued_at은 감사(추적) 전용이며 우선순위
+        판단에는 관여하지 않는다.
         """
         title = self._clean(title)
         body = self._clean(body)
@@ -1081,15 +1154,37 @@ class MasterConditionManager:
         )
         self._own(state, "news_value", news_value=news_value, master_confirmed=master_confirmed)
 
+        # 9-1) 강한재료무조건통과/특징주단독속보무조건통과 — 유일한 소유자: _force_pass
+        force_pass, force_pass_reason = self._force_pass(text, state["title"], state["related"])
+        self._own(state, "force_pass", force_pass=force_pass, force_pass_reason=force_pass_reason)
+
         # 10) 증거 — 원문 근거 문장과 핵심요약을 합쳐 중복 제거
         self._own(state, "evidence", evidence=list(dict.fromkeys(state["evidence_seed"] + state["key_points"])))
 
-        # 11) [최종사용자지시우선 — 실제 구현] directive_overrides로 넘어온 값만
-        #     위에서 이미 확정한 필드를 다시 쓸 수 있는 유일한 경로다. 다른 어떤
-        #     스텝도 이 지점 이후 판단 필드를 다시 계산하지 않는다(재호출금지).
-        if directive_overrides:
+        # 11) [최종사용자지시우선 — Tier 0, 유일한 override 경로]
+        #     directive_overrides는 "명령 큐"가 아니라 "단일 슬롯"이다: 이 호출에서
+        #     넘어온 값 1세트가 곧 최상위 명령이며, 다른 어떤 스텝도 이 지점 이후
+        #     판단 필드를 다시 계산하지 않는다(재호출금지). 화이트리스트 밖 필드는
+        #     최상위 명령이라도 적용하지 않고 거부 사실만 감사 로그에 남긴다.
+        directive = Directive(
+            fields=dict(directive_overrides or {}),
+            issued_at=self._clean(directive_issued_at) or date.today().isoformat(),
+            source=self._clean(directive_source) or "user",
+        )
+        state["directive"] = {
+            "issued_at": directive.issued_at,
+            "source": directive.source,
+            "requested_fields": list(directive.fields.keys()),
+        }
+        if directive.fields:
             allowed_fields = {"title", "key_points", "outlook", "schedule"}
-            applied = {k: v for k, v in directive_overrides.items() if k in allowed_fields}
+            applied = {k: v for k, v in directive.fields.items() if k in allowed_fields}
+            rejected = [k for k in directive.fields if k not in allowed_fields]
+            if rejected:
+                state["priority_trace"].append({
+                    "step": "user_directive", "tier": CommandTier.LATEST_DIRECTIVE,
+                    "action": "REJECTED_FIELD", "fields": rejected,
+                })
             if applied:
                 self._own(state, "user_directive", **applied)
 
@@ -1125,6 +1220,9 @@ class MasterConditionManager:
             related_none_reason=state["related_none_reason"],
             news_value=state["news_value"],
             master_confirmed=state["master_confirmed"],
+            force_pass=state["force_pass"],
+            force_pass_reason=state["force_pass_reason"],
+            directive=state.get("directive", {}),
             priority_trace=state["priority_trace"],
             executed_orders=[],  # [폐기 예정] 더 이상 실행 게이트로 쓰이지 않는다 — 실제 기록은 executed_steps 참조
             executed_steps=list(state["executed_steps"]),
@@ -1212,4 +1310,7 @@ def analyze_news(**kwargs):
     return manager.lock(result)
 
 
-__all__ = ["RULE_VERSION", "CONDITION_RULES", "MasterResult", "MasterConditionManager", "analyze_news"]
+__all__ = [
+    "RULE_VERSION", "CONDITION_RULES", "MasterResult", "MasterConditionManager", "analyze_news",
+    "CommandTier", "Directive", "STEP_TIER", "COMMAND_PRIORITY_POLICY",
+]
