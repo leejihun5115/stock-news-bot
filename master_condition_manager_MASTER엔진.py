@@ -59,9 +59,12 @@ Reusable central decision-logic module for news / stock analysis programs.
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 import re
 import difflib
+import json
+import os
+import uuid
 from typing import Any, Dict, Iterable, List, Optional
 
 RULE_VERSION = "MASTER_CONDITION_MANAGER_V1"
@@ -188,6 +191,9 @@ PIPELINE_STEPS = (
     ("news_value", ("news_value", "master_confirmed"), True),
     ("force_pass", ("force_pass", "force_pass_reason"), True),
     ("evidence", ("evidence",), True),
+    # market_memory: history_store_path가 구성된 경우에만 실질적으로 통계를 낸다.
+    # 구성 안 됐으면 빈 값으로 안전하게 종료한다(IMMUTABLE_EMPTY_SECTION_RULE).
+    ("market_memory", ("market_memory",), False),
     # user_directive: directive_overrides가 실제로 넘어왔을 때만 도는 선택적 스텝
     # (유일하게 이미 확정된 필드를 덮어쓸 수 있는 예외 경로 — 최종사용자지시우선).
     ("user_directive", (), False),
@@ -232,6 +238,8 @@ class MasterResult:
     # [Tier 0 감사] 이번 실행에 적용된 최상위 명령(Directive)의 감사 정보.
     # 값을 다시 담지 않는다 — 어떤 지시가 언제/어디서 왔는지 추적용일 뿐이다.
     directive: Dict[str, Any] = field(default_factory=dict)
+    # [시장기억/누적통계] history_store 미설정 시 항상 빈 dict.
+    market_memory: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self):
         return self.__dict__.copy()
@@ -358,6 +366,148 @@ STOCK_MARKET_CONTEXT_PATTERN = re.compile(
     r"코스피|코스닥|증시|주가|주식|상장사|종목|매수|매도|시가총액|투자자|증권가|애널리스트",
 )
 
+# ============================================================
+# [관련주 자동 노이즈 차단 — 단순 회사명 언급]
+# ------------------------------------------------------------
+# 배경: 후보 생성기(candidates)가 "direct=True" 같은 태그를 붙여 넘겨도,
+# 그 근거가 실은 "채용/교육/산학협력/사회공헌" 같은 단순 언급뿐인 경우가
+# 있었다. 매번 사람이 "이건 관련주 아니다"라고 알려주지 않아도 되도록,
+# MASTER가 후보 생성기의 태그를 그대로 신뢰하지 않고 근거 문장 자체를
+# 여기서 한 번 더 검증한다 — 노이즈 패턴만 있고 실질 재료 패턴이 전혀
+# 없으면 태그와 무관하게 최종 거부한다.
+# ============================================================
+NOISE_ONLY_MENTION_PATTERN = re.compile(
+    r"채용|입사|계약학과|산학협력|사회공헌|인사(?:이동|발령)?|공채|신입사원|"
+    r"경력직\s*채용|봉사활동|기부|후원|MOU\s*체결식|협약식",
+)
+
+# [실질 주가 재료] 매출·이익·사업 전망에 실제로 연결되는 키워드만 인정한다.
+# STRONG_MATERIAL_PATTERN(강한재료무조건통과)보다 넓게 잡되, 목적은 다르다 —
+# 저건 "필터를 무조건 통과시킬 만큼 강한 재료"이고, 이건 "관련주로 인정할
+# 최소한의 사업 연관 근거"다.
+BUSINESS_MATERIAL_PATTERN = re.compile(
+    r"수주|공급계약|공급\s*계약|계약\s*체결|납품(?:\s*계약)?|MOU|양해각서|"
+    r"실적|매출|영업이익|순이익|어닝\s*서프라이즈|흑자\s*전환|적자\s*전환|"
+    r"증설|설비\s*투자|시설투자|투자\s*(?:유치|확대|결정)|"
+    r"신제품|신규\s*출시|출시|양산|"
+    r"정책\s*수혜|보조금|세제\s*혜택|관세\s*(?:부과|인하|면제)|"
+    r"원가\s*(?:상승|하락|절감|변화)|원자재\s*가격|"
+    r"규제\s*(?:강화|완화|변경)|인허가|허가|승인|"
+    r"생산량|판매량|출하량|공급\s*확대|수요\s*증가|점유율",
+    re.I,
+)
+
+class CaseHistoryStore:
+    """[파일 기반 누적 사례 저장소]
+    ------------------------------------------------------------
+    JSON 파일 하나에 과거 사례를 누적한다. DB가 아직 없다고 해서 통계를
+    지어내지 않기 위한 최소 구현이다.
+
+    - add_case(fields): MASTER가 사건을 확정할 때마다 기록. outcome_pct는
+      아직 모르므로 None으로 남긴다.
+    - record_outcome(case_id, outcome_pct): [나중에 별도로 호출] 실제 주가
+      반응(예: 익일 종가 등락률)을 알게 됐을 때만 채워 넣는다. 이 함수를
+      호출하는 주체(스케줄러/시세 조회 프로그램)는 이 파일 밖에 있어야 한다
+      — MASTER는 주가 데이터를 스스로 만들어내지 않는다.
+    - stats(signature, min_count): outcome_pct가 채워진 사례만 모아 계산한다.
+      표본이 min_count 미만이면 None(=아직 통계 낼 수 없음, 보류).
+
+    동시성: 매 호출마다 파일을 통째로 읽고 쓴다. 지금 규모(단일 프로세스,
+    뉴스 1건씩 순차 처리)에서는 충분하고, 트래픽이 커지면 그때 DB로 옮기면
+    된다(조기 추상화하지 않는다).
+    """
+
+    def __init__(self, path):
+        self.path = path
+        directory = os.path.dirname(self.path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        if not os.path.exists(self.path):
+            self._write([])
+
+    def _read(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    def _write(self, records):
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+
+    def add_case(self, fields):
+        """사건 확정 시 기록. 반환된 case_id를 나중에 record_outcome()에 쓴다."""
+        records = self._read()
+        case_id = uuid.uuid4().hex[:10]
+        record = {
+            "case_id": case_id,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "outcome_pct": None,
+            "outcome_recorded_at": None,
+            **fields,
+        }
+        records.append(record)
+        self._write(records)
+        return case_id
+
+    def record_outcome(self, case_id, outcome_pct, note=""):
+        """[외부 호출 전용] 실제 주가 반응(등락률 %)을 나중에 채워 넣는다.
+        MASTER의 analyze() 흐름과는 별개로, 시세를 확인한 다른 프로세스가
+        호출해야 한다."""
+        records = self._read()
+        for r in records:
+            if r.get("case_id") == case_id:
+                r["outcome_pct"] = float(outcome_pct)
+                r["outcome_recorded_at"] = datetime.now().isoformat(timespec="seconds")
+                if note:
+                    r["outcome_note"] = note
+                self._write(records)
+                return True
+        raise KeyError(f"case_id '{case_id}'를 찾을 수 없습니다.")
+
+    def all_records(self):
+        """[외부 호출 전용] 저장된 사례 전체를 반환한다. record_outcome을 채워
+        넣을 스케줄러가 '아직 결과 없는 사례'를 찾을 때 이 메서드를 쓴다."""
+        return self._read()
+
+    def count(self, signature):
+        """signature(카테고리+단계)가 같고 outcome이 채워진 사례 수."""
+        return sum(
+            1 for r in self._read()
+            if r.get("signature") == signature and r.get("outcome_pct") is not None
+        )
+
+    def stats(self, signature, min_count=30):
+        """표본이 min_count 이상일 때만 통계를 낸다. 미만이면 None(보류)."""
+        matched = [
+            r["outcome_pct"] for r in self._read()
+            if r.get("signature") == signature and r.get("outcome_pct") is not None
+        ]
+        if len(matched) < min_count:
+            return None
+        wins = sum(1 for x in matched if x > 0)
+        return {
+            "count": len(matched),
+            "win_rate": wins / len(matched),
+            "avg_outcome_pct": round(sum(matched) / len(matched), 2),
+        }
+
+
+# [사건 카테고리 — 유사사례 매칭 기준] 어떤 재료 유형인지를 대략적인 버킷으로
+# 나눈다. STRONG_MATERIAL_PATTERN(필터 통과용)과 목적이 다르므로 별도로 둔다 —
+# 이건 "얼마나 비슷한 과거 사례를 찾을 것인가"의 기준이다.
+CASE_CATEGORY_PATTERNS = [
+    ("수주공급계약", r"수주|공급계약|납품\s*계약|공급\s*계약|계약\s*체결|MOU|양해각서"),
+    ("M&A지분인수", r"인수\s*합병|M&A|지분\s*인수|경영권\s*인수"),
+    ("증자자사주", r"유상\s*증자|무상\s*증자|자사주\s*(?:매입|소각)"),
+    ("실적서프라이즈", r"사상\s*최대|역대\s*최대|최대\s*실적|어닝\s*서프라이즈|깜짝\s*실적|흑자\s*전환"),
+    ("임상허가승인", r"FDA\s*승인|품목\s*허가|식약처\s*승인|임상"),
+    ("신규상장급등", r"신규\s*상장|공모가|상한가|하한가|급등|급락"),
+    ("기술이전특허", r"기술\s*이전|라이선스|특허"),
+]
+
+
 class MasterConditionManager:
     """
     65개 조건을 '설명표'가 아니라 실제 실행 순서로 사용하는 중앙 엔진.
@@ -439,9 +589,23 @@ class MasterConditionManager:
         "최종 최대 3종목",
     ]
 
-    def __init__(self, max_related=3, min_score=40.0):
+    def __init__(self, max_related=3, min_score=40.0, news_value_high=65.0, news_value_mid=40.0,
+                 history_store_path=None, history_min_count=30):
         self.max_related = max_related
-        self.min_score = min_score
+        self.min_score = min_score          # [관련종목 선정 전용] 후보 점수 필터. news_value와는 무관.
+        # [노하우 — 다이얼 승격] "뉴스가 많이/적게 나오게"를 결정하는 유일한 지점.
+        # 예전엔 이 두 숫자가 _news_value() 안에 65/40으로 박혀 있어서, __init__에
+        # min_score라는 파라미터가 있어도 실제 통과 여부와는 연결되지 않았다(수정해도
+        # 반영 안 되는 증상의 원인). 이제 news_value는 오직 이 두 값만 보고 판정하며,
+        # news_value의 유일한 소유자는 _news_value()이므로(단일 소유), 이 다이얼 하나만
+        # 바꾸면 news_value → master_confirmed → force_pass 무관하게 하위 전체에 그대로 먹힌다.
+        self.news_value_high = news_value_high   # 이 점수 이상 = "높음"
+        self.news_value_mid = news_value_mid      # 이 점수 이상 = "중간" (미만이면 "낮음")
+        # [시장기억 — 선택적] 경로를 안 주면 market_memory는 항상 빈 값이다(기존
+        # 호출부는 아무 변경 없이 그대로 동작). 경로를 주면 사건마다 파일에 누적하고,
+        # 표본이 충분한 카테고리는 통계까지 계산한다.
+        self._history_store = CaseHistoryStore(history_store_path) if history_store_path else None
+        self.history_min_count = history_min_count
         # CONDITION_RULES는 더 이상 실행 순서를 결정하지 않는다(참조 문서용).
         # 실제 실행 순서는 PIPELINE_STEPS + analyze() 본문이 유일한 출처다.
         self._rules = sorted(CONDITION_RULES, key=lambda x: int(x["order"]))
@@ -886,6 +1050,14 @@ class MasterConditionManager:
             )
             anchors = [self._clean(c.get(k)) for k in ("event", "event_link", "supply_chain", "commercial_link") if self._clean(c.get(k))]
             reason_evidence = reason
+            # [노하우 — 단순언급 자동 차단] 후보의 direct/event_link 태그를 그대로
+            # 신뢰하지 않는다. 근거 문장(anchors+reason) 자체가 채용/교육/사회공헌류
+            # 단순 언급뿐이고 실질 주가 재료가 전혀 없으면, 태그와 무관하게 여기서
+            # 즉시 거부한다 — 이후 사람이 "관련주 아니다"를 다시 알려줄 필요가 없다.
+            evidence_for_noise_check = " ".join(anchors + [reason_evidence])
+            if (NOISE_ONLY_MENTION_PATTERN.search(evidence_for_noise_check)
+                    and not BUSINESS_MATERIAL_PATTERN.search(evidence_for_noise_check)):
+                continue
             if c.get("theme_link") and not concrete_link:
                 continue
             if not concrete_link:
@@ -1017,8 +1189,8 @@ class MasterConditionManager:
             score += 25
         if re.search(r"\d+(?:\.\d+)?\s*(?:%|억|조|원|달러)", text, re.I):
             score += 10
-        if score >= 65: return "높음"
-        if score >= 40: return "중간"
+        if score >= self.news_value_high: return "높음"
+        if score >= self.news_value_mid: return "중간"
         return "낮음"
 
     def _force_pass(self, text, title, related):
@@ -1043,6 +1215,67 @@ class MasterConditionManager:
                 label = "특징주" if title_has_featured else "단독속보"
                 return True, f"{label} 표현 + 주식시장 문맥 확인"
         return False, ""
+
+    def _case_category(self, text):
+        """[유사사례 매칭용 카테고리] CASE_CATEGORY_PATTERNS 중 첫 매칭을 쓴다.
+        어떤 카테고리에도 안 걸리면 '기타'로 묶는다(그래도 표본은 쌓인다)."""
+        for label, pattern in CASE_CATEGORY_PATTERNS:
+            if re.search(pattern, text or "", re.I):
+                return label
+        return "기타"
+
+    def _decide_trade_action(self, stats):
+        """[매매판단 라벨 — 참고용] 통계만으로 '사라/팔아라'를 단정하지 않는다.
+        과거 유사사례의 승률·평균 반응을 있는 그대로 보여주고, 최종 판단은
+        사람이 하도록 문구에 항상 '투자 조언 아님'을 남긴다."""
+        wr = stats["win_rate"]
+        avg = stats["avg_outcome_pct"]
+        n = stats["count"]
+        if wr >= 0.6 and avg > 0:
+            tone = "긍정적 참고"
+        elif wr <= 0.4:
+            tone = "신중 접근 권장"
+        else:
+            tone = "혼조"
+        return f"{tone}: 과거 유사사례 {n}건 중 상승 {wr*100:.0f}%, 평균 반응 {avg:+.2f}% (참고용 통계, 투자 조언 아님)"
+
+    def _market_memory(self, state):
+        """[Tier 1 — 시장기억/누적통계] 유일한 소유자: 이 스텝.
+        history_store가 없으면(경로 미설정) 항상 빈 값 — 기존 호출부는 영향 없다.
+        있으면: 1) 이번 사건을 기록(outcome은 아직 모름) 2) 같은 카테고리+단계의
+        과거 사례 중 outcome이 채워진 표본이 history_min_count 이상이면 통계를,
+        아니면 '보류'를 반환한다. 등락률(outcome)은 이 스텝이 만들어내지 않는다
+        — 반드시 CaseHistoryStore.record_outcome()을 통해 외부에서 나중에 채워진다.
+        """
+        if not self._history_store:
+            return {}
+        category = self._case_category(state["text"])
+        stage = state["stage"] or "단계미상"
+        signature = f"{category}|{stage}"
+        related_names = [self._clean(r.get("name")) for r in state["related"] if self._clean(r.get("name"))]
+
+        case_id = None
+        if state.get("master_confirmed") and related_names:
+            case_id = self._history_store.add_case({
+                "signature": signature, "category": category, "stage": state["stage"],
+                "title": state["title"], "related": related_names,
+                "source": state.get("source", ""), "link": state.get("link", ""),
+            })
+
+        stats = self._history_store.stats(signature, min_count=self.history_min_count)
+        if stats is None:
+            matched = self._history_store.count(signature)
+            return {
+                "signature": signature, "case_id": case_id,
+                "matched_cases": matched, "min_required": self.history_min_count,
+                "decision": f"데이터 부족({matched}/{self.history_min_count}건) — 매매판단 보류",
+            }
+        return {
+            "signature": signature, "case_id": case_id,
+            "matched_cases": stats["count"], "win_rate": stats["win_rate"],
+            "avg_outcome_pct": stats["avg_outcome_pct"],
+            "decision": self._decide_trade_action(stats),
+        }
 
     def _own(self, state, owner, **fields):
         """[노하우: 소유권 가드] 판단 필드는 파이프라인에서 정확히 한 스텝만 써야 한다.
@@ -1161,6 +1394,10 @@ class MasterConditionManager:
         # 10) 증거 — 원문 근거 문장과 핵심요약을 합쳐 중복 제거
         self._own(state, "evidence", evidence=list(dict.fromkeys(state["evidence_seed"] + state["key_points"])))
 
+        # 10-1) 시장기억/누적통계 — 유일한 소유자: _market_memory
+        #       history_store_path가 설정된 경우에만 실제로 기록·통계를 낸다.
+        self._own(state, "market_memory", market_memory=self._market_memory(state))
+
         # 11) [최종사용자지시우선 — Tier 0, 유일한 override 경로]
         #     directive_overrides는 "명령 큐"가 아니라 "단일 슬롯"이다: 이 호출에서
         #     넘어온 값 1세트가 곧 최상위 명령이며, 다른 어떤 스텝도 이 지점 이후
@@ -1223,6 +1460,7 @@ class MasterConditionManager:
             force_pass=state["force_pass"],
             force_pass_reason=state["force_pass_reason"],
             directive=state.get("directive", {}),
+            market_memory=state.get("market_memory", {}),
             priority_trace=state["priority_trace"],
             executed_orders=[],  # [폐기 예정] 더 이상 실행 게이트로 쓰이지 않는다 — 실제 기록은 executed_steps 참조
             executed_steps=list(state["executed_steps"]),
@@ -1298,11 +1536,26 @@ class MasterConditionManager:
         return result
 
 
-def analyze_news(**kwargs):
+def analyze_news(max_related=3, min_score=40.0, news_value_high=65.0, news_value_mid=40.0,
+                  history_store_path=None, history_min_count=30, **kwargs):
     """[수정] 검증 오류가 있어도 예외로 결과를 날리지 않고, 계산된 내용을
     locked=False 상태로 그대로 반환한다. (main.py의 master_finalize_news와 동일한 정책)
+
+    [다이얼] "뉴스가 많이/적게 나오게" 하고 싶으면 news_value_mid(기본 40)를
+    낮추면 된다. 예: analyze_news(news_value_mid=25, title=..., body=...).
+    이 값이 news_value의 유일한 판정 기준이므로, 이 함수 호출부(main.py) 한
+    곳만 바꾸면 하위 전체(master_confirmed 통과 여부)에 그대로 반영된다.
+
+    [시장기억] history_store_path를 주면(예: "data/case_history.json") 사건마다
+    파일에 누적하고, 같은 카테고리 표본이 history_min_count 이상이면 통계를 낸다.
+    실제 등락률은 CaseHistoryStore.record_outcome(case_id, 등락률)을 별도로
+    호출해야 채워진다 — 이 함수는 그 결과를 만들어내지 않는다.
     """
-    manager = MasterConditionManager()
+    manager = MasterConditionManager(
+        max_related=max_related, min_score=min_score,
+        news_value_high=news_value_high, news_value_mid=news_value_mid,
+        history_store_path=history_store_path, history_min_count=history_min_count,
+    )
     result = manager.analyze(**kwargs)
     result = manager.validate(result)
     if result.get("validation_errors"):
@@ -1313,4 +1566,5 @@ def analyze_news(**kwargs):
 __all__ = [
     "RULE_VERSION", "CONDITION_RULES", "MasterResult", "MasterConditionManager", "analyze_news",
     "CommandTier", "Directive", "STEP_TIER", "COMMAND_PRIORITY_POLICY",
+    "CaseHistoryStore", "CASE_CATEGORY_PATTERNS",
 ]
