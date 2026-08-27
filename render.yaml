@@ -1,0 +1,68 @@
+# Render Blueprint (Infrastructure as Code)
+#
+# 사용법:
+#   1) 이 저장소를 GitHub에 푸시
+#   2) Render 대시보드 → New + → Blueprint → 이 저장소 선택
+#      (render.yaml을 자동으로 인식해서 서비스가 구성됩니다)
+#   3) 대시보드에서 sync:false로 표시된 값들(토큰 등)을 직접 입력
+#
+# 왜 "web"이 아니라 "worker"인가?
+#   이 봇은 HTTP 포트를 열지 않고 디스코드 게이트웨이에 계속 연결된 채로
+#   백그라운드에서 도는 프로세스다. Render의 Web Service는 포트를 리슨하지
+#   않으면 배포가 "실패"로 처리되므로, 포트가 필요 없는 Background Worker
+#   타입을 써야 한다. (참고: Render의 Background Worker는 Free 플랜에서는
+#   제공되지 않고 Starter 이상 유료 플랜이 필요합니다 — 배포 전 요금제를
+#   꼭 확인하세요.)
+services:
+  - type: worker
+    name: stock-news-bot
+    runtime: python
+    plan: starter
+    region: singapore
+    branch: main
+    buildCommand: "pip install -e ."
+    startCommand: "python -m stock_news_bot"
+    autoDeploy: true
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: DISCORD_NEWS_CHANNEL_ID
+        sync: false
+      - key: DISCORD_ADMIN_USER_IDS
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      # DART Open API 키. opendart.fss.or.kr에서 무료 발급.
+      # 비어있으면 market_intel 코그의 DART 연동 작업이 비활성화되고,
+      # classifier는 하드코딩 화이트리스트로만 종목명을 인식한다.
+      - key: DART_API_KEY
+        sync: false
+      # DART/pykrx 백그라운드 갱신 주기(초). 뉴스 알림 주기(FETCH_INTERVAL_SECONDS)와
+      # 달리 시세/재무데이터는 자주 바뀌지 않으므로 기본값을 길게 잡는다.
+      - key: MARKET_INTEL_INTERVAL_SECONDS
+        value: "3600"
+      - key: NEWS_KEYWORDS
+        value: "삼성전자,SK하이닉스,코스피,반도체"
+      - key: RSS_FEEDS
+        value: ""
+      - key: FETCH_INTERVAL_SECONDS
+        value: "300"
+      - key: HEALTH_STALE_THRESHOLD_SECONDS
+        value: "1800"
+      - key: LOG_LEVEL
+        value: "INFO"
+      # 디스크(아래 disk 항목)에 마운트된 경로를 가리켜야 재배포/재시작에도
+      # 중복방지 DB와 로그가 유지된다. 디스크 없이 기본 경로(./data, ./logs)를
+      # 쓰면 배포될 때마다 파일시스템이 초기화되어 내용이 날아간다.
+      - key: DB_PATH
+        value: "/var/data/stock_news_bot.sqlite3"
+      - key: LOG_DIR
+        value: "/var/data/logs"
+    disk:
+      name: stock-news-bot-data
+      mountPath: /var/data
+      sizeGB: 1
