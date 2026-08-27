@@ -73,6 +73,8 @@ class Settings:
     # 뉴스 수집
     rss_feeds: list[str] = field(default_factory=list)
     news_keywords: list[str] = field(default_factory=list)
+    news_value_mid: int = 40
+    news_value_high: int = 70
     fetch_interval_seconds: int = 300
     fetch_timeout_seconds: int = 10
     fetch_max_retries: int = 3
@@ -117,6 +119,8 @@ def load_settings() -> Settings:
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID"),
         rss_feeds=_get_str_list("RSS_FEEDS"),
         news_keywords=_get_str_list("NEWS_KEYWORDS"),
+        news_value_mid=_get_int("MEDIUM_NEWS_SCORE", 40),
+        news_value_high=_get_int("STRONG_NEWS_SCORE", 70),
         fetch_interval_seconds=_get_int("FETCH_INTERVAL_SECONDS", 300),
         fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),
         fetch_max_retries=_get_int("FETCH_MAX_RETRIES", 3),
