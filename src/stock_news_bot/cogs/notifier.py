@@ -82,7 +82,7 @@ class NotifierCog(commands.Cog, name="Notifier"):
         for item in sorted(items, key=lambda i: order[i.importance]):
             try:
                 content = "@here 🚨 중요 뉴스" if item.importance == Importance.HIGH else None
-                allowed = discord.AllowedMentions(everyone=False, here=True, roles=False)
+                allowed = discord.AllowedMentions(everyone=False, roles=False)
                 await channel.send(content=content, embed=build_embed(item), allowed_mentions=allowed)
                 sent += 1
             except discord.HTTPException as exc:
