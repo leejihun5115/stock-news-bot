@@ -104,25 +104,51 @@ def _theme(text: str) -> str:
     return ""
 
 
-def _key_points(item: NewsItem) -> list[str]:
-    """기사 본문/요약에서 확인되는 사실만 핵심으로 만든다.
+def _clean_text(value: str) -> str:
+    value = re.sub(r"<[^>]+>", " ", value or "")
+    return re.sub(r"\s+", " ", value).strip()
 
-    제목 자체를 잘라 핵심으로 재사용하지 않는다. 요약/본문이 없으면
-    핵심 카테고리도 만들지 않는다.
+
+def _split_sentences(text: str) -> list[str]:
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if not text:
+        return []
+    parts = re.split(r"(?<=[.!?。！？])\s+|(?<=다)\s+", text)
+    return [p.strip(" \"'“”‘’") for p in parts if len(p.strip()) >= 12]
+
+
+def _key_points(item: NewsItem) -> list[str]:
+    """본문의 실제 사실 문장만 핵심으로 추출한다.
+
+    제목, 단순 금액 목록, 시간/주가 한 줄을 핵심으로 복사하지 않는다.
     """
     text = item.summary or ""
-    points: list[str] = []
     if not text.strip():
-        return points
+        return []
 
-    if item.amounts:
-        points.append("금액 — " + ", ".join(item.amounts[:2]))
-    if item.reason:
-        points.append(item.reason)
-    if item.event_type and item.company:
-        points.insert(0, f"{item.company} {item.event_type} 관련 사실 확인")
-    return list(dict.fromkeys(points))[:3]
+    sentences = _split_sentences(text)
+    candidates: list[str] = []
+    priority = (
+        "영업이익", "매출", "순이익", "실적", "계약", "수주", "공급",
+        "관세", "자사주", "인수", "허가", "승인", "임상", "전망",
+        "증가", "감소", "상향", "하향", "급등", "급락",
+    )
+    for sentence in sentences:
+        if any(k in sentence for k in priority):
+            candidates.append(sentence)
+    # 숫자만 있는 문장이나 제목 반복을 배제한다.
+    candidates = [
+        c for c in candidates
+        if not re.fullmatch(r"[\d\s,.%원달러억원만조\-+·]+", c)
+        and _clean_for_compare(c) != _clean_for_compare(item.title)
+    ]
+    if not candidates:
+        return []
+    return list(dict.fromkeys(_compact(c, 150) for c in candidates))[:3]
 
+
+def _clean_for_compare(value: str) -> str:
+    return re.sub(r"[\s\"'“”‘’….,!?？]", "", _clean_text(value)).lower()
 
 def _amount_number(value: str) -> float | None:
     match = re.match(r"([\d,.]+)\s?(조|억|만)?", value)
@@ -164,26 +190,21 @@ def _schedule(text: str) -> list[str]:
 
 
 def extract_reason(text: str) -> str:
-    """본문에서 '왜'에 해당하는 근거 스니펫을 찾아서 반환한다.
-
-    수치(%)나 비교 문구 주변 텍스트를 우선으로 잡고, 없으면 구체적 사업
-    재료 키워드 주변을 잡는다. 아무것도 없으면 빈 문자열(못 찾음)을 반환한다.
-    """
-    match = _EVIDENCE_PERCENT_PATTERN.search(text) or _EVIDENCE_COMPARISON_PATTERN.search(text)
-    if match:
-        start = max(match.start() - 20, 0)
-        end = min(match.end() + 20, len(text))
-        return text[start:end].strip()
-
-    for kw in _EVIDENCE_MATERIAL_KEYWORDS:
-        idx = text.find(kw)
-        if idx != -1:
-            start = max(idx - 15, 0)
-            end = min(idx + len(kw) + 20, len(text))
-            return text[start:end].strip()
-
+    """본문에서 원인·변화가 함께 드러나는 실제 문장을 반환한다."""
+    sentences = _split_sentences(text)
+    reason_keywords = (
+        "때문", "따라", "영향", "반영", "수요", "환급", "확대", "증가",
+        "감소", "상향", "하향", "수주", "계약", "체결", "실적", "관세",
+        "자사주", "매출", "영업이익", "임상", "허가", "승인",
+    )
+    for sentence in sentences:
+        if any(k in sentence for k in reason_keywords) and (
+            re.search(r"\d+(?:[,.]\d+)?\s?%", sentence)
+            or any(k in sentence for k in _EVIDENCE_MATERIAL_KEYWORDS)
+            or any(k in sentence for k in ("때문", "따라", "영향", "반영"))
+        ):
+            return _compact(sentence, 180)
     return ""
-
 
 def extract_amounts(text: str) -> list[str]:
     """본문에서 금액 표현을 전부 찾아서 반환한다 (중복 제거, 등장 순서 유지)."""
@@ -196,10 +217,24 @@ def extract_amounts(text: str) -> list[str]:
 
 
 def extract_company_name(text: str) -> str:
-    """본문에서 인식되는 종목명을 하나 찾아서 반환한다 (화이트리스트 기반)."""
+    """기사의 중심 기업으로 볼 수 있는 화이트리스트 종목만 반환한다.
+
+    단순히 본문에 기업명이 한 번 등장했다는 이유로 관련주로 만들지 않는다.
+    제목에 기업명이 있으면 우선하고, 본문에서는 기업명과 사건/실적 키워드가
+    가까이 붙어 있는 경우만 후보로 인정한다.
+    """
+    title, _, body = text.partition("\n")
     for name in KNOWN_COMPANY_NAMES:
-        if name in text:
+        if name in title:
             return name
+    for name in KNOWN_COMPANY_NAMES:
+        for match in re.finditer(re.escape(name), body):
+            window = body[max(0, match.start()-80):match.end()+100]
+            if any(k in window for k in (
+                "계약", "수주", "실적", "매출", "영업이익", "순이익",
+                "임상", "허가", "승인", "출시", "공급", "증설",
+            )):
+                return name
     return ""
 
 _SCORE_HIGH_KEYWORD = 70
@@ -245,6 +280,21 @@ def score_item(item: NewsItem) -> tuple[int, list[str], list[str]]:
     return score, sectors, matched
 
 
+def _data_values(text: str, amounts: list[str]) -> list[str]:
+    """금액의 의미를 주변 문장에서 함께 보존한다."""
+    if not amounts:
+        return []
+    values: list[str] = []
+    sentences = _split_sentences(text)
+    for amount in amounts:
+        sentence = next((x for x in sentences if amount in x), "")
+        if sentence:
+            values.append(_compact(sentence, 170))
+        else:
+            values.append(f"금액 — {amount}")
+    return list(dict.fromkeys(values))[:5]
+
+
 def classify_item(
     item: NewsItem, *, news_value_mid: int = 40, news_value_high: int = 70
 ) -> NewsItem:
@@ -269,13 +319,13 @@ def classify_item(
     text = item.summary or ""
     item.reason = extract_reason(text)
     item.amounts = extract_amounts(text)
-    item.company = extract_company_name(f"{item.title} {text}")
+    item.company = extract_company_name(f"{item.title}\n{text}")
     item.event_type = _event_type(f"{item.title} {text}")
     item.theme = _theme(f"{item.title} {text}")
     item.key_points = _key_points(item)
     item.analysis = _analysis(item)
     item.schedule = _schedule(text)
-    item.data_values = [f"금액 — {a}" for a in item.amounts[:3]]
+    item.data_values = _data_values(text, item.amounts)
     item.terms = [f"{term} — {definition}" for term, definition in _TERM_RULES.items() if term in text][:3]
     item.related_companies = []
     if item.company and item.event_type and item.reason:

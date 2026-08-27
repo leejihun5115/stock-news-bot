@@ -51,9 +51,10 @@ def _normalize_source(value: str) -> str:
     """RSS의 세부 카테고리가 섞인 출처를 신문사명으로 정규화한다."""
     value = _clean_text(value)
     # 한국경제 | 뉴스 | 증권, 한국경제 뉴스/증권 등의 변형을 한국경제로 통일
+    # RSS/포털의 분류명이 붙어도 최초의 발행사명만 남긴다.
     parts = [p.strip() for p in re.split(r"[|｜]", value) if p.strip()]
-    if parts:
-        return parts[0]
+    value = parts[0] if parts else value
+    value = re.split(r"\s+[-–—]\s+", value, maxsplit=1)[0].strip()
     return value
 
 
@@ -171,23 +172,14 @@ def _fallback_key_points(item: NewsItem) -> list[str]:
     if not item.summary.strip():
         return []
     points: list[str] = []
-    if item.amounts:
-        points.append("금액 — " + ", ".join(item.amounts[:2]))
     if item.reason:
-        points.append(_compact(item.reason, 120))
+        points.append(_compact(item.reason, 150))
     return list(dict.fromkeys(points))[:3]
 
 
 def _fallback_analysis(item: NewsItem) -> list[str]:
-    """확인된 사실에서 직접 연결되는 분석만 만든다."""
-    result: list[str] = []
-    if item.event_type == "계약" and item.company and item.amounts:
-        result.append(f"{item.company}의 계약금액 {item.amounts[0]}이 기사에 명시됨")
-    elif item.event_type == "실적" and item.company and item.reason:
-        result.append(f"{item.company} 실적 변화에 대한 수치·비교 내용이 기사에 명시됨")
-    elif item.event_type in {"임상", "허가", "승인"} and item.company:
-        result.append(f"{item.company}의 {item.event_type} 진행 내용이 기사에 명시됨")
-    return result[:3]
+    """분석 데이터가 실제로 없으면 임의의 분석을 만들지 않는다."""
+    return []
 
 
 def _importance_score_text(item: NewsItem, mid: int, high: int) -> str:
