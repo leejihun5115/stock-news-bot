@@ -30,6 +30,7 @@ class NewsItem:
     sectors: list[str] = field(default_factory=list)
     matched_keywords: list[str] = field(default_factory=list)
     importance: Importance = Importance.LOW
+    score: int = 0  # score_item()이 계산한 원점수. NEWS_SEND_MIN_SCORE 필터링에 사용.
 
     @property
     def dedup_key(self) -> str:
