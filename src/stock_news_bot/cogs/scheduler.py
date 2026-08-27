@@ -119,7 +119,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         classified = classifier.classify(items)
 
         # 강도 필터: NEWS_SEND_MIN_SCORE 미만인 기사는 아예 후보에서 제외한다.
-        min_score = self.settings.news_send_min_score
+        min_score = self.settings.news_value_mid
         qualified = [item for item in classified if item.score >= min_score]
         filtered_out = len(classified) - len(qualified)
 
