@@ -1,15 +1,4 @@
-"""전체 파이프라인(수집→분류→중복제거→알림)을 주기적으로 실행한다.
-
-【상용화 노하우】
-- discord.ext.tasks.loop는 콜백 안에서 잡히지 않은 예외가 발생하면
-  루프 자체가 조용히 죽어버린다 (이게 실전에서 가장 많이 겪는 장애다).
-  그래서 파이프라인 전체를 try/except로 감싸고, 실패해도 다음 사이클에
-  루프가 계속 돌도록 만든다. 예외는 로깅 + 텔레그램 알림으로만 처리한다.
-- 관리자 명령으로 일시정지(pause)할 수 있어야 하므로, 루프 자체를
-  멈추지 않고 내부 플래그로 스킵하는 방식을 쓴다 (재개 시 딜레이 없이
-  바로 이어서 돌 수 있도록).
-- 헬스체크는 파이프라인 성공 여부와 무관하게 별도 주기로 계속 돈다.
-"""
+"""전체 파이프라인(수집→분류→중복제거→알림)을 주기적으로 실행한다."""
 from __future__ import annotations
 
 import logging
@@ -43,7 +32,6 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             stale_threshold_seconds=self.settings.health_stale_threshold_seconds,
         )
 
-        # 루프 간격은 설정값 기준으로 동적으로 지정해야 하므로 change_interval 사용.
         self.pipeline_loop.change_interval(seconds=self.settings.fetch_interval_seconds)
         self.health_loop.change_interval(seconds=self.settings.health_check_interval_seconds)
 
@@ -56,10 +44,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         self.health_loop.cancel()
         self.dedup_store.close()
 
-    # ── 실시간 문제 알림(디스코드) ────────────────────────────
     async def _notify_discord(self, *, title: str, description: str, ok: bool) -> None:
-        """장애/복구 상황을 사람이 텔레그램 설정 없이도 바로 볼 수 있도록
-        디스코드 채널(관리자 채널 우선, 없으면 뉴스 채널)에 직접 올린다."""
         channel_id = self.settings.discord_admin_channel_id or self.settings.discord_news_channel_id
         channel = self.bot.get_channel(channel_id)
         if channel is None:
@@ -75,7 +60,6 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         except discord.HTTPException:
             logger.exception("디스코드 실시간 알림 전송 실패")
 
-    # ── 메인 파이프라인 ──────────────────────────────────────
     @tasks.loop(seconds=300)
     async def pipeline_loop(self) -> None:
         if self.paused:
@@ -103,7 +87,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     description=f"무엇이 문제인가: {exc}\n\n같은 문제가 계속되면 다시 사이클마다 알리지 않고, 해결(복구)될 때 한 번 더 알려드려요.",
                     ok=False,
                 )
-        except Exception as exc:  # 예상 못한 오류까지 포함해 루프가 죽지 않도록 방어
+        except Exception as exc:
             logger.exception("파이프라인 실행 중 예상치 못한 오류")
             bot_status.mark_failure(str(exc))
             await self.alerter.send(f"❌ [stock-news-bot] 예상치 못한 오류: {exc}")
@@ -134,8 +118,13 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
 
         classified = classifier.classify(items)
 
+        # 강도 필터: NEWS_SEND_MIN_SCORE 미만인 기사는 아예 후보에서 제외한다.
+        min_score = self.settings.news_send_min_score
+        qualified = [item for item in classified if item.score >= min_score]
+        filtered_out = len(classified) - len(qualified)
+
         new_items = []
-        for item in classified:
+        for item in qualified:
             key = item.dedup_key
             if self.dedup_store.is_new(key):
                 new_items.append(item)
@@ -144,23 +133,23 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         if new_items:
             sent = await notifier.send_items(new_items)
             logger.info(
-                "수집 %d건 → 신규 %d건 → 전송 %d건 (수집실패 %d건)",
-                len(items), len(new_items), sent, len(fetch_errors),
+                "수집 %d건 → 강도필터(≥%d) 통과 %d건(제외 %d건) → 신규 %d건 → 전송 %d건 (수집실패 %d건)",
+                len(items), min_score, len(qualified), filtered_out,
+                len(new_items), sent, len(fetch_errors),
             )
         else:
             sent = 0
             logger.info(
-                "수집 %d건, 신규 뉴스 없음 (수집실패 %d건)", len(items), len(fetch_errors)
+                "수집 %d건, 강도필터(≥%d) 통과 %d건(제외 %d건), 신규 뉴스 없음 (수집실패 %d건)",
+                len(items), min_score, len(qualified), filtered_out, len(fetch_errors),
             )
 
         bot_status.mark_success(
             fetched=len(items), new=len(new_items), sent=sent, fetch_errors=len(fetch_errors)
         )
 
-        # 매 사이클마다 오래된 dedup 레코드를 정리 (비용이 낮으므로 매번 수행)
         self.dedup_store.cleanup_old(self.settings.dedup_retention_days)
 
-    # ── 헬스체크 루프 ────────────────────────────────────────
     @tasks.loop(seconds=300)
     async def health_loop(self) -> None:
         await self.health.check()
