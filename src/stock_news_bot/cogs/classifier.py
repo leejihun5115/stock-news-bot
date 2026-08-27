@@ -109,6 +109,14 @@ def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _compact(value: str, limit: int = 110) -> str:
+    """Clean text and cap its length without breaking the output pipeline."""
+    value = _clean_text(value)
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
 def _split_sentences(text: str) -> list[str]:
     text = re.sub(r"\s+", " ", text or "").strip()
     if not text:
