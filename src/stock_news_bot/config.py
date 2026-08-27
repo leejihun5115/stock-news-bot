@@ -16,8 +16,6 @@ from dotenv import load_dotenv
 
 from stock_news_bot.utils.errors import ConfigError
 
-# 프로젝트 루트의 .env를 로드한다. 이미 설정된 실제 환경변수(OS/배포환경)가
-# 있다면 그쪽이 우선하도록 override=False로 둔다.
 load_dotenv(override=False)
 
 
@@ -59,35 +57,33 @@ def _get_str_list(key: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Settings:
-    # 디스코드
     discord_token: str
     discord_guild_id: int | None
     discord_news_channel_id: int
     discord_admin_channel_id: int | None = None
     discord_admin_user_ids: list[int] = field(default_factory=list)
 
-    # 텔레그램(장애 알림 전용)
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
-    # 뉴스 수집
     rss_feeds: list[str] = field(default_factory=list)
     news_keywords: list[str] = field(default_factory=list)
     news_value_mid: int = 40
     news_value_high: int = 70
+    # 실제 "전송 여부"를 가르는 필터 기준점. news_value_mid/high는 라벨(색상)만
+    # 정하고 전송을 막지 않으므로, 진짜 강도 필터가 필요하면 이 값을 쓴다.
+    # 기본값 0은 "필터링 없이 전부 전송"이라 기존 동작과 100% 호환된다.
+    news_send_min_score: int = 0
     fetch_interval_seconds: int = 300
     fetch_timeout_seconds: int = 10
     fetch_max_retries: int = 3
 
-    # 저장/중복제거
     db_path: Path = Path("./data/stock_news_bot.sqlite3")
     dedup_retention_days: int = 14
 
-    # 헬스체크
     health_stale_threshold_seconds: int = 1800
     health_check_interval_seconds: int = 300
 
-    # 로깅
     log_level: str = "INFO"
     log_dir: Path = Path("./logs")
 
@@ -121,6 +117,7 @@ def load_settings() -> Settings:
         news_keywords=_get_str_list("NEWS_KEYWORDS"),
         news_value_mid=_get_int("MEDIUM_NEWS_SCORE", 40),
         news_value_high=_get_int("STRONG_NEWS_SCORE", 70),
+        news_send_min_score=_get_int("NEWS_SEND_MIN_SCORE", 0),
         fetch_interval_seconds=_get_int("FETCH_INTERVAL_SECONDS", 300),
         fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),
         fetch_max_retries=_get_int("FETCH_MAX_RETRIES", 3),
@@ -142,6 +139,4 @@ def load_settings() -> Settings:
     return settings
 
 
-# 모듈 임포트 시점에 한 번만 생성되는 전역 설정 객체.
-# (테스트에서는 load_settings()를 직접 호출해 별도 인스턴스를 만들어 쓴다.)
 settings = load_settings()
