@@ -13,6 +13,7 @@ from discord.ext import commands
 from stock_news_bot.cogs import LOAD_ORDER
 from stock_news_bot.config import Settings
 from stock_news_bot.monitor.telegram_alert import TelegramAlerter
+from stock_news_bot.status import status as bot_status
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class StockNewsBot(commands.Bot):
 
     async def on_ready(self) -> None:
         logger.info("로그인 완료: %s (id=%s)", self.user, self.user.id if self.user else "?")
+        bot_status.mark_ready(str(self.user))
 
     async def on_error(self, event_method: str, /, *args, **kwargs) -> None:
         """이벤트 핸들러 내부에서 잡히지 않은 예외에 대한 최후 방어선.

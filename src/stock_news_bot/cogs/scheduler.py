@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import logging
 
+import discord
 from discord.ext import commands, tasks
 
 from stock_news_bot.monitor.health import HealthMonitor
 from stock_news_bot.monitor.telegram_alert import TelegramAlerter
+from stock_news_bot.status import status as bot_status
 from stock_news_bot.storage.dedup import DedupStore
 from stock_news_bot.utils.errors import BaseBotError
 
@@ -54,6 +56,25 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         self.health_loop.cancel()
         self.dedup_store.close()
 
+    # ── 실시간 문제 알림(디스코드) ────────────────────────────
+    async def _notify_discord(self, *, title: str, description: str, ok: bool) -> None:
+        """장애/복구 상황을 사람이 텔레그램 설정 없이도 바로 볼 수 있도록
+        디스코드 채널(관리자 채널 우선, 없으면 뉴스 채널)에 직접 올린다."""
+        channel_id = self.settings.discord_admin_channel_id or self.settings.discord_news_channel_id
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            logger.warning("알림 채널(id=%s)을 찾을 수 없어 디스코드 실시간 알림을 건너뜁니다.", channel_id)
+            return
+        embed = discord.Embed(
+            title=title,
+            description=description[:4000],
+            color=discord.Color.green() if ok else discord.Color.red(),
+        )
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException:
+            logger.exception("디스코드 실시간 알림 전송 실패")
+
     # ── 메인 파이프라인 ──────────────────────────────────────
     @tasks.loop(seconds=300)
     async def pipeline_loop(self) -> None:
@@ -61,15 +82,37 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             logger.debug("스케줄러 일시정지 상태 — 이번 사이클 건너뜀")
             return
 
+        was_failing = bot_status.last_run_ok is False
+
         try:
             await self._run_pipeline_once()
             self.health.record_success()
+            if was_failing:
+                await self._notify_discord(
+                    title="✅ 정상 복구됨",
+                    description="파이프라인이 다시 정상적으로 실행되고 있습니다.",
+                    ok=True,
+                )
         except BaseBotError as exc:
             logger.exception("파이프라인 실행 중 오류")
+            bot_status.mark_failure(str(exc))
             await self.alerter.send(f"❌ [stock-news-bot] 파이프라인 오류: {exc}")
+            if not was_failing:
+                await self._notify_discord(
+                    title="🚨 파이프라인 오류 발생",
+                    description=f"무엇이 문제인가: {exc}\n\n같은 문제가 계속되면 다시 사이클마다 알리지 않고, 해결(복구)될 때 한 번 더 알려드려요.",
+                    ok=False,
+                )
         except Exception as exc:  # 예상 못한 오류까지 포함해 루프가 죽지 않도록 방어
             logger.exception("파이프라인 실행 중 예상치 못한 오류")
+            bot_status.mark_failure(str(exc))
             await self.alerter.send(f"❌ [stock-news-bot] 예상치 못한 오류: {exc}")
+            if not was_failing:
+                await self._notify_discord(
+                    title="🚨 예상치 못한 오류 발생",
+                    description=f"무엇이 문제인가: {exc}\n\n같은 문제가 계속되면 다시 사이클마다 알리지 않고, 해결(복구)될 때 한 번 더 알려드려요.",
+                    ok=False,
+                )
 
     @pipeline_loop.before_loop
     async def _before_pipeline(self) -> None:
@@ -105,9 +148,14 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 len(items), len(new_items), sent, len(fetch_errors),
             )
         else:
+            sent = 0
             logger.info(
                 "수집 %d건, 신규 뉴스 없음 (수집실패 %d건)", len(items), len(fetch_errors)
             )
+
+        bot_status.mark_success(
+            fetched=len(items), new=len(new_items), sent=sent, fetch_errors=len(fetch_errors)
+        )
 
         # 매 사이클마다 오래된 dedup 레코드를 정리 (비용이 낮으므로 매번 수행)
         self.dedup_store.cleanup_old(self.settings.dedup_retention_days)

@@ -63,6 +63,7 @@ class Settings:
     discord_token: str
     discord_guild_id: int | None
     discord_news_channel_id: int
+    discord_admin_channel_id: int | None = None
     discord_admin_user_ids: list[int] = field(default_factory=list)
 
     # 텔레그램(장애 알림 전용)
@@ -110,6 +111,7 @@ def load_settings() -> Settings:
         discord_token=_get_str("DISCORD_TOKEN", required=True),
         discord_guild_id=(_get_int("DISCORD_GUILD_ID", 0) or None),
         discord_news_channel_id=_get_int("DISCORD_NEWS_CHANNEL_ID", 0),
+        discord_admin_channel_id=(_get_int("DISCORD_ADMIN_CHANNEL_ID", 0) or None),
         discord_admin_user_ids=_get_id_list("DISCORD_ADMIN_USER_IDS"),
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID"),
