@@ -70,10 +70,6 @@ class Settings:
     news_keywords: list[str] = field(default_factory=list)
     news_value_mid: int = 40
     news_value_high: int = 70
-    # 실제 "전송 여부"를 가르는 필터 기준점. news_value_mid/high는 라벨(색상)만
-    # 정하고 전송을 막지 않으므로, 진짜 강도 필터가 필요하면 이 값을 쓴다.
-    # 기본값 0은 "필터링 없이 전부 전송"이라 기존 동작과 100% 호환된다.
-    news_send_min_score: int = 0
     fetch_interval_seconds: int = 300
     fetch_timeout_seconds: int = 10
     fetch_max_retries: int = 3
@@ -117,7 +113,6 @@ def load_settings() -> Settings:
         news_keywords=_get_str_list("NEWS_KEYWORDS"),
         news_value_mid=_get_int("MEDIUM_NEWS_SCORE", 40),
         news_value_high=_get_int("STRONG_NEWS_SCORE", 70),
-        news_send_min_score=_get_int("NEWS_SEND_MIN_SCORE", 0),
         fetch_interval_seconds=_get_int("FETCH_INTERVAL_SECONDS", 300),
         fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),
         fetch_max_retries=_get_int("FETCH_MAX_RETRIES", 3),
