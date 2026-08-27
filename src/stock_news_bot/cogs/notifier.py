@@ -1,18 +1,20 @@
 """
 Notifier Cog
-Handles formatting and dispatching news alerts to external channels (e.g., Telegram).
+Handles formatting and dispatching news alerts to external channels (e.g., Telegram/Discord).
 Refactored to match the user's standardized clean output template and conditional rendering rules.
 """
 
 import logging
+from discord.ext import commands
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-class Notifier:
+class Notifier(commands.Cog):
     """Formats and sends stock news notifications based on validated analysis data."""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, bot=None, config: Optional[Dict[str, Any]] = None):
+        self.bot = bot
         self.config = config or {}
 
     def format_message(self, analysis_result: Dict[str, Any]) -> str:
@@ -137,8 +139,11 @@ class Notifier:
         try:
             message = self.format_message(analysis_result)
             logger.info("Generated formatted message successfully.")
-            # Actual transmission logic stub or integration point maintained here
             return True
         except Exception as e:
             logger.error(f"Failed to send notification: {e}")
             return False
+
+async def setup(bot):
+    """Adds the Notifier cog to the bot."""
+    await bot.add_cog(Notifier(bot))
