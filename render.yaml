@@ -1,0 +1,115 @@
+# Render Blueprint - 무료 Web Service + Gemini -> OpenRouter 무료 LLM fallback
+#
+# 1) GitHub에 이 저장소를 push
+# 2) Render Dashboard -> New + -> Blueprint
+# 3) 저장소 선택
+# 4) sync:false 항목을 입력하면 바로 배포 가능
+#
+# Background Worker는 Render에서 무료 플랜 대상이 아니므로 Web Service를 사용한다.
+# 앱은 /health와 /status HTTP 서버를 함께 열고 Discord 봇을 같은 프로세스에서 실행한다.
+# 무료 Web Service의 sleep 정책 때문에 완전한 24/7 연속 실행은 보장되지 않는다.
+services:
+  - type: web
+    name: stock-news-bot
+    runtime: python
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: "pip install -e ."
+    startCommand: "python -m stock_news_bot"
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.4"
+
+      # Discord / Telegram
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: DISCORD_NEWS_CHANNEL_ID
+        sync: false
+      - key: DISCORD_ADMIN_CHANNEL_ID
+        sync: false
+      - key: DISCORD_ADMIN_USER_IDS
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+
+      # 1순위: Gemini Developer API 무료 등급
+      # Google AI Studio에서 발급한 키. 없어도 2순위 OpenRouter로 동작한다.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: "gemini-2.5-flash-lite"
+
+      # 2순위: OpenRouter 무료 모델만 사용하는 공식 free router
+      # https://openrouter.ai/ 에서 발급한 키. 유료 모델로 자동 승격하지 않는다.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: "openrouter/free"
+      - key: LLM_ANALYSIS_ENABLED
+        value: "true"
+      - key: LLM_ANALYSIS_TIMEOUT_SECONDS
+        value: "45"
+      - key: LLM_ANALYSIS_MAX_CHARS
+        value: "9000"
+
+      # DART / 시장 데이터
+      - key: DART_API_KEY
+        sync: false
+      - key: MARKET_INTEL_INTERVAL_SECONDS
+        value: "3600"
+
+      # 뉴스 수집
+      - key: NEWS_KEYWORDS
+        sync: false
+      - key: RSS_FEEDS
+        sync: false
+      - key: BLOG_FEEDS
+        sync: false
+      - key: YOUTUBE_CHANNEL_IDS
+        sync: false
+      - key: TELEGRAM_SOURCE_CHANNELS
+        sync: false
+      - key: FETCH_INTERVAL_SECONDS
+        value: "15"
+      - key: NEWS_ANALYSIS_WORKERS
+        value: "2"
+      - key: NEWS_LOOKBACK_HOURS
+        value: "24"
+      - key: STARTUP_SEND_LIMIT
+        value: "3"
+      - key: MAX_NEW_PER_CYCLE
+        value: "2"
+      - key: MAX_SENT_PER_HOUR
+        value: "15"
+      - key: NEWS_SEND_MIN_SCORE
+        value: "40"
+      - key: MEDIUM_NEWS_SCORE
+        value: "40"
+      - key: STRONG_NEWS_SCORE
+        value: "70"
+
+      # 시간대 / 상태 / 로그
+      - key: TZ
+        value: "UTC"
+      - key: NEWS_US_TIMEZONE
+        value: "America/New_York"
+      - key: NEWS_KR_TIMEZONE
+        value: "Asia/Seoul"
+      - key: HEALTH_STALE_THRESHOLD_SECONDS
+        value: "1800"
+      - key: LOG_LEVEL
+        value: "INFO"
+
+      # 무료 Web Service는 persistent disk를 사용하지 않는다.
+      # 재시작/재배포 시 SQLite가 초기화될 수 있으므로 중복방지 DB는 /tmp에 둔다.
+      - key: DB_PATH
+        value: "/tmp/stock_news_bot.sqlite3"
+      - key: LOG_DIR
+        value: "/tmp/logs"
