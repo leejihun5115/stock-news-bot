@@ -2,15 +2,15 @@
 name = "stock-news-bot"
 version = "1.0.0"
 description = "실시간 주식 뉴스 수집/분류/알림 디스코드 봇"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<3.15"
 dependencies = [
-    "discord.py>=2.4.0",
-    "aiohttp>=3.9.0",
+    "discord.py>=2.7.1",
+    "aiohttp>=3.13.0",
     "feedparser>=6.0.11",
     "python-dotenv>=1.0.1",
     "tenacity>=8.2.3",
     "requests>=2.31.0",
-    "pykrx>=1.0.45",
+    "pykrx>=1.2.8",
 ]
 
 [project.optional-dependencies]

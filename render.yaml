@@ -29,7 +29,7 @@ services:
       # 있었다. PYTHON_VERSION을 명시적으로 고정해 runtime.txt와 이중으로 버전을
       # 못박는다.
       - key: PYTHON_VERSION
-        value: "3.12.7"
+        value: "3.14.3"
       - key: DISCORD_TOKEN
         sync: false
       - key: DISCORD_GUILD_ID
