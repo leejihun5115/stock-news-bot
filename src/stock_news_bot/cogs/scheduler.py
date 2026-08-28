@@ -5,7 +5,6 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone, timedelta
-from zoneinfo import ZoneInfo
 
 import discord
 from discord.ext import commands, tasks
@@ -26,21 +25,6 @@ from stock_news_bot.storage.market_data import MarketDataStore
 from stock_news_bot.utils.errors import BaseBotError
 
 logger = logging.getLogger(__name__)
-
-_KST = ZoneInfo("Asia/Seoul")
-
-
-def _today_start_kst_as_utc(now_utc: datetime | None = None) -> datetime:
-    """한국 시간(KST) 기준 '오늘' 00:00:00을 UTC로 환산해서 반환한다.
-
-    첫 부팅 시 '오늘 뉴스만' 보낸다는 기준을 초 단위(STARTUP_MAX_AGE_SECONDS)가
-    아니라 실제 달력 날짜로 판단하기 위한 헬퍼. 예를 들어 밤 11시 55분에
-    부팅해도 "최근 1시간" 같은 임의의 창이 아니라 오늘 자정부터의 기사를
-    기준으로 삼는다.
-    """
-    reference = (now_utc or datetime.now(timezone.utc)).astimezone(_KST)
-    start_kst = reference.replace(hour=0, minute=0, second=0, microsecond=0)
-    return start_kst.astimezone(timezone.utc)
 
 
 class SchedulerCog(commands.Cog, name="Scheduler"):
@@ -290,35 +274,29 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         # 발행시각이 실제 게시시각보다 늦게/보수적으로 들어오는 피드에서는
         # 강도필터 통과 뉴스까지 전부 "신규 0건"이 되는 문제가 있었다.
         if not self._startup_cycle_done:
-            # '오늘 뉴스만' 기준 = 초 단위 창(예: 최근 1시간)이 아니라 한국시간(KST)
-            # 달력 기준 오늘 00:00부터. 부팅 시각과 무관하게 항상 "오늘 자정 이후"
-            # 기사만 첫 배치 후보가 된다.
-            cutoff = _today_start_kst_as_utc()
-            startup_candidates = [item for item in classified if item.published_at >= cutoff]
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.settings.startup_max_age_seconds)
+            startup_candidates = sorted(
+                [item for item in classified if item.published_at >= cutoff],
+                key=lambda item: item.published_at,
+                reverse=True,
+            )
+            startup_keep_keys = {item.dedup_key for item in startup_candidates[: self.settings.startup_send_limit]}
 
-            # 후보가 발송 상한(STARTUP_SEND_LIMIT)보다 많으면 최신 기사 위주로만
-            # 상한만큼 남긴다. 상한 이내라면 오늘 기사 전부가 후보로 유지된다.
-            if len(startup_candidates) > self.settings.startup_send_limit:
-                startup_candidates = sorted(
-                    startup_candidates, key=lambda item: item.published_at, reverse=True
-                )[: self.settings.startup_send_limit]
-            startup_keep_keys = {item.dedup_key for item in startup_candidates}
-
-            # 오늘 이전(=어제 이전) backlog는 기준점으로 확정해서 dedup 처리한다.
-            # 오늘 기사인데 발송 상한을 초과해 이번에 못 보낸 항목은 dedup 처리하지
-            # 않고 남겨둔다 — 그래야 다음 사이클에서 정상적으로 발송된다.
+            # 오래된 backlog만 기준점으로 확정한다. 최근 기사인데 이번 첫 사이클의
+            # 발송 한도를 초과했다는 이유만으로 dedup 처리하면, 바로 다음 사이클에서
+            # 새 뉴스가 사라지는 문제가 생긴다. 최근 후보는 남겨두어 다음 사이클에서
+            # 정상적으로 발송할 수 있게 한다.
             stale_backlog = [item for item in classified if item.published_at < cutoff]
             for item in stale_backlog:
                 self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
 
             logger.info(
-                "첫 부팅 기준점(KST 오늘 00:00=%s): 이전 backlog %d건만 dedup 등록, "
-                "오늘 기사 후보 %d건 중 %d건을 첫 배치로 발송합니다. (첫 사이클 최대 %d건)",
-                cutoff.astimezone(_KST).isoformat(), len(stale_backlog),
-                len([i for i in classified if i.published_at >= cutoff]), len(startup_candidates),
-                self.settings.startup_send_limit,
+                "첫 부팅 기준점: 오래된 backlog %d건만 dedup 등록, 최신 후보 %d건은 보존합니다. "
+                "(허용 최신 %d초 / 첫 사이클 최대 %d건)",
+                len(stale_backlog), len(startup_candidates),
+                self.settings.startup_max_age_seconds, self.settings.startup_send_limit,
             )
-            classified = [item for item in classified if item.dedup_key in startup_keep_keys]
+            classified = [item for item in classified if item.dedup_key in startup_keep_keys or item.published_at >= cutoff]
             self._startup_cycle_done = True
 
         # 강도 필터: NEWS_SEND_MIN_SCORE 미만인 기사는 아예 후보에서 제외한다.
