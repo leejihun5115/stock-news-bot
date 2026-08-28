@@ -189,7 +189,7 @@ def build_message(
     confidence = analyze_item(item).confidence
     local_time = item.published_at.astimezone().strftime("%H:%M")
     display_source = item.source.split("|")[0].strip() or item.source.strip()
-    lines = [f"📰 {display_source} · {item.classification} · ⏰ {local_time}", f"📌 {title}"]
+    lines = [f"📰 **[{display_source}]**   **[{item.classification}]**   ⏰ {local_time}", f"📌 {title}"]
 
     if core:
         lines += ["", "🔎 [핵심]", *[f"✔️ {x}" for x in core]]
@@ -204,8 +204,6 @@ def build_message(
             lines.append(f"↳ {company}")
             if reason:
                 lines.append(f"↳ 근거 — {reason}")
-            if item.reason:
-                lines.append(f"↳ Why : {item.reason}")
     lines += ["", _strength_label(item, confidence)]
     if schedule:
         lines += ["", "📅 [일정]", *[f"✔️ {x}" for x in schedule[:5]]]

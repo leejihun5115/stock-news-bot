@@ -83,21 +83,25 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
     core = [x for x in core if re.sub(r"\W", "", x) != re.sub(r"\W", "", item.title)]
 
     analysis: list[str] = []
-    if item.company and any(k in text for k in _EVENT_KEYWORDS):
-        analysis.append(f"{item.company}의 사업·실적과 직접 연결될 수 있는 이벤트가 확인됩니다.")
+    # 일반적인 문구를 자동 생성하지 않는다.
+    # 기사 본문/요약에서 실제 근거가 확보된 경우에만 분석을 출력한다.
+    # 현재 결정론적 엔진에서는 금액 등 구체적 근거가 있는 경우만 표시한다.
     if item.amounts:
-        analysis.append(f"본문에 구체적인 금액 정보({', '.join(item.amounts[:3])})가 있어 경제적 영향 판단에 활용할 수 있습니다.")
-    # 실제 근거가 없는 일반론은 송출하지 않는다.
-    # 분석 내용이 없으면 [분석·전망] 카테고리 자체를 숨긴다.
+        analysis.append(
+            f"본문에 확인된 금액({', '.join(item.amounts[:3])})을 기준으로 사업·재무 영향 가능성을 판단할 수 있습니다."
+        )
 
     schedule = _DATE_PATTERN.findall(text)
     theme = _theme(text)
 
     related: list[str] = []
     reasons: dict[str, str] = {}
-    if item.company and (item.reason or item.amounts or any(k in text for k in _EVENT_KEYWORDS)):
+    if item.company and (item.reason or item.amounts):
         related.append(item.company)
-        reasons[item.company] = "기사의 이벤트가 해당 기업의 실제 사업·실적과 직접 연결되는 종목"
+        if item.reason:
+            reasons[item.company] = f"기사에서 확인된 근거: {item.reason}"
+        elif item.amounts:
+            reasons[item.company] = f"기사에서 확인된 금액 정보: {', '.join(item.amounts[:3])}"
 
     if upgraded:
         classification = "업그레이드"
@@ -106,7 +110,15 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
     else:
         classification = "신규"
 
-    confidence = min(95, 35 + (20 if item.company else 0) + (15 if item.amounts else 0) + (15 if item.reason else 0) + (10 if theme else 0))
+    # 신뢰도는 실제로 확인된 근거의 양을 반영한다. 단순히 회사명이
+    # 등장했다는 이유만으로 높은 신뢰도를 주지 않는다.
+    confidence = min(95, 30
+        + (25 if item.company else 0)
+        + (15 if any(k in text for k in _EVENT_KEYWORDS) else 0)
+        + (15 if item.amounts else 0)
+        + (10 if item.reason else 0)
+        + (10 if theme else 0)
+    )
     strength = "🔥 강함" if item.score >= 75 else ("🟢 보통" if item.score >= 45 else "🟡 약함")
 
     return AnalysisResult(
