@@ -43,6 +43,15 @@ _IMPORTANCE_COLOR = {
 _KST = ZoneInfo("Asia/Seoul")
 _SEND_INTERVAL_SECONDS = 0.7
 _SUMMARY_MAX_LEN = 500
+_INDENT = "     "  # "↳" 하위 항목을 상위 [카테고리] 제목보다 5칸 들여쓰기 하기 위한 접두어
+
+
+def _push_body_inward(lines: list[str]) -> list[str]:
+    """맨 첫 줄(📰 [카테고리] ... 헤더)만 왼쪽 끝에 두고, 그 아래 본문
+    전체를 헤더 안쪽으로 들여쓰기한다. 빈 줄(섹션 사이 여백)은 그대로 둔다."""
+    if not lines:
+        return lines
+    return [lines[0]] + [f"{_INDENT}{line}" if line else line for line in lines[1:]]
 
 
 def _display_source(source: str) -> str:
@@ -190,37 +199,38 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
         f"📌 **{title}**",
     ]
     if core:
-        lines += ["", "🔎 [핵심]", *[f"↳ {x}" for x in core]]
+        lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {x}" for x in core]]
     if analysis:
-        lines += ["", "🧠 [분석]", *[f"↳ {x}" for x in analysis]]
+        lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {x}" for x in analysis]]
     if theme:
         lines += ["", f"🏷 [테마] : {theme}"]
     if related:
         lines += ["", "🎯 [관련주]"]
         for company in related:
             reason = reasons.get(company)
-            lines.append(f"↳ {company}")
+            lines.append(f"{_INDENT}↳ {company}")
             if reason:
-                lines.append(f"↳ 근거 — {reason}")
+                lines.append(f"{_INDENT}↳ 근거 — {reason}")
     lines += ["", _strength_label(item, item.confidence)]
-    # 매매 포인트: 굵은 글씨 대신, 판단 이유를 바로 옆에 풀어 쓰고
-    # "[📊 상세보기]"를 근거 원문 기사로 연결되는 실제 하이퍼링크로 넣는다.
+    # 매매 포인트: 판단(매수 주의/관망/매수 우위)만 짧게 보여준다. 이유/판단변경조건
+    # 문구와 근거 링크를 같은 블록에 다닥다닥 붙여두면 링크가 있는 지점에서
+    # 줄바꿈/미리보기가 어긋나 보이는 문제가 있어서, 링크는 메시지 맨 끝에
+    # 완전히 분리된 블록("🔗 하이퍼링크")으로 뺐다.
     lines += [
         "",
         "📊 [매매 포인트]",
-        f"↳ {verdict} — {verdict_reason}",
-        f"↳ 판단 변경 조건: {_verdict_condition(item, verdict)}",
-        f"↳ [📊 상세보기(근거 원문)]({item.url})",
+        f"{_INDENT}↳ {verdict}",
     ]
     if schedule:
-        lines += ["", "📅 [일정]", *[f"↳ {x}" for x in schedule[:5]]]
+        lines += ["", "📅 [일정]", *[f"{_INDENT}↳ {x}" for x in schedule[:5]]]
     if terms:
-        lines += ["", "💡 [용어]", *[f"↳ {x}" for x in terms[:5]]]
+        lines += ["", "💡 [용어]", *[f"{_INDENT}↳ {x}" for x in terms[:5]]]
     if cumulative_line:
         lines += ["", cumulative_line]
     if price_reaction_line:
         lines += ["", price_reaction_line]
-    return "\n".join(lines)
+    lines += ["", f"[🔗 하이퍼링크]({item.url})"]
+    return "\n".join(_push_body_inward(lines))
 
 
 def build_embed(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None) -> discord.Embed:
@@ -246,37 +256,35 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
 
     lines = [f"📰 [{esc(display_source)}]   [{esc(item.classification)}]   ⏰ {local_time}", "", f"📌 <b>{esc(title)}</b>"]
     if core:
-        lines += ["", "🔎 [핵심]", *[f"↳ {esc(x)}" for x in core]]
+        lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {esc(x)}" for x in core]]
     if analysis:
-        lines += ["", "🧠 [분석]", *[f"↳ {esc(x)}" for x in analysis]]
+        lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {esc(x)}" for x in analysis]]
     if theme:
         lines += ["", f"🏷 [테마] : {esc(theme)}"]
     if related:
         lines += ["", "🎯 [관련주]"]
         for company in related:
-            lines.append(f"↳ {esc(company)}")
+            lines.append(f"{_INDENT}↳ {esc(company)}")
             if reasons.get(company):
-                lines.append(f"↳ 근거 — {esc(reasons[company])}")
+                lines.append(f"{_INDENT}↳ 근거 — {esc(reasons[company])}")
     lines += ["", _strength_label(item, item.confidence)]
-    # 굵은 글씨(<b>) 대신, 판단 이유를 바로 풀어 쓰고 "[📊 상세보기]"를
-    # 근거 원문 기사로 연결되는 실제 <a href> 하이퍼링크로 넣는다.
+    # 매매 포인트: 판단(매수 주의/관망/매수 우위)만 짧게 보여준다. 근거 링크는
+    # 메시지 맨 끝에 "🔗 하이퍼링크"로 완전히 분리해서 넣는다(중복 링크 제거).
     lines += [
         "",
         "📊 [매매 포인트]",
-        f"↳ {esc(verdict)} — {esc(verdict_reason)}",
-        f"↳ 판단 변경 조건: {esc(_verdict_condition(item, verdict))}",
-        f'↳ <a href="{esc(item.url)}">📊 상세보기(근거 원문)</a>',
+        f"{_INDENT}↳ {esc(verdict)}",
     ]
     if schedule:
-        lines += ["", "📅 [일정]", *[f"↳ {esc(x)}" for x in schedule[:5]]]
+        lines += ["", "📅 [일정]", *[f"{_INDENT}↳ {esc(x)}" for x in schedule[:5]]]
     if terms:
-        lines += ["", "💡 [용어]", *[f"↳ {esc(x)}" for x in terms[:5]]]
+        lines += ["", "💡 [용어]", *[f"{_INDENT}↳ {esc(x)}" for x in terms[:5]]]
     if cumulative_line:
         lines += ["", esc(cumulative_line)]
     if price_reaction_line:
         lines += ["", esc(price_reaction_line)]
-    lines += ["", f'🔗 <a href="{esc(item.url)}">원문 기사</a>']
-    return "\n".join(lines)
+    lines += ["", f'🔗 <a href="{esc(item.url)}">하이퍼링크</a>']
+    return "\n".join(_push_body_inward(lines))
 
 
 class NotifierCog(commands.Cog, name="Notifier"):
