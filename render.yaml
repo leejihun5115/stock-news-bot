@@ -1,0 +1,120 @@
+# Render Blueprint (Infrastructure as Code)
+#
+# 사용법:
+#   1) 이 저장소를 GitHub에 푸시
+#   2) Render 대시보드 → New + → Blueprint → 이 저장소 선택
+#      (render.yaml을 자동으로 인식해서 서비스가 구성됩니다)
+#   3) 대시보드에서 sync:false로 표시된 값들(토큰 등)을 직접 입력
+#
+# 왜 "web"이 아니라 "worker"인가?
+#   이 봇은 HTTP 포트를 열지 않고 디스코드 게이트웨이에 계속 연결된 채로
+#   백그라운드에서 도는 프로세스다. Render의 Web Service는 포트를 리슨하지
+#   않으면 배포가 "실패"로 처리되므로, 포트가 필요 없는 Background Worker
+#   타입을 써야 한다. (참고: Render의 Background Worker는 Free 플랜에서는
+#   제공되지 않고 Starter 이상 유료 플랜이 필요합니다 — 배포 전 요금제를
+#   꼭 확인하세요.)
+services:
+  - type: worker
+    name: stock-news-bot
+    runtime: python
+    plan: starter
+    region: singapore
+    branch: main
+    buildCommand: "pip install -e ."
+    startCommand: "python -m stock_news_bot"
+    autoDeploy: true
+    envVars:
+      # Render가 runtime.txt를 무시하고 최신 Python(예: 3.14)으로 빌드해서
+      # pyproject.toml의 requires-python(<3.14)과 충돌해 빌드가 실패하는 문제가
+      # 있었다. PYTHON_VERSION을 명시적으로 고정해 runtime.txt와 이중으로 버전을
+      # 못박는다.
+      - key: PYTHON_VERSION
+        value: "3.14.3"
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: DISCORD_NEWS_CHANNEL_ID
+        sync: false
+      - key: DISCORD_ADMIN_CHANNEL_ID
+        sync: false
+      - key: DISCORD_ADMIN_USER_IDS
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      # DART Open API 키. opendart.fss.or.kr에서 무료 발급.
+      # 비어있으면 market_intel 코그의 DART 연동 작업이 비활성화되고,
+      # classifier는 하드코딩 화이트리스트로만 종목명을 인식한다.
+      - key: DART_API_KEY
+        sync: false
+      # DART/pykrx 백그라운드 갱신 주기(초). 뉴스 알림 주기(FETCH_INTERVAL_SECONDS)와
+      # 달리 시세/재무데이터는 자주 바뀌지 않으므로 기본값을 길게 잡는다.
+      - key: MARKET_INTEL_INTERVAL_SECONDS
+        value: "3600"
+      # 수집 키워드의 단일 원본은 Render Dashboard의 Environment Variable이다.
+      # Blueprint에는 기본 키워드를 넣지 않아 저장된 Render 값을 덮어쓰지 않는다.
+      - key: NEWS_KEYWORDS
+        sync: false
+      # NEWS_KEYWORDS가 있으면 RSS_FEEDS보다 항상 우선한다.
+      - key: RSS_FEEDS
+        sync: false
+      # 블로그 RSS/Atom 주소를 쉼표로 입력. 예: https://example.com/feed.xml
+      - key: BLOG_FEEDS
+        sync: false
+      # YouTube 채널 ID(UC... 형태)를 쉼표로 입력. 각 채널의 최신 업로드를 Atom으로 수집.
+      - key: YOUTUBE_CHANNEL_IDS
+        sync: false
+      # 공개 Telegram 채널 username 또는 https://t.me/<username>을 쉼표로 입력.
+      - key: TELEGRAM_SOURCE_CHANNELS
+        sync: false
+      # 실시간 수집: 10초마다 새 RSS를 확인한다.
+      - key: FETCH_INTERVAL_SECONDS
+        value: "10"
+      # 분석은 병렬, 실제 Discord/Telegram 송출은 단일 worker로 순서/폭주를 제어한다.
+      - key: NEWS_ANALYSIS_WORKERS
+        value: "4"
+      # 최근 24시간 이내 기사만 신규 뉴스로 인정한다. 너무 오래된 RSS backlog는 버린다.
+      - key: NEWS_LOOKBACK_HOURS
+        value: "24"
+      # 모든 발행시각 비교는 UTC 절대시각으로 처리한다. Render/미국 RSS의
+      # 로컬시간을 임의로 KST로 더하거나 빼지 않는다.
+      - key: TZ
+        value: "UTC"
+      # 뉴스 발행시각의 기준. 실제 비교는 UTC로 하며, 미국 RSS의 무시간대 값은
+      # America/New_York으로 해석해 EDT/EST를 자동 전환한다.
+      - key: NEWS_US_TIMEZONE
+        value: "America/New_York"
+      - key: NEWS_KR_TIMEZONE
+        value: "Asia/Seoul"
+      # 첫 부팅 시 최신 5건만 가져온다.
+      - key: STARTUP_SEND_LIMIT
+        value: "3"
+      # 한 번의 10초 수집 주기에서 최대 3건만 송출 Queue에 넣는다.
+      - key: MAX_NEW_PER_CYCLE
+        value: "3"
+      # 최근 1시간 최대 20건. 0이면 제한 없음.
+      - key: MAX_SENT_PER_HOUR
+        value: "20"
+      - key: NEWS_SEND_MIN_SCORE
+        value: "40"
+      - key: MEDIUM_NEWS_SCORE
+        value: "40"
+      - key: STRONG_NEWS_SCORE
+        value: "70"
+      - key: HEALTH_STALE_THRESHOLD_SECONDS
+        value: "1800"
+      - key: LOG_LEVEL
+        value: "INFO"
+      # 디스크(아래 disk 항목)에 마운트된 경로를 가리켜야 재배포/재시작에도
+      # 중복방지 DB와 로그가 유지된다. 디스크 없이 기본 경로(./data, ./logs)를
+      # 쓰면 배포될 때마다 파일시스템이 초기화되어 내용이 날아간다.
+      - key: DB_PATH
+        value: "/var/data/stock_news_bot.sqlite3"
+      - key: LOG_DIR
+        value: "/var/data/logs"
+    disk:
+      name: stock-news-bot-data
+      mountPath: /var/data
+      sizeGB: 1
