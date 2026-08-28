@@ -199,7 +199,18 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     stats = self.history_store.sector_stats(sector, lookback_days=self.settings.history_lookback_days)
                     if stats and stats.count >= self.settings.history_min_sample:
                         data_lines.append(f"최근 {stats.lookback_days}일 {stats.count}건 · 평균 {stats.avg_score:.0f}점")
-                result = analyze_item(item, data_lines=data_lines)
+                price_stats = self.market_store.sector_stats(
+                    sector, lookback_days=self.settings.price_reaction_lookback_days
+                ) if sector else None
+                result = analyze_item(
+                    item,
+                    data_lines=data_lines,
+                    history_count=stats.count if sector and stats else 0,
+                    history_avg_score=stats.avg_score if sector and stats else None,
+                    price_count=price_stats.count if price_stats else 0,
+                    price_up_ratio=price_stats.plus1_up_ratio if price_stats else None,
+                    price_avg_pct=price_stats.plus1_avg_pct if price_stats else None,
+                )
                 item.analysis_title = result.title
                 item.classification = result.classification
                 item.confidence = result.confidence

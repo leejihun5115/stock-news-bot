@@ -70,7 +70,7 @@ def _theme(text: str) -> str | None:
     return max(hits)[1] if hits else None
 
 
-def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = False, data_lines: list[str] | None = None) -> AnalysisResult:
+def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = False, data_lines: list[str] | None = None, history_count: int = 0, history_avg_score: float | None = None, price_count: int = 0, price_up_ratio: float | None = None, price_avg_pct: float | None = None) -> AnalysisResult:
     text = re.sub(r"\s+", " ", f"{item.title} {item.summary}").strip()
     sentences = _sentences(item.summary) or _sentences(item.title)
     core: list[str] = []
@@ -110,15 +110,32 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
     else:
         classification = "신규"
 
-    # 신뢰도는 실제로 확인된 근거의 양을 반영한다. 단순히 회사명이
-    # 등장했다는 이유만으로 높은 신뢰도를 주지 않는다.
-    confidence = min(95, 30
-        + (25 if item.company else 0)
-        + (15 if any(k in text for k in _EVENT_KEYWORDS) else 0)
-        + (15 if item.amounts else 0)
-        + (10 if item.reason else 0)
-        + (10 if theme else 0)
-    )
+    # 신뢰도는 ① 현재 기사 근거 + ② 누적된 과거 결과의 일치성으로 계산한다.
+    # 과거 결과가 없으면 통계적 신뢰도를 가장하지 않도록 65점을 상한으로 둔다.
+    evidence = 15
+    evidence += 10 if item.company else 0
+    evidence += 10 if any(k in text for k in _EVENT_KEYWORDS) else 0
+    evidence += 10 if item.amounts else 0
+    evidence += 10 if item.reason else 0
+    evidence += 5 if theme else 0
+    evidence += 5 if len(item.summary.strip()) >= 120 else 0
+
+    confidence = min(65, evidence)
+
+    # 최근 유사 섹터 뉴스가 충분히 쌓였을 때만 과거 데이터 보정치를 적용한다.
+    if history_count >= 5 and history_avg_score is not None:
+        # 과거 평균 점수가 현재 점수와 가까울수록 판단 기준이 안정적이라고 본다.
+        similarity = max(0.0, 1.0 - abs(item.score - history_avg_score) / 100.0)
+        confidence += round(10 * similarity)
+
+    if price_count >= 5 and price_up_ratio is not None:
+        # 실제 발송 후 주가가 한 방향으로 반복 반응한 정도를 통계적 근거로 반영한다.
+        consistency = abs(price_up_ratio - 50.0) / 50.0
+        confidence += round(15 * consistency)
+        if price_avg_pct is not None and abs(price_avg_pct) >= 1.0:
+            confidence += 5
+
+    confidence = max(0, min(95, confidence))
     strength = "🔥 강함" if item.score >= 75 else ("🟢 보통" if item.score >= 45 else "⚪️ 약함")
 
     return AnalysisResult(

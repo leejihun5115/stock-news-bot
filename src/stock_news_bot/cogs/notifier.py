@@ -210,7 +210,7 @@ def build_message(
     """
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     from stock_news_bot.cogs.analysis_engine import analyze_item
-    confidence = analyze_item(item).confidence
+    confidence = item.confidence or analyze_item(item).confidence
     local_time = _display_time(item.published_at)
     display_source = _display_source(item.source)
     lines = [
@@ -270,7 +270,7 @@ def build_telegram_text(
     HTML 전용 렌더링을 사용하고 URL은 <a> 태그의 href에만 넣는다.
     """
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
-    confidence = analyze_item(item).confidence
+    confidence = item.confidence or analyze_item(item).confidence
     local_time = _display_time(item.published_at)
     display_source = _display_source(item.source)
 
