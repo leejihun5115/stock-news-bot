@@ -73,6 +73,12 @@ services:
       # 로컬시간을 임의로 KST로 더하거나 빼지 않는다.
       - key: TZ
         value: "UTC"
+      # 뉴스 발행시각의 기준. 실제 비교는 UTC로 하며, 미국 RSS의 무시간대 값은
+      # America/New_York으로 해석해 EDT/EST를 자동 전환한다.
+      - key: NEWS_US_TIMEZONE
+        value: "America/New_York"
+      - key: NEWS_KR_TIMEZONE
+        value: "Asia/Seoul"
       # 첫 부팅 시 최신 5건만 가져온다.
       - key: STARTUP_SEND_LIMIT
         value: "3"

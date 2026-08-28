@@ -17,6 +17,7 @@ import re
 import time
 from html import unescape
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from email.utils import parsedate_to_datetime
 
 import aiohttp
@@ -35,50 +36,79 @@ from stock_news_bot.utils.errors import FetchError
 logger = logging.getLogger(__name__)
 
 
-def _parse_published(entry: dict) -> datetime | None:
-    """RSS 발행시각을 절대시각(UTC)으로만 반환한다.
+def _source_timezone(source_hint: str) -> ZoneInfo:
+    """Timezone used only when an RSS timestamp has NO timezone information.
 
-    중요: 시간대가 불명확한 문자열을 서버(Render)의 로컬 시간이나 UTC로
-    임의 해석하지 않는다. 특히 미국 뉴스 RSS가 KST/미국 현지시간처럼
-    보이는 문자열을 섞어 보내는 경우 잘못된 시각으로 인해 새벽/오래된
-    기사가 현재 뉴스로 판정되는 것을 막는다.
+    Explicit offsets (GMT/+0000/-0400/etc.) always win.  For timezone-less
+    timestamps, infer from the feed URL instead of the Render machine clock.
+    This avoids the common US-news bug where a naive EDT/EST timestamp is
+    accidentally interpreted as UTC.
+    """
+    text = (source_hint or "").lower()
+    us_markers = (
+        "news.google.com", "reuters.com", "cnbc.com", "bloomberg.com",
+        "wsj.com", "marketwatch.com", "finance.yahoo.com", "nytimes.com",
+        "washingtonpost.com", "foxbusiness.com", "investing.com",
+        "seekingalpha.com", "barrons.com", "fool.com", "businessinsider.com",
+    )
+    if any(marker in text for marker in us_markers):
+        return ZoneInfo("America/New_York")
+    return ZoneInfo("Asia/Seoul")
+
+
+def _parse_published(entry: dict, source_hint: str = "") -> datetime | None:
+    """Return publication time as an absolute UTC datetime.
+
+    Never adds a fixed 13/14-hour offset.  Explicit timezone information from
+    the feed wins; otherwise a source-aware timezone is used (US feeds ->
+    America/New_York with automatic DST, Korean/other feeds -> Asia/Seoul).
     """
     for key in ("published", "updated", "created"):
         raw = entry.get(key)
         parsed_struct = entry.get(f"{key}_parsed")
 
-        # feedparser가 정상적으로 파싱한 *_parsed 값은 UTC 기준으로 변환한다.
-        # RFC822/ISO 문자열 파싱보다 우선하여 feedparser의 timezone 처리를 활용한다.
+        if raw:
+            text = str(raw).strip()
+            # First honor an explicit RFC822/ISO timezone offset.
+            try:
+                parsed = parsedate_to_datetime(text)
+                if parsed.tzinfo is not None:
+                    return parsed.astimezone(timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                pass
+            try:
+                iso = text.replace("Z", "+00:00")
+                parsed = datetime.fromisoformat(iso)
+                if parsed.tzinfo is not None:
+                    return parsed.astimezone(timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                pass
+
+            # No timezone in the raw text: interpret it using the feed's
+            # source timezone, with America/New_York automatically switching
+            # between EDT (UTC-4) and EST (UTC-5).
+            try:
+                parsed = parsedate_to_datetime(text)
+                if parsed.tzinfo is None:
+                    return parsed.replace(tzinfo=_source_timezone(source_hint)).astimezone(timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                pass
+            try:
+                parsed = datetime.fromisoformat(text)
+                if parsed.tzinfo is None:
+                    return parsed.replace(tzinfo=_source_timezone(source_hint)).astimezone(timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                pass
+
+        # feedparser's struct_time is a fallback. It is only trusted when the
+        # raw value did not exist; then interpret it in the source timezone.
         if parsed_struct:
             try:
-                return datetime.fromtimestamp(
-                    calendar.timegm(parsed_struct), tz=timezone.utc
-                )
+                naive = datetime(*parsed_struct[:6])
+                return naive.replace(tzinfo=_source_timezone(source_hint)).astimezone(timezone.utc)
             except (TypeError, ValueError, OverflowError, OSError):
                 pass
 
-        if not raw:
-            continue
-
-        text = str(raw).strip()
-        try:
-            parsed = parsedate_to_datetime(text)
-            if parsed.tzinfo is not None:
-                return parsed.astimezone(timezone.utc)
-        except (TypeError, ValueError, OverflowError):
-            pass
-
-        # ISO-8601 (예: 2026-08-28T07:30:00Z / +00:00) 지원.
-        try:
-            iso = text.replace("Z", "+00:00")
-            parsed = datetime.fromisoformat(iso)
-            if parsed.tzinfo is not None:
-                return parsed.astimezone(timezone.utc)
-        except (TypeError, ValueError, OverflowError):
-            pass
-
-    # 발행시각을 확정할 수 없는 기사는 '현재 시각'으로 속여 보내지 않는다.
-    # 이것이 이전 코드의 가장 위험한 부분이었다.
     return None
 
 
@@ -114,7 +144,7 @@ def parse_entries(raw_bytes: bytes, source_hint: str) -> list[NewsItem]:
         summary = re.sub(r"https?://\S+", " ", summary)
         summary = re.sub(r"\s+", " ", summary).strip()
         source = parsed.feed.get("title", source_hint) or source_hint
-        published_at = _parse_published(entry)
+        published_at = _parse_published(entry, source_hint)
         if published_at is None:
             logger.warning("[%s] 발행시각을 확정할 수 없어 뉴스 제외: %s", source_hint, title[:120])
             continue
