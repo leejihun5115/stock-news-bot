@@ -134,3 +134,28 @@ class TelegramAlerter:
         async with session.post(self._url("sendMessage"), json=payload) as resp:
             if resp.status != 200:
                 logger.error("텔레그램 상세정보 전송 실패(status=%s): %s", resp.status, await resp.text())
+
+
+async def send_startup_probe(alerter: TelegramAlerter) -> None:
+    """기동 시 텔레그램 알림 경로가 실제로 살아있는지 한 번 찔러본다.
+
+    BOT_TOKEN/CHAT_ID는 설정돼 있지만 실제로는 전송이 막힌 경우(토큰
+    오타, 봇이 채팅방에서 차단됨 등)를 장애가 실제로 터질 때까지 기다리지
+    않고 배포 직후 로그/텔레그램에서 바로 알아챌 수 있게 한다.
+
+    scheduler.py의 SchedulerCog.cog_load()에서 백그라운드 태스크로
+    호출된다 (이전 버전에서는 이 함수가 여기 정의돼 있지 않아
+    ImportError로 scheduler 코그 자체가 로드되지 못하던 버그가 있었음).
+    """
+    if not alerter.enabled:
+        logger.debug("텔레그램 알림이 비활성화되어 있어 기동 probe를 건너뜁니다.")
+        return
+
+    from datetime import datetime, timedelta, timezone
+
+    kst = timezone(timedelta(hours=9))
+    now = datetime.now(timezone.utc).astimezone(kst).strftime("%Y-%m-%d %H:%M:%S")
+    await alerter.send(
+        f"🔔 [stock-news-bot] 텔레그램 알림 경로 점검 · KST={now}\n"
+        "이 메시지가 정상적으로 도착했다면 장애 발생 시 알림도 정상적으로 전달됩니다."
+    )

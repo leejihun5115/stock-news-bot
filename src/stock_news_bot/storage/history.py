@@ -130,6 +130,21 @@ class HistoryStore:
             avg_score=avg_score,
         )
 
+    def total_count(self) -> int:
+        """DB에 누적된 전체 발송 이력 건수.
+
+        재배포 후에도 이 값이 계속 늘어나면 디스크가 정상적으로 영구
+        마운트되어 데이터가 누적되고 있다는 뜻이고, 재배포할 때마다
+        0으로 돌아온다면 디스크가 붙지 않고 매번 초기화되고 있다는
+        신호다. bot.py의 부팅 알림에서 이 값을 노출해 매 재시작마다
+        눈으로 바로 확인할 수 있게 한다.
+        """
+        try:
+            cur = self._conn.execute("SELECT COUNT(*) FROM sent_history")
+            return int(cur.fetchone()[0])
+        except sqlite3.Error as exc:
+            raise StorageError(f"이력 전체 건수 조회 실패: {exc}") from exc
+
     def cleanup_old(self, retention_days: int) -> int:
         """retention_days보다 오래된 이력을 지우고 삭제된 행 수를 반환한다."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()

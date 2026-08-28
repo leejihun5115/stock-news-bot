@@ -55,7 +55,7 @@ services:
       - key: RSS_FEEDS
         sync: false
       - key: FETCH_INTERVAL_SECONDS
-        value: "60"
+        value: "20"
       - key: STARTUP_MAX_AGE_SECONDS
         value: "3600"
       - key: STARTUP_SEND_LIMIT

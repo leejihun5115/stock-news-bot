@@ -28,6 +28,13 @@ RELOADABLE_EXTENSIONS = [
     "stock_news_bot.cogs.market_intel",
 ]
 
+# 🔒 누적 데이터(발송이력/주가반응) 보호용 비밀번호.
+# 이 값을 정확히 입력해야만 /데이터정리 명령이 실제로 정리 작업을 실행한다.
+# 그 외의 모든 경로(자동 정리 루프 등)는 이 데이터를 절대 건드리지 않는다 —
+# 즉 "무슨 일이 있어도 누적 데이터가 사라지면 안 된다"는 요구사항을 지키기
+# 위해, 삭제로 이어지는 유일한 경로를 이 비밀번호 뒤에 잠가둔 것이다.
+_DATA_UNLOCK_PASSWORD = "5115"
+
 
 def is_admin(bot: commands.Bot, user_id: int) -> bool:
     admin_ids: list[int] = bot.settings.discord_admin_user_ids  # type: ignore[attr-defined]
@@ -38,6 +45,37 @@ def _check_admin(interaction: discord.Interaction) -> None:
     bot = interaction.client
     if not is_admin(bot, interaction.user.id):  # type: ignore[arg-type]
         raise AdminPermissionError(f"사용자 {interaction.user.id}는 관리자가 아닙니다.")
+
+
+class DataCleanupPasswordModal(discord.ui.Modal, title="🔒 누적 데이터 정리 — 비밀번호 확인"):
+    """관리자가 /데이터정리를 눌러도 곧바로 실행되지 않고, 이 모달을 통해
+    비밀번호를 입력해야만 실제 정리 작업이 실행된다.
+
+    모달 입력값은 명령어 사용 로그(채널의 "/데이터정리" 실행 표시)와 달리
+    다른 사람에게 노출되지 않고, 응답도 ephemeral(본인에게만 표시)로만
+    나간다."""
+
+    password = discord.ui.TextInput(
+        label="비밀번호",
+        placeholder="비밀번호를 입력하세요",
+        max_length=20,
+        required=True,
+    )
+
+    def __init__(self, admin_cog: "AdminCog"):
+        super().__init__()
+        self._admin_cog = admin_cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if str(self.password.value).strip() != _DATA_UNLOCK_PASSWORD:
+            await interaction.response.send_message(
+                "🔒 비밀번호가 틀렸습니다. 누적 데이터는 그대로 보호됩니다 — 아무것도 삭제되지 않았습니다.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        message = await self._admin_cog.run_protected_data_cleanup()
+        await interaction.followup.send(message, ephemeral=True)
 
 
 class AdminCog(commands.Cog, name="Admin"):
@@ -162,6 +200,41 @@ class AdminCog(commands.Cog, name="Admin"):
             return
         await scheduler.alerter.send("✅ [stock-news-bot] 텔레그램 알림 테스트입니다. 이 메시지가 보이면 정상 작동 중입니다.")
         await interaction.response.send_message("텔레그램으로 테스트 메시지를 보냈습니다. 텔레그램을 확인해주세요.", ephemeral=True)
+
+    @app_commands.command(name="데이터정리", description="🔒 누적된 발송이력/주가반응 데이터를 정리합니다. 비밀번호가 필요합니다.")
+    async def cleanup_accumulated_data(self, interaction: discord.Interaction) -> None:
+        _check_admin(interaction)
+        await interaction.response.send_modal(DataCleanupPasswordModal(self))
+
+    async def run_protected_data_cleanup(self) -> str:
+        """비밀번호 확인이 끝난 뒤에만 호출되는 실제 정리 로직.
+
+        history_store(발송이력)와 market_store(주가반응)는 평소엔 어떤
+        자동 경로로도 정리되지 않는다(scheduler.py의 매 사이클 자동정리
+        경로를 없앴음) — 이 함수가 삭제로 이어지는 유일한 경로다."""
+        scheduler = self.bot.get_cog("Scheduler")
+        if scheduler is None:
+            return "⚠️ Scheduler 코그가 로드되지 않아 정리를 실행할 수 없습니다."
+
+        settings = self.bot.settings  # type: ignore[attr-defined]
+        try:
+            before_history = scheduler.history_store.total_count()
+            before_reaction = scheduler.market_store.total_reaction_count()
+            deleted_history = scheduler.history_store.cleanup_old(settings.history_retention_days)
+            deleted_reaction = scheduler.market_store.cleanup_old(settings.price_reaction_retention_days)
+            after_history = scheduler.history_store.total_count()
+            after_reaction = scheduler.market_store.total_reaction_count()
+        except Exception as exc:
+            logger.exception("보호된 데이터 정리 중 오류")
+            return f"❌ 정리 중 오류가 발생했습니다: {exc}"
+
+        return (
+            "🔓 비밀번호 확인 완료 — 누적 데이터 정리를 실행했습니다.\n\n"
+            f"↳ 발송 이력: {before_history}건 → {after_history}건 ({deleted_history}건 삭제, "
+            f"{settings.history_retention_days}일 이전 데이터만 대상)\n"
+            f"↳ 주가 반응: {before_reaction}건 → {after_reaction}건 ({deleted_reaction}건 삭제, "
+            f"{settings.price_reaction_retention_days}일 이전 데이터만 대상)"
+        )
 
     @app_commands.command(name="reload", description="지정한 코그를 다시 로드합니다.")
     @app_commands.describe(extension="예: fetcher, classifier, notifier, market_intel")

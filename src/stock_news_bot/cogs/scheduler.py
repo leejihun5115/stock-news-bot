@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone, timedelta
 
 import discord
@@ -69,6 +70,55 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         # 됐는데 실제로는 하나도 안 오는 상태를 뉴스가 뜰 때까지 기다리지
         # 않고 배포 로그에서 바로 확인할 수 있게 한다.
         asyncio.create_task(send_startup_probe(self.alerter), name="telegram-startup-probe")
+        # DB(디스크) 누적 상태 점검 — 재배포/재시작마다 이 값이 계속
+        # 늘어나면 디스크가 정상적으로 영구 마운트되어 데이터가 쌓이고
+        # 있다는 뜻이고, 매번 0으로 돌아온다면 디스크가 안 붙고 매번
+        # 초기화되고 있다는 신호다.
+        asyncio.create_task(self._report_accumulation_state(), name="db-accumulation-check")
+
+    async def _report_accumulation_state(self) -> None:
+        try:
+            history_count = self.history_store.total_count()
+            reaction_count = self.market_store.total_reaction_count()
+        except Exception:
+            logger.exception("누적 DB 상태 조회 실패")
+            return
+
+        db_path = str(self.settings.db_path)
+        # Render는 실행 환경에 RENDER=true를 자동으로 심어준다. Render 위에서
+        # 돌고 있는데 DB_PATH가 render.yaml에 정의된 영구 디스크 마운트 경로
+        # (/var/data) 밖이면, 배포될 때마다 파일시스템이 초기화되어 데이터가
+        # 쌓이지 않고 매번 사라진다 — 이 경우를 명확히 경고한다.
+        on_render = bool(os.getenv("RENDER"))
+        disk_ok = db_path.startswith("/var/data")
+        warning = ""
+        if on_render and not disk_ok:
+            warning = (
+                "\n\n⚠️ <b>DB_PATH가 영구 디스크 경로(/var/data)가 아닙니다.</b>\n"
+                f"현재 경로: {db_path}\n"
+                "이 상태면 재배포/재시작마다 데이터가 초기화됩니다. Render 대시보드에서 "
+                "이 서비스에 디스크(Disk)가 실제로 연결돼 있는지, 환경변수 DB_PATH가 "
+                "/var/data 아래를 가리키는지 확인하세요."
+            )
+            logger.warning(
+                "DB_PATH(%s)가 영구 디스크 경로가 아닙니다 — 재배포마다 초기화될 수 있습니다.",
+                db_path,
+            )
+
+        logger.info(
+            "누적 DB 상태: 발송이력 %d건, 주가반응 %d건 (경로=%s)",
+            history_count,
+            reaction_count,
+            db_path,
+        )
+        await self.alerter.send(
+            "📦 [stock-news-bot] 누적 DB 상태\n\n"
+            f"↳ 누적 발송 이력: <b>{history_count}건</b>\n"
+            f"↳ 누적 주가 반응 추적: <b>{reaction_count}건</b>\n"
+            f"↳ DB 경로: {db_path}\n"
+            "이 숫자가 재시작할 때마다 계속 늘어나면 정상적으로 누적되고 있는 것이고, "
+            "매번 0으로 초기화된다면 디스크 마운트를 확인해야 합니다." + warning
+        )
 
     def cog_unload(self) -> None:
         self.pipeline_loop.cancel()
@@ -386,8 +436,13 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         )
 
         self.dedup_store.cleanup_old(self.settings.dedup_retention_days)
-        self.history_store.cleanup_old(self.settings.history_retention_days)
-        self.market_store.cleanup_old(self.settings.price_reaction_retention_days)
+        # 주의: history_store/market_store(누적 발송이력·주가반응 통계)는
+        # 여기서 자동으로 정리하지 않는다. 예전에는 매 사이클(기본 60초)마다
+        # retention_days(기본 90일)보다 오래된 누적 데이터를 자동 삭제하고
+        # 있었는데, 이건 사용자가 원하는 "무슨 일이 있어도 누적 데이터가
+        # 사라지면 안 된다"는 요구와 정면으로 배치된다. 이제 이 두 저장소는
+        # /데이터정리 관리자 명령(비밀번호 필요)을 통해서만 수동으로 정리할
+        # 수 있다 — 자동 삭제 경로 자체를 없앴다.
 
         return {"fetched": len(items), "new": len(new_items), "sent": sent}
 

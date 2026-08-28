@@ -70,7 +70,7 @@ class Settings:
     news_keywords: list[str] = field(default_factory=list)
     news_value_mid: int = 45
     news_value_high: int = 75
-    fetch_interval_seconds: int = 60
+    fetch_interval_seconds: int = 20
     fetch_timeout_seconds: int = 10
     fetch_max_retries: int = 3
     startup_max_age_seconds: int = 3600  # 첫 부팅 시 최근 1시간까지만 신규 후보로 허용
@@ -144,7 +144,7 @@ def load_settings() -> Settings:
         news_keywords=_get_str_list("NEWS_KEYWORDS"),
         news_value_mid=_get_int("NEWS_SEND_MIN_SCORE", _get_int("MEDIUM_NEWS_SCORE", 45)),
         news_value_high=_get_int("STRONG_NEWS_SCORE", 75),
-        fetch_interval_seconds=_get_int("FETCH_INTERVAL_SECONDS", 60),
+        fetch_interval_seconds=_get_int("FETCH_INTERVAL_SECONDS", 20),
         fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),
         fetch_max_retries=_get_int("FETCH_MAX_RETRIES", 3),
         startup_max_age_seconds=_get_int("STARTUP_MAX_AGE_SECONDS", 3600),

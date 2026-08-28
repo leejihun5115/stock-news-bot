@@ -269,5 +269,15 @@ class MarketDataStore:
         except sqlite3.Error as exc:
             raise StorageError(f"주가 반응 데이터 정리 실패: {exc}") from exc
 
+    def total_reaction_count(self) -> int:
+        """DB에 누적된 전체 주가 반응 추적 건수. HistoryStore.total_count()와
+        같은 목적 — 재시작마다 이 값이 계속 늘어나는지로 디스크 영구
+        마운트 여부를 눈으로 검증한다."""
+        try:
+            cur = self._conn.execute("SELECT COUNT(*) FROM price_reaction")
+            return int(cur.fetchone()[0])
+        except sqlite3.Error as exc:
+            raise StorageError(f"주가 반응 전체 건수 조회 실패: {exc}") from exc
+
     def close(self) -> None:
         self._conn.close()
