@@ -114,6 +114,15 @@ class Settings:
     price_reaction_min_sample: int = 5          # 이보다 표본이 적으면 "표본 부족"으로 표시
     price_reaction_retention_days: int = 90     # 주가 반응 추적 DB 보관 기간
 
+    # 무료 LLM 3단계 fallback: Gemini -> OpenRouter free -> 규칙 엔진.
+    gemini_api_key: str = ""
+    llm_model: str = "gemini-2.5-flash-lite"
+    openrouter_api_key: str = ""
+    openrouter_model: str = "openrouter/free"
+    llm_analysis_enabled: bool = True
+    llm_analysis_timeout_seconds: int = 60
+    llm_analysis_max_chars: int = 9000
+
     health_stale_threshold_seconds: int = 1800
     health_check_interval_seconds: int = 300
 
@@ -185,6 +194,13 @@ def load_settings() -> Settings:
         price_reaction_lookback_days=_get_int("PRICE_REACTION_LOOKBACK_DAYS", 30),
         price_reaction_min_sample=_get_int("PRICE_REACTION_MIN_SAMPLE", 5),
         price_reaction_retention_days=_get_int("PRICE_REACTION_RETENTION_DAYS", 90),
+        gemini_api_key=_get_str("GEMINI_API_KEY"),
+        llm_model=_get_str("LLM_MODEL", "gemini-2.5-flash-lite"),
+        openrouter_api_key=_get_str("OPENROUTER_API_KEY"),
+        openrouter_model=_get_str("OPENROUTER_MODEL", "openrouter/free"),
+        llm_analysis_enabled=_get_str("LLM_ANALYSIS_ENABLED", "true").lower() not in {"0", "false", "no", "off"},
+        llm_analysis_timeout_seconds=max(5, _get_int("LLM_ANALYSIS_TIMEOUT_SECONDS", 60)),
+        llm_analysis_max_chars=max(2000, _get_int("LLM_ANALYSIS_MAX_CHARS", 9000)),
         health_stale_threshold_seconds=_get_int("HEALTH_STALE_THRESHOLD_SECONDS", 1800),
         health_check_interval_seconds=_get_int("HEALTH_CHECK_INTERVAL_SECONDS", 300),
         log_level=_get_str("LOG_LEVEL", "INFO"),

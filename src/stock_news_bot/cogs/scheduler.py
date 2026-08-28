@@ -19,6 +19,7 @@ from stock_news_bot.cogs.notifier import (
 )
 from stock_news_bot.monitor.health import HealthMonitor
 from stock_news_bot.cogs.analysis_engine import analyze_item
+from stock_news_bot.cogs.llm_analyzer import analyze_news
 from stock_news_bot.monitor.telegram_alert import TelegramAlerter, send_startup_probe
 from stock_news_bot.status import status as bot_status
 from stock_news_bot.storage.dart_client import DartClient
@@ -292,6 +293,58 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     price_up_ratio=price_stats.plus1_up_ratio if price_stats else None,
                     price_avg_pct=price_stats.plus1_avg_pct if price_stats else None,
                 )
+                # 1차 규칙 분석은 사실 추출/신뢰도 판정에 사용하고,
+                # 로컬 LLM은 그 결과를 바탕으로 맥락과 영향까지 자연어로 보강한다.
+                # API 오류나 잘못된 응답은 llm_analyzer 내부에서 안전하게 폴백한다.
+                if (
+                    self.settings.llm_analysis_enabled
+                    and (self.settings.gemini_api_key or self.settings.openrouter_api_key)
+                ):
+                    history_hint = (
+                        "과거 유사 섹터 "
+                        f"{stats.count}건, 평균 점수 {stats.avg_score:.1f}"
+                        if stats and stats.count >= self.settings.history_min_sample
+                        else ""
+                    )
+                    llm_result = await asyncio.to_thread(
+                        analyze_news,
+                        gemini_api_key=self.settings.gemini_api_key,
+                        gemini_model=self.settings.llm_model,
+                        openrouter_api_key=self.settings.openrouter_api_key,
+                        openrouter_model=self.settings.openrouter_model,
+                        title=item.title,
+                        summary=item.summary,
+                        company=item.company,
+                        reason=item.reason,
+                        amounts=item.amounts,
+                        progress_stage=result.progress_stage,
+                        theme=result.theme or "",
+                        score=item.score,
+                        history_hint=history_hint,
+                        timeout_seconds=self.settings.llm_analysis_timeout_seconds,
+                        max_chars=self.settings.llm_analysis_max_chars,
+                    )
+                    if llm_result:
+                        if llm_result.title:
+                            result.title = llm_result.title
+                        if llm_result.core:
+                            result.core = llm_result.core
+                            item.ai_core = list(llm_result.core)
+                        if llm_result.analysis:
+                            # LLM 문장을 우선 보여주되 기존 사실 근거도 최대 2개 보존한다.
+                            # 실제 송출기는 item.ai_analysis를 사용하므로 여기에 최종 표시본을 저장한다.
+                            # LLM이 기사 맥락을 자유롭게 쓰되, 기존 엔진의
+                            # 사실 근거를 잃지 않도록 중복 없이 뒤에 보존한다.
+                            existing = list(result.analysis)
+                            result.analysis = llm_result.analysis + [
+                                x for x in existing if x not in llm_result.analysis
+                            ][:2]
+                            item.ai_analysis = list(result.analysis)
+                        logger.info(
+                            "🤖 무료 LLM 분석 보강 완료 | Gemini -> OpenRouter -> 규칙 엔진 | %s",
+                            item.title[:100],
+                        )
+
                 item.analysis_title = result.title
                 item.classification = result.classification
                 item.confidence = result.confidence

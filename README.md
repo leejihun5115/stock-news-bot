@@ -92,41 +92,36 @@ STOCK_NEWS_BOT_SERVICE=stock-news-bot ./scripts/deploy.sh
 
 ## Render에 배포하기
 
-이 봇은 포트를 열지 않고 계속 떠서 도는 프로세스이므로, Render의 **Background
-Worker** 타입을 사용합니다 (Web Service 아님). Free 플랜에는 Background Worker가
-없고 Starter 이상 유료 플랜이 필요합니다.
+이 버전은 Render **Free Web Service**에서 바로 실행할 수 있도록 구성되어 있습니다.
+`render.yaml`이 `/health` HTTP 서버와 Discord 봇을 같은 프로세스에서 실행하고, AI 분석은 별도 LLM 서버 없이 Gemini Developer API를 사용합니다.
 
-**Blueprint(권장, `render.yaml` 사용)**
-1. 이 프로젝트를 GitHub 저장소에 푸시합니다 (`render.yaml`, `pyproject.toml`이
-   저장소 루트에 있어야 함).
-2. Render 대시보드 → **New +** → **Blueprint** → 방금 푸시한 저장소 선택.
-   `render.yaml`을 자동으로 읽어 Background Worker 서비스와 1GB 디스크를 만듭니다.
-3. 배포 전, 대시보드의 Environment 탭에서 `sync: false`로 표시된 값들
-   (`DISCORD_TOKEN`, `DISCORD_NEWS_CHANNEL_ID`, `DISCORD_ADMIN_USER_IDS`,
-   텔레그램 값 등)을 `.env.example`을 참고해 직접 입력합니다.
-4. **Create Blueprint**로 배포 시작. Logs 탭에서 "로그인 완료" 메시지가
-   뜨면 정상 기동된 것입니다.
+**Blueprint(권장)**
+1. 이 프로젝트를 GitHub 저장소에 푸시합니다 (`render.yaml`, `pyproject.toml`이 저장소 루트).
+2. Render 대시보드 → **New + → Blueprint** → 저장소 선택.
+3. `sync: false` 항목에 Discord/Telegram/Gemini/DART 키를 입력합니다.
+4. Deploy를 실행합니다.
+5. 생성된 서비스의 `/health`가 `ok`, `/status`가 정상 상태인지 확인합니다.
 
-**수동 설정(Blueprint 없이)**
-1. Render 대시보드 → New + → **Background Worker** → 저장소 연결.
-2. Runtime: Python 3 / Build Command: `pip install -e .` / Start Command:
-   `python -m stock_news_bot`.
-3. Environment 탭에서 `.env.example`의 모든 키를 하나씩 등록.
-4. **Disks** 탭에서 디스크를 추가(예: 1GB, mount path `/var/data`)하고,
-   `DB_PATH=/var/data/stock_news_bot.sqlite3`, `LOG_DIR=/var/data/logs`로
-   설정합니다. 디스크 없이 배포하면 재배포/재시작 때마다 파일시스템이
-   초기화되어 중복방지 DB와 로그가 사라집니다 (봇 동작 자체는 되지만
-   재시작 시점의 최신 기사들이 다시 알림으로 올 수 있습니다).
-5. Save 후 배포. 이후 코드를 GitHub에 푸시하면 `autoDeploy: true` 설정에
-   따라 자동으로 재배포됩니다.
+**수동 설정**
+- Type: **Web Service**
+- Plan: **Free**
+- Build: `pip install -e .`
+- Start: `python -m stock_news_bot`
+- Health Check Path: `/health`
 
-**주의사항**
-- 디스코드 토큰 등 민감 값은 절대 `render.yaml`에 평문으로 넣지 말고
-  대시보드의 Environment 탭에서만 입력하세요 (`sync: false`인 항목들).
-- Render의 Background Worker는 헬스체크 핑을 자체적으로 하지 않으므로,
-  이 프로젝트의 텔레그램 헬스체크(`HEALTH_STALE_THRESHOLD_SECONDS`)가
-  사실상 유일한 "봇이 멈췄는지" 감지 수단입니다. 반드시 `TELEGRAM_BOT_TOKEN`/
-  `TELEGRAM_CHAT_ID`를 설정해 두세요.
+무료 Web Service는 sleep/재시작 정책의 영향을 받을 수 있고 persistent disk를 사용하지 않으므로 SQLite 중복방지 이력이 재시작 때 초기화될 수 있습니다. 24시간 무중단과 영구 DB가 필요하면 유료 Background Worker/디스크 구성이 적합합니다.
+
+## AI 기사 분석(Gemini AI)
+
+`GEMINI_API_KEY`를 설정하면 기존 규칙 엔진의 사실 추출을 유지하면서 Gemini AI이 기사 문맥, 실적 연결 가능성, 리스크, 추가 확인 포인트를 자연어로 보강합니다. 별도 유료 API 키는 필요하지 않습니다. LLM 서버가 없거나 호출이 실패하면 기존 규칙 분석으로 자동 폴백하므로 뉴스 송출 자체가 막히지 않습니다.
+
+- `GEMINI_API_KEY`: Google AI Studio에서 발급한 Gemini API 키
+- `LLM_MODEL`: 기본 `gemini-2.5-flash-lite`
+- `LLM_ANALYSIS_ENABLED`: `true`/`false`
+- `LLM_ANALYSIS_TIMEOUT_SECONDS`: 기본 60초
+- `LLM_ANALYSIS_MAX_CHARS`: Gemini AI에 전달할 기사 본문 최대 문자 수, 기본 9000
+
+AI 분석은 모델의 해석을 추가하는 기능이지 사실 검증을 대신하는 기능은 아닙니다. 금액·기업·진행단계 같은 핵심 사실과 신뢰도 점수는 기존 결정론적 엔진이 계속 담당합니다.
 
 ## 운영 시 흔한 오류와 원인
 
@@ -158,3 +153,32 @@ Telegram Bot은 시작 시 `getMe`/`getChat` 검증과 webhook 정리 후 callba
 - 바이오/제약/신약 관련 뉴스는 `제약뉴스 💊` 카테고리로 표시
 - 반도체 관련 뉴스는 `반도체뉴스 💾`, AI 관련 뉴스는 `AI뉴스 🤖`로 표시
 - 제목 끝의 주요 매체명 꼬리는 화면에서 제거
+
+
+## Render 무료 배포 + Gemini 무료 AI 분석
+
+이 프로젝트는 Render에서 별도의 Claude/Ollama 서버 없이 실행되도록 구성되어 있습니다.
+AI 분석은 Google AI Studio의 Gemini Developer API를 사용하며 기본 모델은 `gemini-2.5-flash-lite`입니다.
+Google은 해당 모델의 Developer API 무료 등급을 제공하지만 무료 등급에는 사용량/요청 한도가 있으므로
+한도를 넘으면 봇은 자동으로 기존 규칙 기반 분석으로 폴백합니다.
+
+### Render 환경변수
+
+필수:
+- `DISCORD_TOKEN`
+- `DISCORD_NEWS_CHANNEL_ID`
+- `NEWS_KEYWORDS` 또는 RSS/Blog/YouTube/Telegram source 중 하나
+- `GEMINI_API_KEY` (AI 분석을 사용할 경우)
+
+선택:
+- `DART_API_KEY`
+- Telegram 관련 환경변수
+
+`render.yaml`은 무료 `web` 서비스로 `/health`를 열고 Discord 봇을 같은 프로세스에서 실행합니다.
+무료 Web Service의 sleep/재시작 정책 때문에 24시간 무중단이 필요한 경우에는 유료 Background Worker가 더 적합합니다.
+또한 무료 서비스에는 persistent disk를 연결하지 않으므로 SQLite는 `/tmp`에 저장되며 재시작 시 중복방지 이력이 초기화될 수 있습니다.
+
+
+## 무료 LLM 분석 fallback
+
+Gemini → OpenRouter `openrouter/free` → 기존 규칙 분석 순서로 자동 fallback합니다. 자세한 Render 환경변수는 `FREE_LLM_FALLBACK.md`를 참고하세요.

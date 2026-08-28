@@ -193,9 +193,10 @@ def _meaningful_core(core: list[str], title: str) -> list[str]:
 def _analysis_parts(item: NewsItem):
     result = analyze_item(item)
     title = _clean_display_title(item.analysis_title or result.title)
-    core = _meaningful_core(result.core, title)
+    core = _meaningful_core(item.ai_core or result.core, title)
     analysis = []
-    for x in result.analysis:
+    source_analysis = item.ai_analysis or result.analysis
+    for x in source_analysis:
         x = (x or "").strip()
         if not x:
             continue
