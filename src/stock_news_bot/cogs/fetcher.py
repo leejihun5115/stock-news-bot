@@ -212,6 +212,124 @@ async def fetch_feed(
         raise FetchError(f"'{url}' RSS 처리 실패: {detail}") from None
 
 
+
+
+def _youtube_feed_urls(channel_ids: list[str]) -> list[str]:
+    urls = []
+    for channel_id in channel_ids:
+        channel_id = channel_id.strip()
+        if not channel_id:
+            continue
+        if channel_id.startswith("UC"):
+            urls.append(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")
+        else:
+            logger.warning("YouTube 채널 ID가 UC로 시작하지 않아 제외합니다: %s", channel_id)
+    return urls
+
+
+async def _fetch_telegram_channel(
+    session: aiohttp.ClientSession, channel: str, timeout_seconds: int = 10
+) -> list[NewsItem]:
+    """공개 Telegram 채널(t.me/s/<channel>)의 최신 게시물을 수집한다.
+
+    Telegram Bot API의 getUpdates는 '봇에게 들어오는 업데이트' 용도라 채널
+    원문 수집에 사용할 수 없다. 공개 채널은 웹 미리보기 페이지에서 게시물
+    링크와 datetime을 읽는다. 비공개 채널은 이 방식으로 접근할 수 없으므로
+    명시적으로 오류를 반환하고 전체 수집기는 계속 진행한다.
+    """
+    name = channel.strip().lstrip("@").strip("/")
+    if name.startswith("https://t.me/"):
+        name = name.split("https://t.me/", 1)[1].split("/", 1)[0]
+    elif name.startswith("http://t.me/"):
+        name = name.split("http://t.me/", 1)[1].split("/", 1)[0]
+    if not name or name.startswith("+"):
+        raise FetchError(f"Telegram 공개 채널 형식이 아닙니다: {channel}")
+
+    url = f"https://t.me/s/{name}"
+    try:
+        async with session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+            headers={"Cache-Control": "no-cache", "User-Agent": "Mozilla/5.0 stock-news-bot/1.0"},
+        ) as resp:
+            if resp.status != 200:
+                raise FetchError(f"Telegram 채널 HTTP {resp.status}: @{name}")
+            html = await resp.text(errors="replace")
+    except FetchError:
+        raise
+    except Exception as exc:
+        raise FetchError(f"Telegram 채널 수집 실패 @{name}: {exc}") from exc
+
+    # 게시물 블록에서 post 링크와 time datetime을 함께 찾는다. Telegram의
+    # 공개 웹페이지는 이 구조를 장기간 유지해왔으며, 구조가 바뀌면 해당
+    # 채널만 실패하고 RSS/YouTube/블로그는 계속 수집된다.
+    import html as html_module
+    from urllib.parse import urljoin
+    block_re = re.compile(
+        r'<div[^>]+class="[^"]*tgme_widget_message_wrap[^"]*"[^>]*>(.*?)</div>\s*</div>\s*</div>',
+        re.S | re.I,
+    )
+    time_re = re.compile(r'<time[^>]+datetime="([^"]+)"[^>]*>', re.I)
+    post_re = re.compile(r'href="(https://t\.me/[^"/?]+/(\d+))"[^>]*class="[^"]*tgme_widget_message_date', re.I)
+    title_re = re.compile(r'class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', re.S | re.I)
+    items: list[NewsItem] = []
+    for block in block_re.findall(html):
+        mpost = post_re.search(block)
+        if not mpost:
+            continue
+        mtime = time_re.search(block)
+        if not mtime:
+            continue
+        raw_time = html_module.unescape(mtime.group(1)).strip()
+        try:
+            published = datetime.fromisoformat(raw_time.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except ValueError:
+            continue
+        mtitle = title_re.search(block)
+        title_html = mtitle.group(1) if mtitle else ""
+        title = unescape(re.sub(r"<[^>]+>", " ", title_html))
+        title = re.sub(r"\s+", " ", title).strip()
+        if not title:
+            title = f"Telegram @{name} 게시물"
+        link = mpost.group(1)
+        items.append(NewsItem(title=title[:500], url=urljoin("https://t.me/", link), source=f"Telegram @{name}", published_at=published, summary=title[:1000]))
+    if not items:
+        logger.warning("Telegram 공개 채널에서 게시물을 찾지 못했습니다: @%s", name)
+    return items
+
+
+async def fetch_source_feeds(
+    urls: list[str], blog_feeds: list[str], youtube_channel_ids: list[str], telegram_channels: list[str],
+    timeout_seconds: int = 10, max_retries: int = 3,
+) -> tuple[list[NewsItem], list[FetchError]]:
+    """RSS/블로그/YouTube/공개 Telegram을 한 번에 수집한다."""
+    rss_urls = list(dict.fromkeys(urls + blog_feeds + _youtube_feed_urls(youtube_channel_ids)))
+    items, errors = await fetch_all(rss_urls, timeout_seconds, max_retries) if rss_urls else ([], [])
+    if blog_feeds:
+        logger.info("📝 블로그 RSS 수집 활성화: %d개", len(blog_feeds))
+    if youtube_channel_ids:
+        logger.info("📺 YouTube 수집 활성화: %d개 채널", len(youtube_channel_ids))
+    if telegram_channels:
+        logger.info("✈️ Telegram 공개채널 수집 활성화: %d개", len(telegram_channels))
+        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 stock-news-bot/1.0"}) as session:
+            results = await asyncio.gather(
+                *(_fetch_telegram_channel(session, ch, timeout_seconds) for ch in telegram_channels),
+                return_exceptions=True,
+            )
+        for result in results:
+            if isinstance(result, FetchError):
+                errors.append(result)
+            elif isinstance(result, Exception):
+                errors.append(FetchError(str(result)))
+            else:
+                items.extend(result)
+    # URL dedup: 여러 키워드/피드에서 같은 기사·영상이 반복되는 것을 수집 단계에서 줄인다.
+    unique: dict[str, NewsItem] = {}
+    for item in items:
+        unique.setdefault(item.dedup_key, item)
+    return list(unique.values()), errors
+
+
 async def fetch_all(
     urls: list[str], timeout_seconds: int = 10, max_retries: int = 3
 ) -> tuple[list[NewsItem], list[FetchError]]:
@@ -258,11 +376,14 @@ class FetcherCog(commands.Cog, name="Fetcher"):
                 "Render NEWS_KEYWORDS 미설정: RSS_FEEDS %d개를 사용합니다.",
                 len(urls),
             )
-        if not urls:
-            logger.warning("수집할 RSS 피드/키워드가 설정되어 있지 않습니다.")
+        if not urls and not self.settings.blog_feeds and not self.settings.youtube_channel_ids and not self.settings.telegram_source_channels:
+            logger.warning("수집할 RSS/블로그/YouTube/Telegram 소스가 설정되어 있지 않습니다.")
             return [], []
-        return await fetch_all(
+        return await fetch_source_feeds(
             urls,
+            self.settings.blog_feeds,
+            self.settings.youtube_channel_ids,
+            self.settings.telegram_source_channels,
             timeout_seconds=self.settings.fetch_timeout_seconds,
             max_retries=self.settings.fetch_max_retries,
         )

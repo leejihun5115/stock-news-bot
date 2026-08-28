@@ -140,3 +140,15 @@ Worker** 타입을 사용합니다 (Web Service 아님). Free 플랜에는 Backg
 
 ## v6 표시 수정
 - 뉴스 제목(`📌`)을 Discord/Telegram 모두 굵게 표시합니다.
+
+
+## 실시간 소스
+
+- Google/RSS: `NEWS_KEYWORDS` 또는 `RSS_FEEDS`
+- 블로그: `BLOG_FEEDS` (RSS/Atom URL)
+- YouTube: `YOUTUBE_CHANNEL_IDS` (UC... 채널 ID)
+- 공개 Telegram 채널: `TELEGRAM_SOURCE_CHANNELS` (@username 또는 https://t.me/username)
+- Telegram Bot 알림: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`
+
+모든 소스는 발행시각을 UTC 절대시간으로 정규화한 뒤 최근 `NEWS_LOOKBACK_HOURS` 시간만 통과시킵니다.
+Telegram Bot은 시작 시 `getMe`/`getChat` 검증과 webhook 정리 후 callback polling을 시작합니다.

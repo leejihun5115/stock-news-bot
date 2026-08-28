@@ -26,6 +26,30 @@ class TelegramAlerter:
     def _url(self, method: str) -> str:
         return _API_BASE.format(token=self._bot_token, method=method)
 
+    async def validate(self) -> tuple[bool, str]:
+        """Bot token/chat ID가 실제 Telegram API에서 유효한지 확인한다."""
+        if not self.enabled:
+            return False, "TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID 미설정"
+        timeout = aiohttp.ClientTimeout(total=10)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(self._url("getMe")) as resp:
+                    body = await resp.json(content_type=None)
+                    if resp.status != 200 or not body.get("ok"):
+                        return False, f"getMe 실패: {body.get('description', resp.status)}"
+                async with session.get(self._url("getChat"), params={"chat_id": self._chat_id}) as resp:
+                    body = await resp.json(content_type=None)
+                    if resp.status != 200 or not body.get("ok"):
+                        return False, f"getChat 실패: {body.get('description', resp.status)}"
+                # 이 봇은 callback polling을 사용하므로 기존 webhook이 남아 있으면
+                # getUpdates가 409 Conflict가 된다. webhook은 제거하되 pending update는 버리지 않는다.
+                async with session.post(self._url("deleteWebhook"), json={"drop_pending_updates": False}) as resp:
+                    if resp.status != 200:
+                        logger.warning("Telegram deleteWebhook 실패(status=%s)", resp.status)
+            return True, "Telegram Bot API/Chat 정상"
+        except Exception as exc:
+            return False, f"Telegram API 연결 실패: {exc}"
+
     async def send(self, message: str) -> None:
         if not self.enabled:
             logger.debug("텔레그램 알림 비활성화: %s", message)
@@ -150,6 +174,12 @@ async def send_startup_probe(alerter: TelegramAlerter) -> None:
     if not alerter.enabled:
         logger.debug("텔레그램 알림이 비활성화되어 있어 기동 probe를 건너뜁니다.")
         return
+
+    ok, detail = await alerter.validate()
+    if not ok:
+        logger.error("🚨 Telegram Bot 검증 실패: %s", detail)
+        return
+    alerter.start_callback_polling()
 
     from datetime import datetime, timedelta, timezone
 

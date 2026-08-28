@@ -60,15 +60,24 @@ services:
       # NEWS_KEYWORDS가 있으면 RSS_FEEDS보다 항상 우선한다.
       - key: RSS_FEEDS
         sync: false
+      # 블로그 RSS/Atom 주소를 쉼표로 입력. 예: https://example.com/feed.xml
+      - key: BLOG_FEEDS
+        sync: false
+      # YouTube 채널 ID(UC... 형태)를 쉼표로 입력. 각 채널의 최신 업로드를 Atom으로 수집.
+      - key: YOUTUBE_CHANNEL_IDS
+        sync: false
+      # 공개 Telegram 채널 username 또는 https://t.me/<username>을 쉼표로 입력.
+      - key: TELEGRAM_SOURCE_CHANNELS
+        sync: false
       # 실시간 수집: 10초마다 새 RSS를 확인한다.
       - key: FETCH_INTERVAL_SECONDS
         value: "10"
       # 분석은 병렬, 실제 Discord/Telegram 송출은 단일 worker로 순서/폭주를 제어한다.
       - key: NEWS_ANALYSIS_WORKERS
         value: "4"
-      # 최근 5시간 이내 기사만 신규 뉴스로 인정한다. 어제/오래된 RSS backlog는 버린다.
+      # 최근 24시간 이내 기사만 신규 뉴스로 인정한다. 너무 오래된 RSS backlog는 버린다.
       - key: NEWS_LOOKBACK_HOURS
-        value: "5"
+        value: "24"
       # 모든 발행시각 비교는 UTC 절대시각으로 처리한다. Render/미국 RSS의
       # 로컬시간을 임의로 KST로 더하거나 빼지 않는다.
       - key: TZ

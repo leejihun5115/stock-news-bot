@@ -77,6 +77,9 @@ class Settings:
     telegram_chat_id: str = ""
 
     rss_feeds: list[str] = field(default_factory=list)
+    blog_feeds: list[str] = field(default_factory=list)
+    youtube_channel_ids: list[str] = field(default_factory=list)
+    telegram_source_channels: list[str] = field(default_factory=list)
     news_keywords: list[str] = field(default_factory=list)
     news_value_mid: int = 45
     news_value_high: int = 75
@@ -84,7 +87,7 @@ class Settings:
     fetch_timeout_seconds: int = 10
     fetch_max_retries: int = 3
     # 실시간 뉴스의 허용 시간창. 현재 시각보다 오래된 기사는 새 뉴스로 취급하지 않는다.
-    news_lookback_hours: float = 5.0
+    news_lookback_hours: float = 24.0
     # 첫 부팅 때 과거 RSS에 쌓여 있던 기사를 한꺼번에 쏟지 않도록 최신 몇 건만 허용.
     startup_send_limit: int = 5
     # 한 번의 수집 주기에서 새로 송출 큐에 넣을 최대 건수.
@@ -157,13 +160,16 @@ def load_settings() -> Settings:
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID"),
         rss_feeds=_get_str_list("RSS_FEEDS"),
+        blog_feeds=_get_str_list("BLOG_FEEDS"),
+        youtube_channel_ids=_get_str_list("YOUTUBE_CHANNEL_IDS"),
+        telegram_source_channels=_get_str_list("TELEGRAM_SOURCE_CHANNELS"),
         news_keywords=_get_str_list("NEWS_KEYWORDS"),
         news_value_mid=_get_int("NEWS_SEND_MIN_SCORE", _get_int("MEDIUM_NEWS_SCORE", 45)),
         news_value_high=_get_int("STRONG_NEWS_SCORE", 75),
         fetch_interval_seconds=max(5, _get_int("FETCH_INTERVAL_SECONDS", 10)),
         fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),
         fetch_max_retries=_get_int("FETCH_MAX_RETRIES", 3),
-        news_lookback_hours=max(0.5, _get_float("NEWS_LOOKBACK_HOURS", 5.0)),
+        news_lookback_hours=max(0.5, _get_float("NEWS_LOOKBACK_HOURS", 24.0)),
         startup_send_limit=max(1, _get_int("STARTUP_SEND_LIMIT", 5)),
         max_new_per_cycle=max(1, _get_int("MAX_NEW_PER_CYCLE", 3)),
         max_sent_per_hour=max(0, _get_int("MAX_SENT_PER_HOUR", 20)),
@@ -187,9 +193,9 @@ def load_settings() -> Settings:
 
     if settings.discord_news_channel_id == 0:
         raise ConfigError("DISCORD_NEWS_CHANNEL_ID가 설정되지 않았습니다.")
-    if not settings.news_keywords and not settings.rss_feeds:
+    if not settings.news_keywords and not settings.rss_feeds and not settings.blog_feeds and not settings.youtube_channel_ids and not settings.telegram_source_channels:
         raise ConfigError(
-            "Render의 NEWS_KEYWORDS 또는 RSS_FEEDS가 설정되어야 합니다."
+            "NEWS_KEYWORDS/RSS_FEEDS/BLOG_FEEDS/YOUTUBE_CHANNEL_IDS/TELEGRAM_SOURCE_CHANNELS 중 하나 이상이 설정되어야 합니다."
         )
 
     # Render 환경변수에 실제로 로드된 수집 키워드 수를 부팅 시 기록한다.

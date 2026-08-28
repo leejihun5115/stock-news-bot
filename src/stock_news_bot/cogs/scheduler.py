@@ -184,6 +184,8 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         if self._send_worker_task:
             self._send_worker_task.cancel()
             self._send_worker_task = None
+        if self.alerter:
+            asyncio.create_task(self.alerter.stop_callback_polling())
         self.dedup_store.close()
         self.history_store.close()
         self.market_store.close()
@@ -278,7 +280,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     )
                     if stats and stats.count >= self.settings.history_min_sample:
                         data_lines.append(
-                            f"최근 {stats.lookback_days}일 {stats.count}건 · 평균 {stats.avg_score:.0f}점"
+                            f"최근 {stats.lookback_days}일 {stats.count}건"
                         )
                 else:
                     stats = None
@@ -367,7 +369,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         """분석 완료 뉴스의 실제 송출 담당 단일 worker.
 
         단일 송출 worker + 발행시각 priority queue를 사용해 Discord/Telegram에
-        뉴스가 뒤죽박죽 도착하지 않도록 한다. 또한 5시간보다 오래된 기사는
+        뉴스가 뒤죽박죽 도착하지 않도록 한다. 또한 24시간보다 오래된 기사는
         Queue에서 늦게 처리되더라도 폐기한다.
         """
         while True:
@@ -517,7 +519,12 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         if hasattr(classifier, "record_watched_companies"):
             await asyncio.to_thread(classifier.record_watched_companies, classified)
 
-        feed_count = len(self.settings.effective_feed_urls())
+        feed_count = (
+            len(self.settings.effective_feed_urls())
+            + len(self.settings.blog_feeds)
+            + len(self.settings.youtube_channel_ids)
+            + len(self.settings.telegram_source_channels)
+        )
         keyword_count = len(list(dict.fromkeys(self.settings.news_keywords)))
         self._last_scan.update({
             "keywords": keyword_count,
@@ -534,7 +541,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         # 쏟아지는 문제를 막는다. 미래 시각(공급원 시계 오류)도 제외한다.
         now_utc = datetime.now(timezone.utc)
         # 모든 피드는 UTC 절대시각으로 비교한다. KST/미국 동부시간을 별도로
-        # 더하거나 빼지 않는다. 즉 '최근 5시간'은 한국 시간이든 미국 시간이든
+        # 더하거나 빼지 않는다. 즉 '최근 24시간'은 한국 시간이든 미국 시간이든
         # 동일한 실제 시각 기준이다. 미래 시각과 오래된 backlog는 즉시 차단한다.
         cutoff = now_utc - timedelta(hours=self.settings.news_lookback_hours)
         future_cutoff = now_utc + timedelta(minutes=2)

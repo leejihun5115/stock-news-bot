@@ -153,25 +153,20 @@ def _analysis_parts(item: NewsItem):
     return title, core, analysis[:6], result.theme, result.related_stocks, result.related_reasons, result.schedule, result.terms
 
 
-def _strength_label(item: NewsItem, confidence: int) -> str:
-    if item.score >= 75:
-        strength = "🔥 강함"
-    elif item.score >= 45:
-        strength = "🟢 보통"
-    else:
-        strength = "⚪️ 약함"
-    return f"{strength} : {item.score}점 (신뢰도 {confidence}점)"
-
-
 def _trade_verdict(item: NewsItem) -> tuple[str, str]:
-    """매매 포인트는 뉴스 영향도와 근거 신뢰도를 동시에 보되 단정형 주문이 아닌 판단 상태로 표시한다."""
-    if item.score >= 75 and item.confidence >= 70:
-        return "매수 우위", "뉴스 영향도와 근거 신뢰도가 모두 높은 편"
-    if item.score >= 60 and item.confidence >= 55:
-        return "관망", "핵심 재료는 확인되지만 추가 촉매 확인이 필요"
-    if item.score >= 45 and item.confidence >= 50:
-        return "관망", "재료는 있으나 현재 단계에서 확신도가 충분하지 않음"
-    return "매수 주의", "실제 사업·실적 연결과 객관적 근거가 부족해 현재 매수 근거가 약함"
+    """최종 뉴스 점수 하나로 매매 포인트를 결정한다.
+
+    사용자에게는 신뢰도 점수를 별도로 노출하지 않고, 현재 뉴스의 최종 점수와
+    그에 대응하는 판단만 한 줄로 보여준다. 거시지표는 이 점수에 직접 가산하지 않는다.
+    """
+    score = max(0, min(100, int(item.score or 0)))
+    if score >= 70:
+        return "🔥 매수", "직접적인 기업 호재와 매매 근거가 충분한 구간"
+    if score >= 50:
+        return "🟢 긍정적", "직접적인 기업 호재가 확인되지만 강한 매수 신호까지는 아님"
+    if score >= 30:
+        return "🟡 관망", "재료의 영향이나 실적 연결을 추가 확인할 필요가 있음"
+    return "🔴 부정적", "사업·실적에 부정적인 직접 재료가 확인되는 구간"
 
 
 def _verdict_condition(item: NewsItem, verdict: str) -> str:
@@ -211,15 +206,23 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
             lines.append(f"{_INDENT}↳ {company}")
             if reason:
                 lines.append(f"{_INDENT}↳ 근거 — {reason}")
-    lines += ["", _strength_label(item, item.confidence)]
-    # 매매 포인트: 판단(매수 주의/관망/매수 우위)만 짧게 보여준다. 이유/판단변경조건
-    # 문구와 근거 링크를 같은 블록에 다닥다닥 붙여두면 링크가 있는 지점에서
-    # 줄바꿈/미리보기가 어긋나 보이는 문제가 있어서, 링크는 메시지 맨 끝에
-    # 완전히 분리된 블록("🔗 하이퍼링크")으로 뺐다.
+    # 현재 뉴스의 최종 점수와 판단은 매매 포인트 한 곳에서만 표시한다.
+    # 기존 "강함/보통/약함 + 신뢰도" 중복 표시는 제거한다.
+    # 매매 포인트 자체를 원문 하이퍼링크로 만든다.
+    # 사용자가 요구한 "매수 이유/근거"도 같은 블록 안에 바로 표시한다.
+    trade_reason = (item.reason or "").strip()
+    if not trade_reason and related and reasons.get(related[0]):
+        trade_reason = str(reasons[related[0]]).strip()
+    if not trade_reason:
+        trade_reason = verdict_reason
+    trade_condition = _verdict_condition(item, verdict)
+    trade_link = f"📊 [매매 포인트]({item.url})" if item.url else "📊 [매매 포인트]"
     lines += [
         "",
-        "📊 [매매 포인트]",
-        f"{_INDENT}↳ {verdict}",
+        trade_link,
+        f"{_INDENT}{verdict} ({max(0, min(100, int(item.score or 0)))}점)",
+        f"{_INDENT}↳ 매수 이유/근거 : {trade_reason}",
+        f"{_INDENT}↳ 판단 조건 : {trade_condition}",
     ]
     if schedule:
         lines += ["", "📅 [일정]", *[f"{_INDENT}↳ {x}" for x in schedule[:5]]]
@@ -229,7 +232,6 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
         lines += ["", cumulative_line]
     if price_reaction_line:
         lines += ["", price_reaction_line]
-    lines += ["", f"[🔗 하이퍼링크]({item.url})"]
     return "\n".join(_push_body_inward(lines))
 
 
@@ -267,13 +269,26 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
             lines.append(f"{_INDENT}↳ {esc(company)}")
             if reasons.get(company):
                 lines.append(f"{_INDENT}↳ 근거 — {esc(reasons[company])}")
-    lines += ["", _strength_label(item, item.confidence)]
-    # 매매 포인트: 판단(매수 주의/관망/매수 우위)만 짧게 보여준다. 근거 링크는
-    # 메시지 맨 끝에 "🔗 하이퍼링크"로 완전히 분리해서 넣는다(중복 링크 제거).
+    # 현재 뉴스의 최종 점수와 판단은 매매 포인트 한 곳에서만 표시한다.
+    # 기존 "강함/보통/약함 + 신뢰도" 중복 표시는 제거한다.
+    # 매매 포인트 자체를 원문 하이퍼링크로 만들고, 같은 블록 안에
+    # 실제 기사에서 추출한 매수 이유/근거와 판단 변경 조건을 함께 표시한다.
+    trade_reason = (item.reason or "").strip()
+    if not trade_reason and related and reasons.get(related[0]):
+        trade_reason = str(reasons[related[0]]).strip()
+    if not trade_reason:
+        trade_reason = verdict_reason
+    trade_condition = _verdict_condition(item, verdict)
+    if item.url:
+        trade_link = f'📊 <a href="{esc(item.url)}">[매매 포인트]</a>'
+    else:
+        trade_link = "📊 [매매 포인트]"
     lines += [
         "",
-        "📊 [매매 포인트]",
+        trade_link,
         f"{_INDENT}↳ {esc(verdict)}",
+        f"{_INDENT}↳ 매수 이유/근거 : {esc(trade_reason)}",
+        f"{_INDENT}↳ 판단 조건 : {esc(trade_condition)}",
     ]
     if schedule:
         lines += ["", "📅 [일정]", *[f"{_INDENT}↳ {esc(x)}" for x in schedule[:5]]]
@@ -283,7 +298,6 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
         lines += ["", esc(cumulative_line)]
     if price_reaction_line:
         lines += ["", esc(price_reaction_line)]
-    lines += ["", f'🔗 <a href="{esc(item.url)}">하이퍼링크</a>']
     return "\n".join(_push_body_inward(lines))
 
 

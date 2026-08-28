@@ -129,6 +129,33 @@ _SCORE_SECTOR_ONLY = 40
 _SCORE_PER_EXTRA_KEYWORD = 5
 _SCORE_EXTRA_KEYWORD_CAP = 15
 
+# 지수/거시환경은 개별 종목의 직접 재료가 아니라 간접적인 시장 배경이다.
+# 따라서 이 단어만으로 종목 뉴스 점수를 올리지 않는다.
+_MACRO_ONLY_KEYWORDS = {
+    "코스피", "코스닥", "나스닥", "다우", "S&P500", "s&p 500",
+    "러셀2000", "필라델피아반도체지수", "sox", "vix",
+    "금리", "기준금리", "국채금리", "연준", "fomc", "인플레이션",
+    "cpi", "pce", "환율", "원달러", "달러", "유가", "wti",
+}
+
+
+def _macro_only_context(text: str, matched: list[str]) -> bool:
+    """시장지수/금리 등 거시 배경만 있는 뉴스인지 판정한다.
+
+    개별 기업명이나 직접적인 기업 이벤트가 함께 있으면 종목 재료로 본다.
+    """
+    low = text.lower()
+    macro_hits = [k for k in _MACRO_ONLY_KEYWORDS if k.lower() in low]
+    if not macro_hits:
+        return False
+    company_signal = any(k in low for k in (
+        "수주", "계약", "공급", "납품", "투자", "증설", "양산", "출시",
+        "승인", "허가", "임상", "기술수출", "기술이전", "실적", "매출",
+        "영업이익", "자사주", "배당", "인수", "합병", "신제품", "특허",
+        "주가", "주식", "종목", "급등", "급락", "상한가", "하한가",
+    ))
+    return not company_signal
+
 
 def _contains_any(text: str, keywords: list[str]) -> list[str]:
     return [kw for kw in keywords if kw in text]
@@ -149,6 +176,14 @@ def score_item(item: NewsItem) -> tuple[int, list[str], list[str]]:
     medium_hits = _contains_any(text, MEDIUM_IMPORTANCE_KEYWORDS)
     matched.extend(high_hits)
     matched.extend(medium_hits)
+
+    # 코스피/코스닥/나스닥/금리 등 거시환경만 담긴 뉴스는 종목 점수에 가산하지 않는다.
+    # 기업의 직접 재료가 함께 있을 때만 기존 점수 규칙을 적용한다.
+    if _macro_only_context(text, matched):
+        high_hits = []
+        medium_hits = []
+        sectors = []
+        matched = []
     matched = sorted(set(matched))
 
     if high_hits:
