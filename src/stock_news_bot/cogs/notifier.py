@@ -36,7 +36,7 @@ def _importance_label(importance: Importance, *, mid: int, high: int) -> str:
         return f"🔥 중요 ({high}점이상)"
     if importance == Importance.MEDIUM:
         return f"🟢 보통 ({mid}점이상)"
-    return f"⚪참고 ({mid}점미만)"
+    return f"⚪️ 약함 ({mid}점미만)"
 
 _SEND_INTERVAL_SECONDS = 0.7
 _SUMMARY_MAX_LEN = 500
@@ -54,7 +54,7 @@ def build_cumulative_line(stats: SectorStats | None, *, min_sample: int) -> str 
         return None
     return (
         f"📊 누적 데이터: 최근 {stats.lookback_days}일 '{stats.sector}' 뉴스 {stats.count}건 "
-        f"(🔴중요 {stats.high} / 🟠보통 {stats.medium} / ⚪참고 {stats.low}, "
+        f"(🔥중요 {stats.high} / 🟢보통 {stats.medium} / ⚪️약함 {stats.low}, "
         f"평균 {stats.avg_score:.0f}점)"
     )
 
@@ -193,7 +193,8 @@ def build_message(
     display_source = item.source.split("|")[0].strip() or item.source.strip()
     lines = [
         f"📰 [{display_source}]   [{item.classification}]   ⏰ {local_time}",
-        f"📌 **{title}**",  # Discord: 제목을 반드시 굵게
+        "",
+        f"📌 **{title}**",  # Discord Markdown: 제목만 굵게
     ]
 
     if core:
@@ -256,7 +257,8 @@ def build_telegram_text(
 
     lines = [
         f"📰 [{esc(display_source)}]   [{esc(item.classification)}]   ⏰ {local_time}",
-        f"📌 <b>{esc(title)}</b>",  # Telegram HTML: 제목을 반드시 굵게
+        "",
+        f"📌 <b>{esc(title)}</b>",  # Telegram HTML: 제목만 굵게
     ]
     if core:
         lines += ["", "🔎 [핵심]", *[f"✔️ {esc(x)}" for x in core]]
