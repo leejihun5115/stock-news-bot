@@ -16,6 +16,7 @@ from stock_news_bot.cogs.notifier import (
     build_cumulative_line,
     build_price_reaction_line,
     build_telegram_text,
+    build_telegram_summary_text,
 )
 from stock_news_bot.monitor.health import HealthMonitor
 from stock_news_bot.cogs.analysis_engine import analyze_item
@@ -428,12 +429,18 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                         )
 
                 if self.settings.telegram_alert_enabled:
-                    text = build_telegram_text(
+                    summary_text = build_telegram_summary_text(item)
+                    detail_text = build_telegram_text(
                         item, cumulative_line, price_reaction_line,
                         news_value_mid=self.settings.news_value_mid,
                         news_value_high=self.settings.news_value_high,
                     )
-                    await self.alerter.send(text)
+                    await self.alerter.send_news(
+                        summary_text,
+                        button_label="매매포인트 상세보기",
+                        callback_data=item.dedup_key,
+                        detail=detail_text,
+                    )
 
                 self._last_scan["sent"] = int(self._last_scan.get("sent", 0)) + 1
                 logger.info(

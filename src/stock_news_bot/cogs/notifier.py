@@ -6,6 +6,17 @@
 메시지 안에 전부 펼쳐서 보여주는 방식으로 되돌렸다. 회사명 주변의
 따옴표(")만 계속 안 붙이는 상태로 유지한다(예: `📰 [알톤]`).
 
+【텔레그램: 버튼 클릭 → 상세보기 부활】
+텔레그램은 다시 "요약만 먼저 보내고, 인라인 버튼(📊 매매포인트 상세보기)을
+누르면 상세 내용이 후속 메시지로 온다" 방식을 쓴다.
+- build_telegram_summary_text(): 최초 발송용. 헤더/제목/관련주/판정만.
+- build_telegram_text(): 버튼 클릭 시 전송되는 전체 상세.
+scheduler.py가 TelegramAlerter.send_news()로 이 둘을 함께 넘기고,
+버튼 클릭은 monitor/telegram_alert.py의 콜백 폴링이 처리한다.
+(이 폴링은 과거에 "불안정하다"는 이유로 껐던 적이 있다 — 재활성화하면서
+그 위험을 감수하기로 함.)
+디스코드는 이 요약/상세 분리를 쓰지 않고 원래대로 한 메시지에 다 보여준다.
+
 디스코드는 masked link(`[텍스트](url)`)가 일반 메시지 content에서는
 안정적으로 렌더링되지 않으므로(embed에서만 보장됨), 항상 discord.Embed로
 보낸다. NotifierCog.send_items()가 build_embed()를 실제로 쓴다.
@@ -361,6 +372,34 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
         lines += ["", esc(price_reaction_line)]
     if item.url:
         lines += ["", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
+    return "\n".join(_push_body_inward(lines))
+
+
+def build_telegram_summary_text(item: NewsItem) -> str:
+    """텔레그램 최초 발송용 축약 본문. 헤더 / 제목 / 매매 포인트(판정만) 3블록.
+
+    핵심·분석·관련주 근거·이유/판단조건·전망·일정·용어 등 상세 내용은
+    여기 넣지 않고, 이 메시지에 딸린 인라인 버튼(📊 매매포인트 상세보기)을
+    누르면 build_telegram_text()로 만든 전체 상세가 후속 메시지로 온다.
+    """
+    title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
+    local_time = _display_time(item.published_at)
+    display_company = _display_company(item)
+    title_prefix = _title_prefix(theme, title)
+    verdict, score, _verdict_reason = _trade_verdict(item, analysis)
+
+    def esc(value: str) -> str:
+        return html_escape(str(value), quote=True)
+
+    lines = [
+        f"📰 [{esc(display_company)}]   [{esc(item.classification)}]   ⏰ {local_time}",
+        "",
+        f"{title_prefix} <b>{esc(title)}</b>",
+    ]
+    if related:
+        lines += ["", "🎯 [관련주]", *[f"{_INDENT}↳ {esc(c)}" for c in related]]
+    verdict_label = f"{esc(verdict)} ({score}점)" if verdict != "⚪ 판단 보류" else esc(verdict)
+    lines += ["", f"📊 [매매 포인트]   {verdict_label}"]
     return "\n".join(_push_body_inward(lines))
 
 
