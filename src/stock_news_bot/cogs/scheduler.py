@@ -283,35 +283,42 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                         item.published_at.isoformat(), item.source, item.url,
                     )
 
-        # '오늘 뉴스만' 필터는 첫 부팅 사이클에만 적용하면 안 된다. 봇이 계속 켜져
-        # 있는 동안에도 RSS/포털이 어제 기사를 뒤늦게 새로 노출하거나, dedup에
-        # 안 걸려 있던 어제 기사가 "신규"로 잡혀서 그냥 발송돼버리는 문제가 있었다.
-        # 그래서 매 사이클마다 한국시간(KST) 기준 오늘 00:00 이전 기사는 발송하지
-        # 않고 dedup만 확정해서 자연스럽게 걸러지게 한다.
-        today_cutoff = _today_start_kst_as_utc()
-        backlog = [item for item in classified if item.published_at < today_cutoff]
-        for item in backlog:
-            self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
-        if backlog:
-            logger.info(
-                "오늘(KST %s 00:00) 이전 기사 %d건은 발송 없이 dedup 처리했습니다.",
-                today_cutoff.astimezone(_KST).date().isoformat(), len(backlog),
-            )
-        classified = [item for item in classified if item.published_at >= today_cutoff]
-
-        # 첫 부팅 사이클에는 위에서 걸러진 '오늘 기사' 중에서도 한꺼번에 너무
-        # 많이 쏟아지지 않도록 최신 기사 위주로만 상한(STARTUP_SEND_LIMIT)을
-        # 적용한다. 상한을 넘겨 이번에 못 보낸 항목은 dedup 처리하지 않고
-        # 남겨두어 다음 사이클에 정상적으로 발송되게 한다.
+        # 첫 부팅은 '현재 RSS에 들어와 있던 목록'을 기준점으로 삼되,
+        # 최근 기사 일부는 테스트/운영 시작 직후 바로 확인할 수 있도록 제한적으로
+        # 발송한다. 나머지 backlog는 dedup에 등록하여 다음 사이클에 재등장하지 않게 한다.
+        # 이전 방식은 최근 15분 이내가 아니면 전부 dedup 처리했기 때문에, RSS의
+        # 발행시각이 실제 게시시각보다 늦게/보수적으로 들어오는 피드에서는
+        # 강도필터 통과 뉴스까지 전부 "신규 0건"이 되는 문제가 있었다.
         if not self._startup_cycle_done:
-            if len(classified) > self.settings.startup_send_limit:
-                classified = sorted(
-                    classified, key=lambda item: item.published_at, reverse=True
+            # '오늘 뉴스만' 기준 = 초 단위 창(예: 최근 1시간)이 아니라 한국시간(KST)
+            # 달력 기준 오늘 00:00부터. 부팅 시각과 무관하게 항상 "오늘 자정 이후"
+            # 기사만 첫 배치 후보가 된다.
+            cutoff = _today_start_kst_as_utc()
+            startup_candidates = [item for item in classified if item.published_at >= cutoff]
+
+            # 후보가 발송 상한(STARTUP_SEND_LIMIT)보다 많으면 최신 기사 위주로만
+            # 상한만큼 남긴다. 상한 이내라면 오늘 기사 전부가 후보로 유지된다.
+            if len(startup_candidates) > self.settings.startup_send_limit:
+                startup_candidates = sorted(
+                    startup_candidates, key=lambda item: item.published_at, reverse=True
                 )[: self.settings.startup_send_limit]
+            startup_keep_keys = {item.dedup_key for item in startup_candidates}
+
+            # 오늘 이전(=어제 이전) backlog는 기준점으로 확정해서 dedup 처리한다.
+            # 오늘 기사인데 발송 상한을 초과해 이번에 못 보낸 항목은 dedup 처리하지
+            # 않고 남겨둔다 — 그래야 다음 사이클에서 정상적으로 발송된다.
+            stale_backlog = [item for item in classified if item.published_at < cutoff]
+            for item in stale_backlog:
+                self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
+
             logger.info(
-                "첫 부팅 배치: 오늘 기사 중 최신 %d건을 첫 배치 후보로 발송합니다. (첫 사이클 최대 %d건)",
-                len(classified), self.settings.startup_send_limit,
+                "첫 부팅 기준점(KST 오늘 00:00=%s): 이전 backlog %d건만 dedup 등록, "
+                "오늘 기사 후보 %d건 중 %d건을 첫 배치로 발송합니다. (첫 사이클 최대 %d건)",
+                cutoff.astimezone(_KST).isoformat(), len(stale_backlog),
+                len([i for i in classified if i.published_at >= cutoff]), len(startup_candidates),
+                self.settings.startup_send_limit,
             )
+            classified = [item for item in classified if item.dedup_key in startup_keep_keys]
             self._startup_cycle_done = True
 
         # 강도 필터: NEWS_SEND_MIN_SCORE 미만인 기사는 아예 후보에서 제외한다.

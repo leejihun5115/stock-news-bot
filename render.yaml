@@ -24,12 +24,6 @@ services:
     startCommand: "python -m stock_news_bot"
     autoDeploy: true
     envVars:
-      # Render가 runtime.txt를 무시하고 최신 Python(예: 3.14)으로 빌드해서
-      # pyproject.toml의 requires-python(<3.14)과 충돌해 빌드가 실패하는 문제가
-      # 있었다. PYTHON_VERSION을 명시적으로 고정해 runtime.txt와 이중으로 버전을
-      # 못박는다.
-      - key: PYTHON_VERSION
-        value: "3.12.7"
       - key: DISCORD_TOKEN
         sync: false
       - key: DISCORD_GUILD_ID
