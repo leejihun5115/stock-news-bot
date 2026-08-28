@@ -280,7 +280,9 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
     if not trade_reason:
         trade_reason = verdict_reason
     trade_condition = _verdict_condition(item, verdict)
-    trade_link = f"📊 [매매 포인트]({item.url})" if item.url else "📊 [매매 포인트]"
+    # "매매 포인트" 자체는 더 이상 하이퍼링크로 만들지 않는다 — 순수 텍스트로 표시하고,
+    # 원문 기사 링크는 메시지 맨 아래에 별도 줄로 분리한다.
+    trade_link = "📊 [매매 포인트]"
     verdict_label = f"{verdict} ({score}점)" if verdict != "⚪ 판단 보류" else verdict
     lines += [
         "",
@@ -299,6 +301,8 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
         lines += ["", cumulative_line]
     if price_reaction_line:
         lines += ["", price_reaction_line]
+    if item.url:
+        lines += ["", f"🔗 [기사 원문 보기]({item.url})"]
     return "\n".join(_push_body_inward(lines))
 
 
@@ -347,10 +351,9 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
     if not trade_reason:
         trade_reason = verdict_reason
     trade_condition = _verdict_condition(item, verdict)
-    if item.url:
-        trade_link = f'📊 <a href="{esc(item.url)}">[매매 포인트]</a>'
-    else:
-        trade_link = "📊 [매매 포인트]"
+    # Discord와 동일하게 "매매 포인트"는 순수 텍스트로만 표시하고,
+    # 원문 기사 링크는 메시지 맨 아래에 별도 줄로 분리한다.
+    trade_link = "📊 [매매 포인트]"
     lines += [
         "",
         f"{trade_link}   {esc(verdict)}" + (f" ({score}점)" if verdict != "⚪ 판단 보류" else ""),
@@ -368,6 +371,8 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
         lines += ["", esc(cumulative_line)]
     if price_reaction_line:
         lines += ["", esc(price_reaction_line)]
+    if item.url:
+        lines += ["", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
     return "\n".join(_push_body_inward(lines))
 
 

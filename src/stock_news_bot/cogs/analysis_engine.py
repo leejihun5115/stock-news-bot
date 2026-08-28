@@ -123,7 +123,9 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
     if item.reason:
         analysis.append(f"사업 근거: {item.reason}")
 
-    schedule = _DATE_PATTERN.findall(text)
+    # 같은 날짜/분기 표현이 제목+본문에 여러 번 등장해도 한 번만 표시한다
+    # (예: "2분기"가 제목과 본문에 반복돼 [일정]에 중복으로 찍히던 문제).
+    schedule = list(dict.fromkeys(_DATE_PATTERN.findall(text)))
     theme = _theme(text)
     progress_stage = _progress_stage(text)
     if progress_stage:
