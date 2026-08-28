@@ -31,8 +31,63 @@ def _sec():
  try:
   r=requests.get('https://www.sec.gov/files/company_tickers.json',headers={'User-Agent':'stock-news-bot/1.0'},timeout=5);r.raise_for_status(); raw=r.json(); rows=list(raw.values()) if isinstance(raw,dict) else [];_sec_cache=(now,rows);return rows
  except Exception as e:logger.info('미국 상장기업 목록 조회 실패(무시): %s',e);return []
+# 국내 뉴스에서 자주 쓰는 미국 상장사 한글명/약칭 -> SEC ticker 보완 매핑.
+# SEC company_tickers.json에는 한국어 회사명이 없기 때문에,
+# '엔비디아'처럼 한국어 표기만 들어오는 기사도 미국 상장사로 식별할 수 있게 한다.
+_KR_LISTED_ALIASES={
+ '삼성전자','SK하이닉스','LG전자','LG에너지솔루션','삼성SDI','삼성바이오로직스',
+ '현대차','현대자동차','기아','POSCO홀딩스','포스코홀딩스','NAVER','네이버',
+ '카카오','셀트리온','KB금융','신한지주','신한금융지주','하나금융지주','우리금융지주',
+ '삼성물산','삼성생명','삼성화재','LG화학','LG생활건강','SK이노베이션','SK텔레콤',
+ 'KT','한국전력','한화에어로스페이스','한화솔루션','두산에너빌리티','두산밥캣',
+ 'HD현대중공업','HD한국조선해양','현대모비스','현대글로비스','에코프로','에코프로비엠',
+ '포스코퓨처엠','금양','한미반도체','리노공업','HMM','대한항공','아모레퍼시픽',
+ '크래프톤','엔씨소프트','넷마블','카카오뱅크','카카오페이','삼성전기','삼성중공업',
+}
+
+_US_KR_ALIASES={
+ '엔비디아':'NVDA','엔비디아코퍼레이션':'NVDA',
+ '테슬라':'TSLA','테슬라모터스':'TSLA',
+ '애플':'AAPL','애플컴퓨터':'AAPL',
+ '마이크로소프트':'MSFT',
+ '아마존':'AMZN','아마존닷컴':'AMZN',
+ '알파벳':'GOOGL','구글':'GOOGL',
+ '메타':'META','메타플랫폼스':'META','페이스북':'META',
+ '브로드컴':'AVGO',
+ 'AMD':'AMD','에이엠디':'AMD','어드밴스드마이크로디바이시스':'AMD',
+ '인텔':'INTC',
+ '퀄컴':'QCOM',
+ '마이크론':'MU','마이크론테크놀로지':'MU',
+ '팔란티어':'PLTR','팔란티어테크놀로지':'PLTR',
+ '넷플릭스':'NFLX',
+ '코인베이스':'COIN',
+ '리비안':'RIVN',
+ '루시드':'LCID',
+ '슈퍼마이크로컴퓨터':'SMCI','슈퍼마이크로':'SMCI',
+ '브로드컴':'AVGO',
+ '오라클':'ORCL',
+ '세일즈포스':'CRM',
+ '어도비':'ADBE',
+ '월마트':'WMT',
+ '스타벅스':'SBUX',
+ '나이키':'NKE',
+ '보잉':'BA',
+ '록히드마틴':'LMT',
+ '팔로알토네트웍스':'PANW',
+ '크라우드스트라이크':'CRWD',
+ '서비스나우':'NOW',
+ '스노우플레이크':'SNOW',
+ '크라우드스트라이크홀딩스':'CRWD',
+ 'ARM':'ARM','암홀딩스':'ARM',
+}
+
 def _ticker(company):
  t=_norm(company)
+ # 1) 한국 뉴스에서 흔한 미국 상장사 한글명/약칭 우선 확인
+ for alias, ticker in _US_KR_ALIASES.items():
+  if _norm(alias)==t:
+   return ticker
+ # 2) 회사명이 영문으로 들어온 경우 SEC 공식 목록에서 정확히 확인
  for row in _sec():
   n=_norm(str(row.get('title','')))
   if n==t:return str(row.get('ticker','')).upper()
@@ -51,15 +106,20 @@ def resolve_company_profile(company,sectors=None):
   c=_cache.get(company)
   if c and time.time()-c[0]<_CACHE_TTL:return c[1]
  p=CompanyProfile(company)
- try:m=_get_dart().find_by_name(company)
- except Exception:m=None
- if m and m.stock_code:
+ # DART 조회가 일시적으로 실패해도 국내 대표 상장사는 국기를 표시한다.
+ # (DART corpCode 갱신 오류가 발생한 경우에도 뉴스 표시를 놓치지 않도록 보완)
+ if _norm(company) in {_norm(x) for x in _KR_LISTED_ALIASES}:
   p.market_label='🇰🇷'; text,p.image_url=_wiki(company,'ko')
  else:
-  p.ticker=_ticker(company)
-  if p.ticker:
-   p.market_label='🇺🇸';text,p.image_url=_wiki(company,'en')
-  else:text,p.image_url=_wiki(company,'ko')
+  try:m=_get_dart().find_by_name(company)
+  except Exception:m=None
+  if m and m.stock_code:
+   p.market_label='🇰🇷'; text,p.image_url=_wiki(company,'ko')
+  else:
+   p.ticker=_ticker(company)
+   if p.ticker:
+    p.market_label='🇺🇸';text,p.image_url=_wiki(company,'en')
+   else:text,p.image_url=_wiki(company,'ko')
  if text:
   first=re.split(r'(?<=[.!?。])\s+',text)[0][:180]
   p.business=first.rstrip(' ,;:')
