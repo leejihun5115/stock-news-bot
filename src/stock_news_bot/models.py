@@ -36,6 +36,9 @@ class NewsItem:
     reason: str = ""            # 본문에서 찾은 근거 스니펫 (없으면 빈 문자열)
     amounts: list[str] = field(default_factory=list)  # 본문에서 찾은 금액 표현들 (예: "500억원")
     company: str = ""           # 본문에서 인식된 종목명 (없으면 빈 문자열)
+    analysis_title: str = ""     # 분석 엔진이 생성한 송출 제목
+    classification: str = "신규"
+    confidence: int = 0
 
     @property
     def dedup_key(self) -> str:

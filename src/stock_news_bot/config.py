@@ -131,7 +131,7 @@ def load_settings() -> Settings:
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID"),
         rss_feeds=_get_str_list("RSS_FEEDS"),
         news_keywords=_get_str_list("NEWS_KEYWORDS"),
-        news_value_mid=_get_int("MEDIUM_NEWS_SCORE", 40),
+        news_value_mid=_get_int("NEWS_SEND_MIN_SCORE", _get_int("MEDIUM_NEWS_SCORE", 40)),
         news_value_high=_get_int("STRONG_NEWS_SCORE", 70),
         fetch_interval_seconds=_get_int("FETCH_INTERVAL_SECONDS", 300),
         fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),

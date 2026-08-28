@@ -26,7 +26,6 @@ RELOADABLE_EXTENSIONS = [
     "stock_news_bot.cogs.classifier",
     "stock_news_bot.cogs.notifier",
     "stock_news_bot.cogs.market_intel",
-    "stock_news_bot.cogs.scheduler",
 ]
 
 
@@ -101,6 +100,25 @@ class AdminCog(commands.Cog, name="Admin"):
         scheduler.paused = False
         await interaction.response.send_message("▶️ 재개했습니다.", ephemeral=True)
 
+
+    @app_commands.command(name="run-now", description="뉴스 파이프라인을 지금 한 번 실행합니다.")
+    async def run_now(self, interaction: discord.Interaction) -> None:
+        _check_admin(interaction)
+        scheduler = self.bot.get_cog("Scheduler")
+        if scheduler is None:
+            await interaction.response.send_message("Scheduler 코그가 로드되지 않았습니다.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            result = await scheduler.run_now()
+            await interaction.followup.send(
+                f"✅ 수동 실행 완료 — 수집 {result['fetched']}건 / 신규 {result['new']}건 / 전송 {result['sent']}건",
+                ephemeral=True,
+            )
+        except Exception as exc:
+            logger.exception("수동 파이프라인 실행 실패")
+            await interaction.followup.send(f"❌ 실행 실패: {exc}", ephemeral=True)
+
     @app_commands.command(name="test-telegram", description="텔레그램 장애 알림이 정상 작동하는지 테스트 메시지를 보냅니다.")
     async def test_telegram(self, interaction: discord.Interaction) -> None:
         _check_admin(interaction)
@@ -119,7 +137,7 @@ class AdminCog(commands.Cog, name="Admin"):
         await interaction.response.send_message("텔레그램으로 테스트 메시지를 보냈습니다. 텔레그램을 확인해주세요.", ephemeral=True)
 
     @app_commands.command(name="reload", description="지정한 코그를 다시 로드합니다.")
-    @app_commands.describe(extension="예: fetcher, classifier, notifier, scheduler")
+    @app_commands.describe(extension="예: fetcher, classifier, notifier, market_intel")
     async def reload(self, interaction: discord.Interaction, extension: str) -> None:
         _check_admin(interaction)
         target = f"stock_news_bot.cogs.{extension}"

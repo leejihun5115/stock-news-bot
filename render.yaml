@@ -30,6 +30,8 @@ services:
         sync: false
       - key: DISCORD_NEWS_CHANNEL_ID
         sync: false
+      - key: DISCORD_ADMIN_CHANNEL_ID
+        sync: false
       - key: DISCORD_ADMIN_USER_IDS
         sync: false
       - key: TELEGRAM_BOT_TOKEN
@@ -51,6 +53,12 @@ services:
         value: ""
       - key: FETCH_INTERVAL_SECONDS
         value: "300"
+      - key: NEWS_SEND_MIN_SCORE
+        value: "40"
+      - key: MEDIUM_NEWS_SCORE
+        value: "40"
+      - key: STRONG_NEWS_SCORE
+        value: "70"
       - key: HEALTH_STALE_THRESHOLD_SECONDS
         value: "1800"
       - key: LOG_LEVEL

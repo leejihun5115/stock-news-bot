@@ -49,7 +49,7 @@ def build_cumulative_line(stats: SectorStats | None, *, min_sample: int) -> str 
     if stats is None:
         return None
     if stats.count < min_sample:
-        return f"📊 누적 데이터: {stats.sector} 표본 부족 ({stats.count}건 < {min_sample}건) — 데이터 누적 중"
+        return None
     return (
         f"📊 누적 데이터: 최근 {stats.lookback_days}일 '{stats.sector}' 뉴스 {stats.count}건 "
         f"(🔴중요 {stats.high} / 🟠보통 {stats.medium} / ⚪참고 {stats.low}, "
@@ -68,7 +68,7 @@ def build_price_reaction_line(stats: SectorPriceStats | None, *, min_sample: int
     if stats is None:
         return None
     if stats.count < min_sample:
-        return f"📈 과거 주가 반응: {stats.sector} 표본 부족 ({stats.count}건 < {min_sample}건) — 데이터 누적 중"
+        return None
 
     parts = []
     if stats.plus1_avg_pct is not None:
@@ -142,6 +142,14 @@ def build_amount_context(item: NewsItem) -> str | None:
     return "\n".join(lines)
 
 
+def _analysis_parts(item: NewsItem) -> tuple[str, list[str], list[str], str | None, list[str], list[str]]:
+    """상용화 송출 포맷을 만들기 위한 공통 분석 결과."""
+    from stock_news_bot.cogs.analysis_engine import analyze_item
+    result = analyze_item(item)
+    title = item.analysis_title or result.title
+    return title, result.core, result.analysis, result.theme, result.related_stocks, result.schedule
+
+
 def build_embed(
     item: NewsItem,
     cumulative_line: str | None = None,
@@ -150,38 +158,38 @@ def build_embed(
     news_value_mid: int = 40,
     news_value_high: int = 70,
 ) -> discord.Embed:
+    title, core, analysis, theme, related, schedule = _analysis_parts(item)
     embed = discord.Embed(
-        title=item.title[:256],
+        title=f"📌 {title[:248]}",
         url=item.url,
         color=_IMPORTANCE_COLOR[item.importance],
         timestamp=item.published_at,
     )
-    if item.summary:
-        summary = item.summary
-        if len(summary) > _SUMMARY_MAX_LEN:
-            summary = summary[: _SUMMARY_MAX_LEN - 1].rstrip() + "…"
-        embed.description = summary
+    header = f"📰 {item.source} · {item.classification} · ⏰ {item.published_at.astimezone().strftime('%H:%M')}"
+    embed.description = header
 
-    label = _importance_label(item.importance, mid=news_value_mid, high=news_value_high)
-    embed.add_field(name="중요도", value=f"{label} · 실점수 {item.score}점", inline=True)
-    if item.sectors:
-        embed.add_field(name="섹터", value=", ".join(item.sectors), inline=True)
-    if item.matched_keywords:
-        embed.add_field(
-            name="매칭 키워드", value=", ".join(item.matched_keywords[:10]), inline=False
-        )
+    embed.add_field(name="🔎 핵심", value="\n".join(f"✔ {x}" for x in core[:3])[:1024], inline=False)
+    embed.add_field(name="🧠 분석·전망", value="\n".join(f"✔ {x}" for x in analysis[:3])[:1024], inline=False)
+    if theme:
+        embed.add_field(name="🏷 테마", value=theme, inline=False)
+    if related:
+        lines = []
+        for company in related:
+            reason = "사업적 직접 연결성 확인"
+            lines.append(f"↳ {company}\n↳ 근거 — {reason}\n↳ Why : 뉴스 이벤트가 실제 사업·실적에 영향을 줄 가능성")
+        embed.add_field(name="🎯 관련주", value="\n".join(lines)[:1024], inline=False)
 
-    # 근거는 있든 없든 항상 표시한다 (없으면 "없다"는 사실을 명시).
-    embed.add_field(name="근거", value=item.reason or _NO_REASON_TEXT, inline=False)
-
+    label = "🔥 강함" if item.importance == Importance.HIGH else ("🟢 보통" if item.importance == Importance.MEDIUM else "🟡 약함")
+    embed.add_field(name="강도", value=f"{label} · 신뢰도 {item.confidence}%", inline=True)
+    if schedule:
+        embed.add_field(name="📅 일정", value="\n".join(f"✔ {x}" for x in schedule[:5]), inline=False)
+    if cumulative_line or price_reaction_line:
+        values = [x for x in (cumulative_line, price_reaction_line) if x]
+        embed.add_field(name="🧠 데이터 값", value="\n".join(values)[:1024], inline=False)
     amount_context = build_amount_context(item)
     if amount_context:
-        embed.add_field(name="금액 분석", value=amount_context, inline=False)
-
-    if cumulative_line:
-        embed.add_field(name="누적 데이터", value=cumulative_line, inline=False)
-    if price_reaction_line:
-        embed.add_field(name="주가 반응", value=price_reaction_line, inline=False)
+        embed.add_field(name="💡 용어/금액", value=amount_context[:1024], inline=False)
+    embed.add_field(name="🔗 하이퍼링크", value=f"[기사 원문]({item.url})", inline=False)
     embed.set_footer(text=item.source)
     return embed
 
@@ -194,25 +202,34 @@ def build_telegram_text(
     news_value_mid: int = 40,
     news_value_high: int = 70,
 ) -> str:
-    """디스코드 임베드와 같은 정보를, 텔레그램 일반 텍스트 메시지로 만든다."""
-    label = _importance_label(item.importance, mid=news_value_mid, high=news_value_high)
+    title, core, analysis, theme, related, schedule = _analysis_parts(item)
+    label = "🔥 강함" if item.importance == Importance.HIGH else ("🟢 보통" if item.importance == Importance.MEDIUM else "🟡 약함")
     lines = [
-        f"{label} · 실점수 {item.score}점",
-        item.title,
+        f"📰 {item.source} · {item.classification} · ⏰ {item.published_at.astimezone().strftime('%H:%M')}",
+        f"📌 {title}",
+        "",
+        "🔎 [핵심]",
+        *[f"✔ {x}" for x in core[:3]],
+        "",
+        "🧠 [분석·전망]",
+        *[f"✔ {x}" for x in analysis[:3]],
     ]
-    if item.sectors:
-        lines.append("섹터: " + ", ".join(item.sectors))
-    if item.matched_keywords:
-        lines.append("키워드: " + ", ".join(item.matched_keywords[:10]))
-    lines.append("근거: " + (item.reason or _NO_REASON_TEXT))
+    if theme:
+        lines += ["", f"🏷 [테마] : {theme}"]
+    if related:
+        lines += ["", "🎯 [관련주]"]
+        for company in related:
+            lines += [f"↳ {company}", "↳ 근거 — 실제 사업·실적과 직접 연결", "↳ Why : 뉴스 이벤트의 경제적 영향 가능성"]
+    lines += ["", f"{label} · 신뢰도 {item.confidence}%"]
+    if schedule:
+        lines += ["", "📅 [일정]", *[f"✔ {x}" for x in schedule[:5]]]
+    data = [x for x in (cumulative_line, price_reaction_line) if x]
+    if data:
+        lines += ["", "🧠 [데이터 값]", *[f"✔ {x}" for x in data]]
     amount_context = build_amount_context(item)
     if amount_context:
-        lines.append(amount_context)
-    if cumulative_line:
-        lines.append(cumulative_line)
-    if price_reaction_line:
-        lines.append(price_reaction_line)
-    lines.append(item.url)
+        lines += ["", "💡 [용어]", f"✔ {amount_context}"]
+    lines += ["", "🔗 하이퍼링크", item.url]
     return "\n".join(lines)
 
 

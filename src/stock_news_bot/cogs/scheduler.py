@@ -13,6 +13,7 @@ from stock_news_bot.cogs.notifier import (
     build_telegram_text,
 )
 from stock_news_bot.monitor.health import HealthMonitor
+from stock_news_bot.cogs.analysis_engine import analyze_item
 from stock_news_bot.monitor.telegram_alert import TelegramAlerter
 from stock_news_bot.status import status as bot_status
 from stock_news_bot.storage.dart_client import DartClient
@@ -29,6 +30,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         self.bot = bot
         self.settings = bot.settings  # type: ignore[attr-defined]
         self.paused = False
+        self._run_lock = asyncio.Lock()
 
         self.dedup_store = DedupStore(self.settings.db_path)
         self.history_store = HistoryStore(self.settings.db_path)
@@ -84,7 +86,8 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         was_failing = bot_status.last_run_ok is False
 
         try:
-            await self._run_pipeline_once()
+            async with self._run_lock:
+                await self._run_pipeline_once()
             self.health.record_success()
             if was_failing:
                 await self._notify_discord(
@@ -117,7 +120,14 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
     async def _before_pipeline(self) -> None:
         await self.bot.wait_until_ready()
 
-    async def _run_pipeline_once(self) -> None:
+    async def run_now(self) -> dict[str, int]:
+        """수동 명령과 스케줄러가 동일한 실행 경로를 사용한다."""
+        if self.paused:
+            raise BaseBotError("스케줄러가 일시정지 상태입니다. /resume 후 다시 실행하세요.")
+        async with self._run_lock:
+            return await self._run_pipeline_once()
+
+    async def _run_pipeline_once(self) -> dict[str, int]:
         fetcher = self.bot.get_cog("Fetcher")
         classifier = self.bot.get_cog("Classifier")
         notifier = self.bot.get_cog("Notifier")
@@ -138,12 +148,16 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         qualified = [item for item in classified if item.score >= min_score]
         filtered_out = len(classified) - len(qualified)
 
+        # 발송 성공 전에는 dedup을 확정하지 않는다. 같은 사이클의 다중 RSS 중복도
+        # 여기서 제거하고, 실제 송출 성공 항목만 아래에서 확정한다.
         new_items = []
+        cycle_seen: set[str] = set()
         for item in qualified:
             key = item.dedup_key
-            if self.dedup_store.is_new(key):
-                new_items.append(item)
-                self.dedup_store.mark_seen(key, item.title, item.url)
+            if key in cycle_seen or not self.dedup_store.is_new(key):
+                continue
+            cycle_seen.add(key)
+            new_items.append(item)
 
         if new_items:
             # 【누적 데이터 분석 — 발송 "전" 단계】
@@ -178,6 +192,18 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 if price_line:
                     price_reaction_lines[item.dedup_key] = price_line
 
+            for item in new_items:
+                data_lines = []
+                sector = item.sectors[0] if item.sectors else None
+                if sector:
+                    stats = self.history_store.sector_stats(sector, lookback_days=self.settings.history_lookback_days)
+                    if stats and stats.count >= self.settings.history_min_sample:
+                        data_lines.append(f"최근 {stats.lookback_days}일 {stats.count}건 · 평균 {stats.avg_score:.0f}점")
+                result = analyze_item(item, data_lines=data_lines)
+                item.analysis_title = result.title
+                item.classification = result.classification
+                item.confidence = result.confidence
+
             sent_items = await notifier.send_items(new_items, cumulative_lines, price_reaction_lines)
             sent = len(sent_items)
 
@@ -185,6 +211,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             # DB 기록은 반드시 전송에 "성공"한 항목만. 실패한 항목까지
             # 기록하면 사용자는 못 받은 뉴스가 통계에는 잡히는 불일치가 생긴다.
             for item in sent_items:
+                self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
                 self.history_store.record_sent(item)
 
                 # 【발송 후 주가 반응 — 발송 "후" 단계】
@@ -237,6 +264,8 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         self.dedup_store.cleanup_old(self.settings.dedup_retention_days)
         self.history_store.cleanup_old(self.settings.history_retention_days)
         self.market_store.cleanup_old(self.settings.price_reaction_retention_days)
+
+        return {"fetched": len(items), "new": len(new_items), "sent": sent}
 
     @tasks.loop(seconds=300)
     async def health_loop(self) -> None:
