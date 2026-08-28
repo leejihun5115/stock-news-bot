@@ -182,6 +182,8 @@ async def _fetch_raw(
             if "news.google.com/rss" in url:
                 request_url = f"{url}{separator}_cb={time.time_ns()}"
             headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0 Safari/537.36 stock-news-bot/1.0",
+                "Accept": "application/rss+xml, application/xml, text/xml, */*",
                 "Cache-Control": "no-cache, no-store, max-age=0",
                 "Pragma": "no-cache",
                 "Expires": "0",
@@ -333,26 +335,47 @@ async def fetch_source_feeds(
 async def fetch_all(
     urls: list[str], timeout_seconds: int = 10, max_retries: int = 3
 ) -> tuple[list[NewsItem], list[FetchError]]:
-    """모든 피드를 병렬로 수집한다. 개별 실패는 errors 리스트에 모아서
-    반환하고, 성공한 피드의 결과는 items로 합쳐서 반환한다."""
+    """피드를 제한된 동시성으로 수집한다.
+
+    Google News RSS처럼 키워드가 많아질수록 동시 요청이 폭증하는 공급원은
+    세마포어로 압력을 낮춘다. 한 피드 실패는 다른 피드에 영향을 주지 않는다.
+    """
+    if not urls:
+        return [], []
+    semaphore = asyncio.Semaphore(6)
+
     async with aiohttp.ClientSession(
-        headers={"User-Agent": "stock-news-bot/1.0 (+github.com)"}
+        headers={
+            "User-Agent": "Mozilla/5.0 stock-news-bot/1.0",
+            "Accept": "application/rss+xml, application/xml, text/xml, */*",
+        }
     ) as session:
+        async def one(url: str):
+            async with semaphore:
+                # 같은 시각에 197개 요청이 시작되지 않도록 짧게 분산한다.
+                if "news.google.com/rss" in url:
+                    await asyncio.sleep(0.05 + (hash(url) % 250) / 1000)
+                return await fetch_feed(session, url, timeout_seconds, max_retries)
+
         results = await asyncio.gather(
-            *(fetch_feed(session, url, timeout_seconds, max_retries) for url in urls),
+            *(one(url) for url in urls),
             return_exceptions=True,
         )
 
     items: list[NewsItem] = []
     errors: list[FetchError] = []
-    for result in results:
+    for url, result in zip(urls, results):
         if isinstance(result, FetchError):
             errors.append(result)
+            logger.warning("RSS 개별 수집 실패(다른 피드는 계속 진행): %s", result)
         elif isinstance(result, Exception):
-            errors.append(FetchError(str(result)))
+            err = FetchError(f"'{url}' 수집 실패: {type(result).__name__}: {result}")
+            errors.append(err)
+            logger.warning("RSS 개별 수집 실패(다른 피드는 계속 진행): %s", err)
         else:
             items.extend(result)
     return items, errors
+
 
 
 class FetcherCog(commands.Cog, name="Fetcher"):

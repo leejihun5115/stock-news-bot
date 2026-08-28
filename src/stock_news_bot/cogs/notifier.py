@@ -54,19 +54,27 @@ def _push_body_inward(lines: list[str]) -> list[str]:
     return [lines[0]] + [f"{_INDENT}{line}" if line else line for line in lines[1:]]
 
 
-def _display_source(source: str, theme: str | None = None, title: str = "") -> str:
-    """사용자에게 보여줄 뉴스 카테고리. 원문 사이트명보다 투자자가 즉시
-    이해할 수 있는 분야명을 우선하고, 제약/바이오 뉴스는 💊를 붙인다."""
-    raw = (source or "").strip()
-    value = re.split(r"\s+[-–—|]\s+", raw, maxsplit=1)[0].strip()
+def _display_company(item: NewsItem) -> str:
+    """헤더에는 원문 매체명이 아니라 식별된 기업명을 우선 표시한다."""
+    company = (item.company or "").strip()
+    if company:
+        return company
+    return "시장/테마"
+
+
+def _title_prefix(theme: str | None, title: str) -> str:
+    """기사 분야가 제약/바이오이면 제목 앞에 💊만 붙인다.
+
+    사용자가 정한 출력 규칙: [제약뉴스]를 헤더에 붙이지 않고 제목을
+    `💊 **제목**` 형태로 표시한다.
+    """
     text = f"{theme or ''} {title}".lower()
-    if any(k in text for k in ("바이오", "제약", "신약", "임상", "단백질", "항체", "의약", "drug", "biotech", "pharma")):
-        return "제약뉴스 💊"
-    if any(k in text for k in ("반도체", "hbm", "ai반도체", "메모리")):
-        return "반도체뉴스 💾"
-    if any(k in text for k in ("인공지능", " ai ", "생성형 ai", "머신러닝", "딥러닝")):
-        return "AI뉴스 🤖"
-    return value or "뉴스"
+    if any(k in text for k in (
+        "바이오", "제약", "신약", "임상", "단백질", "항체", "의약",
+        "drug", "biotech", "pharma", "fda", "기술수출", "기술이전",
+    )):
+        return "💊"
+    return "📌"
 
 
 def _display_time(dt) -> str:
@@ -170,45 +178,84 @@ def _analysis_parts(item: NewsItem):
     return title, core, analysis[:6], result.theme, result.related_stocks, result.related_reasons, result.schedule, result.terms
 
 
-def _trade_verdict(item: NewsItem) -> tuple[str, str]:
-    """최종 뉴스 점수 하나로 매매 포인트를 결정한다.
+def _has_direct_company_evidence(item: NewsItem, analysis: list[str]) -> bool:
+    """기업 직접 재료가 있는지 보수적으로 확인한다.
 
-    사용자에게는 신뢰도 점수를 별도로 노출하지 않고, 현재 뉴스의 최종 점수와
-    그에 대응하는 판단만 한 줄로 보여준다. 거시지표는 이 점수에 직접 가산하지 않는다.
+    지수/시장 시황만 있는 기사는 매수/긍정 판정을 내리지 않는다.
     """
+    text = f"{item.title} {item.summary}".lower()
+    macro = ("코스피", "코스닥", "나스닥", "다우", "s&p500", "금리", "환율", "원달러", "유가", "연준", "fomc")
+    direct = (
+        "계약", "수주", "공급", "납품", "투자", "증설", "양산", "출시",
+        "승인", "허가", "임상", "기술수출", "기술이전", "실적", "매출",
+        "영업이익", "자사주", "배당", "인수", "합병", "신제품", "특허",
+        "생산", "공장", "고객사", "수주", "개발",
+    )
+    has_direct = bool(item.reason or item.amounts or item.progress_stage or any(k in text for k in direct))
+    macro_only = any(k in text for k in macro) and not any(k in text for k in direct)
+    return has_direct and not macro_only and bool(item.company)
+
+
+def _trade_verdict(item: NewsItem, analysis: list[str] | None = None) -> tuple[str, int, str]:
+    """최종 뉴스 점수와 기업 직접 근거를 함께 고려해 매매 포인트를 결정한다."""
     score = max(0, min(100, int(item.score or 0)))
+    analysis = analysis or []
+    if not _has_direct_company_evidence(item, analysis):
+        return "⚪ 판단 보류", score, "기업의 직접적인 계약·수주·투자·실적·승인 등 근거가 충분히 확인되지 않음"
     if score >= 70:
-        return "🔥 매수", "직접적인 기업 호재와 매매 근거가 충분한 구간"
+        return "🔥 매수", score, "직접적인 기업 호재와 구체적인 근거가 확인됨"
     if score >= 50:
-        return "🟢 긍정적", "직접적인 기업 호재가 확인되지만 강한 매수 신호까지는 아님"
+        return "🟢 긍정적", score, "직접적인 기업 호재가 확인되지만 강한 매수 신호까지는 아님"
     if score >= 30:
-        return "🟡 관망", "재료의 영향이나 실적 연결을 추가 확인할 필요가 있음"
-    return "🔴 부정적", "사업·실적에 부정적인 직접 재료가 확인되는 구간"
+        return "🟡 관망", score, "재료의 영향이나 실적 연결을 추가 확인할 필요가 있음"
+    return "🔴 부정적", score, "사업·실적에 부정적인 직접 재료가 확인되는 구간"
 
 
 def _verdict_condition(item: NewsItem, verdict: str) -> str:
-    """판단이 바뀌려면 무엇이 더 확인돼야 하는지 — 매매란에 늘 붙여서 보여준다."""
-    if verdict == "매수 주의":
-        if not item.reason and not item.amounts:
-            return "실제 계약·금액·실적 연결 근거가 확인되지 않음 → 이후 계약·공급·투자·실적 반영 확인 필요"
-        if not item.reason:
-            return "금액은 확인되지만 사업·실적 연결 근거가 부족함 → 사업 근거 확인 필요"
-        return "실제 계약·공급·투자·실적 반영 등 객관적 촉매 확인 필요"
-    if verdict == "관망":
-        return "추가 촉매 확인 또는 현재 사업·실적 반영 확인 필요"
-    return "실제 공급·계약·매출·실적 반영이 이어지는지 확인 필요"
+    if verdict == "⚪ 판단 보류":
+        return "기업 직접 재료(계약·공급·투자·승인·실적 등)가 추가로 확인되는지 확인 필요"
+    if verdict == "🔥 매수":
+        return "계약·공급·양산·실적 반영이 실제로 이어지는지 확인"
+    if verdict == "🟢 긍정적":
+        return "추가 계약·공급·실적 반영 또는 주가 선반영 여부 확인"
+    if verdict == "🟡 관망":
+        return "추가 촉매와 실적 연결 여부, 현재 주가 반영 정도 확인"
+    return "악재가 실적에 실제 반영되는지와 추가 악화 여부 확인"
+
+
+def _build_outlook(item: NewsItem, verdict: str, analysis: list[str]) -> list[str]:
+    """확인된 사실에만 기대어 단기/중기 전망을 만든다. 미래를 단정하지 않는다."""
+    lines: list[str] = []
+    if verdict == "⚪ 판단 보류":
+        lines.append("단기 : 기업 직접 재료가 부족해 방향성 판단보다 추가 확인이 우선")
+        return lines
+    stage = item.progress_stage or ""
+    if verdict == "🔥 매수":
+        lines.append("단기 : 직접 호재가 실제 수급·주가에 반영되는지 확인")
+    elif verdict == "🟢 긍정적":
+        lines.append("단기 : 호재 반영 여부와 추격매수 위험을 함께 확인")
+    elif verdict == "🟡 관망":
+        lines.append("단기 : 추가 촉매와 실적 연결 여부가 방향성 결정에 중요")
+    else:
+        lines.append("단기 : 악재의 추가 확산과 실적 영향 여부 확인 필요")
+    if stage:
+        lines.append(f"진행단계 : 현재 {stage} 단계가 실제 매출·실적로 연결되는지 확인")
+    if item.amounts:
+        lines.append(f"중기 : 기사에 언급된 {', '.join(item.amounts[:2])} 규모가 사업·실적에 실제 반영되는지 확인")
+    return lines
 
 
 def build_message(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None) -> str:
     """디스코드 embed description에 넣을 본문(마크다운, masked link 지원)."""
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     local_time = _display_time(item.published_at)
-    display_source = _display_source(item.source, theme, title)
-    verdict, verdict_reason = _trade_verdict(item)
+    display_company = _display_company(item)
+    title_prefix = _title_prefix(theme, title)
+    verdict, score, verdict_reason = _trade_verdict(item, analysis)
     lines = [
-        f"📰 [{display_source}]   [{item.classification}]   ⏰ {local_time}",
+        f"📰 [\"{display_company}\"]   [{item.classification}]   ⏰ {local_time}",
         "",
-        f"📌 **{title}**",
+        f"{title_prefix} **{title}**",
     ]
     if core:
         lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {x}" for x in core]]
@@ -234,12 +281,16 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
         trade_reason = verdict_reason
     trade_condition = _verdict_condition(item, verdict)
     trade_link = f"📊 [매매 포인트]({item.url})" if item.url else "📊 [매매 포인트]"
+    verdict_label = f"{verdict} ({score}점)" if verdict != "⚪ 판단 보류" else verdict
     lines += [
         "",
-        f"{trade_link}   {verdict} ({max(0, min(100, int(item.score or 0)))}점)",
-        f"{_INDENT}↳ 매수 이유/근거 : {trade_reason}",
+        f"{trade_link}   {verdict_label}",
+        f"{_INDENT}↳ 이유/근거 : {trade_reason}",
         f"{_INDENT}↳ 판단 조건 : {trade_condition}",
     ]
+    outlook = _build_outlook(item, verdict, analysis)
+    if outlook:
+        lines += ["", "🔮 [전망]", *[f"{_INDENT}↳ {x}" for x in outlook]]
     if schedule:
         lines += ["", "📅 [일정]", *[f"{_INDENT}↳ {x}" for x in schedule[:5]]]
     if terms:
@@ -252,7 +303,7 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
 
 
 def build_embed(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None) -> discord.Embed:
-    verdict, _ = _trade_verdict(item)
+    verdict, _, _ = _trade_verdict(item)
     embed = discord.Embed(
         description=build_message(item, cumulative_line, price_reaction_line)[:4096],
         url=item.url,
@@ -266,13 +317,14 @@ def build_embed(item: NewsItem, cumulative_line: str | None = None, price_reacti
 def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None, *, news_value_mid: int = 45, news_value_high: int = 75) -> str:
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     local_time = _display_time(item.published_at)
-    display_source = _display_source(item.source, theme, title)
-    verdict, verdict_reason = _trade_verdict(item)
+    display_company = _display_company(item)
+    title_prefix = _title_prefix(theme, title)
+    verdict, score, verdict_reason = _trade_verdict(item, analysis)
 
     def esc(value: str) -> str:
         return html_escape(str(value), quote=True)
 
-    lines = [f"📰 [{esc(display_source)}]   [{esc(item.classification)}]   ⏰ {local_time}", "", f"📌 <b>{esc(title)}</b>"]
+    lines = [f"📰 [\"{esc(display_company)}\"]   [{esc(item.classification)}]   ⏰ {local_time}", "", f"{title_prefix} <b>{esc(title)}</b>"]
     if core:
         lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {esc(x)}" for x in core]]
     if analysis:
@@ -301,10 +353,13 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
         trade_link = "📊 [매매 포인트]"
     lines += [
         "",
-        f"{trade_link}   {esc(verdict)} ({max(0, min(100, int(item.score or 0)))}점)",
-        f"{_INDENT}↳ 매수 이유/근거 : {esc(trade_reason)}",
+        f"{trade_link}   {esc(verdict)}" + (f" ({score}점)" if verdict != "⚪ 판단 보류" else ""),
+        f"{_INDENT}↳ 이유/근거 : {esc(trade_reason)}",
         f"{_INDENT}↳ 판단 조건 : {esc(trade_condition)}",
     ]
+    outlook = _build_outlook(item, verdict, analysis)
+    if outlook:
+        lines += ["", "🔮 [전망]", *[f"{_INDENT}↳ {esc(x)}" for x in outlook]]
     if schedule:
         lines += ["", "📅 [일정]", *[f"{_INDENT}↳ {esc(x)}" for x in schedule[:5]]]
     if terms:
