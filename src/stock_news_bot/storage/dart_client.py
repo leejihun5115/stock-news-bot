@@ -25,6 +25,7 @@ match_company()는 항상 종목명 "길이가 긴 순서"로 후보를 검사�
 from __future__ import annotations
 
 import io
+import re
 import logging
 import sqlite3
 import xml.etree.ElementTree as ET
@@ -169,15 +170,28 @@ class DartClient:
         except requests.RequestException as exc:
             raise StorageError(f"DART corpCode.xml 다운로드 실패: {exc}") from exc
 
+        # 정상 corpCode.xml 응답은 ZIP 파일이며 보통 application/zip 또는 PK
+        # 시그니처로 시작한다. DART가 오류 XML/텍스트를 반환하면 BadZipFile 대신
+        # 실제 응답 상태를 짧게 알려줘서 API 키/서버 오류를 구분하기 쉽게 한다.
+        content_type = (getattr(resp, "headers", {}) or {}).get("content-type", "").lower()
+        if not resp.content.startswith(b"PK\x03\x04"):
+            preview = resp.content[:500].decode("utf-8", errors="replace")
+            preview = re.sub(r"(?:crtfc_key|api[_-]?key|key)\s*[=:]\s*[^&\s<]+", r"\1=[REDACTED]", preview, flags=re.I)
+            preview = re.sub(r"\s+", " ", preview).strip()
+            raise StorageError(
+                "DART corpCode.xml이 ZIP이 아닌 응답을 반환했습니다 "
+                f"(HTTP {resp.status_code}, content-type={content_type or 'unknown'}). "
+                f"응답 미리보기: {preview[:300]}"
+            )
+
         try:
             with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
                 xml_name = next(n for n in zf.namelist() if n.lower().endswith(".xml"))
                 xml_bytes = zf.read(xml_name)
         except (zipfile.BadZipFile, StopIteration) as exc:
-            # DART는 API 키가 잘못되면 zip이 아니라 에러 메시지가 담긴 XML을
-            # 그대로 반환한다. 이 경우 여기서 걸린다.
             raise StorageError(
-                f"DART corpCode.xml 압축 해제 실패 (API 키가 잘못되었을 수 있음): {exc}"
+                "DART corpCode.xml ZIP 응답을 열 수 없습니다 "
+                f"(HTTP {resp.status_code}, content-type={content_type or 'unknown'}): {exc}"
             ) from exc
 
         try:

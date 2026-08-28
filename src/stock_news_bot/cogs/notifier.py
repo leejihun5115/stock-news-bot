@@ -53,6 +53,7 @@ import discord
 from discord.ext import commands
 
 from stock_news_bot.models import Importance, NewsItem
+from stock_news_bot.company_profile import CompanyProfile, resolve_company_profile
 from stock_news_bot.cogs.analysis_engine import analyze_item
 from stock_news_bot.storage.fundamentals import get_fundamentals
 from stock_news_bot.storage.history import SectorStats
@@ -273,17 +274,20 @@ def _build_outlook(item: NewsItem, verdict: str, analysis: list[str]) -> list[st
     return lines
 
 
-def build_message(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None) -> str:
+def build_message(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None, company_profile: CompanyProfile | None = None) -> str:
     """디스코드 embed description에 넣을 본문(마크다운, masked link 지원)."""
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     local_time = _display_time(item.published_at)
     display_company = _display_company(item)
     title_prefix = _title_prefix(theme, title)
+    company_profile = company_profile or CompanyProfile(company=display_company)
     verdict, score, verdict_reason = _trade_verdict(item, analysis)
+    company_label = f"{company_profile.market_label} {display_company}".strip()
     lines = [
-        f"📰 [{display_company}]   [{item.classification}]   ⏰ {local_time}",
+        f"📰 [{company_label}]   [{item.classification}]   ⏰ {local_time}",
         "",
         f"{title_prefix} **{title}**",
+        "",
     ]
     if core:
         lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {x}" for x in core]]
@@ -327,14 +331,14 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
     if price_reaction_line:
         lines += ["", price_reaction_line]
     if item.url:
-        lines += ["", f"🔗 [기사 원문 보기]({item.url})"]
+        lines += ["", f"🏭 업종 : {company_profile.industry}", f"🏢 주요 사업 : {company_profile.business}", f"🔗 [기사 원문 보기]({item.url})"]
     return "\n".join(_push_body_inward(lines))
 
 
-def build_embed(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None) -> discord.Embed:
+def build_embed(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None, company_profile: CompanyProfile | None = None) -> discord.Embed:
     verdict, _, _ = _trade_verdict(item)
     embed = discord.Embed(
-        description=build_message(item, cumulative_line, price_reaction_line)[:4096],
+        description=build_message(item, cumulative_line, price_reaction_line, company_profile)[:4096],
         url=item.url,
         timestamp=item.published_at,
         color=_IMPORTANCE_COLOR.get(item.importance, discord.Color.light_grey()),
@@ -343,7 +347,7 @@ def build_embed(item: NewsItem, cumulative_line: str | None = None, price_reacti
     return embed
 
 
-def build_message_summary(item: NewsItem) -> str:
+def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None = None) -> str:
     """디스코드 최초 발송용 축약 본문. 헤더 / 제목 / 관련주 / 매매 포인트(판정만) 3~4블록.
 
     핵심·분석·관련주 근거·이유/판단조건·전망·일정·용어 등 상세 내용은
@@ -356,10 +360,12 @@ def build_message_summary(item: NewsItem) -> str:
     local_time = _display_time(item.published_at)
     display_company = _display_company(item)
     title_prefix = _title_prefix(theme, title)
+    company_profile = company_profile or CompanyProfile(company=display_company)
     verdict, score, _verdict_reason = _trade_verdict(item, analysis)
+    company_label = f"{company_profile.market_label} {display_company}".strip()
 
     lines = [
-        f"📰 [{display_company}]   [{item.classification}]   ⏰ {local_time}",
+        f"📰 [{company_label}]   [{item.classification}]   ⏰ {local_time}",
         "",
         f"{title_prefix} **{title}**",
     ]
@@ -370,11 +376,11 @@ def build_message_summary(item: NewsItem) -> str:
     return "\n".join(_push_body_inward(lines))
 
 
-def build_embed_summary(item: NewsItem) -> discord.Embed:
+def build_embed_summary(item: NewsItem, company_profile: CompanyProfile | None = None) -> discord.Embed:
     """최초 발송용 요약 embed. 상세는 버튼 클릭 시 build_embed()로 별도 전송."""
     verdict, _, _ = _trade_verdict(item)
     embed = discord.Embed(
-        description=build_message_summary(item)[:4096],
+        description=build_message_summary(item, company_profile)[:4096],
         url=item.url,
         timestamp=item.published_at,
         color=_IMPORTANCE_COLOR.get(item.importance, discord.Color.light_grey()),
@@ -427,17 +433,19 @@ class TradePointView(discord.ui.View):
             logger.exception("디스코드 상세정보 버튼 응답 실패")
 
 
-def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None, *, news_value_mid: int = 45, news_value_high: int = 75) -> str:
+def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None, *, news_value_mid: int = 45, news_value_high: int = 75, company_profile: CompanyProfile | None = None) -> str:
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     local_time = _display_time(item.published_at)
     display_company = _display_company(item)
     title_prefix = _title_prefix(theme, title)
+    company_profile = company_profile or CompanyProfile(company=display_company)
     verdict, score, verdict_reason = _trade_verdict(item, analysis)
 
     def esc(value: str) -> str:
         return html_escape(str(value), quote=True)
 
-    lines = [f"📰 [{esc(display_company)}]   [{esc(item.classification)}]   ⏰ {local_time}", "", f"{title_prefix} <b>{esc(title)}</b>"]
+    company_label = f"{company_profile.market_label} {display_company}".strip()
+    lines = [f"📰 [{esc(company_label)}]   [{esc(item.classification)}]   ⏰ {local_time}", "", f"{title_prefix} <b>{esc(title)}</b>"]
     if core:
         lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {esc(x)}" for x in core]]
     if analysis:
@@ -475,11 +483,11 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
     if price_reaction_line:
         lines += ["", esc(price_reaction_line)]
     if item.url:
-        lines += ["", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
+        lines += ["", f"🏭 업종 : {esc(company_profile.industry)}", f"🏢 주요 사업 : {esc(company_profile.business)}", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
     return "\n".join(_push_body_inward(lines))
 
 
-def build_telegram_summary_text(item: NewsItem) -> str:
+def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile | None = None) -> str:
     """텔레그램 최초 발송용 축약 본문. 헤더 / 제목 / 매매 포인트(판정만) 3블록.
 
     핵심·분석·관련주 근거·이유/판단조건·전망·일정·용어 등 상세 내용은
@@ -490,13 +498,15 @@ def build_telegram_summary_text(item: NewsItem) -> str:
     local_time = _display_time(item.published_at)
     display_company = _display_company(item)
     title_prefix = _title_prefix(theme, title)
+    company_profile = company_profile or CompanyProfile(company=display_company)
     verdict, score, _verdict_reason = _trade_verdict(item, analysis)
 
-    def esc(value: str) -> str:
+    def esc(value: str):
         return html_escape(str(value), quote=True)
 
+    company_label = f"{company_profile.market_label} {display_company}".strip()
     lines = [
-        f"📰 [{esc(display_company)}]   [{esc(item.classification)}]   ⏰ {local_time}",
+        f"📰 [{esc(company_label)}]   [{esc(item.classification)}]   ⏰ {local_time}",
         "",
         f"{title_prefix} <b>{esc(title)}</b>",
     ]
@@ -530,8 +540,9 @@ class NotifierCog(commands.Cog, name="Notifier"):
                 price_reaction_line = price_reaction_lines.get(item.dedup_key)
                 try:
                     content = "@here 🚨 중요 뉴스" if item.importance == Importance.HIGH else None
-                    summary_embed = build_embed_summary(item)
-                    detail_embed = build_embed(item, cumulative_line, price_reaction_line)
+                    company_profile = await asyncio.to_thread(resolve_company_profile, item.company, item.sectors) if item.company else CompanyProfile(company="")
+                    summary_embed = build_embed_summary(item, company_profile)
+                    detail_embed = build_embed(item, cumulative_line, price_reaction_line, company_profile)
                     view = TradePointView(detail_embed)
                     await channel.send(
                         content=content,

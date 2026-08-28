@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import discord
 from discord.ext import commands, tasks
 
+from stock_news_bot.company_profile import CompanyProfile, resolve_company_profile
 from stock_news_bot.cogs.notifier import (
     build_cumulative_line,
     build_price_reaction_line,
@@ -108,6 +109,14 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             self.settings.fetch_interval_seconds,
             self._analysis_worker_count,
             self._analysis_queue.maxsize,
+        )
+        logger.info(
+            "🧪 LLM 진단 설정 | enabled=%s | Gemini키=%s | OpenRouter키=%s | Gemini모델=%s | OpenRouter모델=%s",
+            self.settings.llm_analysis_enabled,
+            bool(self.settings.gemini_api_key),
+            bool(self.settings.openrouter_api_key),
+            self.settings.llm_model,
+            self.settings.openrouter_model,
         )
         # 텔레그램이 실제로 살아있는지 기동 시 한 번 찔러본다 — 설정은
         # 됐는데 실제로는 하나도 안 오는 상태를 뉴스가 뜰 때까지 기다리지
@@ -296,10 +305,14 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 # 1차 규칙 분석은 사실 추출/신뢰도 판정에 사용하고,
                 # 로컬 LLM은 그 결과를 바탕으로 맥락과 영향까지 자연어로 보강한다.
                 # API 오류나 잘못된 응답은 llm_analyzer 내부에서 안전하게 폴백한다.
-                if (
-                    self.settings.llm_analysis_enabled
-                    and (self.settings.gemini_api_key or self.settings.openrouter_api_key)
-                ):
+                llm_enabled = self.settings.llm_analysis_enabled
+                has_gemini_key = bool(self.settings.gemini_api_key)
+                has_openrouter_key = bool(self.settings.openrouter_api_key)
+                logger.info(
+                    "🧪 LLM 진단 | 기사 분석 조건 | enabled=%s | Gemini키=%s | OpenRouter키=%s | title=%s",
+                    llm_enabled, has_gemini_key, has_openrouter_key, item.title[:80],
+                )
+                if llm_enabled and (has_gemini_key or has_openrouter_key):
                     history_hint = (
                         "과거 유사 섹터 "
                         f"{stats.count}건, 평균 점수 {stats.avg_score:.1f}"
@@ -323,6 +336,10 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                         history_hint=history_hint,
                         timeout_seconds=self.settings.llm_analysis_timeout_seconds,
                         max_chars=self.settings.llm_analysis_max_chars,
+                    )
+                    logger.info(
+                        "🧪 LLM 진단 | 기사 분석 호출 종료 | 성공=%s | title=%s",
+                        bool(llm_result), item.title[:80],
                     )
                     if llm_result:
                         if llm_result.title:
@@ -468,11 +485,13 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                         )
 
                 if self.settings.telegram_alert_enabled:
-                    summary_text = build_telegram_summary_text(item)
+                    company_profile = await asyncio.to_thread(resolve_company_profile, item.company, item.sectors) if item.company else CompanyProfile(company="")
+                    summary_text = build_telegram_summary_text(item, company_profile)
                     detail_text = build_telegram_text(
                         item, cumulative_line, price_reaction_line,
                         news_value_mid=self.settings.news_value_mid,
                         news_value_high=self.settings.news_value_high,
+                        company_profile=company_profile,
                     )
                     await self.alerter.send_news(
                         summary_text,

@@ -201,7 +201,16 @@ def analyze_news(
     max_chars: int = 9000,
 ) -> LLMAnalysis | None:
     """Gemini -> OpenRouter 무료 모델 -> None 순서로 시도한다."""
+    logger.info(
+        "🧪 LLM 진단 | 호출 시작 | Gemini키=%s | OpenRouter키=%s | Gemini모델=%s | OpenRouter모델=%s",
+        bool(gemini_api_key),
+        bool(openrouter_api_key),
+        gemini_model or "미설정",
+        openrouter_model or "openrouter/free",
+    )
+
     if not gemini_api_key and not openrouter_api_key:
+        logger.warning("🧪 LLM 진단 | 호출 중단 | 사용 가능한 API 키가 없습니다.")
         return None
 
     article = _build_article(
@@ -217,9 +226,15 @@ def analyze_news(
                 article=article, timeout_seconds=timeout_seconds,
             )
             if result:
+                logger.info("🧪 LLM 진단 | Gemini 성공 | 결과 길이=%d", len(result.analysis) + len(result.core))
                 logger.info("Gemini 무료 분석 성공")
                 return result
+            logger.warning("🧪 LLM 진단 | Gemini 응답은 왔지만 유효한 JSON 분석 결과가 없습니다.")
         except Exception as exc:
+            logger.warning(
+                "🧪 LLM 진단 | Gemini 실패 | %s",
+                str(exc)[:500],
+            )
             logger.warning("Gemini 분석 실패 -> OpenRouter 무료 모델로 전환: %s", exc)
 
     if openrouter_api_key:
@@ -229,9 +244,20 @@ def analyze_news(
                 article=article, timeout_seconds=timeout_seconds,
             )
             if result:
+                logger.info(
+                    "🧪 LLM 진단 | OpenRouter 성공 | 결과 길이=%d | model=%s",
+                    len(result.analysis) + len(result.core),
+                    openrouter_model or "openrouter/free",
+                )
                 logger.info("OpenRouter 무료 모델 분석 성공 | model=%s", openrouter_model or "openrouter/free")
                 return result
+            logger.warning("🧪 LLM 진단 | OpenRouter 응답은 왔지만 유효한 JSON 분석 결과가 없습니다.")
         except Exception as exc:
+            logger.warning(
+                "🧪 LLM 진단 | OpenRouter 실패 | %s",
+                str(exc)[:500],
+            )
             logger.warning("OpenRouter 무료 분석 실패 -> 기존 규칙 엔진으로 폴백: %s", exc)
 
+    logger.warning("🧪 LLM 진단 | 모든 외부 LLM 실패/미사용 | 규칙 엔진 결과 유지")
     return None

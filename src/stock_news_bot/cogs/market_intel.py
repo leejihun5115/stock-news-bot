@@ -104,8 +104,10 @@ class MarketIntelCog(commands.Cog, name="MarketIntel"):
                 None, self.dart_client.refresh_corp_codes, self.settings.dart_api_key
             )
             logger.info("DART 상장사 목록 갱신 완료: %d개", count)
-        except Exception:
-            logger.exception("DART 상장사 목록 갱신 실패 — 다음 주기에 재시도합니다.")
+        except Exception as exc:
+            # DART 장애는 뉴스 파이프라인을 막지 않는다. 예외 전체 traceback은
+            # 반복적으로 로그를 오염시키므로 메시지만 남기고 다음 주기에 재시도한다.
+            logger.warning("DART 상장사 목록 갱신 실패 — 다음 주기에 재시도합니다: %s", exc)
 
     @corp_code_loop.before_loop
     async def _before_corp_code(self) -> None:
