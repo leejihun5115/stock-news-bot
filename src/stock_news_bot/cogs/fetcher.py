@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import logging
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -36,8 +37,19 @@ def _parse_published(entry: dict) -> datetime:
         raw = entry.get(key)
         if raw:
             try:
-                return parsedate_to_datetime(raw).astimezone(timezone.utc)
-            except (TypeError, ValueError):
+                parsed = parsedate_to_datetime(raw)
+                if parsed.tzinfo is None:
+                    # timezone 정보가 없는 RSS 날짜는 feedparser가 만든
+                    # *_parsed(struct_time, UTC 기준) 값을 우선 사용한다.
+                    parsed_struct = entry.get(f"{key}_parsed")
+                    if parsed_struct:
+                        return datetime.fromtimestamp(
+                            calendar.timegm(parsed_struct), tz=timezone.utc
+                        )
+                    # 최후의 fallback: 서버(Render)의 로컬 타임존에 의존하지 않고 UTC로 취급.
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone(timezone.utc)
+            except (TypeError, ValueError, OverflowError):
                 continue
     return datetime.now(timezone.utc)
 

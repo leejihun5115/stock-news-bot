@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from datetime import timezone
 from html import escape as html_escape
+from zoneinfo import ZoneInfo
 
 import discord
 from discord.ext import commands
@@ -23,6 +25,26 @@ _IMPORTANCE_COLOR = {
     Importance.MEDIUM: discord.Color.green(),
     Importance.LOW: discord.Color.light_grey(),
 }
+
+_KST = ZoneInfo("Asia/Seoul")
+
+def _display_source(source: str) -> str:
+    """뉴스 제공처에서 신문사/매체명만 추출한다."""
+    value = (source or "").strip()
+    # RSS 제목에 붙는 섹션명 제거: "이데일리 - 주식/펀드뉴스" 등
+    value = re.split(r"\s+[-–—|]\s+", value, maxsplit=1)[0].strip()
+    return value or "뉴스"
+
+
+def _display_time(dt) -> str:
+    """기사 시각을 항상 한국 표준시(KST)로 표시한다.
+
+    Render 서버의 OS 타임존에 의존하지 않아 미국/한국 등 해외 뉴스도
+    원문에 포함된 timezone을 기준으로 KST로 정확히 변환한다.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_KST).strftime("%H:%M")
 
 
 def _importance_label(importance: Importance, *, mid: int, high: int) -> str:
@@ -172,7 +194,7 @@ def _strength_label(item: NewsItem, confidence: int) -> str:
     elif item.score >= 45:
         strength = "🟢 보통"
     else:
-        strength = "🟡 약함"
+        strength = "⚪️ 약함"
     # 점수와 신뢰도는 서로 다른 지표로 표시한다.
     return f"{strength} : {item.score}점 (신뢰도 {confidence}점)"
 
@@ -189,8 +211,8 @@ def build_message(
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     from stock_news_bot.cogs.analysis_engine import analyze_item
     confidence = analyze_item(item).confidence
-    local_time = item.published_at.astimezone().strftime("%H:%M")
-    display_source = item.source.split("|")[0].strip() or item.source.strip()
+    local_time = _display_time(item.published_at)
+    display_source = _display_source(item.source)
     lines = [
         f"📰 [{display_source}]   [{item.classification}]   ⏰ {local_time}",
         "",
@@ -198,9 +220,9 @@ def build_message(
     ]
 
     if core:
-        lines += ["", "🔎 [핵심]", *[f"✔️ {x}" for x in core]]
+        lines += ["", "🔎 [핵심]", *[f"↳ {x}" for x in core]]
     if analysis:
-        lines += ["", "🧠 [분석·전망]", *[f"✔️ {x}" for x in analysis]]
+        lines += ["", "🧠 [분석·전망]", *[f"↳ {x}" for x in analysis]]
     if theme:
         lines += ["", f"🏷 [테마] : {theme}"]
     if related:
@@ -212,12 +234,12 @@ def build_message(
                 lines.append(f"↳ 근거 — {reason}")
     lines += ["", _strength_label(item, confidence)]
     if schedule:
-        lines += ["", "📅 [일정]", *[f"✔️ {x}" for x in schedule[:5]]]
+        lines += ["", "📅 [일정]", *[f"↳ {x}" for x in schedule[:5]]]
     data = [x for x in (cumulative_line, price_reaction_line) if x]
     if data:
-        lines += ["", "🧠 [데이터 값]", *[f"✔️ {x}" for x in data]]
+        lines += ["", "🧠 [데이터 값]", *[f"↳ {x}" for x in data]]
     if terms:
-        lines += ["", "💡 [용어]", *[f"✔️ {x}" for x in terms[:5]]]
+        lines += ["", "💡 [용어]", *[f"↳ {x}" for x in terms[:5]]]
 
     # URL 원문은 보이지 않게 하고 링크 텍스트만 클릭 가능하게 한다.
     lines += ["", f"🔗 [하이퍼링크]({item.url})"]
@@ -249,8 +271,8 @@ def build_telegram_text(
     """
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     confidence = analyze_item(item).confidence
-    local_time = item.published_at.astimezone().strftime("%H:%M")
-    display_source = item.source.split("|")[0].strip() or item.source.strip()
+    local_time = _display_time(item.published_at)
+    display_source = _display_source(item.source)
 
     def esc(value: str) -> str:
         return html_escape(str(value), quote=True)
@@ -261,9 +283,9 @@ def build_telegram_text(
         f"📌 <b>{esc(title)}</b>",  # Telegram HTML: 제목만 굵게
     ]
     if core:
-        lines += ["", "🔎 [핵심]", *[f"✔️ {esc(x)}" for x in core]]
+        lines += ["", "🔎 [핵심]", *[f"↳ {esc(x)}" for x in core]]
     if analysis:
-        lines += ["", "🧠 [분석·전망]", *[f"✔️ {esc(x)}" for x in analysis]]
+        lines += ["", "🧠 [분석·전망]", *[f"↳ {esc(x)}" for x in analysis]]
     if theme:
         lines += ["", f"🏷 [테마] : {esc(theme)}"]
     if related:
@@ -275,12 +297,12 @@ def build_telegram_text(
                 lines.append(f"↳ 근거 — {esc(reason)}")
     lines += ["", _strength_label(item, confidence)]
     if schedule:
-        lines += ["", "📅 [일정]", *[f"✔️ {esc(x)}" for x in schedule[:5]]]
+        lines += ["", "📅 [일정]", *[f"↳ {esc(x)}" for x in schedule[:5]]]
     data = [x for x in (cumulative_line, price_reaction_line) if x]
     if data:
-        lines += ["", "🧠 [데이터 값]", *[f"✔️ {esc(x)}" for x in data]]
+        lines += ["", "🧠 [데이터 값]", *[f"↳ {esc(x)}" for x in data]]
     if terms:
-        lines += ["", "💡 [용어]", *[f"✔️ {esc(x)}" for x in terms[:5]]]
+        lines += ["", "💡 [용어]", *[f"↳ {esc(x)}" for x in terms[:5]]]
 
     lines += ["", f'🔗 <a href="{esc(item.url)}">하이퍼링크</a>']
     return "\n".join(lines)

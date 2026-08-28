@@ -24,7 +24,7 @@ class AnalysisResult:
     schedule: list[str] = field(default_factory=list)
     data_lines: list[str] = field(default_factory=list)
     terms: list[str] = field(default_factory=list)
-    strength: str = "🟡 약함"
+    strength: str = "⚪️ 약함"
     classification: str = "신규"
     confidence: int = 0
 
@@ -119,7 +119,7 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
         + (10 if item.reason else 0)
         + (10 if theme else 0)
     )
-    strength = "🔥 강함" if item.score >= 75 else ("🟢 보통" if item.score >= 45 else "🟡 약함")
+    strength = "🔥 강함" if item.score >= 75 else ("🟢 보통" if item.score >= 45 else "⚪️ 약함")
 
     return AnalysisResult(
         title=_make_title(item),
