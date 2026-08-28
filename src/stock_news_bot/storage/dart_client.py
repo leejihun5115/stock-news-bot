@@ -122,8 +122,10 @@ class DartClient:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self._conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=2.0)
             self._conn.execute("PRAGMA journal_mode=WAL;")
+            self._conn.execute("PRAGMA busy_timeout=2000;")
+            self._conn.execute("PRAGMA synchronous=NORMAL;")
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
         except sqlite3.Error as exc:
@@ -281,6 +283,36 @@ class DartClient:
             self._conn.commit()
         except sqlite3.Error as exc:
             raise StorageError(f"관심종목 기록 실패: {exc}") from exc
+
+    def mark_watched_many(self, matches: list[CompanyMatch]) -> int:
+        """관심종목 기록을 한 트랜잭션으로 처리한다. 이벤트 루프에서는 직접 호출하지 않는다."""
+        if not matches:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        rows = [
+            (m.stock_code, m.corp_code, m.corp_name, now, now)
+            for m in matches if m.stock_code
+        ]
+        if not rows:
+            return 0
+        try:
+            with closing(self._conn.cursor()) as cur:
+                cur.executemany(
+                    """INSERT INTO dart_watched_stocks
+                       (stock_code, corp_code, corp_name, first_seen_at, last_seen_at, mention_count)
+                       VALUES (?, ?, ?, ?, ?, 1)
+                       ON CONFLICT(stock_code) DO UPDATE SET
+                           last_seen_at = excluded.last_seen_at,
+                           mention_count = mention_count + 1""",
+                    rows,
+                )
+            self._conn.commit()
+            return len(rows)
+        except sqlite3.OperationalError as exc:
+            logger.warning("관심종목 일괄 기록 지연/실패: %s", exc)
+            return 0
+        except sqlite3.Error as exc:
+            raise StorageError(f"관심종목 일괄 기록 실패: {exc}") from exc
 
     def list_watched_stocks(self) -> list[WatchedStock]:
         cur = self._conn.execute(

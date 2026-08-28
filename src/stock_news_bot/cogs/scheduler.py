@@ -160,7 +160,10 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         for err in fetch_errors:
             logger.warning("수집 실패: %s", err)
 
-        classified = classifier.classify(items)
+        classified = await asyncio.to_thread(classifier.classify, items)
+        # 회사 추적용 SQLite 쓰기는 분류 이벤트 루프에서 분리한다.
+        if hasattr(classifier, "record_watched_companies"):
+            await asyncio.to_thread(classifier.record_watched_companies, classified)
         feed_count = len(self.settings.effective_feed_urls())
         keyword_count = len(list(dict.fromkeys(self.settings.news_keywords)))
         self._last_scan.update({
@@ -335,7 +338,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 # 주기로 채워 넣는다 — 알림 전송 경로를 시세 API 지연/장애로
                 # 부터 격리하기 위함.
                 if item.company and item.sectors:
-                    match = self.dart_client.find_by_name(item.company)
+                    match = await asyncio.to_thread(self.dart_client.find_by_name, item.company)
                     if match and match.stock_code:
                         self.market_store.register_reaction(
                             dedup_key=item.dedup_key,

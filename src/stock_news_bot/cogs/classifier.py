@@ -238,7 +238,6 @@ class ClassifierCog(commands.Cog, name="Classifier"):
         match = self.dart_client.match_company(text)
         if match is None:
             return ""
-        self.dart_client.mark_watched(match)
         return match.corp_name
 
     def classify(self, items: list[NewsItem]) -> list[NewsItem]:
@@ -255,6 +254,19 @@ class ClassifierCog(commands.Cog, name="Classifier"):
             news_value_high=self.settings.news_value_high,
             company_matcher=self._company_matcher,
         )
+
+    def record_watched_companies(self, items: list[NewsItem]) -> int:
+        """분류 중에는 DB를 쓰지 않고, 분류가 끝난 뒤 회사 등장 기록을 일괄 저장한다."""
+        seen: set[str] = set()
+        matches: list = []
+        for item in items:
+            if not item.company or item.company in seen:
+                continue
+            seen.add(item.company)
+            match = self.dart_client.find_by_name(item.company)
+            if match is not None and match.stock_code:
+                matches.append(match)
+        return self.dart_client.mark_watched_many(matches)
 
     def cog_unload(self) -> None:
         self.dart_client.close()
