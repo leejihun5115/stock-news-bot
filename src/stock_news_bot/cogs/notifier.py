@@ -10,6 +10,7 @@ import discord
 from discord.ext import commands
 
 from stock_news_bot.models import Importance, NewsItem
+from stock_news_bot.cogs.analysis_engine import analyze_item
 from stock_news_bot.storage.fundamentals import get_fundamentals
 from stock_news_bot.storage.history import SectorStats
 from stock_news_bot.storage.market_data import SectorPriceStats
