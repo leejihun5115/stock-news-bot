@@ -79,16 +79,16 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
             core.append(s[:180])
         if len(core) >= 3:
             break
-    if not core:
-        core = [item.title[:180]]
+    # 제목을 그대로 반복하는 것은 핵심 내용으로 취급하지 않는다.
+    core = [x for x in core if re.sub(r"\W", "", x) != re.sub(r"\W", "", item.title)]
 
     analysis: list[str] = []
     if item.company and any(k in text for k in _EVENT_KEYWORDS):
         analysis.append(f"{item.company}의 사업·실적과 직접 연결될 수 있는 이벤트가 확인됩니다.")
     if item.amounts:
         analysis.append(f"본문에 구체적인 금액 정보({', '.join(item.amounts[:3])})가 있어 경제적 영향 판단에 활용할 수 있습니다.")
-    if not analysis:
-        analysis.append("기사에서 확인된 사실을 기준으로 시장 영향 가능성을 판단하며, 추가 근거가 없는 부분은 단정하지 않습니다.")
+    # 실제 근거가 없는 일반론은 송출하지 않는다.
+    # 분석 내용이 없으면 [분석·전망] 카테고리 자체를 숨긴다.
 
     schedule = _DATE_PATTERN.findall(text)
     theme = _theme(text)
@@ -107,7 +107,7 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
         classification = "신규"
 
     confidence = min(95, 35 + (20 if item.company else 0) + (15 if item.amounts else 0) + (15 if item.reason else 0) + (10 if theme else 0))
-    strength = "🔥 강함" if item.score >= 70 and confidence >= 60 else ("🟢 보통" if item.score >= 40 else "🟡 약함")
+    strength = "🔥 강함" if item.score >= 75 else ("🟢 보통" if item.score >= 45 else "🟡 약함")
 
     return AnalysisResult(
         title=_make_title(item),

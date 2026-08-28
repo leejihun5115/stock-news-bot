@@ -142,56 +142,91 @@ def build_amount_context(item: NewsItem) -> str | None:
     return "\n".join(lines)
 
 
-def _analysis_parts(item: NewsItem) -> tuple[str, list[str], list[str], str | None, list[str], list[str]]:
-    """상용화 송출 포맷을 만들기 위한 공통 분석 결과."""
+def _meaningful_core(core: list[str], title: str) -> list[str]:
+    normalized_title = re.sub(r"\W", "", title)
+    result = []
+    for line in core:
+        normalized = re.sub(r"\W", "", line)
+        if not normalized or normalized == normalized_title:
+            continue
+        if len(normalized) < 8:
+            continue
+        result.append(line)
+    return result[:3]
+
+
+def _analysis_parts(item: NewsItem) -> tuple[str, list[str], list[str], str | None, list[str], dict[str, str], list[str], list[str]]:
     from stock_news_bot.cogs.analysis_engine import analyze_item
     result = analyze_item(item)
     title = item.analysis_title or result.title
-    return title, result.core, result.analysis, result.theme, result.related_stocks, result.schedule
+    core = _meaningful_core(result.core, title)
+    analysis = [x for x in result.analysis if x and "추가 근거가 없는 부분은 단정하지 않습니다" not in x]
+    return title, core, analysis[:3], result.theme, result.related_stocks, result.related_reasons, result.schedule, result.terms
 
 
-def build_embed(
+def _strength_label(item: NewsItem, confidence: int) -> str:
+    if item.score >= 75:
+        strength = "🔥 강함"
+    elif item.score >= 45:
+        strength = "🟢 보통"
+    else:
+        strength = "🟡 약함"
+    # 점수와 신뢰도는 서로 다른 지표로 표시한다.
+    return f"{strength} · {item.score}점 · 신뢰도 {confidence}점"
+
+
+def build_message(
     item: NewsItem,
     cumulative_line: str | None = None,
     price_reaction_line: str | None = None,
-    *,
-    news_value_mid: int = 40,
-    news_value_high: int = 70,
-) -> discord.Embed:
-    title, core, analysis, theme, related, schedule = _analysis_parts(item)
-    embed = discord.Embed(
-        title=f"📌 {title[:248]}",
-        url=item.url,
-        color=_IMPORTANCE_COLOR[item.importance],
-        timestamp=item.published_at,
-    )
-    header = f"📰 {item.source} · {item.classification} · ⏰ {item.published_at.astimezone().strftime('%H:%M')}"
-    embed.description = header
+) -> str:
+    """사용자 지정 Discord/Telegram 공통 송출 포맷.
 
-    embed.add_field(name="🔎 핵심", value="\n".join(f"✔ {x}" for x in core[:3])[:1024], inline=False)
-    embed.add_field(name="🧠 분석·전망", value="\n".join(f"✔ {x}" for x in analysis[:3])[:1024], inline=False)
+    빈 카테고리와 일반론을 절대 출력하지 않고, URL 자체도 노출하지 않는다.
+    """
+    title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
+    from stock_news_bot.cogs.analysis_engine import analyze_item
+    confidence = analyze_item(item).confidence
+    local_time = item.published_at.astimezone().strftime("%H:%M")
+    display_source = item.source.split("|")[0].strip() or item.source.strip()
+    lines = [f"📰 {display_source} · {item.classification} · ⏰ {local_time}", f"📌 {title}"]
+
+    if core:
+        lines += ["", "🔎 [핵심]", *[f"✔️ {x}" for x in core]]
+    if analysis:
+        lines += ["", "🧠 [분석·전망]", *[f"✔️ {x}" for x in analysis]]
     if theme:
-        embed.add_field(name="🏷 테마", value=theme, inline=False)
+        lines += ["", f"🏷 [테마] : {theme}"]
     if related:
-        lines = []
+        lines += ["", "🎯 [관련주]"]
         for company in related:
-            reason = "사업적 직접 연결성 확인"
-            lines.append(f"↳ {company}\n↳ 근거 — {reason}\n↳ Why : 뉴스 이벤트가 실제 사업·실적에 영향을 줄 가능성")
-        embed.add_field(name="🎯 관련주", value="\n".join(lines)[:1024], inline=False)
-
-    label = "🔥 강함" if item.importance == Importance.HIGH else ("🟢 보통" if item.importance == Importance.MEDIUM else "🟡 약함")
-    embed.add_field(name="강도", value=f"{label} · 신뢰도 {item.confidence}%", inline=True)
+            reason = reasons.get(company)
+            lines.append(f"↳ {company}")
+            if reason:
+                lines.append(f"↳ 근거 — {reason}")
+            if item.reason:
+                lines.append(f"↳ Why : {item.reason}")
+    lines += ["", _strength_label(item, confidence)]
     if schedule:
-        embed.add_field(name="📅 일정", value="\n".join(f"✔ {x}" for x in schedule[:5]), inline=False)
-    if cumulative_line or price_reaction_line:
-        values = [x for x in (cumulative_line, price_reaction_line) if x]
-        embed.add_field(name="🧠 데이터 값", value="\n".join(values)[:1024], inline=False)
-    amount_context = build_amount_context(item)
-    if amount_context:
-        embed.add_field(name="💡 용어/금액", value=amount_context[:1024], inline=False)
-    embed.add_field(name="🔗 하이퍼링크", value=f"[기사 원문]({item.url})", inline=False)
-    embed.set_footer(text=item.source)
-    return embed
+        lines += ["", "📅 [일정]", *[f"✔️ {x}" for x in schedule[:5]]]
+    data = [x for x in (cumulative_line, price_reaction_line) if x]
+    if data:
+        lines += ["", "🧠 [데이터 값]", *[f"✔️ {x}" for x in data]]
+    if terms:
+        lines += ["", "💡 [용어]", *[f"✔️ {x}" for x in terms[:5]]]
+
+    # URL 원문은 보이지 않게 하고 링크 텍스트만 클릭 가능하게 한다.
+    lines += ["", f"🔗 [하이퍼링크]({item.url})"]
+    return "\n".join(lines)
+
+
+def build_embed(*args, **kwargs) -> discord.Embed:
+    """호환성을 위한 래퍼. 실제 송출은 build_message()를 사용한다."""
+    item = args[0] if args else kwargs["item"]
+    cumulative_line = args[1] if len(args) > 1 else kwargs.get("cumulative_line")
+    price_reaction_line = args[2] if len(args) > 2 else kwargs.get("price_reaction_line")
+    message = build_message(item, cumulative_line, price_reaction_line)
+    return discord.Embed(description=message[:4096], url=item.url, timestamp=item.published_at)
 
 
 def build_telegram_text(
@@ -199,38 +234,10 @@ def build_telegram_text(
     cumulative_line: str | None = None,
     price_reaction_line: str | None = None,
     *,
-    news_value_mid: int = 40,
-    news_value_high: int = 70,
+    news_value_mid: int = 45,
+    news_value_high: int = 75,
 ) -> str:
-    title, core, analysis, theme, related, schedule = _analysis_parts(item)
-    label = "🔥 강함" if item.importance == Importance.HIGH else ("🟢 보통" if item.importance == Importance.MEDIUM else "🟡 약함")
-    lines = [
-        f"📰 {item.source} · {item.classification} · ⏰ {item.published_at.astimezone().strftime('%H:%M')}",
-        f"📌 {title}",
-        "",
-        "🔎 [핵심]",
-        *[f"✔ {x}" for x in core[:3]],
-        "",
-        "🧠 [분석·전망]",
-        *[f"✔ {x}" for x in analysis[:3]],
-    ]
-    if theme:
-        lines += ["", f"🏷 [테마] : {theme}"]
-    if related:
-        lines += ["", "🎯 [관련주]"]
-        for company in related:
-            lines += [f"↳ {company}", "↳ 근거 — 실제 사업·실적과 직접 연결", "↳ Why : 뉴스 이벤트의 경제적 영향 가능성"]
-    lines += ["", f"{label} · 신뢰도 {item.confidence}%"]
-    if schedule:
-        lines += ["", "📅 [일정]", *[f"✔ {x}" for x in schedule[:5]]]
-    data = [x for x in (cumulative_line, price_reaction_line) if x]
-    if data:
-        lines += ["", "🧠 [데이터 값]", *[f"✔ {x}" for x in data]]
-    amount_context = build_amount_context(item)
-    if amount_context:
-        lines += ["", "💡 [용어]", f"✔ {amount_context}"]
-    lines += ["", "🔗 하이퍼링크", item.url]
-    return "\n".join(lines)
+    return build_message(item, cumulative_line, price_reaction_line)
 
 
 class NotifierCog(commands.Cog, name="Notifier"):
@@ -273,16 +280,11 @@ class NotifierCog(commands.Cog, name="Notifier"):
             try:
                 content = "@here 🚨 중요 뉴스" if item.importance == Importance.HIGH else None
                 allowed = discord.AllowedMentions(everyone=False, roles=False)
-                embed = build_embed(
-                    item,
-                    cumulative_line,
-                    price_reaction_line,
-                    news_value_mid=self.settings.news_value_mid,
-                    news_value_high=self.settings.news_value_high,
-                )
+                message = build_message(item, cumulative_line, price_reaction_line)
+                if content:
+                    message = f"{content}\n\n{message}"
                 await channel.send(
-                    content=content,
-                    embed=embed,
+                    content=message[:2000],
                     allowed_mentions=allowed,
                 )
                 sent_items.append(item)
