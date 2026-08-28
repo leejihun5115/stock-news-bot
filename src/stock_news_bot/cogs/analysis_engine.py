@@ -42,6 +42,21 @@ _THEME_MAP = {
 _EVENT_KEYWORDS = ("계약", "수주", "공급", "확정", "투자", "승인", "허가", "실적", "기술수출", "생산", "증설")
 _DATE_PATTERN = re.compile(r"(?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일|\d{1,2}분기)")
 
+_SOURCE_SUFFIX_RE = re.compile(
+    r"\s*[-–—|]\s*(?:(?:뉴스|주식|증권|경제|산업|마켓|비즈|데일리|타임즈|TV|닷컴|포스트|모터트렌드|뉴스포스트|매일경제(?: 마켓)?|한국경제|이데일리|연합뉴스|머니투데이|서울경제|조선비즈|전자신문|파이낸셜뉴스|아시아경제|헤럴드경제|한경닷컴|뉴스1|뉴시스|더구루|CNBC|로이터|블룸버그)[^\n]*)$",
+    re.IGNORECASE,
+)
+
+def _clean_title(title: str) -> str:
+    title = re.sub(r"<[^>]+>", " ", str(title or ""))
+    title = re.sub(r"\s+", " ", title).strip()
+    previous = None
+    while title != previous:
+        previous = title
+        title = _SOURCE_SUFFIX_RE.sub("", title).strip()
+    return title.rstrip(" -–—|")
+
+
 _PROGRESS_PATTERNS = (
     ("상용화", ("상용화", "상용화 단계", "상용화 완료", "상용화 진행")),
     ("공급중", ("공급 중", "공급중", "납품 중", "납품중", "양산 중", "양산중")),
@@ -66,7 +81,7 @@ def _sentences(text: str) -> list[str]:
 
 
 def _make_title(item: NewsItem) -> str:
-    title = re.sub(r"\s+", " ", item.title).strip()
+    title = _clean_title(item.title)
     # 지나치게 서술형/긴 제목은 기사에서 확인되는 이벤트와 기업을 우선한다.
     if len(title) <= 70 and not title.endswith(("다", "니다")):
         return title
@@ -90,7 +105,7 @@ def _theme(text: str) -> str | None:
 
 
 def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = False, data_lines: list[str] | None = None, history_count: int = 0, history_avg_score: float | None = None, price_count: int = 0, price_up_ratio: float | None = None, price_avg_pct: float | None = None) -> AnalysisResult:
-    text = re.sub(r"\s+", " ", f"{item.title} {item.summary}").strip()
+    text = re.sub(r"\s+", " ", f"{_clean_title(item.title)} {item.summary}").strip()
     sentences = _sentences(item.summary) or _sentences(item.title)
     core: list[str] = []
     for s in sentences:
@@ -174,15 +189,30 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
 
     confidence = max(0, min(100, confidence))
 
-    # 분석 영역에 "필수 4요소"를 항상 노출한다. 값이 없으면 없다고 명시한다.
-    progress_line = f"진행단계: {progress_stage or '확인되지 않음'}"
-    amount_line = f"금액 근거: {', '.join(item.amounts[:3]) if item.amounts else '확인되지 않음'}"
-    business_line = f"사업 근거: {item.reason if item.reason else '기사 본문에서 직접 확인되지 않음'}"
-    reasons_text = " · ".join(dict.fromkeys(evidence_reasons)) if evidence_reasons else "객관적 근거 없음"
-    confidence_line = f"신뢰도 근거: {reasons_text} (근거 충족 {raw_evidence_score}점)"
+    # 의미가 있는 분석만 노출한다.
+    # "확인되지 않음" 같은 형식용 문구는 절대 출력하지 않는다.
+    analysis = []
 
-    # 진행단계/금액/사업/신뢰도 근거는 뉴스 노출 시 반드시 포함한다.
-    analysis = [progress_line, amount_line, business_line, confidence_line]
+    if progress_stage and progress_stage.strip() not in {"확인되지 않음", "미확인", "없음"}:
+        analysis.append(f"진행단계: {progress_stage}")
+
+    if item.amounts:
+        analysis.append(f"금액 근거: {', '.join(item.amounts[:3])}")
+
+    # 사업 근거가 실제 문장이고 URL/HTML 조각이 아닌 경우에만 출력한다.
+    reason = re.sub(r"<[^>]+>", " ", item.reason or "")
+    reason = re.sub(r"https?://\S+", " ", reason)
+    reason = re.sub(r"\s+", " ", reason).strip()
+    bad_reason = {"", "확인되지 않음", "기사 본문에서 직접 확인되지 않음", "근거 없음"}
+    title_key = re.sub(r"\W", "", _clean_title(item.title))
+    reason_key = re.sub(r"\W", "", reason)
+    if reason not in bad_reason and len(reason_key) >= 12 and reason_key != title_key:
+        analysis.append(f"사업 근거: {reason}")
+
+    # 신뢰도 근거는 실제 분석 내용이 하나 이상 있을 때만 노출한다.
+    if analysis and evidence_reasons:
+        reasons_text = " · ".join(dict.fromkeys(evidence_reasons))
+        analysis.append(f"신뢰도 근거: {reasons_text} (근거 충족 {raw_evidence_score}점)")
 
     strength = "🔥 강함" if item.score >= 75 else ("🟢 보통" if item.score >= 45 else "⚪️ 약함")
 

@@ -128,7 +128,14 @@ def _analysis_parts(item: NewsItem):
     result = analyze_item(item)
     title = item.analysis_title or result.title
     core = _meaningful_core(result.core, title)
-    analysis = [x for x in result.analysis if x]
+    analysis = []
+    for x in result.analysis:
+        x = (x or "").strip()
+        if not x:
+            continue
+        if x.endswith(": 확인되지 않음") or x.endswith(": 미확인") or x.endswith(": 없음"):
+            continue
+        analysis.append(x)
     return title, core, analysis[:6], result.theme, result.related_stocks, result.related_reasons, result.schedule, result.terms
 
 
@@ -150,7 +157,7 @@ def _trade_verdict(item: NewsItem) -> tuple[str, str]:
         return "관망", "핵심 재료는 확인되지만 추가 촉매 확인이 필요"
     if item.score >= 45 and item.confidence >= 50:
         return "관망", "재료는 있으나 현재 단계에서 확신도가 충분하지 않음"
-    return "매수 주의", "사업·실적 연결 또는 객관적 근거가 부족함"
+    return "매수 주의", "실제 사업·실적 연결과 객관적 근거가 부족해 현재 매수 근거가 약함"
 
 
 def build_trade_detail(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None) -> str:
@@ -188,13 +195,13 @@ def build_trade_detail(item: NewsItem, cumulative_line: str | None = None, price
     if price_reaction_line:
         lines.append(f"↳ {price_reaction_line.replace('📈 ', '')}")
     if not item.reason and not item.amounts and not related:
-        lines.append("↳ 핵심 확인: 기사 본문에서 구체적인 사업·수치 근거를 충분히 확인하지 못함")
+        lines.append("↳ 핵심 확인: 현재 기사만으로는 실적·수익 연결 근거가 부족함")
     lines.append(f"↳ 기사: {item.url}")
     return "\n".join(lines)[:3900]
 
 
 def build_trade_button_label(item: NewsItem) -> str:
-    return _trade_verdict(item)[0]
+    return f"{_trade_verdict(item)[0]} · 상세보기"
 
 
 def _detail_token(item: NewsItem) -> str:

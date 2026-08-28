@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import calendar
 import logging
+import re
 import time
+from html import unescape
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -68,10 +70,14 @@ def parse_entries(raw_bytes: bytes, source_hint: str) -> list[NewsItem]:
 
     items: list[NewsItem] = []
     for entry in parsed.entries:
-        title = entry.get("title", "").strip()
-        url = entry.get("link", "").strip()
+        title = unescape(re.sub(r"<[^>]+>", " ", str(entry.get("title", "") or ""))).strip()
+        url = str(entry.get("link", "") or "").strip()
         if not title or not url:
             continue
+        raw_summary = str(entry.get("summary", "") or "")
+        summary = unescape(re.sub(r"<[^>]+>", " ", raw_summary))
+        summary = re.sub(r"https?://\S+", " ", summary)
+        summary = re.sub(r"\s+", " ", summary).strip()
         source = parsed.feed.get("title", source_hint) or source_hint
         items.append(
             NewsItem(
@@ -79,7 +85,7 @@ def parse_entries(raw_bytes: bytes, source_hint: str) -> list[NewsItem]:
                 url=url,
                 source=source,
                 published_at=_parse_published(entry),
-                summary=(entry.get("summary", "") or "").strip(),
+                summary=summary,
             )
         )
     return items

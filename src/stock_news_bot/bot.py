@@ -94,17 +94,20 @@ class StockNewsBot(commands.Bot):
         keywords = list(dict.fromkeys(self.settings.news_keywords))
         feeds = self.settings.effective_feed_urls()
         extensions = ", ".join(self.cogs.keys()) or "없음"
+        from datetime import datetime, timezone, timedelta
+        kst = timezone(timedelta(hours=9))
+        boot_time = datetime.now(timezone.utc).astimezone(kst).strftime("%Y-%m-%d %H:%M:%S")
         message = (
-            "🚀 **[뉴스봇 부팅 확인]**\n\n"
-            "↳ 상태: **정상 기동**\n"
-            f"↳ 실행 버전: **BOOT-DIAGNOSTIC-V21**\n"
+            "✅ **[통제소] 뉴스봇 부팅 완료**\n\n"
+            f"↳ 상태: **정상 기동 · KST={boot_time}**\n"
+            f"↳ 실행 버전: **BOOT-DIAGNOSTIC-V24**\n"
             f"↳ 검색 키워드: **{len(keywords)}개**\n"
             f"↳ 검색 피드: **{len(feeds)}개**\n"
             f"↳ 최소 전송 점수: **{self.settings.news_value_mid}점**\n"
-            f"↳ 수집 주기: **{self.settings.fetch_interval_seconds}초**\n"
-            f"↳ 로드 코그: **{extensions}**\n\n"
-            "✅ 부팅 완료 후 뉴스 수집을 즉시 시작합니다.\n"
-            "`/search-status`로 실제 검색 상태를 확인할 수 있습니다."
+            f"↳ 수집 주기: **{self.settings.fetch_interval_seconds}초**\n\n"
+            "✅ **뉴스 수집을 즉시 시작합니다.**\n"
+            "`/status` · `/run` · `/pause` · `/resume` · `/재진단` · `/help`\n"
+            "🔎 `/search-status`로 Render 검색 설정과 실제 수집 상태를 확인할 수 있습니다."
         )
         try:
             await channel.send(message[:1900], allowed_mentions=discord.AllowedMentions.none())
