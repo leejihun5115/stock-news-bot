@@ -115,7 +115,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     ok=True,
                 )
         except BaseBotError as exc:
-            logger.exception("파이프라인 실행 중 오류")
+            logger.error("파이프라인 실행 중 오류: %s", exc)
             bot_status.mark_failure(str(exc))
             await self.alerter.send(f"❌ [stock-news-bot] 파이프라인 오류: {exc}")
             if not was_failing:
@@ -349,12 +349,15 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                         news_value_high=self.settings.news_value_high,
                     )
                     detail = build_trade_detail(item, cumulative_line, price_reaction_line)
+                    button_label = build_trade_button_label(item)
+                    callback_data = _detail_token(item)
                     await self.alerter.send_news(
                         text,
-                        button_label=build_trade_button_label(item),
-                        callback_data=_detail_token(item),
+                        button_label=button_label,
+                        callback_data=callback_data,
                         detail=detail,
                     )
+                    logger.info("텔레그램 뉴스 전송: 판단=%s | title=%r", button_label, item.title)
                     await asyncio.sleep(1)
             logger.info(
                 "수집 %d건 → 강도필터(≥%d) 통과 %d건(제외 %d건) → 신규 %d건 → 전송 %d건 (수집실패 %d건)",

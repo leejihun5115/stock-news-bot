@@ -66,5 +66,9 @@ def setup_logging(log_dir: Path, level: str = "INFO") -> None:
     logging.getLogger("discord").setLevel(logging.WARNING)
     logging.getLogger("discord.http").setLevel(logging.WARNING)
     logging.getLogger("discord.gateway").setLevel(logging.WARNING)
+    # RSS/XML 파서의 내부 로그는 수집기에서 FetchError로 정규화하므로
+    # Render 콘솔에 라이브러리 내부 영문 traceback이 반복되지 않게 한다.
+    logging.getLogger("feedparser").setLevel(logging.ERROR)
+    logging.getLogger("xml.sax").setLevel(logging.ERROR)
 
     _CONFIGURED = True

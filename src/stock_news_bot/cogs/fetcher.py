@@ -64,9 +64,19 @@ def parse_entries(raw_bytes: bytes, source_hint: str) -> list[NewsItem]:
     세우는 특이한 라이브러리라, entries가 비어있는데 bozo=1이면 명시적으로
     FetchError로 승격시켜서 상위 로직이 실패를 인지하게 한다.
     """
-    parsed = feedparser.parse(raw_bytes)
+    try:
+        parsed = feedparser.parse(raw_bytes)
+    except Exception as exc:
+        # 일부 RSS/프록시가 깨진 XML을 반환하면 Python 3.14의 SAX 파서가
+        # 내부 traceback을 남기며 예외를 직접 전파할 수 있다.
+        # 이 예외는 개별 피드 실패로만 처리하고 전체 스케줄러를 흔들지 않는다.
+        detail = str(exc).replace("\n", " ").strip()[:300]
+        raise FetchError(f"[{source_hint}] RSS 형식 오류: {detail}") from None
+
     if parsed.bozo and not parsed.entries:
-        raise FetchError(f"[{source_hint}] 피드 파싱 실패: {parsed.bozo_exception}")
+        detail = str(getattr(parsed, "bozo_exception", "알 수 없는 XML 오류"))
+        detail = detail.replace("\n", " ").strip()[:300]
+        raise FetchError(f"[{source_hint}] RSS 형식 오류: {detail}")
 
     items: list[NewsItem] = []
     for entry in parsed.entries:
@@ -134,7 +144,13 @@ async def fetch_feed(
         raw = await _fetch_raw(session, url, timeout_seconds, max_retries)
     except Exception as exc:  # aiohttp/timeout 등 재시도 소진 후 최종 실패
         raise FetchError(f"'{url}' 수집 실패: {exc}") from exc
-    return parse_entries(raw, source_hint=url)
+    try:
+        return parse_entries(raw, source_hint=url)
+    except FetchError:
+        raise
+    except Exception as exc:
+        detail = str(exc).replace("\n", " ").strip()[:300]
+        raise FetchError(f"'{url}' RSS 처리 실패: {detail}") from None
 
 
 async def fetch_all(

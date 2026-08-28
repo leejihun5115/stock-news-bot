@@ -128,6 +128,7 @@ class TelegramAlerter:
         payload = {
             "chat_id": chat_id,
             "text": detail[:4000],
+            "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
         async with session.post(self._url("sendMessage"), json=payload) as resp:
