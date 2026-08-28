@@ -60,8 +60,12 @@ services:
       # NEWS_KEYWORDS가 있으면 RSS_FEEDS보다 항상 우선한다.
       - key: RSS_FEEDS
         sync: false
+      # 실시간 수집: 최소 5초까지 허용하지만 기본은 10초.
       - key: FETCH_INTERVAL_SECONDS
-        value: "20"
+        value: "10"
+      # 분석/번역/DB 작업은 병렬로 처리하고 Discord 송출만 직렬화한다.
+      - key: NEWS_ANALYSIS_WORKERS
+        value: "4"
       - key: STARTUP_MAX_AGE_SECONDS
         value: "3600"
       - key: STARTUP_SEND_LIMIT

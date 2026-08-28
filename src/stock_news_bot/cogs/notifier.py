@@ -291,6 +291,7 @@ class NotifierCog(commands.Cog, name="Notifier"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.settings = bot.settings  # type: ignore[attr-defined]
+        self._send_lock = asyncio.Lock()
 
     async def send_items(self, items: list[NewsItem], cumulative_lines: dict[str, str] | None = None, price_reaction_lines: dict[str, str] | None = None) -> list[NewsItem]:
         channel = self.bot.get_channel(self.settings.discord_news_channel_id)
@@ -299,33 +300,33 @@ class NotifierCog(commands.Cog, name="Notifier"):
 
         cumulative_lines = cumulative_lines or {}
         price_reaction_lines = price_reaction_lines or {}
-        # 과거 기사부터 최신 기사 순으로 송출한다. 예전에는 중요도(LOW/MEDIUM/HIGH)
-        # 순으로 정렬했는데, 그러면 같은 배치 안에서도 시각이 뒤죽박죽으로 섞여
-        # 나오는 문제가 있었다. 시간순(오래된 것 → 최신) 정렬로 바꿔서
-        # 채널에서 봤을 때 자연스러운 시간 흐름으로 읽히게 한다.
         sent_items: list[NewsItem] = []
-        for item in sorted(items, key=lambda i: i.published_at):
-            cumulative_line = cumulative_lines.get(item.dedup_key)
-            price_reaction_line = price_reaction_lines.get(item.dedup_key)
-            try:
-                content = "@here 🚨 중요 뉴스" if item.importance == Importance.HIGH else None
-                embed = build_embed(item, cumulative_line, price_reaction_line)
-                await channel.send(
-                    content=content,
-                    embed=embed,
-                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False),
-                )
-                sent_items.append(item)
-            except discord.HTTPException as exc:
-                logger.error("알림 전송 실패 (title=%r): %s", item.title, exc)
-                continue
-            except Exception:
-                # 여기서 잡히지 않은 예외가 파이프라인 전체를 멈추게 하면
-                # "뉴스가 늦게 오거나 아예 안 오는" 증상으로 이어진다.
-                # 이 항목 하나만 건너뛰고 나머지는 계속 보낸다.
-                logger.exception("알림 전송 중 예상치 못한 오류 (title=%r) — 이 항목만 건너뜁니다.", item.title)
-                continue
-            await asyncio.sleep(_SEND_INTERVAL_SECONDS)
+
+        # 분석 worker는 병렬이지만 실제 Discord 송출은 한 줄로 직렬화한다.
+        # Discord rate-limit을 피하면서 기사 시각 순서를 유지한다.
+        async with self._send_lock:
+            for item in sorted(items, key=lambda i: i.published_at):
+                cumulative_line = cumulative_lines.get(item.dedup_key)
+                price_reaction_line = price_reaction_lines.get(item.dedup_key)
+                try:
+                    content = "@here 🚨 중요 뉴스" if item.importance == Importance.HIGH else None
+                    embed = build_embed(item, cumulative_line, price_reaction_line)
+                    await channel.send(
+                        content=content,
+                        embed=embed,
+                        allowed_mentions=discord.AllowedMentions(everyone=False, roles=False),
+                    )
+                    sent_items.append(item)
+                except discord.HTTPException as exc:
+                    logger.error("알림 전송 실패 (title=%r): %s", item.title, exc)
+                    continue
+                except Exception:
+                    logger.exception(
+                        "알림 전송 중 예상치 못한 오류 (title=%r) — 이 항목만 건너뜁니다.",
+                        item.title,
+                    )
+                    continue
+                await asyncio.sleep(_SEND_INTERVAL_SECONDS)
         return sent_items
 
 
