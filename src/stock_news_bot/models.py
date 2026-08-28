@@ -39,6 +39,7 @@ class NewsItem:
     analysis_title: str = ""     # 분석 엔진이 생성한 송출 제목
     classification: str = "신규"
     confidence: int = 0
+    progress_stage: str = ""  # 기사에서 확인된 사업 진행 단계
 
     @property
     def dedup_key(self) -> str:

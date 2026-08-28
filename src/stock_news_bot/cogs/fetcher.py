@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 import logging
+import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -98,7 +99,19 @@ async def _fetch_raw(
         reraise=True,
     ):
         with attempt:
-            async with session.get(url, timeout=timeout) as resp:
+            # RSS 제공자/프록시가 이전 XML을 캐시해서 같은 목록만 돌려주는 문제를
+            # 피한다. 특히 Google News RSS는 짧은 주기의 폴링에서 캐시 영향을
+            # 받을 수 있으므로 요청마다 cache-buster를 붙인다.
+            request_url = url
+            separator = "&" if "?" in url else "?"
+            if "news.google.com/rss" in url:
+                request_url = f"{url}{separator}_cb={time.time_ns()}"
+            headers = {
+                "Cache-Control": "no-cache, no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+            async with session.get(request_url, timeout=timeout, headers=headers) as resp:
                 resp.raise_for_status()
                 return await resp.read()
     raise FetchError(f"'{url}' 수집 재시도 로직이 비정상 종료되었습니다.")  # 방어 코드, 도달 불가

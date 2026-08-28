@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone, timedelta
 
 import discord
 from discord.ext import commands, tasks
@@ -11,6 +12,9 @@ from stock_news_bot.cogs.notifier import (
     build_cumulative_line,
     build_price_reaction_line,
     build_telegram_text,
+    build_trade_detail,
+    build_trade_button_label,
+    _detail_token,
 )
 from stock_news_bot.monitor.health import HealthMonitor
 from stock_news_bot.cogs.analysis_engine import analyze_item
@@ -31,6 +35,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         self.settings = bot.settings  # type: ignore[attr-defined]
         self.paused = False
         self._run_lock = asyncio.Lock()
+        self._startup_cycle_done = False
 
         self.dedup_store = DedupStore(self.settings.db_path)
         self.history_store = HistoryStore(self.settings.db_path)
@@ -52,10 +57,13 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
     async def cog_load(self) -> None:
         self.pipeline_loop.start()
         self.health_loop.start()
+        self.alerter.start_callback_polling()
 
     def cog_unload(self) -> None:
         self.pipeline_loop.cancel()
         self.health_loop.cancel()
+        if self.alerter.enabled:
+            asyncio.create_task(self.alerter.stop_callback_polling())
         self.dedup_store.close()
         self.history_store.close()
         self.market_store.close()
@@ -142,6 +150,23 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             logger.warning("수집 실패: %s", err)
 
         classified = classifier.classify(items)
+
+        # 첫 부팅 때 RSS가 제공하는 과거 backlog를 한꺼번에 보내지 않는다.
+        # 첫 사이클은 최근 STARTUP_MAX_AGE_SECONDS 이내 기사만 신규 후보로 삼고,
+        # 그보다 오래된 항목은 dedup에 등록해 다음 사이클에서도 다시 튀어나오지
+        # 않게 한다. 이후 사이클은 평소처럼 새로 들어온 기사만 처리한다.
+        if not self._startup_cycle_done:
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.settings.startup_max_age_seconds)
+            startup_old = [item for item in classified if item.published_at < cutoff]
+            for item in startup_old:
+                self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
+            if startup_old:
+                logger.info(
+                    "첫 부팅 backlog %d건은 발송하지 않고 dedup에 등록했습니다. (허용 최신 %d초)",
+                    len(startup_old), self.settings.startup_max_age_seconds,
+                )
+            classified = [item for item in classified if item.published_at >= cutoff]
+            self._startup_cycle_done = True
 
         # 강도 필터: NEWS_SEND_MIN_SCORE 미만인 기사는 아예 후보에서 제외한다.
         min_score = self.settings.news_value_mid
@@ -254,7 +279,13 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                         news_value_mid=self.settings.news_value_mid,
                         news_value_high=self.settings.news_value_high,
                     )
-                    await self.alerter.send(text)
+                    detail = build_trade_detail(item, cumulative_line, price_reaction_line)
+                    await self.alerter.send_news(
+                        text,
+                        button_label=build_trade_button_label(item),
+                        callback_data=_detail_token(item),
+                        detail=detail,
+                    )
                     await asyncio.sleep(1)
             logger.info(
                 "수집 %d건 → 강도필터(≥%d) 통과 %d건(제외 %d건) → 신규 %d건 → 전송 %d건 (수집실패 %d건)",

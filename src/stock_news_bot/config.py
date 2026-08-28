@@ -73,6 +73,7 @@ class Settings:
     fetch_interval_seconds: int = 300
     fetch_timeout_seconds: int = 10
     fetch_max_retries: int = 3
+    startup_max_age_seconds: int = 900  # 첫 부팅 때 과거 RSS backlog를 일괄 발송하지 않을 시간 범위
 
     db_path: Path = Path("./data/stock_news_bot.sqlite3")
     dedup_retention_days: int = 14
@@ -136,6 +137,7 @@ def load_settings() -> Settings:
         fetch_interval_seconds=_get_int("FETCH_INTERVAL_SECONDS", 300),
         fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),
         fetch_max_retries=_get_int("FETCH_MAX_RETRIES", 3),
+        startup_max_age_seconds=_get_int("STARTUP_MAX_AGE_SECONDS", 900),
         db_path=Path(_get_str("DB_PATH", "./data/stock_news_bot.sqlite3")),
         dedup_retention_days=_get_int("DEDUP_RETENTION_DAYS", 14),
         history_lookback_days=_get_int("HISTORY_LOOKBACK_DAYS", 30),
