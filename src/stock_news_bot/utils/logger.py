@@ -65,5 +65,6 @@ def setup_logging(log_dir: Path, level: str = "INFO") -> None:
     # discord.py 자체 로그는 너무 시끄러우니 WARNING 이상만.
     logging.getLogger("discord").setLevel(logging.WARNING)
     logging.getLogger("discord.http").setLevel(logging.WARNING)
+    logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 
     _CONFIGURED = True

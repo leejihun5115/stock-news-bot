@@ -176,26 +176,13 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             "errors": len(fetch_errors),
         })
 
-        # 첫 정상 수집 직후 관리자 채널로 Render 검색 설정이 실제 적용되었는지
-        # 사용자 눈으로 확인할 수 있는 부팅 메시지를 1회 보낸다.
+        # 부팅 완료 알림은 bot.on_ready()에서 READY 직후 즉시 전송한다.
+        # 첫 수집 단계에서는 중복 부팅 메시지를 보내지 않고 검색 통계만 갱신한다.
         if not self._startup_notice_sent:
-            source = "NEWS_KEYWORDS" if self.settings.news_keywords else "RSS_FEEDS"
-            preview = ", ".join(self.settings.news_keywords[:12]) if self.settings.news_keywords else "직접 RSS"
-            description = (
-                "✅ Render 검색 설정이 실제 실행 중입니다.\n\n"
-                f"🔎 사용 소스: {source}\n"
-                f"🔑 키워드: {keyword_count}개\n"
-                f"📡 검색 피드: {feed_count}개\n"
-                f"📰 첫 수집: {len(items)}건\n"
-                f"⚙️ 최소 점수: {self.settings.news_value_mid}점\n"
-                f"⏱️ 수집 주기: {self.settings.fetch_interval_seconds}초\n\n"
-                f"예시 키워드: {preview}"
-            )
-            await self._notify_discord(title="🚀 뉴스 검색 엔진 부팅 확인", description=description, ok=True)
             self._startup_notice_sent = True
             logger.info(
-                "부팅 확인 메시지 전송: source=%s keywords=%d feeds=%d fetched=%d",
-                source, keyword_count, feed_count, len(items),
+                "첫 수집 완료: 키워드=%d개, 피드=%d개, 수집=%d건. 부팅 알림은 READY 단계에서 이미 전송했습니다.",
+                keyword_count, feed_count, len(items),
             )
 
         # RSS가 같은 100개를 계속 돌려주는지 확인할 수 있도록 현재 피드 목록의

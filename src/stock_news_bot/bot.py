@@ -55,16 +55,20 @@ class StockNewsBot(commands.Bot):
         # Discord 전역 sync를 setup_hook에서 기다리면 콜드스타트 때
         # "부팅은 됐는데 뉴스가 시작되지 않는" 것처럼 보이는 시간을 만든다.
         self._commands_synced = False
+        self._boot_notice_sent = False
 
     async def on_ready(self) -> None:
         logger.info("로그인 완료: %s (id=%s)", self.user, self.user.id if self.user else "?")
         bot_status.mark_ready(str(self.user))
 
-        # 재연결 때마다 명령 동기화/부팅 알림이 중복되지 않도록 1회만 실행한다.
+        # 부팅 확인은 명령 동기화와 분리한다. READY 직후 직접 전송해서
+        # 슬래시 명령 sync나 다른 무거운 작업 때문에 부팅 메시지가 늦어지지 않게 한다.
+        if not self._boot_notice_sent:
+            await self._send_boot_notice()
+
         if not self._commands_synced:
             self._commands_synced = True
             asyncio.create_task(self._sync_commands_after_ready(), name="discord-command-sync")
-            asyncio.create_task(self._send_boot_notice(), name="boot-notice")
 
     async def _sync_commands_after_ready(self) -> None:
         try:
@@ -86,33 +90,60 @@ class StockNewsBot(commands.Bot):
             await alerter.send("🚨 [stock-news-bot] 슬래시 명령 동기화에 실패했습니다. 뉴스 수집은 계속 실행합니다.")
 
     async def _send_boot_notice(self) -> None:
-        channel_id = self.settings.discord_admin_channel_id or self.settings.discord_news_channel_id
-        channel = self.get_channel(channel_id)
-        if channel is None:
-            logger.warning("부팅 확인 채널(id=%s)을 찾을 수 없습니다.", channel_id)
+        """Discord READY 직후 부팅 확인을 즉시 전송한다.
+
+        관리자 채널이 없거나 캐시에 없으면 뉴스 채널로 fallback하고,
+        일시적인 Discord API 지연에도 최대 3회 재시도한다.
+        """
+        if self._boot_notice_sent:
             return
-        keywords = list(dict.fromkeys(self.settings.news_keywords))
-        feeds = self.settings.effective_feed_urls()
-        extensions = ", ".join(self.cogs.keys()) or "없음"
+
+        channel_ids = []
+        for channel_id in (self.settings.discord_admin_channel_id, self.settings.discord_news_channel_id):
+            if channel_id and channel_id not in channel_ids:
+                channel_ids.append(channel_id)
+
+        if not channel_ids:
+            logger.error("부팅 확인 채널이 없습니다: DISCORD_ADMIN_CHANNEL_ID / DISCORD_NEWS_CHANNEL_ID")
+            return
+
         from datetime import datetime, timezone, timedelta
         kst = timezone(timedelta(hours=9))
         boot_time = datetime.now(timezone.utc).astimezone(kst).strftime("%Y-%m-%d %H:%M:%S")
+        keywords = list(dict.fromkeys(self.settings.news_keywords))
+        feeds = self.settings.effective_feed_urls()
         message = (
             "✅ **[통제소] 뉴스봇 부팅 완료**\n\n"
             f"↳ 상태: **정상 기동 · KST={boot_time}**\n"
-            f"↳ 실행 버전: **BOOT-DIAGNOSTIC-V24**\n"
             f"↳ 검색 키워드: **{len(keywords)}개**\n"
             f"↳ 검색 피드: **{len(feeds)}개**\n"
             f"↳ 최소 전송 점수: **{self.settings.news_value_mid}점**\n"
             f"↳ 수집 주기: **{self.settings.fetch_interval_seconds}초**\n\n"
             "✅ **뉴스 수집을 즉시 시작합니다.**\n"
-            "`/status` · `/run` · `/pause` · `/resume` · `/재진단` · `/help`\n"
-            "🔎 `/search-status`로 Render 검색 설정과 실제 수집 상태를 확인할 수 있습니다."
+            "`/status` · `/run-now` · `/pause` · `/resume` · `/search-status` · `/help`"
         )
-        try:
-            await channel.send(message[:1900], allowed_mentions=discord.AllowedMentions.none())
-        except Exception:
-            logger.exception("부팅 확인 메시지 전송 실패")
+
+        for attempt in range(1, 4):
+            for channel_id in channel_ids:
+                channel = self.get_channel(channel_id)
+                if channel is None:
+                    try:
+                        channel = await self.fetch_channel(channel_id)
+                    except Exception as exc:
+                        logger.warning("부팅 확인 채널 조회 실패(%s회, id=%s): %s", attempt, channel_id, exc)
+                        continue
+                try:
+                    await channel.send(message[:1900], allowed_mentions=discord.AllowedMentions.none())
+                    self._boot_notice_sent = True
+                    logger.info("✅ 통제소 부팅 완료 메시지 전송 성공: 채널=%s", channel_id)
+                    return
+                except Exception as exc:
+                    logger.warning("부팅 확인 메시지 전송 실패(%s회, id=%s): %s", attempt, channel_id, exc)
+            if attempt < 3:
+                await asyncio.sleep(attempt * 2)
+
+        logger.error("🚨 부팅 확인 메시지를 Discord로 전송하지 못했습니다. 채널 ID와 봇 권한을 확인하세요.")
+        await self.alerter.send("🚨 [stock-news-bot] 봇은 로그인했지만 부팅 확인 메시지를 Discord로 보내지 못했습니다. 관리자/뉴스 채널 ID와 봇의 메시지 전송 권한을 확인하세요.")
 
     async def on_error(self, event_method: str, /, *args, **kwargs) -> None:
         """이벤트 핸들러 내부에서 잡히지 않은 예외에 대한 최후 방어선.

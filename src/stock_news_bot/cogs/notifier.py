@@ -161,8 +161,11 @@ def _trade_verdict(item: NewsItem) -> tuple[str, str]:
 
 
 def build_trade_detail(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None) -> str:
-    title, _core, analysis, theme, related, reasons, schedule, _terms = _analysis_parts(item)
+    title, core, analysis, theme, related, reasons, schedule, _terms = _analysis_parts(item)
     verdict, verdict_reason = _trade_verdict(item)
+
+    # 상세 화면은 "왜 이 판단인가"를 한눈에 이해할 수 있도록
+    # 판단 기준 → 객관적 근거 → 확인할 조건 순서로 구성한다.
     lines = [
         "📊 상세 매매정보",
         f"↳ 판단: {verdict}",
@@ -170,32 +173,57 @@ def build_trade_detail(item: NewsItem, cumulative_line: str | None = None, price
         f"↳ 영향 점수: {item.score}점",
         f"↳ 신뢰도: {item.confidence}점",
     ]
+
+    # 뉴스에서 실제 확인된 핵심 사실을 최우선으로 보여준다.
+    if core:
+        lines.append("↳ 핵심 근거:")
+        lines.extend(f"   • {x}" for x in core[:3])
+
+    # 진행단계는 실제 값이 있을 때만 표시한다.
     if item.progress_stage:
         lines.append(f"↳ 진행단계: {item.progress_stage}")
-    elif analysis:
-        for line in analysis:
-            if line.startswith("진행단계:"):
-                lines.append(f"↳ {line}")
-                break
+
     if item.amounts:
         lines.append(f"↳ 금액 근거: {', '.join(item.amounts[:3])}")
+
     if item.reason:
         lines.append(f"↳ 사업 근거: {item.reason}")
+
     if theme:
         lines.append(f"↳ 테마: {theme}")
+
     if related:
         lines.append(f"↳ 관련주: {', '.join(related)}")
         for company in related[:3]:
             if reasons.get(company):
                 lines.append(f"↳ 관련 근거: {reasons[company]}")
+
     if schedule:
         lines.append(f"↳ 일정: {', '.join(schedule[:5])}")
+
     if cumulative_line:
         lines.append(f"↳ {cumulative_line.replace('📊 ', '')}")
+
     if price_reaction_line:
         lines.append(f"↳ {price_reaction_line.replace('📈 ', '')}")
-    if not item.reason and not item.amounts and not related:
-        lines.append("↳ 핵심 확인: 현재 기사만으로는 실적·수익 연결 근거가 부족함")
+
+    # 신뢰도는 숫자만 보여주지 않고 실제 충족 근거를 설명한다.
+    confidence_reason = next((x for x in analysis if x.startswith("신뢰도 근거:")), None)
+    if confidence_reason:
+        lines.append(f"↳ {confidence_reason}")
+
+    # 매수주의/관망일 때는 '무엇이 확인되어야 판단이 바뀌는가'를 명확히 한다.
+    if verdict == "매수 주의":
+        if not item.reason and not item.amounts:
+            lines.append("↳ 주의 이유: 실제 계약·금액·실적 연결 근거가 확인되지 않음")
+        elif not item.reason:
+            lines.append("↳ 주의 이유: 금액은 확인되지만 사업·실적 연결 근거가 부족함")
+        lines.append("↳ 판단 변경 조건: 실제 계약·공급·투자·실적 반영 등 객관적 촉매 확인")
+    elif verdict == "관망":
+        lines.append("↳ 판단 변경 조건: 추가 촉매 확인 또는 현재 사업·실적 반영 확인")
+    else:
+        lines.append("↳ 확인 조건: 실제 공급·계약·매출·실적 반영이 이어지는지 확인")
+
     lines.append(f"↳ 기사: {item.url}")
     return "\n".join(lines)[:3900]
 
