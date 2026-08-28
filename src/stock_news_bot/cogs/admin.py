@@ -80,6 +80,33 @@ class AdminCog(commands.Cog, name="Admin"):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
+    @app_commands.command(name="search-status", description="Render 뉴스 검색 설정과 최근 수집 상태를 확인합니다.")
+    async def search_status(self, interaction: discord.Interaction) -> None:
+        _check_admin(interaction)
+        scheduler = self.bot.get_cog("Scheduler")
+        if scheduler is None:
+            await interaction.response.send_message("Scheduler 코그가 로드되지 않았습니다.", ephemeral=True)
+            return
+
+        scan = scheduler._last_scan
+        keywords = self.bot.settings.news_keywords  # type: ignore[attr-defined]
+        preview = ", ".join(keywords[:20]) if keywords else "없음"
+        source = "NEWS_KEYWORDS" if keywords else "RSS_FEEDS"
+        message = (
+            "🔎 **[뉴스 검색 상태]**\n\n"
+            f"↳ 사용 소스: **{source}**\n"
+            f"↳ Render 키워드: **{scan.get('keywords', 0)}개**\n"
+            f"↳ 검색 RSS: **{scan.get('feeds', 0)}개**\n"
+            f"↳ 최근 수집: **{scan.get('fetched', 0)}건**\n"
+            f"↳ 점수 통과: **{scan.get('filtered', 0)}건**\n"
+            f"↳ 신규: **{scan.get('new', 0)}건**\n"
+            f"↳ 최종 전송: **{scan.get('sent', 0)}건**\n"
+            f"↳ 수집 오류: **{scan.get('errors', 0)}건**\n\n"
+            f"🔑 키워드 일부: {preview}"
+        )
+        await interaction.response.send_message(message[:1900], ephemeral=True)
+
     @app_commands.command(name="pause", description="뉴스 수집/알림을 일시정지합니다.")
     async def pause(self, interaction: discord.Interaction) -> None:
         _check_admin(interaction)

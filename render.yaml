@@ -47,14 +47,19 @@ services:
       # 달리 시세/재무데이터는 자주 바뀌지 않으므로 기본값을 길게 잡는다.
       - key: MARKET_INTEL_INTERVAL_SECONDS
         value: "3600"
+      # 수집 키워드의 단일 원본은 Render Dashboard의 Environment Variable이다.
+      # Blueprint에는 기본 키워드를 넣지 않아 저장된 Render 값을 덮어쓰지 않는다.
       - key: NEWS_KEYWORDS
-        value: "삼성전자,SK하이닉스,코스피,반도체"
+        sync: false
+      # NEWS_KEYWORDS가 있으면 RSS_FEEDS보다 항상 우선한다.
       - key: RSS_FEEDS
-        value: ""
+        sync: false
       - key: FETCH_INTERVAL_SECONDS
-        value: "300"
+        value: "60"
       - key: STARTUP_MAX_AGE_SECONDS
-        value: "900"
+        value: "3600"
+      - key: STARTUP_SEND_LIMIT
+        value: "10"
       - key: NEWS_SEND_MIN_SCORE
         value: "40"
       - key: MEDIUM_NEWS_SCORE

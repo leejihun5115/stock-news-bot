@@ -23,6 +23,8 @@ class BotStatus:
     last_sent_count: int = 0
     last_new_count: int = 0
     last_fetch_error_count: int = 0
+    last_keyword_count: int = 0
+    last_feed_count: int = 0
 
     started_at: dt.datetime = field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
 
@@ -30,7 +32,7 @@ class BotStatus:
         self.bot_ready = True
         self.bot_user = user
 
-    def mark_success(self, *, fetched: int, new: int, sent: int, fetch_errors: int) -> None:
+    def mark_success(self, *, fetched: int, new: int, sent: int, fetch_errors: int, keyword_count: int = 0, feed_count: int = 0) -> None:
         now = dt.datetime.now(dt.timezone.utc)
         self.last_run_at = now
         self.last_run_ok = True
@@ -39,6 +41,8 @@ class BotStatus:
         self.last_new_count = new
         self.last_sent_count = sent
         self.last_fetch_error_count = fetch_errors
+        self.last_keyword_count = keyword_count
+        self.last_feed_count = feed_count
 
     def mark_failure(self, error: str) -> None:
         self.last_run_at = dt.datetime.now(dt.timezone.utc)

@@ -166,6 +166,17 @@ class FetcherCog(commands.Cog, name="Fetcher"):
 
     async def collect(self) -> tuple[list[NewsItem], list[FetchError]]:
         urls = self.settings.effective_feed_urls()
+        if self.settings.news_keywords:
+            unique_count = len(list(dict.fromkeys(self.settings.news_keywords)))
+            logger.info(
+                "Render NEWS_KEYWORDS 적용: %d개 키워드 → %d개 RSS 검색 피드",
+                unique_count, len(urls),
+            )
+        else:
+            logger.info(
+                "Render NEWS_KEYWORDS 미설정: RSS_FEEDS %d개를 사용합니다.",
+                len(urls),
+            )
         if not urls:
             logger.warning("수집할 RSS 피드/키워드가 설정되어 있지 않습니다.")
             return [], []

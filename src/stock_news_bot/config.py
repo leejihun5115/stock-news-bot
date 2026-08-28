@@ -70,10 +70,11 @@ class Settings:
     news_keywords: list[str] = field(default_factory=list)
     news_value_mid: int = 45
     news_value_high: int = 75
-    fetch_interval_seconds: int = 300
+    fetch_interval_seconds: int = 60
     fetch_timeout_seconds: int = 10
     fetch_max_retries: int = 3
-    startup_max_age_seconds: int = 900  # 첫 부팅 때 과거 RSS backlog를 일괄 발송하지 않을 시간 범위
+    startup_max_age_seconds: int = 3600  # 첫 부팅 시 최근 1시간까지만 신규 후보로 허용
+    startup_send_limit: int = 10  # 첫 부팅에 한꺼번에 보내지 않을 최대 뉴스 수
 
     db_path: Path = Path("./data/stock_news_bot.sqlite3")
     dedup_retention_days: int = 14
@@ -109,16 +110,25 @@ class Settings:
         return bool(self.dart_api_key)
 
     def effective_feed_urls(self) -> list[str]:
-        """RSS_FEEDS가 명시돼 있으면 그것을, 없으면 키워드 기반 구글 뉴스
-        검색 RSS를 자동 생성해서 반환한다."""
-        if self.rss_feeds:
-            return self.rss_feeds
+        """Render의 NEWS_KEYWORDS를 수집 키워드의 단일 원본으로 사용한다.
+
+        RSS_FEEDS는 레거시/진단용으로만 유지하고, NEWS_KEYWORDS가 있으면
+        항상 NEWS_KEYWORDS가 우선한다. 따라서 코드에 별도의 수집용 키워드
+        목록을 두지 않고 Render Environment Variables를 그대로 실행 기준으로 쓴다.
+        """
         from urllib.parse import quote
 
-        return [
-            f"https://news.google.com/rss/search?q={quote(kw)}&hl=ko&gl=KR&ceid=KR:ko"
-            for kw in self.news_keywords
-        ]
+        if self.news_keywords:
+            # 중복 키워드는 RSS 중복 호출과 같은 뉴스 후보 중복을 만들 수 있으므로
+            # 입력 순서를 유지하면서 1회만 사용한다.
+            unique_keywords = list(dict.fromkeys(self.news_keywords))
+            return [
+                f"https://news.google.com/rss/search?q={quote(kw)}&hl=ko&gl=KR&ceid=KR:ko"
+                for kw in unique_keywords
+            ]
+
+        # NEWS_KEYWORDS가 완전히 비어 있는 경우에만 명시적 RSS_FEEDS를 허용한다.
+        return self.rss_feeds
 
 
 def load_settings() -> Settings:
@@ -134,10 +144,11 @@ def load_settings() -> Settings:
         news_keywords=_get_str_list("NEWS_KEYWORDS"),
         news_value_mid=_get_int("NEWS_SEND_MIN_SCORE", _get_int("MEDIUM_NEWS_SCORE", 45)),
         news_value_high=_get_int("STRONG_NEWS_SCORE", 75),
-        fetch_interval_seconds=_get_int("FETCH_INTERVAL_SECONDS", 300),
+        fetch_interval_seconds=_get_int("FETCH_INTERVAL_SECONDS", 60),
         fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),
         fetch_max_retries=_get_int("FETCH_MAX_RETRIES", 3),
-        startup_max_age_seconds=_get_int("STARTUP_MAX_AGE_SECONDS", 900),
+        startup_max_age_seconds=_get_int("STARTUP_MAX_AGE_SECONDS", 3600),
+        startup_send_limit=_get_int("STARTUP_SEND_LIMIT", 10),
         db_path=Path(_get_str("DB_PATH", "./data/stock_news_bot.sqlite3")),
         dedup_retention_days=_get_int("DEDUP_RETENTION_DAYS", 14),
         history_lookback_days=_get_int("HISTORY_LOOKBACK_DAYS", 30),
@@ -158,10 +169,21 @@ def load_settings() -> Settings:
 
     if settings.discord_news_channel_id == 0:
         raise ConfigError("DISCORD_NEWS_CHANNEL_ID가 설정되지 않았습니다.")
-    if not settings.rss_feeds and not settings.news_keywords:
+    if not settings.news_keywords and not settings.rss_feeds:
         raise ConfigError(
-            "RSS_FEEDS 또는 NEWS_KEYWORDS 중 하나는 반드시 설정해야 합니다."
+            "Render의 NEWS_KEYWORDS 또는 RSS_FEEDS가 설정되어야 합니다."
         )
+
+    # Render 환경변수에 실제로 로드된 수집 키워드 수를 부팅 시 기록한다.
+    # 키워드가 다른 값으로 들어왔는지 로그만 봐도 즉시 확인할 수 있게 한다.
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    _log.info(
+        "수집 설정 로드 완료: NEWS_KEYWORDS=%d개, RSS_FEEDS=%d개, 실제 사용=%s",
+        len(settings.news_keywords),
+        len(settings.rss_feeds),
+        "NEWS_KEYWORDS" if settings.news_keywords else "RSS_FEEDS",
+    )
 
     return settings
 
