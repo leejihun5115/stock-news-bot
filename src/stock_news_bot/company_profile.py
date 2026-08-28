@@ -99,6 +99,19 @@ def _wiki(company,lang):
   if not pages:return '',''
   page=next(iter(pages.values())); return re.sub(r'\s+',' ',str(page.get('extract',''))).strip(),str(((page.get('thumbnail') or {}).get('source')) or '')
  except Exception as e:logger.info('회사 프로필 조회 실패(%s): %s',company,e);return '',''
+def is_listed_company(company):
+ """상장 여부만 가볍게 확인한다(위키 조회 없이) — 관련주 목록이나 본문
+ 텍스트 안에 등장하는 회사명 하나하나에 ⚡️ 표시를 붙일지 결정할 때 쓴다.
+ (resolve_company_profile과 같은 국내/미국 상장 판정 로직을 재사용하되,
+ 느린 위키백과 조회는 건너뛴다.)"""
+ company=(company or '').strip()
+ if not company:return False
+ if _norm(company) in {_norm(x) for x in _KR_LISTED_ALIASES}:return True
+ try:m=_get_dart().find_by_name(company)
+ except Exception:m=None
+ if m and m.stock_code:return True
+ return bool(_ticker(company))
+
 def resolve_company_profile(company,sectors=None):
  company=(company or '').strip();sectors=sectors or []
  if not company:return CompanyProfile('')

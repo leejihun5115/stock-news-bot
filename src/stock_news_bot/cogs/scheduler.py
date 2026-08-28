@@ -495,7 +495,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     )
                     await self.alerter.send_news(
                         summary_text,
-                        button_label="매매포인트 상세보기",
+                        button_label="Key Point 🔗상세보기",
                         callback_data=item.dedup_key,
                         detail=detail_text,
                     )

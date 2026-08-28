@@ -83,7 +83,7 @@ class TelegramAlerter:
             "text": message[:4000],
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
-            "reply_markup": {"inline_keyboard": [[{"text": f"📊 {button_label}", "callback_data": callback_data}]]},
+            "reply_markup": {"inline_keyboard": [[{"text": f"🔓 {button_label}", "callback_data": callback_data}]]},
         }
         try:
             timeout = aiohttp.ClientTimeout(total=10)
@@ -135,8 +135,9 @@ class TelegramAlerter:
                                 detail = "📊 상세정보가 만료되었습니다. 최신 뉴스의 버튼을 눌러주세요."
                             message = callback.get("message") or {}
                             chat = (message.get("chat") or {}).get("id")
+                            reply_to = message.get("message_id")
                             if chat is not None:
-                                await self._send_detail(session, chat, detail)
+                                await self._send_detail(session, chat, detail, reply_to_message_id=reply_to)
                             await session.post(self._url("answerCallbackQuery"), json={"callback_query_id": callback["id"], "text": "상세 매매정보를 표시했습니다."})
                     except asyncio.CancelledError:
                         raise
@@ -148,13 +149,29 @@ class TelegramAlerter:
         except Exception:
             logger.exception("텔레그램 callback polling 종료")
 
-    async def _send_detail(self, session: aiohttp.ClientSession, chat_id: int, detail: str) -> None:
+    async def _send_detail(
+        self,
+        session: aiohttp.ClientSession,
+        chat_id: int,
+        detail: str,
+        *,
+        reply_to_message_id: int | None = None,
+    ) -> None:
         payload = {
             "chat_id": chat_id,
             "text": detail[:4000],
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
+        if reply_to_message_id is not None:
+            # 상세보기를 새 메시지로 그냥 보내면 그 사이 들어온 다른 뉴스들
+            # 밑에 묻혀버린다. reply_to_message_id로 원본 뉴스 메시지에 답장
+            # 형태로 붙여서, 나중에 온 뉴스들 아래에서 열리더라도 어떤 뉴스의
+            # 상세보기인지 원본을 인용해서 바로 보여준다.
+            payload["reply_to_message_id"] = reply_to_message_id
+            # 원본 메시지가 (드물게) 삭제된 경우에도 상세보기 전송 자체는
+            # 실패하지 않도록 한다.
+            payload["allow_sending_without_reply"] = True
         async with session.post(self._url("sendMessage"), json=payload) as resp:
             if resp.status != 200:
                 logger.error("텔레그램 상세정보 전송 실패(status=%s): %s", resp.status, await resp.text())

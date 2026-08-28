@@ -7,7 +7,7 @@
 따옴표(")만 계속 안 붙이는 상태로 유지한다(예: `📰 [알톤]`).
 
 【텔레그램: 버튼 클릭 → 상세보기 부활】
-텔레그램은 다시 "요약만 먼저 보내고, 인라인 버튼(📊 매매포인트 상세보기)을
+텔레그램은 다시 "요약만 먼저 보내고, 인라인 버튼(🔓 Key Point 🔗상세보기)을
 누르면 상세 내용이 후속 메시지로 온다" 방식을 쓴다.
 - build_telegram_summary_text(): 최초 발송용. 헤더/제목/관련주/판정만.
 - build_telegram_text(): 버튼 클릭 시 전송되는 전체 상세.
@@ -17,7 +17,7 @@ scheduler.py가 TelegramAlerter.send_news()로 이 둘을 함께 넘기고,
 그 위험을 감수하기로 함.)
 【디스코드: 버튼 클릭 → 그 자리에서 상세보기 → 삭제】
 디스코드도 요약을 먼저 보내는 건 같지만, 텔레그램과 달리 새 메시지를
-따로 보내지 않는다. "📊 매매포인트 상세보기" 버튼을 누르면 그 뉴스
+따로 보내지 않는다. "🔓 Key Point 🔗상세보기" 버튼을 누르면 그 뉴스
 메시지 자체를 interaction.response.edit_message()로 상세 내용으로
 바꿔치기한다 — 상세가 항상 그 뉴스가 있던 자리에 그대로 나온다(채널
 맨 아래로 새 메시지가 추가되는 게 아님). 상세로 바뀐 뒤에는 view가
@@ -53,7 +53,7 @@ import discord
 from discord.ext import commands
 
 from stock_news_bot.models import Importance, NewsItem
-from stock_news_bot.company_profile import CompanyProfile, resolve_company_profile
+from stock_news_bot.company_profile import CompanyProfile, resolve_company_profile, is_listed_company
 from stock_news_bot.cogs.analysis_engine import analyze_item
 from stock_news_bot.storage.fundamentals import get_fundamentals
 from stock_news_bot.storage.history import SectorStats
@@ -103,6 +103,40 @@ def _title_prefix(theme: str | None, title: str) -> str:
     )):
         return "💊"
     return "📌"
+
+
+def _listed_companies(display_company: str, related: list[str], company_profile: CompanyProfile) -> set[str]:
+    """이번 뉴스에 등장하는 이름들(헤더 회사명 + 관련주) 중 상장사로 확인된 것만 모은다.
+
+    ⚡️ 표시는 국내/미국 상장사(한글 이름 표기 포함)에만 붙이고, 📅 [일정] 블록에는
+    적용하지 않는다(호출부에서 schedule 줄은 애초에 이 마킹을 거치지 않는다).
+    """
+    listed: set[str] = set()
+    if display_company and company_profile.market_label:
+        listed.add(display_company)
+    for c in related:
+        c = (c or "").strip()
+        if c and c not in listed and is_listed_company(c):
+            listed.add(c)
+    return listed
+
+
+def _mark(name: str, listed_companies: set[str]) -> str:
+    """상장사로 확인된 이름 앞에 ⚡️를 붙인다."""
+    return f"⚡️{name}" if name in listed_companies else name
+
+
+def _mark_in_text(text: str, listed_companies: set[str]) -> str:
+    """제목/핵심/분석/전망 등 본문 텍스트 안에 상장사 이름이 그대로 등장하면
+    그 앞에 ⚡️를 붙인다. (📅 [일정] 텍스트에는 호출하지 않는다.)"""
+    if not text or not listed_companies:
+        return text
+    for name in sorted(listed_companies, key=len, reverse=True):
+        marker = f"⚡️{name}"
+        if not name or marker in text:
+            continue
+        text = text.replace(name, marker)
+    return text
 
 
 def _display_time(dt) -> str:
@@ -282,7 +316,9 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
     title_prefix = _title_prefix(theme, title)
     company_profile = company_profile or CompanyProfile(company=display_company)
     verdict, score, verdict_reason = _trade_verdict(item, analysis)
-    company_label = f"{company_profile.market_label} {display_company}".strip()
+    listed = _listed_companies(display_company, related, company_profile)
+    company_label = f"{company_profile.market_label} {_mark(display_company, listed)}".strip()
+    title = _mark_in_text(title, listed)
     lines = [
         f"📰 [{company_label}]   [{item.classification}]   ⏰ {local_time}",
         "",
@@ -290,18 +326,18 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
         "",
     ]
     if core:
-        lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {x}" for x in core]]
+        lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {_mark_in_text(x, listed)}" for x in core]]
     if analysis:
-        lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {x}" for x in analysis]]
+        lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {_mark_in_text(x, listed)}" for x in analysis]]
     if theme:
         lines += ["", f"🏷 [테마] : {theme}"]
     if related:
         lines += ["", "🎯 [관련주]"]
         for company in related:
             reason = reasons.get(company)
-            lines.append(f"{_INDENT}↳ {company}")
+            lines.append(f"{_INDENT}↳ {_mark(company, listed)}")
             if reason:
-                lines.append(f"{_INDENT}↳ 근거 — {reason}")
+                lines.append(f"{_INDENT}↳ 근거 — {_mark_in_text(reason, listed)}")
     # 현재 뉴스의 최종 점수와 판단은 매매 포인트 한 곳에서만 표시한다.
     # 기존 "강함/보통/약함 + 신뢰도" 중복 표시는 제거한다.
     # 사용자가 요구한 "매수 이유/근거"도 같은 블록 안에 바로 표시한다.
@@ -311,17 +347,17 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
     if not trade_reason:
         trade_reason = verdict_reason
     trade_condition = _verdict_condition(item, verdict)
-    trade_link = "📊 [매매 포인트]"
     verdict_label = f"{verdict} ({score}점)" if verdict != "⚪ 판단 보류" else verdict
     lines += [
         "",
-        f"{trade_link}   {verdict_label}",
+        verdict_label,
         f"{_INDENT}↳ 이유/근거 : {trade_reason}",
         f"{_INDENT}↳ 판단 조건 : {trade_condition}",
     ]
     outlook = _build_outlook(item, verdict, analysis)
     if outlook:
-        lines += ["", "🔮 [전망]", *[f"{_INDENT}↳ {x}" for x in outlook]]
+        lines += ["", "🔮 [전망]", *[f"{_INDENT}↳ {_mark_in_text(x, listed)}" for x in outlook]]
+    # 📅 [일정]에는 ⚡️ 표시를 붙이지 않는다(일정/브리핑 성격의 텍스트는 그대로 둔다).
     if schedule:
         lines += ["", "📅 [일정]", *[f"{_INDENT}↳ {x}" for x in schedule[:5]]]
     if terms:
@@ -331,7 +367,9 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
     if price_reaction_line:
         lines += ["", price_reaction_line]
     if item.url:
-        lines += ["", f"🏭 업종 : {company_profile.industry}", f"🏢 주요 사업 : {company_profile.business}", f"🔗 [기사 원문 보기]({item.url})"]
+        if display_company in listed:
+            lines += ["", f"🏭 업종 : {company_profile.industry}", f"🏢 주요 사업 : {company_profile.business}"]
+        lines += ["", f"🔗 [기사 원문 보기]({item.url})"]
     return "\n".join(_push_body_inward(lines))
 
 
@@ -351,7 +389,7 @@ def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None
     """디스코드 최초 발송용 축약 본문. 헤더 / 제목 / 관련주 / 매매 포인트(판정만) 3~4블록.
 
     핵심·분석·관련주 근거·이유/판단조건·전망·일정·용어 등 상세 내용은
-    여기 넣지 않고, 이 메시지에 딸린 버튼(📊 매매포인트 상세보기)을
+    여기 넣지 않고, 이 메시지에 딸린 버튼(🔓 Key Point 🔗상세보기)을
     누르면 build_message()로 만든 전체 상세가 후속 메시지로 온다.
     build_telegram_summary_text()와 동일한 구성이며 HTML escape만 없다
     (디스코드 embed는 마크다운을 쓰지 HTML을 쓰지 않는다).
@@ -362,7 +400,9 @@ def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None
     title_prefix = _title_prefix(theme, title)
     company_profile = company_profile or CompanyProfile(company=display_company)
     verdict, score, _verdict_reason = _trade_verdict(item, analysis)
-    company_label = f"{company_profile.market_label} {display_company}".strip()
+    listed = _listed_companies(display_company, related, company_profile)
+    company_label = f"{company_profile.market_label} {_mark(display_company, listed)}".strip()
+    title = _mark_in_text(title, listed)
 
     lines = [
         f"📰 [{company_label}]   [{item.classification}]   ⏰ {local_time}",
@@ -370,9 +410,9 @@ def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None
         f"{title_prefix} **{title}**",
     ]
     if related:
-        lines += ["", "🎯 [관련주]", *[f"{_INDENT}↳ {c}" for c in related]]
+        lines += ["", "🎯 [관련주]", *[f"{_INDENT}↳ {_mark(c, listed)}" for c in related]]
     verdict_label = f"{verdict} ({score}점)" if verdict != "⚪ 판단 보류" else verdict
-    lines += ["", f"📊 [매매 포인트]   {verdict_label}"]
+    lines += ["", verdict_label]
     return "\n".join(_push_body_inward(lines))
 
 
@@ -409,7 +449,7 @@ class DetailView(discord.ui.View):
 
 
 class TradePointView(discord.ui.View):
-    """요약 메시지에 붙는 "📊 매매포인트 상세보기" 버튼.
+    """요약 메시지에 붙는 "🔓 Key Point 🔗상세보기" 버튼.
 
     버튼을 누르면 새 메시지를 보내지 않고, 그 뉴스 요약 메시지 자체를
     interaction.response.edit_message()로 상세 내용으로 바꿔친다 — 상세가
@@ -425,7 +465,7 @@ class TradePointView(discord.ui.View):
         super().__init__(timeout=None)
         self._detail_embed = detail_embed
 
-    @discord.ui.button(label="매매포인트 상세보기", emoji="📊", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Key Point 🔗상세보기", emoji="🔓", style=discord.ButtonStyle.primary)
     async def show_detail(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         try:
             await interaction.response.edit_message(embed=self._detail_embed, view=DetailView())
@@ -444,36 +484,39 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
     def esc(value: str) -> str:
         return html_escape(str(value), quote=True)
 
-    company_label = f"{company_profile.market_label} {display_company}".strip()
+    listed = _listed_companies(display_company, related, company_profile)
+    title = _mark_in_text(title, listed)
+    company_label = f"{company_profile.market_label} {_mark(display_company, listed)}".strip()
     lines = [f"📰 [{esc(company_label)}]   [{esc(item.classification)}]   ⏰ {local_time}", "", f"{title_prefix} <b>{esc(title)}</b>"]
     if core:
-        lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {esc(x)}" for x in core]]
+        lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {esc(_mark_in_text(x, listed))}" for x in core]]
     if analysis:
-        lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {esc(x)}" for x in analysis]]
+        lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {esc(_mark_in_text(x, listed))}" for x in analysis]]
     if theme:
         lines += ["", f"🏷 [테마] : {esc(theme)}"]
     if related:
         lines += ["", "🎯 [관련주]"]
         for company in related:
-            lines.append(f"{_INDENT}↳ {esc(company)}")
+            lines.append(f"{_INDENT}↳ {esc(_mark(company, listed))}")
             if reasons.get(company):
-                lines.append(f"{_INDENT}↳ 근거 — {esc(reasons[company])}")
+                lines.append(f"{_INDENT}↳ 근거 — {esc(_mark_in_text(reasons[company], listed))}")
     trade_reason = (item.reason or "").strip()
     if not trade_reason and related and reasons.get(related[0]):
         trade_reason = str(reasons[related[0]]).strip()
     if not trade_reason:
         trade_reason = verdict_reason
+    trade_reason = _mark_in_text(trade_reason, listed)
     trade_condition = _verdict_condition(item, verdict)
-    trade_link = "📊 [매매 포인트]"
     lines += [
         "",
-        f"{trade_link}   {esc(verdict)}" + (f" ({score}점)" if verdict != "⚪ 판단 보류" else ""),
+        esc(verdict) + (f" ({score}점)" if verdict != "⚪ 판단 보류" else ""),
         f"{_INDENT}↳ 이유/근거 : {esc(trade_reason)}",
         f"{_INDENT}↳ 판단 조건 : {esc(trade_condition)}",
     ]
     outlook = _build_outlook(item, verdict, analysis)
     if outlook:
-        lines += ["", "🔮 [전망]", *[f"{_INDENT}↳ {esc(x)}" for x in outlook]]
+        lines += ["", "🔮 [전망]", *[f"{_INDENT}↳ {esc(_mark_in_text(x, listed))}" for x in outlook]]
+    # 📅 [일정]에는 ⚡️ 표시를 붙이지 않는다.
     if schedule:
         lines += ["", "📅 [일정]", *[f"{_INDENT}↳ {esc(x)}" for x in schedule[:5]]]
     if terms:
@@ -483,7 +526,9 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
     if price_reaction_line:
         lines += ["", esc(price_reaction_line)]
     if item.url:
-        lines += ["", f"🏭 업종 : {esc(company_profile.industry)}", f"🏢 주요 사업 : {esc(company_profile.business)}", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
+        if display_company in listed:
+            lines += ["", f"🏭 업종 : {esc(company_profile.industry)}", f"🏢 주요 사업 : {esc(company_profile.business)}"]
+        lines += ["", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
     return "\n".join(_push_body_inward(lines))
 
 
@@ -491,7 +536,7 @@ def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile 
     """텔레그램 최초 발송용 축약 본문. 헤더 / 제목 / 매매 포인트(판정만) 3블록.
 
     핵심·분석·관련주 근거·이유/판단조건·전망·일정·용어 등 상세 내용은
-    여기 넣지 않고, 이 메시지에 딸린 인라인 버튼(📊 매매포인트 상세보기)을
+    여기 넣지 않고, 이 메시지에 딸린 인라인 버튼(🔓 Key Point 🔗상세보기)을
     누르면 build_telegram_text()로 만든 전체 상세가 후속 메시지로 온다.
     """
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
@@ -504,16 +549,18 @@ def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile 
     def esc(value: str):
         return html_escape(str(value), quote=True)
 
-    company_label = f"{company_profile.market_label} {display_company}".strip()
+    listed = _listed_companies(display_company, related, company_profile)
+    title = _mark_in_text(title, listed)
+    company_label = f"{company_profile.market_label} {_mark(display_company, listed)}".strip()
     lines = [
         f"📰 [{esc(company_label)}]   [{esc(item.classification)}]   ⏰ {local_time}",
         "",
         f"{title_prefix} <b>{esc(title)}</b>",
     ]
     if related:
-        lines += ["", "🎯 [관련주]", *[f"{_INDENT}↳ {esc(c)}" for c in related]]
+        lines += ["", "🎯 [관련주]", *[f"{_INDENT}↳ {esc(_mark(c, listed))}" for c in related]]
     verdict_label = f"{esc(verdict)} ({score}점)" if verdict != "⚪ 판단 보류" else esc(verdict)
-    lines += ["", f"📊 [매매 포인트]   {verdict_label}"]
+    lines += ["", verdict_label]
     return "\n".join(_push_body_inward(lines))
 
 
