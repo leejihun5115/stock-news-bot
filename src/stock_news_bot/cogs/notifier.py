@@ -291,9 +291,12 @@ class NotifierCog(commands.Cog, name="Notifier"):
 
         cumulative_lines = cumulative_lines or {}
         price_reaction_lines = price_reaction_lines or {}
-        order = {Importance.LOW: 0, Importance.MEDIUM: 1, Importance.HIGH: 2}
+        # 과거 기사부터 최신 기사 순으로 송출한다. 예전에는 중요도(LOW/MEDIUM/HIGH)
+        # 순으로 정렬했는데, 그러면 같은 배치 안에서도 시각이 뒤죽박죽으로 섞여
+        # 나오는 문제가 있었다. 시간순(오래된 것 → 최신) 정렬로 바꿔서
+        # 채널에서 봤을 때 자연스러운 시간 흐름으로 읽히게 한다.
         sent_items: list[NewsItem] = []
-        for item in sorted(items, key=lambda i: order[i.importance]):
+        for item in sorted(items, key=lambda i: i.published_at):
             cumulative_line = cumulative_lines.get(item.dedup_key)
             price_reaction_line = price_reaction_lines.get(item.dedup_key)
             try:

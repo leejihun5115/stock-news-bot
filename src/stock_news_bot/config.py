@@ -73,8 +73,8 @@ class Settings:
     fetch_interval_seconds: int = 20
     fetch_timeout_seconds: int = 10
     fetch_max_retries: int = 3
-    startup_max_age_seconds: int = 3600  # 첫 부팅 시 최근 1시간까지만 신규 후보로 허용
-    startup_send_limit: int = 10  # 첫 부팅에 한꺼번에 보내지 않을 최대 뉴스 수
+    startup_max_age_seconds: int = 3600  # (더 이상 사용되지 않음. 첫 부팅 기준은 이제 KST 달력상 "오늘"로 고정됨)
+    startup_send_limit: int = 50  # 첫 부팅 시 "오늘" 기사 중 한꺼번에 보낼 최대 건수(초과분은 다음 사이클로 이월)
 
     db_path: Path = Path("./data/stock_news_bot.sqlite3")
     dedup_retention_days: int = 14
@@ -148,7 +148,7 @@ def load_settings() -> Settings:
         fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),
         fetch_max_retries=_get_int("FETCH_MAX_RETRIES", 3),
         startup_max_age_seconds=_get_int("STARTUP_MAX_AGE_SECONDS", 3600),
-        startup_send_limit=_get_int("STARTUP_SEND_LIMIT", 10),
+        startup_send_limit=_get_int("STARTUP_SEND_LIMIT", 50),
         db_path=Path(_get_str("DB_PATH", "./data/stock_news_bot.sqlite3")),
         dedup_retention_days=_get_int("DEDUP_RETENTION_DAYS", 14),
         history_lookback_days=_get_int("HISTORY_LOOKBACK_DAYS", 30),
