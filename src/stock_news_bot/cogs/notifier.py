@@ -54,9 +54,18 @@ def _push_body_inward(lines: list[str]) -> list[str]:
     return [lines[0]] + [f"{_INDENT}{line}" if line else line for line in lines[1:]]
 
 
-def _display_source(source: str) -> str:
-    value = (source or "").strip()
-    value = re.split(r"\s+[-–—|]\s+", value, maxsplit=1)[0].strip()
+def _display_source(source: str, theme: str | None = None, title: str = "") -> str:
+    """사용자에게 보여줄 뉴스 카테고리. 원문 사이트명보다 투자자가 즉시
+    이해할 수 있는 분야명을 우선하고, 제약/바이오 뉴스는 💊를 붙인다."""
+    raw = (source or "").strip()
+    value = re.split(r"\s+[-–—|]\s+", raw, maxsplit=1)[0].strip()
+    text = f"{theme or ''} {title}".lower()
+    if any(k in text for k in ("바이오", "제약", "신약", "임상", "단백질", "항체", "의약", "drug", "biotech", "pharma")):
+        return "제약뉴스 💊"
+    if any(k in text for k in ("반도체", "hbm", "ai반도체", "메모리")):
+        return "반도체뉴스 💾"
+    if any(k in text for k in ("인공지능", " ai ", "생성형 ai", "머신러닝", "딥러닝")):
+        return "AI뉴스 🤖"
     return value or "뉴스"
 
 
@@ -127,6 +136,14 @@ def build_amount_context(item: NewsItem) -> str | None:
     return "\n".join(lines)
 
 
+def _clean_display_title(title: str) -> str:
+    """기사 제목 뒤에 붙은 매체명/출처 꼬리를 제거해 제목을 깔끔하게 표시한다."""
+    value = (title or "").strip()
+    # 흔한 " - 매체명" 꼬리만 제거한다. 제목 내부의 하이픈은 건드리지 않는다.
+    value = re.sub(r"\s+[-–—|]\s+(?:이투데이|디지털데일리|인공지능신문|연합뉴스|머니투데이|한국경제|매일경제|서울경제|조선비즈|전자신문|뉴스1|뉴시스)$", "", value).strip()
+    return value
+
+
 def _meaningful_core(core: list[str], title: str) -> list[str]:
     normalized_title = re.sub(r"\W", "", title)
     result = []
@@ -140,7 +157,7 @@ def _meaningful_core(core: list[str], title: str) -> list[str]:
 
 def _analysis_parts(item: NewsItem):
     result = analyze_item(item)
-    title = item.analysis_title or result.title
+    title = _clean_display_title(item.analysis_title or result.title)
     core = _meaningful_core(result.core, title)
     analysis = []
     for x in result.analysis:
@@ -186,7 +203,7 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
     """디스코드 embed description에 넣을 본문(마크다운, masked link 지원)."""
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     local_time = _display_time(item.published_at)
-    display_source = _display_source(item.source)
+    display_source = _display_source(item.source, theme, title)
     verdict, verdict_reason = _trade_verdict(item)
     lines = [
         f"📰 [{display_source}]   [{item.classification}]   ⏰ {local_time}",
@@ -219,8 +236,7 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
     trade_link = f"📊 [매매 포인트]({item.url})" if item.url else "📊 [매매 포인트]"
     lines += [
         "",
-        trade_link,
-        f"{_INDENT}{verdict} ({max(0, min(100, int(item.score or 0)))}점)",
+        f"{trade_link}   {verdict} ({max(0, min(100, int(item.score or 0)))}점)",
         f"{_INDENT}↳ 매수 이유/근거 : {trade_reason}",
         f"{_INDENT}↳ 판단 조건 : {trade_condition}",
     ]
@@ -250,7 +266,7 @@ def build_embed(item: NewsItem, cumulative_line: str | None = None, price_reacti
 def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None, *, news_value_mid: int = 45, news_value_high: int = 75) -> str:
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     local_time = _display_time(item.published_at)
-    display_source = _display_source(item.source)
+    display_source = _display_source(item.source, theme, title)
     verdict, verdict_reason = _trade_verdict(item)
 
     def esc(value: str) -> str:
@@ -285,8 +301,7 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
         trade_link = "📊 [매매 포인트]"
     lines += [
         "",
-        trade_link,
-        f"{_INDENT}↳ {esc(verdict)}",
+        f"{trade_link}   {esc(verdict)} ({max(0, min(100, int(item.score or 0)))}점)",
         f"{_INDENT}↳ 매수 이유/근거 : {esc(trade_reason)}",
         f"{_INDENT}↳ 판단 조건 : {esc(trade_condition)}",
     ]

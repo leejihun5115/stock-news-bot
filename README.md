@@ -152,3 +152,9 @@ Worker** 타입을 사용합니다 (Web Service 아님). Free 플랜에는 Backg
 
 모든 소스는 발행시각을 UTC 절대시간으로 정규화한 뒤 최근 `NEWS_LOOKBACK_HOURS` 시간만 통과시킵니다.
 Telegram Bot은 시작 시 `getMe`/`getChat` 검증과 webhook 정리 후 callback polling을 시작합니다.
+
+
+## v8 표시 수정
+- 바이오/제약/신약 관련 뉴스는 `제약뉴스 💊` 카테고리로 표시
+- 반도체 관련 뉴스는 `반도체뉴스 💾`, AI 관련 뉴스는 `AI뉴스 🤖`로 표시
+- 제목 끝의 주요 매체명 꼬리는 화면에서 제거
