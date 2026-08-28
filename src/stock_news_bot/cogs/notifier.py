@@ -1,17 +1,21 @@
 """디스코드/텔레그램 뉴스 알림 메시지를 만든다.
 
 【이전 버전과의 차이】
-매매 포인트(매수/매수주의/관망) 줄을 굵게(bold)만 강조하던 방식에서,
-"[📊 상세보기]"를 실제 하이퍼링크(근거가 되는 원문 기사로 연결)로 바꿨다.
-또한 이전에는 텔레그램 인라인 버튼을 눌러야만 보이던 "판단 이유 /
-신뢰도 근거 / 판단이 바뀌려면 무엇이 확인돼야 하는가"를, 버튼 없이도
-메시지 안에서 바로 다 볼 수 있게 기본으로 펼쳐서 넣는다 — 텔레그램
-콜백 폴링(불안정한 부분)에 더 이상 의존하지 않는다.
+핵심/분석/테마/전망/일정/용어/근거 등 상세 내용을 메시지 안에 전부
+펼쳐서 보여주던 방식을 버리고, 다음 3줄만 노출하는 축약형으로 바꿨다.
+
+    📰 [회사명]   [분류]   ⏰ 시각
+    🎯 [관련주]
+         ↳ 회사명
+    📊 [매매 포인트]   판단 (점수)
+
+회사명 주변의 따옴표(")는 더 이상 붙이지 않는다. 나머지 상세 내용은
+화면에 그대로 늘어놓지 않고, 맨 위 헤더 줄 자체를 원문 기사로 가는
+하이퍼링크로 만들어 그 안에 "숨긴다"(클릭하면 원문 기사로 이동).
 
 디스코드는 masked link(`[텍스트](url)`)가 일반 메시지 content에서는
 안정적으로 렌더링되지 않으므로(embed에서만 보장됨), 항상 discord.Embed로
-보낸다. NotifierCog.send_items()가 build_embed()를 실제로 쓴다
-(이전 버전엔 build_embed가 정의만 되고 실제로는 안 쓰이고 있었다).
+보낸다. NotifierCog.send_items()가 build_embed()를 실제로 쓴다.
 """
 from __future__ import annotations
 
@@ -245,64 +249,42 @@ def _build_outlook(item: NewsItem, verdict: str, analysis: list[str]) -> list[st
     return lines
 
 
-def build_message(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None) -> str:
-    """디스코드 embed description에 넣을 본문(마크다운, masked link 지원)."""
-    title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
+def _build_compact_lines(item: NewsItem, esc=None) -> tuple[list[str], str]:
+    """3줄(헤더 / 관련주 / 매매 포인트)만 남긴 축약 본문을 만든다.
+
+    사용자 요구사항: 핵심·분석·테마·전망·일정·용어·근거 등 나머지 내용은
+    화면에 그대로 늘어놓지 않고, 헤더 줄 자체를 원문 기사로 가는
+    하이퍼링크로 만들어 그 안에 "숨긴다".
+    회사명 주변의 따옴표(")는 더 이상 붙이지 않는다.
+    """
+    e = esc or (lambda x: x)
+    _, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     local_time = _display_time(item.published_at)
-    display_company = _display_company(item)
-    title_prefix = _title_prefix(theme, title)
-    verdict, score, verdict_reason = _trade_verdict(item, analysis)
-    lines = [
-        f"📰 [\"{display_company}\"]   [{item.classification}]   ⏰ {local_time}",
-        "",
-        f"{title_prefix} **{title}**",
-    ]
-    if core:
-        lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {x}" for x in core]]
-    if analysis:
-        lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {x}" for x in analysis]]
-    if theme:
-        lines += ["", f"🏷 [테마] : {theme}"]
+    display_company = e(_display_company(item))
+    verdict, score, _verdict_reason = _trade_verdict(item, analysis)
+
+    header_text = f"📰 [{display_company}]   [{e(item.classification)}]   ⏰ {local_time}"
+    lines = [header_text]
     if related:
         lines += ["", "🎯 [관련주]"]
         for company in related:
-            reason = reasons.get(company)
-            lines.append(f"{_INDENT}↳ {company}")
-            if reason:
-                lines.append(f"{_INDENT}↳ 근거 — {reason}")
-    # 현재 뉴스의 최종 점수와 판단은 매매 포인트 한 곳에서만 표시한다.
-    # 기존 "강함/보통/약함 + 신뢰도" 중복 표시는 제거한다.
-    # 매매 포인트 자체를 원문 하이퍼링크로 만든다.
-    # 사용자가 요구한 "매수 이유/근거"도 같은 블록 안에 바로 표시한다.
-    trade_reason = (item.reason or "").strip()
-    if not trade_reason and related and reasons.get(related[0]):
-        trade_reason = str(reasons[related[0]]).strip()
-    if not trade_reason:
-        trade_reason = verdict_reason
-    trade_condition = _verdict_condition(item, verdict)
-    # "매매 포인트" 자체는 더 이상 하이퍼링크로 만들지 않는다 — 순수 텍스트로 표시하고,
-    # 원문 기사 링크는 메시지 맨 아래에 별도 줄로 분리한다.
-    trade_link = "📊 [매매 포인트]"
+            lines.append(f"{_INDENT}↳ {e(company)}")
     verdict_label = f"{verdict} ({score}점)" if verdict != "⚪ 판단 보류" else verdict
-    lines += [
-        "",
-        f"{trade_link}   {verdict_label}",
-        f"{_INDENT}↳ 이유/근거 : {trade_reason}",
-        f"{_INDENT}↳ 판단 조건 : {trade_condition}",
-    ]
-    outlook = _build_outlook(item, verdict, analysis)
-    if outlook:
-        lines += ["", "🔮 [전망]", *[f"{_INDENT}↳ {x}" for x in outlook]]
-    if schedule:
-        lines += ["", "📅 [일정]", *[f"{_INDENT}↳ {x}" for x in schedule[:5]]]
-    if terms:
-        lines += ["", "💡 [용어]", *[f"{_INDENT}↳ {x}" for x in terms[:5]]]
-    if cumulative_line:
-        lines += ["", cumulative_line]
-    if price_reaction_line:
-        lines += ["", price_reaction_line]
+    lines += ["", f"📊 [매매 포인트]   {e(verdict_label)}"]
+    return lines, header_text
+
+
+def build_message(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None) -> str:
+    """디스코드 embed description에 넣을 본문(마크다운, masked link 지원).
+
+    표시는 헤더 / 🎯 관련주 / 📊 매매 포인트 3개 블록으로 축약하고,
+    나머지 상세 내용은 헤더의 하이퍼링크(원문 기사)로 숨긴다.
+    cumulative_line, price_reaction_line은 더 이상 본문에 노출하지 않지만,
+    호출부(scheduler 등) 호환을 위해 인자는 그대로 받는다.
+    """
+    lines, header_text = _build_compact_lines(item)
     if item.url:
-        lines += ["", f"🔗 [기사 원문 보기]({item.url})"]
+        lines[0] = f"[{header_text}]({item.url})"
     return "\n".join(_push_body_inward(lines))
 
 
@@ -319,60 +301,16 @@ def build_embed(item: NewsItem, cumulative_line: str | None = None, price_reacti
 
 
 def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None, *, news_value_mid: int = 45, news_value_high: int = 75) -> str:
-    title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
-    local_time = _display_time(item.published_at)
-    display_company = _display_company(item)
-    title_prefix = _title_prefix(theme, title)
-    verdict, score, verdict_reason = _trade_verdict(item, analysis)
+    """텔레그램 본문. Discord와 동일하게 헤더 / 🎯 관련주 / 📊 매매 포인트 3블록만
+    노출하고, 나머지 상세는 헤더 하이퍼링크(원문 기사)로 숨긴다.
+    """
 
     def esc(value: str) -> str:
         return html_escape(str(value), quote=True)
 
-    lines = [f"📰 [\"{esc(display_company)}\"]   [{esc(item.classification)}]   ⏰ {local_time}", "", f"{title_prefix} <b>{esc(title)}</b>"]
-    if core:
-        lines += ["", "🔎 [핵심]", *[f"{_INDENT}↳ {esc(x)}" for x in core]]
-    if analysis:
-        lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {esc(x)}" for x in analysis]]
-    if theme:
-        lines += ["", f"🏷 [테마] : {esc(theme)}"]
-    if related:
-        lines += ["", "🎯 [관련주]"]
-        for company in related:
-            lines.append(f"{_INDENT}↳ {esc(company)}")
-            if reasons.get(company):
-                lines.append(f"{_INDENT}↳ 근거 — {esc(reasons[company])}")
-    # 현재 뉴스의 최종 점수와 판단은 매매 포인트 한 곳에서만 표시한다.
-    # 기존 "강함/보통/약함 + 신뢰도" 중복 표시는 제거한다.
-    # 매매 포인트 자체를 원문 하이퍼링크로 만들고, 같은 블록 안에
-    # 실제 기사에서 추출한 매수 이유/근거와 판단 변경 조건을 함께 표시한다.
-    trade_reason = (item.reason or "").strip()
-    if not trade_reason and related and reasons.get(related[0]):
-        trade_reason = str(reasons[related[0]]).strip()
-    if not trade_reason:
-        trade_reason = verdict_reason
-    trade_condition = _verdict_condition(item, verdict)
-    # Discord와 동일하게 "매매 포인트"는 순수 텍스트로만 표시하고,
-    # 원문 기사 링크는 메시지 맨 아래에 별도 줄로 분리한다.
-    trade_link = "📊 [매매 포인트]"
-    lines += [
-        "",
-        f"{trade_link}   {esc(verdict)}" + (f" ({score}점)" if verdict != "⚪ 판단 보류" else ""),
-        f"{_INDENT}↳ 이유/근거 : {esc(trade_reason)}",
-        f"{_INDENT}↳ 판단 조건 : {esc(trade_condition)}",
-    ]
-    outlook = _build_outlook(item, verdict, analysis)
-    if outlook:
-        lines += ["", "🔮 [전망]", *[f"{_INDENT}↳ {esc(x)}" for x in outlook]]
-    if schedule:
-        lines += ["", "📅 [일정]", *[f"{_INDENT}↳ {esc(x)}" for x in schedule[:5]]]
-    if terms:
-        lines += ["", "💡 [용어]", *[f"{_INDENT}↳ {esc(x)}" for x in terms[:5]]]
-    if cumulative_line:
-        lines += ["", esc(cumulative_line)]
-    if price_reaction_line:
-        lines += ["", esc(price_reaction_line)]
+    lines, header_text = _build_compact_lines(item, esc=esc)
     if item.url:
-        lines += ["", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
+        lines[0] = f'<a href="{esc(item.url)}">{header_text}</a>'
     return "\n".join(_push_body_inward(lines))
 
 
