@@ -73,3 +73,18 @@ def test_dedup_key_ignores_query_string():
         published_at=datetime.now(timezone.utc),
     )
     assert a.dedup_key == b.dedup_key
+
+
+def test_parse_published_uses_explicit_timezone_and_not_server_local():
+    from datetime import timezone
+    from stock_news_bot.cogs.fetcher import _parse_published
+
+    dt = _parse_published({"published": "Fri, 28 Aug 2026 07:00:00 -0400"})
+    assert dt is not None
+    assert dt.tzinfo == timezone.utc
+    assert dt.hour == 11
+
+
+def test_parse_published_rejects_naive_timestamp():
+    from stock_news_bot.cogs.fetcher import _parse_published
+    assert _parse_published({"published": "2026-08-28 07:00:00"}) is None

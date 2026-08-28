@@ -35,26 +35,51 @@ from stock_news_bot.utils.errors import FetchError
 logger = logging.getLogger(__name__)
 
 
-def _parse_published(entry: dict) -> datetime:
-    for key in ("published", "updated"):
+def _parse_published(entry: dict) -> datetime | None:
+    """RSS 발행시각을 절대시각(UTC)으로만 반환한다.
+
+    중요: 시간대가 불명확한 문자열을 서버(Render)의 로컬 시간이나 UTC로
+    임의 해석하지 않는다. 특히 미국 뉴스 RSS가 KST/미국 현지시간처럼
+    보이는 문자열을 섞어 보내는 경우 잘못된 시각으로 인해 새벽/오래된
+    기사가 현재 뉴스로 판정되는 것을 막는다.
+    """
+    for key in ("published", "updated", "created"):
         raw = entry.get(key)
-        if raw:
+        parsed_struct = entry.get(f"{key}_parsed")
+
+        # feedparser가 정상적으로 파싱한 *_parsed 값은 UTC 기준으로 변환한다.
+        # RFC822/ISO 문자열 파싱보다 우선하여 feedparser의 timezone 처리를 활용한다.
+        if parsed_struct:
             try:
-                parsed = parsedate_to_datetime(raw)
-                if parsed.tzinfo is None:
-                    # timezone 정보가 없는 RSS 날짜는 feedparser가 만든
-                    # *_parsed(struct_time, UTC 기준) 값을 우선 사용한다.
-                    parsed_struct = entry.get(f"{key}_parsed")
-                    if parsed_struct:
-                        return datetime.fromtimestamp(
-                            calendar.timegm(parsed_struct), tz=timezone.utc
-                        )
-                    # 최후의 fallback: 서버(Render)의 로컬 타임존에 의존하지 않고 UTC로 취급.
-                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return datetime.fromtimestamp(
+                    calendar.timegm(parsed_struct), tz=timezone.utc
+                )
+            except (TypeError, ValueError, OverflowError, OSError):
+                pass
+
+        if not raw:
+            continue
+
+        text = str(raw).strip()
+        try:
+            parsed = parsedate_to_datetime(text)
+            if parsed.tzinfo is not None:
                 return parsed.astimezone(timezone.utc)
-            except (TypeError, ValueError, OverflowError):
-                continue
-    return datetime.now(timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            pass
+
+        # ISO-8601 (예: 2026-08-28T07:30:00Z / +00:00) 지원.
+        try:
+            iso = text.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(iso)
+            if parsed.tzinfo is not None:
+                return parsed.astimezone(timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            pass
+
+    # 발행시각을 확정할 수 없는 기사는 '현재 시각'으로 속여 보내지 않는다.
+    # 이것이 이전 코드의 가장 위험한 부분이었다.
+    return None
 
 
 def parse_entries(raw_bytes: bytes, source_hint: str) -> list[NewsItem]:
@@ -89,12 +114,16 @@ def parse_entries(raw_bytes: bytes, source_hint: str) -> list[NewsItem]:
         summary = re.sub(r"https?://\S+", " ", summary)
         summary = re.sub(r"\s+", " ", summary).strip()
         source = parsed.feed.get("title", source_hint) or source_hint
+        published_at = _parse_published(entry)
+        if published_at is None:
+            logger.warning("[%s] 발행시각을 확정할 수 없어 뉴스 제외: %s", source_hint, title[:120])
+            continue
         items.append(
             NewsItem(
                 title=title,
                 url=url,
                 source=source,
-                published_at=_parse_published(entry),
+                published_at=published_at,
                 summary=summary,
             )
         )

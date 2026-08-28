@@ -50,6 +50,16 @@ def _get_id_list(key: str) -> list[int]:
     return ids
 
 
+def _get_float(key: str, default: float) -> float:
+    raw = os.getenv(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"환경변수 '{key}'의 값 '{raw}'가 유효한 숫자가 아닙니다.") from exc
+
+
 def _get_str_list(key: str) -> list[str]:
     raw = os.getenv(key, "")
     return [chunk.strip() for chunk in raw.split(",") if chunk.strip()]
@@ -73,8 +83,14 @@ class Settings:
     fetch_interval_seconds: int = 10
     fetch_timeout_seconds: int = 10
     fetch_max_retries: int = 3
-    startup_max_age_seconds: int = 3600  # (더 이상 사용되지 않음. 첫 부팅 기준은 이제 KST 달력상 "오늘"로 고정됨)
-    startup_send_limit: int = 50  # 첫 부팅 시 "오늘" 기사 중 한꺼번에 보낼 최대 건수(초과분은 다음 사이클로 이월)
+    # 실시간 뉴스의 허용 시간창. 현재 시각보다 오래된 기사는 새 뉴스로 취급하지 않는다.
+    news_lookback_hours: float = 5.0
+    # 첫 부팅 때 과거 RSS에 쌓여 있던 기사를 한꺼번에 쏟지 않도록 최신 몇 건만 허용.
+    startup_send_limit: int = 5
+    # 한 번의 수집 주기에서 새로 송출 큐에 넣을 최대 건수.
+    max_new_per_cycle: int = 3
+    # 안전장치: 최근 1시간에 이보다 많이 송출하지 않는다. 0이면 제한 없음.
+    max_sent_per_hour: int = 20
 
     db_path: Path = Path("./data/stock_news_bot.sqlite3")
     dedup_retention_days: int = 14
@@ -147,8 +163,10 @@ def load_settings() -> Settings:
         fetch_interval_seconds=max(5, _get_int("FETCH_INTERVAL_SECONDS", 10)),
         fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),
         fetch_max_retries=_get_int("FETCH_MAX_RETRIES", 3),
-        startup_max_age_seconds=_get_int("STARTUP_MAX_AGE_SECONDS", 3600),
-        startup_send_limit=_get_int("STARTUP_SEND_LIMIT", 50),
+        news_lookback_hours=max(0.5, _get_float("NEWS_LOOKBACK_HOURS", 5.0)),
+        startup_send_limit=max(1, _get_int("STARTUP_SEND_LIMIT", 5)),
+        max_new_per_cycle=max(1, _get_int("MAX_NEW_PER_CYCLE", 3)),
+        max_sent_per_hour=max(0, _get_int("MAX_SENT_PER_HOUR", 20)),
         db_path=Path(_get_str("DB_PATH", "./data/stock_news_bot.sqlite3")),
         dedup_retention_days=_get_int("DEDUP_RETENTION_DAYS", 14),
         history_lookback_days=_get_int("HISTORY_LOOKBACK_DAYS", 30),

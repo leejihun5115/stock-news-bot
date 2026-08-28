@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import heapq
+from collections import deque
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -71,7 +73,13 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         # 분석은 여러 worker가 병렬 처리하고, Discord/Telegram 송출은 별도
         # 단일 worker가 담당해 API rate-limit과 메시지 순서를 안정적으로 유지한다.
         self._analysis_queue: asyncio.Queue[tuple] = asyncio.Queue(maxsize=500)
+        # 분석 결과는 별도 송출 큐로 넘긴다. 실제 Discord/Telegram 송출은
+        # 단일 worker가 담당해 뉴스가 뒤죽박죽 도착하는 현상을 막는다.
+        self._send_queue: asyncio.PriorityQueue[tuple] = asyncio.PriorityQueue(maxsize=500)
         self._analysis_workers: list[asyncio.Task] = []
+        self._send_worker_task: asyncio.Task | None = None
+        self._send_sequence = 0
+        self._sent_timestamps: deque[float] = deque()
         self._analysis_worker_count = max(
             1, min(8, int(os.getenv("NEWS_ANALYSIS_WORKERS", "4")))
         )
@@ -102,6 +110,9 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             )
             for i in range(self._analysis_worker_count)
         ]
+        self._send_worker_task = asyncio.create_task(
+            self._send_worker(), name="news-send-worker"
+        )
         self.pipeline_loop.start()
         self.health_loop.start()
         logger.info(
@@ -170,6 +181,9 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         for task in self._analysis_workers:
             task.cancel()
         self._analysis_workers.clear()
+        if self._send_worker_task:
+            self._send_worker_task.cancel()
+            self._send_worker_task = None
         self.dedup_store.close()
         self.history_store.close()
         self.market_store.close()
@@ -251,6 +265,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         while True:
             payload = await self._analysis_queue.get()
             item, cumulative_line, price_reaction_line = payload
+            handed_to_send_queue = False
             try:
                 data_lines: list[str] = []
                 sector = item.sectors[0] if item.sectors else None
@@ -292,64 +307,23 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 item.classification = result.classification
                 item.confidence = result.confidence
 
-                notifier = self.bot.get_cog("Notifier")
-                if notifier is None:
-                    raise BaseBotError("Notifier 코그가 로드되지 않았습니다.")
-
-                # 실제 송출 성공을 확인하기 위해 1건만 넘긴다.
-                sent_items = await notifier.send_items(
-                    [item],
-                    {item.dedup_key: cumulative_line} if cumulative_line else {},
-                    {item.dedup_key: price_reaction_line} if price_reaction_line else {},
+                # 분석이 끝나면 실제 송출은 별도 단일 worker로 넘긴다.
+                # priority = 기사 발행시각이므로 준비된 기사도 오래된 순서로 송출된다.
+                self._send_sequence += 1
+                await self._send_queue.put(
+                    (
+                        item.published_at.timestamp(),
+                        self._send_sequence,
+                        item,
+                        cumulative_line,
+                        price_reaction_line,
+                    )
                 )
-
-                if not sent_items:
-                    logger.warning(
-                        "⚠️ 뉴스 송출 실패/보류: %s | worker=%d — dedup을 확정하지 않고 재시도합니다.",
-                        item.title[:100],
-                        worker_id,
-                    )
-                else:
-                    # Discord 송출 성공을 확인한 즉시 dedup을 확정한다.
-                    # 이후 통계/시세 DB가 느리거나 실패해도 같은 뉴스가 다시
-                    # 송출되는 것을 막는다.
-                    self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
-                    try:
-                        await asyncio.to_thread(self.history_store.record_sent, item)
-                    except Exception:
-                        logger.exception("발송 이력 DB 기록 실패(뉴스는 이미 송출됨): %s", item.title[:100])
-
-                    if item.company and item.sectors:
-                        match = await asyncio.to_thread(
-                            self.dart_client.find_by_name, item.company
-                        )
-                        if match and match.stock_code:
-                            await asyncio.to_thread(
-                                self.market_store.register_reaction,
-                                dedup_key=item.dedup_key,
-                                stock_code=match.stock_code,
-                                corp_name=match.corp_name,
-                                sector=item.sectors[0],
-                                sent_at=item.now_utc(),
-                            )
-
-                    if self.settings.telegram_alert_enabled:
-                        text = build_telegram_text(
-                            item,
-                            cumulative_line,
-                            price_reaction_line,
-                            news_value_mid=self.settings.news_value_mid,
-                            news_value_high=self.settings.news_value_high,
-                        )
-                        await self.alerter.send(text)
-                        logger.info("텔레그램 뉴스 전송 완료: title=%r", item.title)
-
-                    self._last_scan["sent"] = int(self._last_scan.get("sent", 0)) + 1
-                    logger.info(
-                        "⚡ 실시간 뉴스 송출 완료 | worker=%d | %s",
-                        worker_id,
-                        item.title[:120],
-                    )
+                handed_to_send_queue = True
+                logger.info(
+                    "🧵 분석 완료 → 송출 Queue 대기 | worker=%d | queue=%d | %s",
+                    worker_id, self._send_queue.qsize(), item.title[:100],
+                )
 
             except asyncio.CancelledError:
                 raise
@@ -360,9 +334,119 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     getattr(item, "title", ""),
                 )
             finally:
+                if not handed_to_send_queue:
+                    async with self._inflight_lock:
+                        self._inflight_keys.discard(item.dedup_key)
+                self._analysis_queue.task_done()
+
+    def _prune_send_window(self, now_ts: float) -> None:
+        if self.settings.max_sent_per_hour <= 0:
+            return
+        cutoff = now_ts - 3600.0
+        while self._sent_timestamps and self._sent_timestamps[0] <= cutoff:
+            self._sent_timestamps.popleft()
+
+    async def _wait_for_send_slot(self) -> None:
+        """최근 1시간 송출량 제한. 제한에 걸려도 기사를 버리지 않고 기다린다."""
+        limit = self.settings.max_sent_per_hour
+        if limit <= 0:
+            return
+        while True:
+            now_ts = datetime.now(timezone.utc).timestamp()
+            self._prune_send_window(now_ts)
+            if len(self._sent_timestamps) < limit:
+                return
+            wait_seconds = max(0.5, 3600.0 - (now_ts - self._sent_timestamps[0]))
+            logger.warning(
+                "🛑 뉴스 송출 속도 제한: 최근 1시간 %d건. %.1f초 후 다음 뉴스 송출",
+                limit, wait_seconds,
+            )
+            await asyncio.sleep(min(wait_seconds, 30.0))
+
+    async def _send_worker(self) -> None:
+        """분석 완료 뉴스의 실제 송출 담당 단일 worker.
+
+        단일 송출 worker + 발행시각 priority queue를 사용해 Discord/Telegram에
+        뉴스가 뒤죽박죽 도착하지 않도록 한다. 또한 5시간보다 오래된 기사는
+        Queue에서 늦게 처리되더라도 폐기한다.
+        """
+        while True:
+            priority, sequence, item, cumulative_line, price_reaction_line = await self._send_queue.get()
+            try:
+                cutoff = datetime.now(timezone.utc) - timedelta(
+                    hours=self.settings.news_lookback_hours
+                )
+                if item.published_at < cutoff:
+                    self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
+                    logger.info(
+                        "⏭️ 송출 직전 오래된 뉴스 폐기(%s시간 초과): %s",
+                        self.settings.news_lookback_hours, item.title[:100],
+                    )
+                    continue
+
+                await self._wait_for_send_slot()
+
+                notifier = self.bot.get_cog("Notifier")
+                if notifier is None:
+                    raise BaseBotError("Notifier 코그가 로드되지 않았습니다.")
+
+                sent_items = await notifier.send_items(
+                    [item],
+                    {item.dedup_key: cumulative_line} if cumulative_line else {},
+                    {item.dedup_key: price_reaction_line} if price_reaction_line else {},
+                )
+
+                if not sent_items:
+                    logger.warning(
+                        "⚠️ 뉴스 송출 실패/보류: %s — dedup을 확정하지 않습니다.",
+                        item.title[:100],
+                    )
+                    # 실패는 다음 수집에서 dedup이 새 기사로 다시 잡도록 둔다.
+                    continue
+
+                self._sent_timestamps.append(datetime.now(timezone.utc).timestamp())
+                self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
+                try:
+                    await asyncio.to_thread(self.history_store.record_sent, item)
+                except Exception:
+                    logger.exception("발송 이력 DB 기록 실패(뉴스는 이미 송출됨): %s", item.title[:100])
+
+                if item.company and item.sectors:
+                    match = await asyncio.to_thread(
+                        self.dart_client.find_by_name, item.company
+                    )
+                    if match and match.stock_code:
+                        await asyncio.to_thread(
+                            self.market_store.register_reaction,
+                            dedup_key=item.dedup_key,
+                            stock_code=match.stock_code,
+                            corp_name=match.corp_name,
+                            sector=item.sectors[0],
+                            sent_at=item.now_utc(),
+                        )
+
+                if self.settings.telegram_alert_enabled:
+                    text = build_telegram_text(
+                        item, cumulative_line, price_reaction_line,
+                        news_value_mid=self.settings.news_value_mid,
+                        news_value_high=self.settings.news_value_high,
+                    )
+                    await self.alerter.send(text)
+
+                self._last_scan["sent"] = int(self._last_scan.get("sent", 0)) + 1
+                logger.info(
+                    "⚡ 뉴스 송출 완료 | queue=%d | published=%s | %s",
+                    self._send_queue.qsize(), item.published_at.isoformat(), item.title[:120],
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("뉴스 송출 worker 오류 | title=%r", getattr(item, "title", ""))
+            finally:
                 async with self._inflight_lock:
                     self._inflight_keys.discard(item.dedup_key)
-                self._analysis_queue.task_done()
+                self._send_queue.task_done()
+
 
     async def _enqueue_new_items(self, new_items: list[NewsItem]) -> int:
         """신규 뉴스만 queue에 넣고, queue가 가득 차도 수집 루프를 멈추지 않는다."""
@@ -445,21 +529,36 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             "errors": len(fetch_errors),
         })
 
-        today_cutoff = _today_start_kst_as_utc()
-        backlog = [item for item in classified if item.published_at < today_cutoff]
+        # 날짜가 아니라 "현재 시각 기준 최근 N시간"으로 자른다.
+        # RSS에 남아 있는 어제/몇 시간 전의 backlog가 부팅 직후 100~200건씩
+        # 쏟아지는 문제를 막는다. 미래 시각(공급원 시계 오류)도 제외한다.
+        now_utc = datetime.now(timezone.utc)
+        # 모든 피드는 UTC 절대시각으로 비교한다. KST/미국 동부시간을 별도로
+        # 더하거나 빼지 않는다. 즉 '최근 5시간'은 한국 시간이든 미국 시간이든
+        # 동일한 실제 시각 기준이다. 미래 시각과 오래된 backlog는 즉시 차단한다.
+        cutoff = now_utc - timedelta(hours=self.settings.news_lookback_hours)
+        future_cutoff = now_utc + timedelta(minutes=2)
+        backlog = [
+            item for item in classified
+            if item.published_at < cutoff or item.published_at > future_cutoff
+        ]
         for item in backlog:
             self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
-        classified = [item for item in classified if item.published_at >= today_cutoff]
+        classified = [
+            item for item in classified
+            if cutoff <= item.published_at <= future_cutoff
+        ]
 
         if not self._startup_cycle_done:
-            if len(classified) > self.settings.startup_send_limit:
-                classified = sorted(
-                    classified, key=lambda item: item.published_at, reverse=True
-                )[: self.settings.startup_send_limit]
+            # 첫 부팅은 최신 뉴스만 소량 투입한다. 오래된 backlog를 따라잡느라
+            # 채널을 도배하지 않는다. 이후 새 뉴스는 주기당 제한을 적용한다.
+            classified = sorted(
+                classified, key=lambda item: item.published_at, reverse=True
+            )[: self.settings.startup_send_limit]
             self._startup_cycle_done = True
             logger.info(
-                "첫 부팅 배치: 오늘 기사 중 최신 %d건을 Queue에 등록합니다.",
-                len(classified),
+                "첫 부팅 배치: 최근 %.1f시간 중 최신 %d건만 Queue에 등록합니다.",
+                self.settings.news_lookback_hours, len(classified),
             )
 
         min_score = self.settings.news_value_mid
@@ -477,6 +576,14 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             cycle_seen.add(key)
             new_items.append(item)
 
+        # 한 주기에 너무 많은 뉴스가 한꺼번에 들어오지 않게 제한한다.
+        # 이후 수집에서 새로 발견되는 기사와 섞여도 채널이 폭주하지 않는다.
+        if len(new_items) > self.settings.max_new_per_cycle:
+            # 최신 기사를 우선하되, 같은 주기 안에서는 발행시각 순으로 송출 Queue가 정렬한다.
+            new_items = sorted(
+                new_items, key=lambda x: x.published_at, reverse=True
+            )[: self.settings.max_new_per_cycle]
+
         self._last_scan["new"] = len(new_items)
         queued = await self._enqueue_new_items(new_items)
 
@@ -490,8 +597,10 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         )
 
         logger.info(
-            "⚡ 실시간 수집 완료: 수집=%d / 필터통과=%d / 신규=%d / Queue등록=%d / Queue잔량=%d / 오류=%d",
+            "⚡ 실시간 수집 완료: 수집=%d / 최근%.1fh=%d / 필터통과=%d / 신규=%d / Queue등록=%d / Queue잔량=%d / 오류=%d",
             len(items),
+            self.settings.news_lookback_hours,
+            len(classified),
             len(qualified),
             len(new_items),
             queued,

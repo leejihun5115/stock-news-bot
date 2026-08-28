@@ -60,16 +60,28 @@ services:
       # NEWS_KEYWORDS가 있으면 RSS_FEEDS보다 항상 우선한다.
       - key: RSS_FEEDS
         sync: false
-      # 실시간 수집: 최소 5초까지 허용하지만 기본은 10초.
+      # 실시간 수집: 10초마다 새 RSS를 확인한다.
       - key: FETCH_INTERVAL_SECONDS
         value: "10"
-      # 분석/번역/DB 작업은 병렬로 처리하고 Discord 송출만 직렬화한다.
+      # 분석은 병렬, 실제 Discord/Telegram 송출은 단일 worker로 순서/폭주를 제어한다.
       - key: NEWS_ANALYSIS_WORKERS
         value: "4"
-      - key: STARTUP_MAX_AGE_SECONDS
-        value: "3600"
+      # 최근 5시간 이내 기사만 신규 뉴스로 인정한다. 어제/오래된 RSS backlog는 버린다.
+      - key: NEWS_LOOKBACK_HOURS
+        value: "5"
+      # 모든 발행시각 비교는 UTC 절대시각으로 처리한다. Render/미국 RSS의
+      # 로컬시간을 임의로 KST로 더하거나 빼지 않는다.
+      - key: TZ
+        value: "UTC"
+      # 첫 부팅 시 최신 5건만 가져온다.
       - key: STARTUP_SEND_LIMIT
-        value: "10"
+        value: "3"
+      # 한 번의 10초 수집 주기에서 최대 3건만 송출 Queue에 넣는다.
+      - key: MAX_NEW_PER_CYCLE
+        value: "3"
+      # 최근 1시간 최대 20건. 0이면 제한 없음.
+      - key: MAX_SENT_PER_HOUR
+        value: "20"
       - key: NEWS_SEND_MIN_SCORE
         value: "40"
       - key: MEDIUM_NEWS_SCORE

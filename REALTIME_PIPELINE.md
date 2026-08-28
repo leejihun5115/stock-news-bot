@@ -29,3 +29,12 @@
   - `NEWS_ANALYSIS_WORKERS=4`
 
 기존 Discord/Telegram, DART, DB, 중복 방지, 분석, 분류, 관리자 명령 및 기타 코그 구조는 그대로 유지합니다.
+
+## 뉴스 시간창 / 폭주 방지
+
+- `NEWS_LOOKBACK_HOURS=5`: 현재 시각 기준 최근 5시간 이내의 기사만 신규 기사로 인정합니다. 어제 기사나 오래된 RSS backlog는 송출하지 않고 dedup에 기록합니다.
+- `STARTUP_SEND_LIMIT=5`: 재부팅 직후 RSS에 쌓여 있던 기사 중 최신 5건만 시작 큐에 넣습니다.
+- `MAX_NEW_PER_CYCLE=3`: 10초 수집 주기마다 최대 3건만 송출 큐에 넣습니다.
+- `MAX_SENT_PER_HOUR=20`: 최근 1시간 최대 20건으로 최종 송출량을 제한합니다. 한도를 넘으면 기사를 버리지 않고 큐에서 기다립니다.
+- 실제 Discord/Telegram 송출은 단일 worker가 담당하며 발행시각 priority queue를 사용합니다.
+- 송출 시점에도 5시간을 초과한 대기 기사는 폐기합니다.
