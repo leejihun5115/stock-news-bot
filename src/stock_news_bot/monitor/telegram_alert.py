@@ -36,6 +36,7 @@ class TelegramAlerter:
         payload = {
             "chat_id": self._chat_id,
             "text": message[:4000],  # 텔레그램 메시지 길이 제한 대비
+            "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
         try:

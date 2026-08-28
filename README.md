@@ -136,3 +136,7 @@ Worker** 타입을 사용합니다 (Web Service 아님). Free 플랜에는 Backg
   헬스체크 경고가 갔을 것입니다. `LOG_DIR`의 로그 파일에서 FetchError 확인.
 - **채널을 찾을 수 없다는 NotifyError** → 봇이 해당 서버/채널에 초대돼 있는지,
   `DISCORD_NEWS_CHANNEL_ID`가 맞는지 확인.
+
+
+## v6 표시 수정
+- 뉴스 제목(`📌`)을 Discord/Telegram 모두 굵게 표시합니다.

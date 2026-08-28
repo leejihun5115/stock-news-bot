@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from html import escape as html_escape
 
 import discord
 from discord.ext import commands
@@ -172,7 +173,7 @@ def _strength_label(item: NewsItem, confidence: int) -> str:
     else:
         strength = "🟡 약함"
     # 점수와 신뢰도는 서로 다른 지표로 표시한다.
-    return f"{strength} · {item.score}점 · 신뢰도 {confidence}점"
+    return f"{strength} : {item.score}점 (신뢰도 {confidence}점)"
 
 
 def build_message(
@@ -189,7 +190,10 @@ def build_message(
     confidence = analyze_item(item).confidence
     local_time = item.published_at.astimezone().strftime("%H:%M")
     display_source = item.source.split("|")[0].strip() or item.source.strip()
-    lines = [f"📰 **[{display_source}]**   **[{item.classification}]**   ⏰ {local_time}", f"📌 {title}"]
+    lines = [
+        f"📰 [{display_source}]   [{item.classification}]   ⏰ {local_time}",
+        f"📌 **{title}**",  # Discord: 제목을 반드시 굵게
+    ]
 
     if core:
         lines += ["", "🔎 [핵심]", *[f"✔️ {x}" for x in core]]
@@ -235,7 +239,48 @@ def build_telegram_text(
     news_value_mid: int = 45,
     news_value_high: int = 75,
 ) -> str:
-    return build_message(item, cumulative_line, price_reaction_line)
+    """텔레그램용 HTML 메시지.
+
+    텔레그램 sendMessage에 parse_mode를 지정하지 않으면 Markdown 문법
+    (`**굵게**`, `[하이퍼링크](URL)`)이 그대로 노출된다. 따라서 텔레그램은
+    HTML 전용 렌더링을 사용하고 URL은 <a> 태그의 href에만 넣는다.
+    """
+    title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
+    confidence = analyze_item(item).confidence
+    local_time = item.published_at.astimezone().strftime("%H:%M")
+    display_source = item.source.split("|")[0].strip() or item.source.strip()
+
+    def esc(value: str) -> str:
+        return html_escape(str(value), quote=True)
+
+    lines = [
+        f"📰 [{esc(display_source)}]   [{esc(item.classification)}]   ⏰ {local_time}",
+        f"📌 <b>{esc(title)}</b>",  # Telegram HTML: 제목을 반드시 굵게
+    ]
+    if core:
+        lines += ["", "🔎 [핵심]", *[f"✔️ {esc(x)}" for x in core]]
+    if analysis:
+        lines += ["", "🧠 [분석·전망]", *[f"✔️ {esc(x)}" for x in analysis]]
+    if theme:
+        lines += ["", f"🏷 [테마] : {esc(theme)}"]
+    if related:
+        lines += ["", "🎯 [관련주]"]
+        for company in related:
+            reason = reasons.get(company)
+            lines.append(f"↳ {esc(company)}")
+            if reason:
+                lines.append(f"↳ 근거 — {esc(reason)}")
+    lines += ["", _strength_label(item, confidence)]
+    if schedule:
+        lines += ["", "📅 [일정]", *[f"✔️ {esc(x)}" for x in schedule[:5]]]
+    data = [x for x in (cumulative_line, price_reaction_line) if x]
+    if data:
+        lines += ["", "🧠 [데이터 값]", *[f"✔️ {esc(x)}" for x in data]]
+    if terms:
+        lines += ["", "💡 [용어]", *[f"✔️ {esc(x)}" for x in terms[:5]]]
+
+    lines += ["", f'🔗 <a href="{esc(item.url)}">하이퍼링크</a>']
+    return "\n".join(lines)
 
 
 class NotifierCog(commands.Cog, name="Notifier"):
