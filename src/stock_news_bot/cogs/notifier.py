@@ -349,8 +349,13 @@ def _display_time(dt) -> str:
 
 
 def build_cumulative_line(stats: SectorStats | None, *, min_sample: int) -> str | None:
-    if stats is None or stats.count < min_sample:
+    if stats is None:
         return None
+    if stats.count < min_sample:
+        return (
+            f"📊 누적 데이터: 최근 {stats.lookback_days}일 '{stats.sector}' 뉴스 {stats.count}건 "
+            f"— 표본 부족(최소 {min_sample}건 필요)으로 통계 참고용으로만 확인하세요."
+        )
     return (
         f"📊 누적 데이터: 최근 {stats.lookback_days}일 '{stats.sector}' 뉴스 {stats.count}건 "
         f"(🔥중요 {stats.high} / 🟢보통 {stats.medium} / ⚪️약함 {stats.low}, "
