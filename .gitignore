@@ -1,0 +1,36 @@
+# --- 환경설정 / 비밀값 ---
+.env
+.env.*
+!.env.example
+
+# --- 로컬 데이터베이스 / 로그 (실행 시 자동 생성됨) ---
+src/data/*.sqlite3
+src/data/*.sqlite3-journal
+data/*.sqlite3
+data/*.sqlite3-journal
+*.sqlite3
+*.sqlite3-journal
+logs/
+*.log
+
+# --- 파이썬 ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# --- 가상환경 ---
+.venv/
+venv/
+env/
+
+# --- 에디터 / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
