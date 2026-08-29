@@ -118,7 +118,7 @@ class Settings:
     # 한 번의 수집 주기에서 새로 송출 큐에 넣을 최대 건수.
     max_new_per_cycle: int = 3
     # 안전장치: 최근 1시간에 이보다 많이 송출하지 않는다. 0이면 제한 없음.
-    max_sent_per_hour: int = 20
+    max_sent_per_hour: int = 0
 
     db_path: Path = Path("./data/stock_news_bot.sqlite3")
     dedup_retention_days: int = 14
@@ -244,7 +244,7 @@ def load_settings() -> Settings:
         news_lookback_hours=max(0.5, _get_float("NEWS_LOOKBACK_HOURS", 24.0)),
         startup_send_limit=max(1, _get_int("STARTUP_SEND_LIMIT", 8)),
         max_new_per_cycle=max(1, _get_int("MAX_NEW_PER_CYCLE", 8)),
-        max_sent_per_hour=max(0, _get_int("MAX_SENT_PER_HOUR", 60)),
+        max_sent_per_hour=max(0, _get_int("MAX_SENT_PER_HOUR", 0)),
         db_path=_resolve_db_path(),
         dedup_retention_days=_get_int("DEDUP_RETENTION_DAYS", 14),
         history_lookback_days=_get_int("HISTORY_LOOKBACK_DAYS", 30),
