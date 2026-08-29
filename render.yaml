@@ -69,6 +69,15 @@ services:
         sync: false
       - key: MARKET_INTEL_INTERVAL_SECONDS
         value: "3600"
+      # pykrx(>=1.2.8)가 시작 시 data.krx.co.kr 로그인을 시도한다. 선택 사항 —
+      # 비워두면 "KRX 로그인 실패" 메시지만 남기고 기존처럼 비로그인 상태로
+      # 시세 조회를 계속한다(market_intel.py가 예외를 모두 흡수하므로 봇
+      # 동작에는 영향 없음). data.krx.co.kr(정보데이터시스템) 계정이 있으면
+      # 채워서 인증 세션을 쓸 수 있다.
+      - key: KRX_ID
+        sync: false
+      - key: KRX_PW
+        sync: false
 
       # 뉴스 수집
       - key: NEWS_KEYWORDS
