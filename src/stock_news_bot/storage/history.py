@@ -114,11 +114,20 @@ class HistoryStore:
         except sqlite3.Error as exc:
             raise StorageError(f"섹터 통계 조회 실패: {exc}") from exc
 
-        count = len(rows)
-        high = sum(1 for imp, _ in rows if imp == Importance.HIGH.value)
-        medium = sum(1 for imp, _ in rows if imp == Importance.MEDIUM.value)
-        low = sum(1 for imp, _ in rows if imp == Importance.LOW.value)
-        avg_score = (sum(score for _, score in rows) / count) if count else 0.0
+        # 오래된/손상된 SQLite 행이 섞여도 뉴스 송출 자체가 중단되지 않도록
+        # (importance, score) 2개 컬럼을 모두 가진 정상 행만 통계에 사용한다.
+        valid_rows = []
+        for row in rows:
+            if not isinstance(row, (tuple, list)) or len(row) != 2:
+                continue
+            imp, score = row
+            valid_rows.append((imp, score))
+
+        count = len(valid_rows)
+        high = sum(1 for imp, _ in valid_rows if imp == Importance.HIGH.value)
+        medium = sum(1 for imp, _ in valid_rows if imp == Importance.MEDIUM.value)
+        low = sum(1 for imp, _ in valid_rows if imp == Importance.LOW.value)
+        avg_score = (sum(score for _, score in valid_rows) / count) if count else 0.0
 
         return SectorStats(
             sector=sector,

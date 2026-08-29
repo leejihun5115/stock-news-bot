@@ -81,6 +81,9 @@ class Settings:
     youtube_channel_ids: list[str] = field(default_factory=list)
     telegram_source_channels: list[str] = field(default_factory=list)
     news_keywords: list[str] = field(default_factory=list)
+    enable_blog: bool = True
+    enable_youtube: bool = True
+    enable_telegram_channels: bool = True
     news_value_mid: int = 45
     news_value_high: int = 75
     fetch_interval_seconds: int = 10
@@ -169,10 +172,17 @@ def load_settings() -> Settings:
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID"),
         rss_feeds=_get_str_list("RSS_FEEDS"),
-        blog_feeds=_get_str_list("BLOG_FEEDS"),
+        blog_feeds=_get_str_list("BLOG_FEEDS") or _get_str_list("BLOG_RSS_FEEDS"),
         youtube_channel_ids=_get_str_list("YOUTUBE_CHANNEL_IDS"),
-        telegram_source_channels=_get_str_list("TELEGRAM_SOURCE_CHANNELS"),
+        telegram_source_channels=(
+            _get_str_list("TELEGRAM_SOURCE_CHANNELS")
+            or _get_str_list("TELEGRAM_CHANNEL_FILTERED")
+            or _get_str_list("TELEGRAM_CHANNEL_FORCE")
+        ),
         news_keywords=_get_str_list("NEWS_KEYWORDS"),
+        enable_blog=_get_str("ENABLE_BLOG", "true").lower() not in {"0", "false", "no", "off"},
+        enable_youtube=_get_str("ENABLE_YOUTUBE", "true").lower() not in {"0", "false", "no", "off"},
+        enable_telegram_channels=_get_str("ENABLE_TELEGRAM_CHANNELS", "true").lower() not in {"0", "false", "no", "off"},
         news_value_mid=_get_int("NEWS_SEND_MIN_SCORE", _get_int("MEDIUM_NEWS_SCORE", 45)),
         news_value_high=_get_int("STRONG_NEWS_SCORE", 75),
         fetch_interval_seconds=max(5, _get_int("FETCH_INTERVAL_SECONDS", 5)),
@@ -207,9 +217,50 @@ def load_settings() -> Settings:
         log_dir=Path(_get_str("LOG_DIR", "./logs")),
     )
 
+    # 레거시 학습 콘텐츠 소스 복구:
+    # 예전 엔진은 YouTube/Telegram/블로그 대상을 코드에 기본 등록해 두어
+    # ENABLE 스위치만 켜도 수집이 시작됐다. 현재 버전은 환경변수만 읽도록
+    # 바뀌면서 대상 목록이 비어 있으면 해당 소스가 조용히 비활성화되는 문제가
+    # 생겼다. 환경변수가 명시되어 있으면 사용자 설정을 우선하고, 비어 있을
+    # 때만 예전 기본 소스 목록을 사용한다.
+    legacy_blog_feeds = [
+        "https://rss.blog.naver.com/ranto28.xml",
+        "https://rss.blog.naver.com/tosoha1.xml",
+        "https://rss.blog.naver.com/freechip.xml",
+        "https://rss.blog.naver.com/dkanchup.xml",
+        "https://rss.blog.naver.com/noruda11.xml",
+        "https://rss.blog.naver.com/richyun0108.xml",
+        "https://rss.blog.naver.com/crush212121.xml",
+        "https://rss.blog.naver.com/bsj7000.xml",
+        "https://rss.blog.naver.com/limsk1212.xml",
+        "https://rss.blog.naver.com/cart10101.xml",
+        "https://rss.blog.naver.com/zero_family.xml",
+        "https://rss.blog.naver.com/pokara61.xml",
+        "https://contents.premium.naver.com/ystreet/irnote/rss",
+    ]
+    legacy_youtube_channels = [
+        "GODofIT_official", "김단테", "easybio_shiba", "3protv", "syukaworld",
+        "unrealtech", "understanding.", "eng_tv", "Ystreet", "wsaj",
+        "EZKIPOST-p4o", "blueoak1004",
+    ]
+    legacy_telegram_channels = [
+        "notRealDonaldTrump_kr", "newszzang", "stockdartalert",
+        "allsiljuk", "sunstudy", "shmstory", "bornlupin", "DrDtech",
+        "one_going", "HANAchina", "gaoshoukorea", "goddessTTF",
+        "theelec", "scalpinglove",
+    ]
+
+    if not settings.blog_feeds:
+        from dataclasses import replace as _replace
+    settings = _replace(settings, blog_feeds=legacy_blog_feeds)
+    if not settings.youtube_channel_ids:
+        settings = _replace(settings, youtube_channel_ids=legacy_youtube_channels)
+    if not settings.telegram_source_channels:
+        settings = _replace(settings, telegram_source_channels=legacy_telegram_channels)
+
     if settings.discord_news_channel_id == 0:
         raise ConfigError("DISCORD_NEWS_CHANNEL_ID가 설정되지 않았습니다.")
-    if not settings.news_keywords and not settings.rss_feeds and not settings.blog_feeds and not settings.youtube_channel_ids and not settings.telegram_source_channels:
+    if not settings.news_keywords and not settings.rss_feeds and not (settings.enable_blog and settings.blog_feeds) and not (settings.enable_youtube and settings.youtube_channel_ids) and not (settings.enable_telegram_channels and settings.telegram_source_channels):
         raise ConfigError(
             "NEWS_KEYWORDS/RSS_FEEDS/BLOG_FEEDS/YOUTUBE_CHANNEL_IDS/TELEGRAM_SOURCE_CHANNELS 중 하나 이상이 설정되어야 합니다."
         )

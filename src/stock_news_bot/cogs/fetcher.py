@@ -215,16 +215,60 @@ async def fetch_feed(
 
 
 
-def _youtube_feed_urls(channel_ids: list[str]) -> list[str]:
-    urls = []
-    for channel_id in channel_ids:
-        channel_id = channel_id.strip()
-        if not channel_id:
+_YOUTUBE_ID_CACHE: dict[str, tuple[str, float]] = {}
+
+def _resolve_youtube_channel_id(value: str, timeout_seconds: int = 10) -> str:
+    """UC ID뿐 아니라 예전 버전에서 사용하던 @핸들/핸들명도 UC ID로 해석한다."""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if re.fullmatch(r"UC[A-Za-z0-9_-]{20,}", value):
+        return value
+    key = value.lstrip("@").strip()
+    cached = _YOUTUBE_ID_CACHE.get(key)
+    if cached and time.time() - cached[1] < 86400:
+        return cached[0]
+    urls = (
+        f"https://www.youtube.com/@{key}",
+        f"https://www.youtube.com/@{key}/videos",
+        f"https://www.youtube.com/c/{key}",
+        f"https://www.youtube.com/user/{key}",
+    )
+    patterns = (
+        r'"channelId":"(UC[A-Za-z0-9_-]{20,})"',
+        r'"externalId":"(UC[A-Za-z0-9_-]{20,})"',
+        r'"browseId":"(UC[A-Za-z0-9_-]{20,})"',
+        r'/channel/(UC[A-Za-z0-9_-]{20,})',
+    )
+    import requests
+    headers = {"User-Agent": "Mozilla/5.0 stock-news-bot/1.0"}
+    for url in urls:
+        try:
+            resp = requests.get(url, headers=headers, timeout=min(timeout_seconds, 10), allow_redirects=True)
+            if not resp.ok:
+                continue
+            body = resp.text or ""
+            for pattern in patterns:
+                m = re.search(pattern, body, flags=re.I)
+                if m:
+                    cid = m.group(1)
+                    _YOUTUBE_ID_CACHE[key] = (cid, time.time())
+                    return cid
+        except Exception:
             continue
-        if channel_id.startswith("UC"):
-            urls.append(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")
+    return ""
+
+def _youtube_feed_urls(channel_ids: list[str], timeout_seconds: int = 10) -> list[tuple[str, str]]:
+    urls: list[tuple[str, str]] = []
+    for channel in channel_ids:
+        channel = channel.strip()
+        if not channel:
+            continue
+        cid = _resolve_youtube_channel_id(channel, timeout_seconds)
+        if cid:
+            urls.append((channel.lstrip("@"), f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}"))
         else:
-            logger.warning("YouTube 채널 ID가 UC로 시작하지 않아 제외합니다: %s", channel_id)
+            logger.warning("YouTube 채널 확인 실패: %s", channel)
     return urls
 
 
@@ -304,7 +348,7 @@ async def fetch_source_feeds(
     timeout_seconds: int = 10, max_retries: int = 3,
 ) -> tuple[list[NewsItem], list[FetchError]]:
     """RSS/블로그/YouTube/공개 Telegram을 한 번에 수집한다."""
-    youtube_urls = _youtube_feed_urls(youtube_channel_ids)
+    youtube_urls = _youtube_feed_urls(youtube_channel_ids, timeout_seconds)
     # 키워드/RSS_FEEDS와 블로그/유튜브를 하나로 합쳐서 fetch_all에 넘기면 실제
     # 수집이 되는지는 알 수 있어도 "블로그만 몇 건, 유튜브만 몇 건"인지는 알
     # 수 없다. 진단을 위해 블로그/유튜브는 따로 fetch해서 소스별 건수를
@@ -325,20 +369,20 @@ async def fetch_source_feeds(
         errors.extend(blog_errors)
         logger.info("📝 블로그 RSS 수집: %d개 피드 URL → %d건 수집(오류 %d건)", len(blog_urls), len(blog_items), len(blog_errors))
 
-    if youtube_channel_ids:
-        if len(youtube_urls) < len(youtube_channel_ids):
-            logger.warning(
-                "⚠️ YOUTUBE_CHANNEL_IDS 중 %d개가 'UC'로 시작하지 않아 제외되었습니다. "
-                "채널 URL이 아니라 반드시 채널 ID(UC로 시작)를 넣어야 합니다.",
-                len(youtube_channel_ids) - len(youtube_urls),
-            )
-        if youtube_urls:
-            yt_items, yt_errors = await fetch_all(youtube_urls, timeout_seconds, max_retries)
-            for item in yt_items:
-                item.source_kind = "youtube"
-            items.extend(yt_items)
-            errors.extend(yt_errors)
-            logger.info("📺 YouTube 수집: %d개 채널 → %d건 수집(오류 %d건)", len(youtube_urls), len(yt_items), len(yt_errors))
+    if youtube_urls:
+        yt_url_list = [url for _, url in youtube_urls]
+        yt_items, yt_errors = await fetch_all(yt_url_list, timeout_seconds, max_retries)
+        for item in yt_items:
+            item.source_kind = "youtube"
+            # RSS feed title 대신 설정된 채널명/핸들을 표시해 공부용 헤더를 짧게 유지한다.
+            for channel_name, url in youtube_urls:
+                if f"channel_id=" in url and item.url:
+                    # 영상 URL에는 channel_id가 없으므로 feed URL과 직접 매칭할 수 없다.
+                    # 우선 원래 feed title을 유지한다.
+                    break
+        items.extend(yt_items)
+        errors.extend(yt_errors)
+        logger.info("📺 YouTube 수집: %d개 채널 → %d건 수집(오류 %d건)", len(youtube_urls), len(yt_items), len(yt_errors))
 
     if telegram_channels:
         async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 stock-news-bot/1.0"}) as session:
@@ -435,14 +479,14 @@ class FetcherCog(commands.Cog, name="Fetcher"):
                 "Render NEWS_KEYWORDS 미설정: RSS_FEEDS %d개를 사용합니다.",
                 len(urls),
             )
-        if not urls and not self.settings.blog_feeds and not self.settings.youtube_channel_ids and not self.settings.telegram_source_channels:
+        if not urls and not (self.settings.enable_blog and self.settings.blog_feeds) and not (self.settings.enable_youtube and self.settings.youtube_channel_ids) and not (self.settings.enable_telegram_channels and self.settings.telegram_source_channels):
             logger.warning("수집할 RSS/블로그/YouTube/Telegram 소스가 설정되어 있지 않습니다.")
             return [], []
         return await fetch_source_feeds(
             urls,
-            self.settings.blog_feeds,
-            self.settings.youtube_channel_ids,
-            self.settings.telegram_source_channels,
+            self.settings.blog_feeds if self.settings.enable_blog else [],
+            self.settings.youtube_channel_ids if self.settings.enable_youtube else [],
+            self.settings.telegram_source_channels if self.settings.enable_telegram_channels else [],
             timeout_seconds=self.settings.fetch_timeout_seconds,
             max_retries=self.settings.fetch_max_retries,
         )
