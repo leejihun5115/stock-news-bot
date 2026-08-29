@@ -304,26 +304,59 @@ async def fetch_source_feeds(
     timeout_seconds: int = 10, max_retries: int = 3,
 ) -> tuple[list[NewsItem], list[FetchError]]:
     """RSS/블로그/YouTube/공개 Telegram을 한 번에 수집한다."""
-    rss_urls = list(dict.fromkeys(urls + blog_feeds + _youtube_feed_urls(youtube_channel_ids)))
-    items, errors = await fetch_all(rss_urls, timeout_seconds, max_retries) if rss_urls else ([], [])
+    youtube_urls = _youtube_feed_urls(youtube_channel_ids)
+    # 키워드/RSS_FEEDS와 블로그/유튜브를 하나로 합쳐서 fetch_all에 넘기면 실제
+    # 수집이 되는지는 알 수 있어도 "블로그만 몇 건, 유튜브만 몇 건"인지는 알
+    # 수 없다. 진단을 위해 블로그/유튜브는 따로 fetch해서 소스별 건수를
+    # 남긴다(요청 URL 목록 자체는 그대로 세마포어로 제한된 fetch_all을 쓰므로
+    # 동시성 동작은 이전과 동일하다).
+    other_urls = list(dict.fromkeys(urls))
+    other_items, other_errors = await fetch_all(other_urls, timeout_seconds, max_retries) if other_urls else ([], [])
+
+    items = list(other_items)
+    errors = list(other_errors)
+
     if blog_feeds:
-        logger.info("📝 블로그 RSS 수집 활성화: %d개", len(blog_feeds))
+        blog_urls = list(dict.fromkeys(blog_feeds))
+        blog_items, blog_errors = await fetch_all(blog_urls, timeout_seconds, max_retries)
+        items.extend(blog_items)
+        errors.extend(blog_errors)
+        logger.info("📝 블로그 RSS 수집: %d개 피드 URL → %d건 수집(오류 %d건)", len(blog_urls), len(blog_items), len(blog_errors))
+
     if youtube_channel_ids:
-        logger.info("📺 YouTube 수집 활성화: %d개 채널", len(youtube_channel_ids))
+        if len(youtube_urls) < len(youtube_channel_ids):
+            logger.warning(
+                "⚠️ YOUTUBE_CHANNEL_IDS 중 %d개가 'UC'로 시작하지 않아 제외되었습니다. "
+                "채널 URL이 아니라 반드시 채널 ID(UC로 시작)를 넣어야 합니다.",
+                len(youtube_channel_ids) - len(youtube_urls),
+            )
+        if youtube_urls:
+            yt_items, yt_errors = await fetch_all(youtube_urls, timeout_seconds, max_retries)
+            items.extend(yt_items)
+            errors.extend(yt_errors)
+            logger.info("📺 YouTube 수집: %d개 채널 → %d건 수집(오류 %d건)", len(youtube_urls), len(yt_items), len(yt_errors))
+
     if telegram_channels:
-        logger.info("✈️ Telegram 공개채널 수집 활성화: %d개", len(telegram_channels))
         async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 stock-news-bot/1.0"}) as session:
             results = await asyncio.gather(
                 *(_fetch_telegram_channel(session, ch, timeout_seconds) for ch in telegram_channels),
                 return_exceptions=True,
             )
-        for result in results:
+        telegram_item_count = 0
+        for ch, result in zip(telegram_channels, results):
             if isinstance(result, FetchError):
                 errors.append(result)
+                logger.warning("✈️ Telegram 채널 수집 실패: %s — %s", ch, result)
             elif isinstance(result, Exception):
-                errors.append(FetchError(str(result)))
+                err = FetchError(str(result))
+                errors.append(err)
+                logger.warning("✈️ Telegram 채널 수집 실패: %s — %s", ch, err)
             else:
                 items.extend(result)
+                telegram_item_count += len(result)
+                logger.info("✈️ Telegram 채널 수집: @%s → %d건", ch.strip().lstrip('@'), len(result))
+        logger.info("✈️ Telegram 전체 수집: %d개 채널에서 %d건", len(telegram_channels), telegram_item_count)
+
     # URL dedup: 여러 키워드/피드에서 같은 기사·영상이 반복되는 것을 수집 단계에서 줄인다.
     unique: dict[str, NewsItem] = {}
     for item in items:

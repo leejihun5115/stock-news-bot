@@ -455,12 +455,45 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     {item.dedup_key: price_reaction_line} if price_reaction_line else {},
                 )
 
-                if not sent_items:
+                # 【버그 수정】 예전 코드는 디스코드 전송이 실패하면(sent_items가
+                # 비면) 여기서 continue로 건너뛰어서 텔레그램 발송 자체를 아예
+                # 시도하지 않았다. 텔레그램은 원래 "디스코드가 죽었을 때도
+                # 알림이 오게" 만든 독립 채널(send_startup_probe의 점검 문구
+                # 참고)인데, 그 목적과 반대로 디스코드에 종속돼 있었다.
+                # 이제 디스코드 성공 여부와 무관하게 텔레그램은 항상 별도로
+                # 시도한다 — 디스코드가 막혀 있어도(채널 ID 오류, 권한 문제,
+                # HTTPException 등) 텔레그램 뉴스는 계속 온다.
+                discord_sent = bool(sent_items)
+                if not discord_sent:
                     logger.warning(
-                        "⚠️ 뉴스 송출 실패/보류: %s — dedup을 확정하지 않습니다.",
+                        "⚠️ 디스코드 송출 실패/보류: %s — dedup을 확정하지 않고 텔레그램만 별도 시도합니다.",
                         item.title[:100],
                     )
-                    # 실패는 다음 수집에서 dedup이 새 기사로 다시 잡도록 둔다.
+
+                telegram_sent = False
+                if self.settings.telegram_alert_enabled:
+                    try:
+                        company_profile = await asyncio.to_thread(resolve_company_profile, item.company, item.sectors) if item.company else CompanyProfile(company="")
+                        summary_text = build_telegram_summary_text(item, company_profile)
+                        detail_text = build_telegram_text(
+                            item, cumulative_line, price_reaction_line,
+                            news_value_mid=self.settings.news_value_mid,
+                            news_value_high=self.settings.news_value_high,
+                            company_profile=company_profile,
+                        )
+                        await self.alerter.send_news(
+                            summary_text,
+                            button_label="Key Point 🔗상세보기",
+                            callback_data=item.dedup_key,
+                            detail=detail_text,
+                        )
+                        telegram_sent = True
+                    except Exception:
+                        logger.exception("텔레그램 송출 중 오류 | title=%r", item.title[:100])
+
+                if not discord_sent and not telegram_sent:
+                    # 디스코드/텔레그램 둘 다 실패했을 때만 dedup을 확정하지
+                    # 않는다 — 다음 수집에서 새 기사로 다시 잡혀 재시도된다.
                     continue
 
                 self._sent_timestamps.append(datetime.now(timezone.utc).timestamp())
@@ -484,26 +517,10 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                             sent_at=item.now_utc(),
                         )
 
-                if self.settings.telegram_alert_enabled:
-                    company_profile = await asyncio.to_thread(resolve_company_profile, item.company, item.sectors) if item.company else CompanyProfile(company="")
-                    summary_text = build_telegram_summary_text(item, company_profile)
-                    detail_text = build_telegram_text(
-                        item, cumulative_line, price_reaction_line,
-                        news_value_mid=self.settings.news_value_mid,
-                        news_value_high=self.settings.news_value_high,
-                        company_profile=company_profile,
-                    )
-                    await self.alerter.send_news(
-                        summary_text,
-                        button_label="Key Point 🔗상세보기",
-                        callback_data=item.dedup_key,
-                        detail=detail_text,
-                    )
-
                 self._last_scan["sent"] = int(self._last_scan.get("sent", 0)) + 1
                 logger.info(
-                    "⚡ 뉴스 송출 완료 | queue=%d | published=%s | %s",
-                    self._send_queue.qsize(), item.published_at.isoformat(), item.title[:120],
+                    "⚡ 뉴스 송출 완료 | discord=%s | telegram=%s | queue=%d | published=%s | %s",
+                    discord_sent, telegram_sent, self._send_queue.qsize(), item.published_at.isoformat(), item.title[:120],
                 )
             except asyncio.CancelledError:
                 raise
@@ -635,7 +652,26 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
 
         min_score = self.settings.news_value_mid
         qualified = [item for item in classified if item.score >= min_score]
-        self._last_scan["filtered"] = len(classified) - len(qualified)
+        filtered_out = [item for item in classified if item.score < min_score]
+        self._last_scan["filtered"] = len(filtered_out)
+        if filtered_out:
+            # 점수 미달로 걸러진 기사를 최대 5건까지 소스/점수와 함께 로그로
+            # 남긴다. "블로그/유튜브/텔레그램에서 수집은 되는데 안 옴"이라는
+            # 문제의 상당수는 여기(키워드 매칭 점수 미달)가 원인이다 —
+            # NEWS_KEYWORDS 기반 검색 결과와 달리 블로그/유튜브/텔레그램은
+            # 임의의 텍스트라 SECTOR_KEYWORDS/HIGH·MEDIUM_IMPORTANCE_KEYWORDS에
+            # 안 걸리면 점수가 0~낮게 나와서 NEWS_SEND_MIN_SCORE(기본 45)를
+            # 못 넘긴다.
+            sample = sorted(filtered_out, key=lambda i: i.score, reverse=True)[:5]
+            for item in sample:
+                logger.info(
+                    "🚫 점수 미달로 제외(min=%d) | score=%d | source=%s | %s",
+                    min_score, item.score, item.source, item.title[:100],
+                )
+            logger.info(
+                "🚫 이번 주기 점수 미달 제외: %d건(기준 %d점 미만) — 자세한 항목은 위 로그 참고",
+                len(filtered_out), min_score,
+            )
 
         new_items: list[NewsItem] = []
         cycle_seen: set[str] = set()
