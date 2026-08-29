@@ -239,10 +239,41 @@ _STUDY_SOURCE_META = {
     "telegram": ("✈️", "Telegram"),
 }
 
-def _short_source_name(source: str, kind: str, max_len: int = 18) -> str:
+# 사람이 바로 알아볼 수 있도록 영문 닉네임 뒤에 한글 닉네임을 붙인다.
+# 환경변수 STUDY_NICKNAME_KO_MAP(JSON)으로 운영 중인 채널을 추가/변경할 수 있다.
+_DEFAULT_NICKNAME_KO = {
+    "Money Comics": "머니코믹스",
+    "HANAchina": "김경환",
+    "DrDtech": "닥터디테크",
+    "one_going": "원고잉",
+}
+
+def _nickname_ko(name: str) -> str:
+    value = (name or "").strip()
+    if not value:
+        return ""
+    try:
+        raw = os.getenv("STUDY_NICKNAME_KO_MAP", "").strip()
+        if raw:
+            custom = json.loads(raw)
+            if isinstance(custom, dict):
+                merged = {**_DEFAULT_NICKNAME_KO, **{str(k): str(v) for k, v in custom.items()}}
+            else:
+                merged = _DEFAULT_NICKNAME_KO
+        else:
+            merged = _DEFAULT_NICKNAME_KO
+    except Exception:
+        merged = _DEFAULT_NICKNAME_KO
+    return merged.get(value, "")
+
+def _short_source_name(source: str, kind: str, max_len: int = 24) -> str:
     value = (source or "").strip()
+    # fetcher가 저장한 접두사를 제거하고 '실제 닉네임/채널명'만 표시한다.
     if kind == "telegram":
         value = re.sub(r"^Telegram\s+", "", value, flags=re.I).strip()
+        value = value.lstrip("@")
+    elif kind == "youtube":
+        value = re.sub(r"^YouTube\s+", "", value, flags=re.I).strip()
     value = re.sub(r"\s+[-|·]\s*(?:YouTube|Youtube|RSS|Blog)$", "", value, flags=re.I).strip()
     value = re.sub(r"\s+", " ", value)
     if len(value) <= max_len:
@@ -255,8 +286,10 @@ def _study_header(item: NewsItem) -> str | None:
         return None
     icon, label = meta
     name = _short_source_name(item.source, item.source_kind) or "콘텐츠"
+    ko_name = _nickname_ko(name)
+    display_name = f"{name}({ko_name})" if ko_name and ko_name != name else name
     local_time = _display_time(item.published_at)
-    return f"{icon} [{label}]_{name}   ⏰ {local_time}"
+    return f"{icon}[{label}]   🕵️ {display_name}   ⏰ {local_time}"
 
 def _clean_display_title(title: str) -> str:
     """기사 제목 뒤에 붙은 매체명/출처 꼬리를 제거해 제목을 깔끔하게 표시한다."""
