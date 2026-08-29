@@ -620,8 +620,6 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
     if company_context:
         lines += ["", *company_context]
     if item.url:
-        if display_company in listed:
-            lines += ["", f"🏭 업종 : {company_profile.industry}", f"🏢 주요 사업 : {company_profile.business}"]
         lines += ["", f"🔗 [기사 원문 보기]({item.url})"]
     # 더 이상 맨 첫 줄이 헤더/제목이 아니므로(중복 제거로 삭제됨),
     # _push_body_inward(첫 줄만 안 들여쓰기)를 쓰지 않고 모든 줄을
@@ -851,8 +849,6 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
     if company_context:
         lines += ["", *[esc(x) for x in company_context]]
     if item.url:
-        if display_company in listed:
-            lines += ["", f"🏭 업종 : {esc(company_profile.industry)}", f"🏢 주요 사업 : {esc(company_profile.business)}"]
         lines += ["", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
     indented = [f"{_INDENT}{line}" if line else line for line in lines]
     return "\n".join(indented)
