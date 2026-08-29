@@ -85,6 +85,15 @@ def test_parse_published_uses_explicit_timezone_and_not_server_local():
     assert dt.hour == 11
 
 
-def test_parse_published_rejects_naive_timestamp():
+def test_parse_published_naive_timestamp_uses_source_fallback():
+    """타임존 정보가 없는 값은 거부하지 않고, source_hint 기반 기본 시간대
+    (지정이 없으면 Asia/Seoul)로 해석한다. RSS 피드 다수가 타임존을 생략
+    하므로, 여기서 None을 반환하면 정상 기사가 대량으로 누락된다."""
+    from datetime import timezone
     from stock_news_bot.cogs.fetcher import _parse_published
-    assert _parse_published({"published": "2026-08-28 07:00:00"}) is None
+
+    dt = _parse_published({"published": "2026-08-28 07:00:00"})
+    assert dt is not None
+    assert dt.tzinfo == timezone.utc
+    # Asia/Seoul(UTC+9) 07:00 -> UTC 전날 22:00
+    assert dt.hour == 22
