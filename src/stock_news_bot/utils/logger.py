@@ -70,5 +70,13 @@ def setup_logging(log_dir: Path, level: str = "INFO") -> None:
     # Render 콘솔에 라이브러리 내부 영문 traceback이 반복되지 않게 한다.
     logging.getLogger("feedparser").setLevel(logging.ERROR)
     logging.getLogger("xml.sax").setLevel(logging.ERROR)
+    # pykrx 내부에 %-포맷 로그 호출 중 플레이스홀더와 인자 개수가 안 맞는
+    # 버그가 있어(예: 세션/조회 실패 시 경고 로그), 실제로 그 로그가 찍히는
+    # 순간 logging 모듈의 getMessage()에서 "not all arguments converted
+    # during string formatting" TypeError로 죽는다. pykrx 쪽 버그라 우리가
+    # 고칠 수 없으므로, 레벨을 CRITICAL 위로 올려 해당 네임스페이스 로거
+    # 자체를 비활성화해 이 크래시를 원천 차단한다(로그 레코드 생성 자체가
+    # 안 되므로 getMessage()가 호출되지 않는다).
+    logging.getLogger("pykrx").setLevel(logging.CRITICAL + 1)
 
     _CONFIGURED = True
