@@ -19,7 +19,9 @@ class TelegramAlerter:
         self._bot_token = bot_token
         self._chat_id = chat_id
         self.enabled = enabled
-        self._details: dict[str, str] = {}
+        # token -> {"summary": 최초 요약 텍스트, "detail": 상세 텍스트, "button_label": 상세보기 버튼 라벨}
+        # "🔙 원문으로" 버튼을 누르면 summary로 되돌리기 위해 요약도 함께 보관한다.
+        self._details: dict[str, dict[str, str]] = {}
         self._callback_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
         self._offset = 0
@@ -81,7 +83,7 @@ class TelegramAlerter:
         if not self.enabled:
             return
         token = hashlib.sha1(callback_data.encode("utf-8")).hexdigest()[:12]
-        self._details[token] = detail
+        self._details[token] = {"summary": message, "detail": detail, "button_label": button_label}
         if len(self._details) > 300:
             # 오래된 항목부터 정리. 딕셔너리 삽입순서를 이용한다.
             for key in list(self._details)[:100]:
@@ -148,10 +150,22 @@ class TelegramAlerter:
                             if chat_id is not None and message_id is not None:
                                 if data.startswith("s:"):
                                     token = data[2:]
-                                    detail = self._details.get(token)
-                                    if detail:
-                                        await self._edit_to_detail(session, chat_id, message_id, detail, token)
+                                    entry = self._details.get(token)
+                                    if entry:
+                                        await self._edit_to_detail(session, chat_id, message_id, entry["detail"], token)
                                         answer_text = "상세 매매정보를 표시했습니다."
+                                    else:
+                                        await self._edit_to_expired(session, chat_id, message_id)
+                                        answer_text = "상세정보가 만료되었습니다."
+                                elif data.startswith("b:"):
+                                    token = data[2:]
+                                    entry = self._details.get(token)
+                                    if entry:
+                                        await self._edit_to_summary(
+                                            session, chat_id, message_id,
+                                            entry["summary"], token, entry["button_label"],
+                                        )
+                                        answer_text = "원문으로 돌아갔습니다."
                                     else:
                                         await self._edit_to_expired(session, chat_id, message_id)
                                         answer_text = "상세정보가 만료되었습니다."
@@ -177,18 +191,45 @@ class TelegramAlerter:
         detail: str,
         token: str,
     ) -> None:
-        """원본 뉴스 메시지를 상세 내용으로 편집하고, 버튼을 삭제 버튼으로 교체한다."""
+        """원본 뉴스 메시지를 상세 내용으로 편집하고, 버튼을 "🔙 원문으로" + "🗑️ 삭제"로 교체한다."""
         payload = {
             "chat_id": chat_id,
             "message_id": message_id,
             "text": detail[:4000],
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
-            "reply_markup": {"inline_keyboard": [[{"text": "🗑️ 삭제", "callback_data": f"d:{token}"}]]},
+            "reply_markup": {"inline_keyboard": [[
+                {"text": "🔙 원문으로", "callback_data": f"b:{token}"},
+                {"text": "🗑️ 삭제", "callback_data": f"d:{token}"},
+            ]]},
         }
         async with session.post(self._url("editMessageText"), json=payload) as resp:
             if resp.status != 200:
                 logger.error("텔레그램 상세정보 편집 실패(status=%s): %s", resp.status, await resp.text())
+
+    async def _edit_to_summary(
+        self,
+        session: aiohttp.ClientSession,
+        chat_id: int,
+        message_id: int,
+        summary: str,
+        token: str,
+        button_label: str,
+    ) -> None:
+        """"🔙 원문으로" 버튼을 눌렀을 때 상세 내용을 다시 요약 화면으로 되돌린다.
+        같은 메시지를 편집만 할 뿐 새 메시지를 보내지 않는다(디스코드의
+        edit_message()로 요약으로 되돌아가는 것과 동일한 방식)."""
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": summary[:4000],
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "reply_markup": {"inline_keyboard": [[{"text": f"🔓 {button_label}", "callback_data": f"s:{token}"}]]},
+        }
+        async with session.post(self._url("editMessageText"), json=payload) as resp:
+            if resp.status != 200:
+                logger.error("텔레그램 원문으로 편집 실패(status=%s): %s", resp.status, await resp.text())
 
     async def _edit_to_expired(self, session: aiohttp.ClientSession, chat_id: int, message_id: int) -> None:
         payload = {
