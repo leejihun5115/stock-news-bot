@@ -156,6 +156,41 @@ def test_contract_impact_renders_verified_ratio():
     assert "계약상대: 한국수력원자력" in summary
 
 
+def test_related_theme_not_duplicated_when_theme_already_shown():
+    """🏷[테마]가 이미 표시된 경우, 같은 값으로 🏷️ 관련 테마를 또 보여주지
+    않는다(사용자가 스크린샷으로 지적한 중복 표시 버그). 테마 생성에
+    실패했을 때만(=🏷[테마]가 비었을 때만) company_profile.industry로
+    보완한 관련 테마를 보여준다."""
+    from stock_news_bot.company_profile import CompanyProfile
+
+    item = _sample_item(
+        title="SKIET 1주가 SK이노 0.1주로?…주식 합병은 어떻게?",
+        summary="합병 앞두고 SKIET 이틀 연속 8%대 급락, 2차전지 업황 우려",
+        company="SK이노베이션",
+    )
+    profile = CompanyProfile(
+        company="SK이노베이션",
+        industry="2차전지·전기차",
+        business="정유·배터리 소재 사업",
+    )
+    summary = build_message_summary(item, profile)
+    telegram = build_telegram_summary_text(item, profile)
+    for text in (summary, telegram):
+        assert text.count("2차전지·전기차") == 1  # 🏷[테마] 한 곳에만 나옴
+        assert "관련 테마" not in text
+
+
+def test_related_theme_shown_as_fallback_when_theme_missing():
+    """🏷[테마] 생성 자체가 안 됐을 때는(예: THEME_MAP에 안 걸리는 기사)
+    company_profile.industry로 관련 테마를 보여줘서 정보 공백을 메운다."""
+    from stock_news_bot.company_profile import CompanyProfile
+
+    item = _sample_item(title="평범한 사업 소식", summary="특별한 산업 키워드 없음", company="테스트기업")
+    profile = CompanyProfile(company="테스트기업", market_label="KOSPI", industry="특수산업", business="")
+    summary = build_message_summary(item, profile)
+    assert "🏷️ 관련 테마: 특수산업" in summary
+
+
 def test_dart_query_parameter_is_part_of_dedup_key_but_tracking_is_ignored():
     from stock_news_bot.models import NewsItem
     from datetime import datetime, timezone

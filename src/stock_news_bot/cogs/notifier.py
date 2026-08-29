@@ -128,9 +128,15 @@ def _company_context_lines(theme: str | None, company_profile: CompanyProfile, l
     """
     if not company_profile or not company_profile.company or company_profile.company not in listed:
         return []
-    related_theme = (theme or company_profile.industry or '').strip()
-    if related_theme == _PLACEHOLDER_INDUSTRY:
-        related_theme = ''
+    # 🏷[테마]가 이미 표시됐다면 여기서 같은 값을 또 보여주지 않는다.
+    # theme이 비어 있을 때만(=위쪽 테마 생성이 안 됐을 때만) industry로 보완하고,
+    # 그마저도 placeholder 문구("업종 정보 확인 중")면 표시하지 않는다.
+    if theme:
+        related_theme = ""
+    else:
+        related_theme = (company_profile.industry or "").strip()
+        if related_theme == _PLACEHOLDER_INDUSTRY:
+            related_theme = ""
     related_business = (company_profile.business or '').strip()
     if related_business == _PLACEHOLDER_BUSINESS:
         related_business = ''
