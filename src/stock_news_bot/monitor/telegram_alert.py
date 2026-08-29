@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from typing import Awaitable, Callable
 
@@ -70,10 +71,17 @@ class TelegramAlerter:
             logger.exception("텔레그램 알림 전송 중 예외 발생")
 
     async def send_news(self, message: str, *, button_label: str, callback_data: str, detail: str) -> None:
-        """뉴스와 함께 인라인 버튼을 전송하고 상세정보를 서버 메모리에 등록한다."""
+        """뉴스와 함께 인라인 버튼을 전송하고 상세정보를 서버 메모리에 등록한다.
+
+        callback_data(item.dedup_key, 64자 sha256 hex)는 그 자체로 이미
+        텔레그램 callback_data 바이트 제한(64바이트)을 꽉 채우므로 접두사를
+        붙일 여유가 없다 — 대신 내부적으로 짧은 토큰을 새로 만들어 그 토큰만
+        주고받고, 실제 상세 내용은 self._details[token]에 보관한다.
+        """
         if not self.enabled:
             return
-        self._details[callback_data] = detail
+        token = hashlib.sha1(callback_data.encode("utf-8")).hexdigest()[:12]
+        self._details[token] = detail
         if len(self._details) > 300:
             # 오래된 항목부터 정리. 딕셔너리 삽입순서를 이용한다.
             for key in list(self._details)[:100]:
@@ -83,7 +91,7 @@ class TelegramAlerter:
             "text": message[:4000],
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
-            "reply_markup": {"inline_keyboard": [[{"text": f"🔓 {button_label}", "callback_data": callback_data}]]},
+            "reply_markup": {"inline_keyboard": [[{"text": f"🔓 {button_label}", "callback_data": f"s:{token}"}]]},
         }
         try:
             timeout = aiohttp.ClientTimeout(total=10)
@@ -112,7 +120,10 @@ class TelegramAlerter:
         self._callback_task = None
 
     async def _poll_callbacks(self) -> None:
-        """인라인 버튼 클릭을 받아 상세정보를 같은 대화에 표시한다."""
+        """인라인 버튼 클릭을 받아 원본 뉴스 메시지 자체를 상세 내용으로
+        바꿔친다(디스코드의 edit_message()와 같은 방식). 새 메시지를 채팅
+        맨 아래에 보내지 않으므로, 뉴스가 많이 쌓인 채팅 중간에서 버튼을
+        눌러도 상세 내용이 항상 그 자리에서 열린다."""
         timeout = aiohttp.ClientTimeout(total=35)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -129,16 +140,25 @@ class TelegramAlerter:
                             callback = update.get("callback_query")
                             if not callback:
                                 continue
-                            token = callback.get("data", "")
-                            detail = self._details.get(token)
-                            if not detail:
-                                detail = "📊 상세정보가 만료되었습니다. 최신 뉴스의 버튼을 눌러주세요."
+                            data = callback.get("data", "")
                             message = callback.get("message") or {}
-                            chat = (message.get("chat") or {}).get("id")
-                            reply_to = message.get("message_id")
-                            if chat is not None:
-                                await self._send_detail(session, chat, detail, reply_to_message_id=reply_to)
-                            await session.post(self._url("answerCallbackQuery"), json={"callback_query_id": callback["id"], "text": "상세 매매정보를 표시했습니다."})
+                            chat_id = (message.get("chat") or {}).get("id")
+                            message_id = message.get("message_id")
+                            answer_text = ""
+                            if chat_id is not None and message_id is not None:
+                                if data.startswith("s:"):
+                                    token = data[2:]
+                                    detail = self._details.get(token)
+                                    if detail:
+                                        await self._edit_to_detail(session, chat_id, message_id, detail, token)
+                                        answer_text = "상세 매매정보를 표시했습니다."
+                                    else:
+                                        await self._edit_to_expired(session, chat_id, message_id)
+                                        answer_text = "상세정보가 만료되었습니다."
+                                elif data.startswith("d:"):
+                                    await self._delete_message(session, chat_id, message_id)
+                                    answer_text = "삭제했습니다."
+                            await session.post(self._url("answerCallbackQuery"), json={"callback_query_id": callback["id"], "text": answer_text})
                     except asyncio.CancelledError:
                         raise
                     except Exception:
@@ -149,32 +169,43 @@ class TelegramAlerter:
         except Exception:
             logger.exception("텔레그램 callback polling 종료")
 
-    async def _send_detail(
+    async def _edit_to_detail(
         self,
         session: aiohttp.ClientSession,
         chat_id: int,
+        message_id: int,
         detail: str,
-        *,
-        reply_to_message_id: int | None = None,
+        token: str,
     ) -> None:
+        """원본 뉴스 메시지를 상세 내용으로 편집하고, 버튼을 삭제 버튼으로 교체한다."""
         payload = {
             "chat_id": chat_id,
+            "message_id": message_id,
             "text": detail[:4000],
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
+            "reply_markup": {"inline_keyboard": [[{"text": "🗑️ 삭제", "callback_data": f"d:{token}"}]]},
         }
-        if reply_to_message_id is not None:
-            # 상세보기를 새 메시지로 그냥 보내면 그 사이 들어온 다른 뉴스들
-            # 밑에 묻혀버린다. reply_to_message_id로 원본 뉴스 메시지에 답장
-            # 형태로 붙여서, 나중에 온 뉴스들 아래에서 열리더라도 어떤 뉴스의
-            # 상세보기인지 원본을 인용해서 바로 보여준다.
-            payload["reply_to_message_id"] = reply_to_message_id
-            # 원본 메시지가 (드물게) 삭제된 경우에도 상세보기 전송 자체는
-            # 실패하지 않도록 한다.
-            payload["allow_sending_without_reply"] = True
-        async with session.post(self._url("sendMessage"), json=payload) as resp:
+        async with session.post(self._url("editMessageText"), json=payload) as resp:
             if resp.status != 200:
-                logger.error("텔레그램 상세정보 전송 실패(status=%s): %s", resp.status, await resp.text())
+                logger.error("텔레그램 상세정보 편집 실패(status=%s): %s", resp.status, await resp.text())
+
+    async def _edit_to_expired(self, session: aiohttp.ClientSession, chat_id: int, message_id: int) -> None:
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": "📊 상세정보가 만료되었습니다(봇 재시작 등으로 서버 메모리에서 사라짐). 최신 뉴스를 확인해주세요.",
+            "parse_mode": "HTML",
+        }
+        async with session.post(self._url("editMessageText"), json=payload) as resp:
+            if resp.status != 200:
+                logger.error("텔레그램 상세정보 만료 편집 실패(status=%s): %s", resp.status, await resp.text())
+
+    async def _delete_message(self, session: aiohttp.ClientSession, chat_id: int, message_id: int) -> None:
+        payload = {"chat_id": chat_id, "message_id": message_id}
+        async with session.post(self._url("deleteMessage"), json=payload) as resp:
+            if resp.status != 200:
+                logger.error("텔레그램 메시지 삭제 실패(status=%s): %s", resp.status, await resp.text())
 
 
 async def send_startup_probe(alerter: TelegramAlerter) -> None:

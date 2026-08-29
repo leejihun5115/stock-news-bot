@@ -19,13 +19,13 @@ def _sample_item(**overrides):
     return NewsItem(**defaults)
 
 
-def test_title_is_bold_in_discord_and_telegram():
-    # 제목은 원문(summary)과 상세(detail) 양쪽 모두에 굵게 표시된다.
+def test_title_is_bold_in_summary_only_not_repeated_in_detail():
+    # 제목은 원문(summary)에만 굵게 표시되고, 상세(detail)에는 중복되지 않는다.
     item = _sample_item()
-    for discord in (build_message_summary(item), build_message(item)):
-        assert "📌 **테스트 제목**" in discord
-    for telegram in (build_telegram_summary_text(item), build_telegram_text(item)):
-        assert "📌 <b>테스트 제목</b>" in telegram
+    assert "📌 **테스트 제목**" in build_message_summary(item)
+    assert "**테스트 제목**" not in build_message(item)
+    assert "📌 <b>테스트 제목</b>" in build_telegram_summary_text(item)
+    assert "<b>테스트 제목</b>" not in build_telegram_text(item)
 
 
 def test_company_name_has_no_quotes_in_header():
@@ -46,17 +46,6 @@ def test_original_source_link_shown_in_summary_as_hyperlink():
     telegram = build_telegram_summary_text(item)
     assert "🔗 [기사 원문 보기](https://example.com/a)" in discord
     assert '🔗 <a href="https://example.com/a">[기사 원문 보기]</a>' in telegram
-
-
-def test_key_point_hint_shown_below_link_in_summary():
-    """원문 링크 아래에 '키포인트 상세내역' 안내 문구가 있어야 한다."""
-    item = _sample_item()
-    discord = build_message_summary(item)
-    telegram = build_telegram_summary_text(item)
-    for text in (discord, telegram):
-        link_idx = text.index("기사 원문 보기")
-        hint_idx = text.index("키포인트 상세내역")
-        assert hint_idx > link_idx
 
 
 def test_verdict_appears_once_in_summary_not_in_detail_header():
@@ -103,7 +92,6 @@ def test_listed_company_marked_with_bell_and_bilingual_name():
     assert "📌 <b>테스트 제목</b>" in summary
     assert "⚪ 판단 보류" in summary
     assert "기사 원문 보기" in summary
-    assert "키포인트 상세내역" in summary
     # 상세 메시지에는 매매 판단의 이유/근거·판단 조건이 들어있어야 한다.
     assert "이유/근거" in full
     assert "판단 조건" in full

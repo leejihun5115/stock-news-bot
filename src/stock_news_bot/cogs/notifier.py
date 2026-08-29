@@ -4,13 +4,20 @@
 헤더/관련주/매매포인트 3~4줄만 남기고 나머지를 링크 뒤로 숨기는
 축약형으로 바꿨다가, 원래대로 핵심/분석/테마/전망/일정/용어/근거까지
 메시지 안에 전부 펼쳐서 보여주는 방식으로 되돌렸다. 회사명 주변의
-따옴표(")만 계속 안 붙이는 상태로 유지한다(예: `📰 [알톤]`).
+따옴표(")만 계속 안 붙이는 상태로 유지한다(예: `📰 [알톤]`). 헤더의
+회사명은 시장 국기(🇰🇷 등)나 상장 🔔 표시 없이 순수 회사명만 보여준다.
 
-【텔레그램: 버튼 클릭 → 상세보기 부활】
-텔레그램은 다시 "요약만 먼저 보내고, 인라인 버튼(🔓 Key Point 🔗상세보기)을
-누르면 상세 내용이 후속 메시지로 온다" 방식을 쓴다.
+【텔레그램: 버튼 클릭 → 그 자리에서 상세보기 → 삭제】
+텔레그램도 이제 디스코드와 같은 방식이다 — "🔓 Key Point 🔗상세보기" 버튼을
+누르면 새 메시지를 채팅 맨 아래로 보내지 않고, 원본 뉴스 메시지 자체를
+텔레그램 Bot API의 editMessageText로 상세 내용으로 바꿔친다(뉴스가 많이
+쌓인 채팅 중간에서 눌러도 그 자리에서 열림). 버튼도 "🗑️ 삭제"로 교체되고,
+누르면 deleteMessage로 그 메시지를 지운다.
+(예전에는 상세보기를 reply_to_message_id로 답장하는 새 메시지로 보냈는데,
+그러면 나중에 온 다른 뉴스들 아래 맨 밑에서 열려서 불편하다는 피드백을
+받고 위 방식으로 바꿨다.)
 - build_telegram_summary_text(): 최초 발송용. 헤더/제목/관련주/판정만.
-- build_telegram_text(): 버튼 클릭 시 전송되는 전체 상세.
+- build_telegram_text(): 버튼 클릭 시 같은 메시지가 바뀌는 전체 상세.
 scheduler.py가 TelegramAlerter.send_news()로 이 둘을 함께 넘기고,
 버튼 클릭은 monitor/telegram_alert.py의 콜백 폴링이 처리한다.
 (이 폴링은 과거에 "불안정하다"는 이유로 껐던 적이 있다 — 재활성화하면서
@@ -22,6 +29,10 @@ scheduler.py가 TelegramAlerter.send_news()로 이 둘을 함께 넘기고,
 바꿔치기한다 — 상세가 항상 그 뉴스가 있던 자리에 그대로 나온다(채널
 맨 아래로 새 메시지가 추가되는 게 아님). 상세로 바뀐 뒤에는 view가
 "🗑️ 삭제" 버튼(DetailView)으로 교체되어 그 메시지를 지울 수 있다.
+(다만 디스코드 클라이언트 자체가 컴포넌트 상호작용 시 화면을 최신
+메시지 쪽으로 스크롤해버리는 경우가 있는데, 이건 클라이언트 동작이라
+서버 코드로는 제어할 수 없다 — 상세 내용 맨 아래에 그 메시지로 돌아가는
+jump 링크를 넣어 완화한다.)
 - build_message_summary()/build_embed_summary(): 최초 발송용 요약(텔레그램
   요약과 동일하게 헤더/제목/관련주/판정만).
 - build_message()/build_embed(): 버튼 클릭 시 같은 메시지가 바뀌는 전체 상세.
@@ -31,10 +42,10 @@ scheduler.py가 TelegramAlerter.send_news()로 이 둘을 함께 넘기고,
 프로세스 메모리 안에서 직접 콜백을 받으므로, NotifierCog.send_items()가
 상세 embed를 TradePointView 인스턴스에 그대로 들려서 channel.send(view=...)
 로 보낸다 — 별도 캐시나 폴링이 필요 없다.
-트레이드오프: 봇이 재시작되면 View 인스턴스가 메모리에서 사라지므로, 이미
-보낸 메시지의 버튼(상세보기든 삭제든)은 재시작 이후로는 반응하지 않는다
-(텔레그램의 "상세정보 만료" 케이스와 같은 종류의 리스크지만 디스코드는
-폴백 메시지 없이 그냥 무반응/에러가 뜬다).
+트레이드오프: 봇이 재시작되면 View 인스턴스(디스코드)나 _details 딕셔너리
+(텔레그램) 둘 다 메모리에서 사라지므로, 이미 보낸 메시지의 버튼(상세보기든
+삭제든)은 재시작 이후 눌러도 반응하지 않거나(디스코드) "상세정보 만료"로
+편집된다(텔레그램).
 
 디스코드는 masked link(`[텍스트](url)`)가 일반 메시지 content에서는
 안정적으로 렌더링되지 않으므로(embed에서만 보장됨), 항상 discord.Embed로
@@ -43,8 +54,8 @@ scheduler.py가 TelegramAlerter.send_news()로 이 둘을 함께 넘기고,
 【원문 vs 상세 내용 분리】
 원문(최초 발송 요약: build_message_summary / build_embed_summary /
 build_telegram_summary_text)에는 헤더·제목·🧠[분석]·매매 판단 배지(예:
-⚪ 판단 보류)를 한 번만 넣고, 그 밑에 🔗 기사 원문 링크(하이퍼링크)와
-"🔑 키포인트 상세내역" 안내 문구를 붙인다. 상세(버튼 클릭 시:
+⚪ 판단 보류)를 한 번만 넣고, 그 밑에 🔗 기사 원문 링크(하이퍼링크)까지만
+붙인다. 상세(버튼 클릭 시:
 build_message / build_embed / build_telegram_text)에는 헤더/제목/분석을
 반복하지 않고, "매매 판단"을 뒷받침하는 근거 — 🔎[핵심]/🎯[관련주]/
 이유·근거/판단조건/🔮[전망]/📅[일정]/💡[용어]/누적데이터 등 — 만 담는다.
@@ -321,7 +332,7 @@ def _build_outlook(item: NewsItem, verdict: str, analysis: list[str]) -> list[st
 def build_message(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None, company_profile: CompanyProfile | None = None) -> str:
     """디스코드 embed description에 넣을 상세 본문(마크다운, masked link 지원).
 
-    헤더(회사/분류/시각)·🏷[테마]·🎯[관련주]·🧠[분석]은 이미
+    헤더(회사/분류/시각)·🏷[테마]·🎯[관련주]·🧠[분석]·제목은 이미
     원문(build_message_summary)에 나와 있으므로 여기서는 반복하지 않는다.
     여기는 "매매 판단"을 뒷받침하는 상세 근거 — 🔎[핵심] / 관련주 근거 /
     이유·근거 / 판단조건 / 🔮[전망] / 📅[일정] / 💡[용어] / 누적데이터
@@ -329,15 +340,10 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
     """
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     display_company = _display_company(item)
-    title_prefix = _title_prefix(theme, title)
     company_profile = company_profile or CompanyProfile(company=display_company)
     verdict, score, verdict_reason = _trade_verdict(item, analysis)
     listed = _listed_companies(display_company, related, company_profile)
-    title = _mark_in_text(title, listed)
-    lines = [
-        f"{title_prefix} **{title}**",
-        "",
-    ]
+    lines: list[str] = []
     if core:
         lines += ["🔎 [핵심]", *[f"{_INDENT}↳ {_mark_in_text(x, listed)}" for x in core], ""]
     related_with_reason = [c for c in related if reasons.get(c)]
@@ -377,7 +383,11 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
         if display_company in listed:
             lines += ["", f"🏭 업종 : {company_profile.industry}", f"🏢 주요 사업 : {company_profile.business}"]
         lines += ["", f"🔗 [기사 원문 보기]({item.url})"]
-    return "\n".join(_push_body_inward(lines))
+    # 더 이상 맨 첫 줄이 헤더/제목이 아니므로(중복 제거로 삭제됨),
+    # _push_body_inward(첫 줄만 안 들여쓰기)를 쓰지 않고 모든 줄을
+    # 동일하게 들여쓴다 — 원문 헤더 들여쓰기와 시각적으로 맞춘다.
+    indented = [f"{_INDENT}{line}" if line else line for line in lines]
+    return "\n".join(indented)
 
 
 def build_embed(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None, company_profile: CompanyProfile | None = None) -> discord.Embed:
@@ -408,7 +418,7 @@ def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None
     company_profile = company_profile or CompanyProfile(company=display_company)
     verdict, score, _verdict_reason = _trade_verdict(item, analysis)
     listed = _listed_companies(display_company, related, company_profile)
-    company_label = f"{company_profile.market_label} {_mark(display_company, listed)}".strip()
+    company_label = display_company
     title = _mark_in_text(title, listed)
 
     lines = [
@@ -426,7 +436,6 @@ def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None
     lines += ["", verdict_label]
     if item.url:
         lines += ["", f"🔗 [기사 원문 보기]({item.url})"]
-    lines += ["", "🔑 키포인트 상세내역 (버튼을 눌러 더 보기)"]
     return "\n".join(_push_body_inward(lines))
 
 
@@ -472,6 +481,20 @@ class TradePointView(discord.ui.View):
     않게 하지만, 봇 프로세스가 재시작되면 이 View 자체가 메모리에서
     사라지므로 그 이전에 보낸 메시지의 버튼은 재시작 이후 눌러도
     반응하지 않는다.
+
+    【뉴스가 많이 쌓인 채널 중간에서 버튼을 눌렀을 때 화면이 맨 아래로
+    스크롤되어 보이는 문제에 대해】
+    edit_message()는 항상 같은 메시지(같은 message id, 같은 채널 내 위치)를
+    그 자리에서 덮어쓸 뿐, 새 메시지를 보내거나 메시지를 채널 맨 아래로
+    옮기지 않는다 — 위 send_items()에서 채널 맨 아래로 새로 보내는 것과는
+    다른 코드 경로다. 그런데도 "맨 아래로 스크롤되어 열린다"는 현상은,
+    디스코드 클라이언트(특히 모바일)가 컴포넌트(버튼) 상호작용이 들어오면
+    사용자가 위로 스크롤해 놓은 상태여도 뷰를 최신 메시지 쪽으로 되돌리는
+    자체 동작 때문인 경우가 많다 — 디스코드 자체에도 오래전부터 보고된
+    클라이언트 버그/동작이며, 봇 쪽 코드(edit_message 호출 방식)로는 그
+    스크롤 위치 자체를 제어할 수 없다. 대신 상세 내용 맨 아래에 이 메시지로
+    바로 돌아올 수 있는 링크(jump_url)를 붙여서, 화면이 아래로 밀려도
+    한 번의 탭/클릭으로 원래 자리로 되돌아올 수 있게 한다.
     """
 
     def __init__(self, detail_embed: discord.Embed):
@@ -481,18 +504,24 @@ class TradePointView(discord.ui.View):
     @discord.ui.button(label="Key Point 🔗상세보기", emoji="🔓", style=discord.ButtonStyle.primary)
     async def show_detail(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         try:
+            message = interaction.message
+            if message is not None:
+                self._detail_embed.add_field(
+                    name="\u200b",
+                    value=f"[📍 이 메시지로 바로가기 (화면이 아래로 이동했다면 눌러주세요)]({message.jump_url})",
+                    inline=False,
+                )
             await interaction.response.edit_message(embed=self._detail_embed, view=DetailView())
         except discord.HTTPException:
             logger.exception("디스코드 상세정보 버튼 응답 실패")
 
 
 def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, price_reaction_line: str | None = None, *, news_value_mid: int = 45, news_value_high: int = 75, company_profile: CompanyProfile | None = None) -> str:
-    """텔레그램 상세 본문. 헤더(회사/분류/시각)·🏷[테마]·🎯[관련주]·🧠[분석]은
+    """텔레그램 상세 본문. 헤더(회사/분류/시각)·🏷[테마]·🎯[관련주]·🧠[분석]·제목은
     이미 원문(build_telegram_summary_text)에 나와 있으므로 여기서는 반복하지
     않는다. 여기는 "매매 판단"을 뒷받침하는 상세 근거만 담는다."""
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
     display_company = _display_company(item)
-    title_prefix = _title_prefix(theme, title)
     company_profile = company_profile or CompanyProfile(company=display_company)
     verdict, score, verdict_reason = _trade_verdict(item, analysis)
 
@@ -500,8 +529,7 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
         return html_escape(str(value), quote=True)
 
     listed = _listed_companies(display_company, related, company_profile)
-    title = _mark_in_text(title, listed)
-    lines = [f"{title_prefix} <b>{esc(title)}</b>", ""]
+    lines: list[str] = []
     if core:
         lines += ["🔎 [핵심]", *[f"{_INDENT}↳ {esc(_mark_in_text(x, listed))}" for x in core], ""]
     related_with_reason = [c for c in related if reasons.get(c)]
@@ -540,7 +568,8 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
         if display_company in listed:
             lines += ["", f"🏭 업종 : {esc(company_profile.industry)}", f"🏢 주요 사업 : {esc(company_profile.business)}"]
         lines += ["", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
-    return "\n".join(_push_body_inward(lines))
+    indented = [f"{_INDENT}{line}" if line else line for line in lines]
+    return "\n".join(indented)
 
 
 def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile | None = None) -> str:
@@ -564,7 +593,7 @@ def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile 
 
     listed = _listed_companies(display_company, related, company_profile)
     title = _mark_in_text(title, listed)
-    company_label = f"{company_profile.market_label} {_mark(display_company, listed)}".strip()
+    company_label = display_company
     lines = [
         f"📰 [{esc(company_label)}]   [{esc(item.classification)}]   ⏰ {local_time}",
         "",
@@ -580,7 +609,6 @@ def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile 
     lines += ["", verdict_label]
     if item.url:
         lines += ["", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
-    lines += ["", "🔑 키포인트 상세내역 (버튼을 눌러 더 보기)"]
     return "\n".join(_push_body_inward(lines))
 
 
