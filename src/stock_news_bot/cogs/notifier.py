@@ -8,7 +8,7 @@
 회사명은 시장 국기(🇰🇷 등)나 상장 🔔 표시 없이 순수 회사명만 보여준다.
 
 【텔레그램: 버튼 클릭 → 그 자리에서 상세보기 → 삭제】
-텔레그램도 이제 디스코드와 같은 방식이다 — "🔓 Key Point 🔗상세보기" 버튼을
+텔레그램도 이제 디스코드와 같은 방식이다 — "🔓 Key Point     🔗상세보기" 버튼을
 누르면 새 메시지를 채팅 맨 아래로 보내지 않고, 원본 뉴스 메시지 자체를
 텔레그램 Bot API의 editMessageText로 상세 내용으로 바꿔친다(뉴스가 많이
 쌓인 채팅 중간에서 눌러도 그 자리에서 열림). 버튼도 "🔙 원문으로" + "🗑️ 삭제"로 교체되고,
@@ -24,7 +24,7 @@ scheduler.py가 TelegramAlerter.send_news()로 이 둘을 함께 넘기고,
 그 위험을 감수하기로 함.)
 【디스코드: 버튼 클릭 → 그 자리에서 상세보기 → 삭제】
 디스코드도 요약을 먼저 보내는 건 같지만, 텔레그램과 달리 새 메시지를
-따로 보내지 않는다. "🔓 Key Point 🔗상세보기" 버튼을 누르면 그 뉴스
+따로 보내지 않는다. "🔓 Key Point     🔗상세보기" 버튼을 누르면 그 뉴스
 메시지 자체를 interaction.response.edit_message()로 상세 내용으로
 바꿔치기한다 — 상세가 항상 그 뉴스가 있던 자리에 그대로 나온다(채널
 맨 아래로 새 메시지가 추가되는 게 아님). 상세로 바뀐 뒤에는 view가
@@ -446,7 +446,7 @@ def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None
 
     🔎[핵심]·관련주 근거·이유/판단조건·🔮[전망]·📅[일정]·💡[용어] 등
     "매매 판단"을 뒷받침하는 상세 근거는 여기 넣지 않고, 이 메시지에 딸린
-    버튼(🔓 Key Point 🔗상세보기)을 누르면 build_message()로 만든 상세가
+    버튼(🔓 Key Point     🔗상세보기)을 누르면 build_message()로 만든 상세가
     같은 자리에서 펼쳐진다. build_telegram_summary_text()와 동일한 구성이며
     HTML escape만 없다(디스코드 embed는 마크다운을 쓰지 HTML을 쓰지 않는다).
     """
@@ -528,7 +528,7 @@ class DetailView(discord.ui.View):
 
 
 class TradePointView(discord.ui.View):
-    """요약 메시지에 붙는 "🔓 Key Point 🔗상세보기" 버튼.
+    """요약 메시지에 붙는 "🔓 Key Point     🔗상세보기" 버튼.
 
     버튼을 누르면 새 메시지를 보내지 않고, 그 뉴스 요약 메시지 자체를
     interaction.response.edit_message()로 상세 내용으로 바꿔친다 — 상세가
@@ -565,7 +565,7 @@ class TradePointView(discord.ui.View):
         self._detail_embed = detail_embed
         self._jump_link_added = False
 
-    @discord.ui.button(label="Key Point 🔗상세보기", emoji="🔓", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Key Point     🔗상세보기", emoji="🔓", style=discord.ButtonStyle.primary)
     async def show_detail(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         try:
             message = interaction.message
@@ -649,7 +649,7 @@ def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile 
 
     🔎[핵심]·관련주 근거·이유/판단조건·🔮[전망]·📅[일정]·💡[용어] 등
     "매매 판단"을 뒷받침하는 상세 근거는 여기 넣지 않고, 이 메시지에 딸린
-    인라인 버튼(🔓 Key Point 🔗상세보기)을 누르면 build_telegram_text()로
+    인라인 버튼(🔓 Key Point     🔗상세보기)을 누르면 build_telegram_text()로
     만든 상세가 후속 메시지로 온다.
     """
     title, core, analysis, theme, related, reasons, schedule, terms = _analysis_parts(item)
