@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -250,13 +250,15 @@ def load_settings() -> Settings:
         "theelec", "scalpinglove",
     ]
 
-    if not settings.blog_feeds:
-        from dataclasses import replace as _replace
-    settings = _replace(settings, blog_feeds=legacy_blog_feeds)
-    if not settings.youtube_channel_ids:
-        settings = _replace(settings, youtube_channel_ids=legacy_youtube_channels)
-    if not settings.telegram_source_channels:
-        settings = _replace(settings, telegram_source_channels=legacy_telegram_channels)
+    # 환경변수가 비어 있을 때만 구버전의 "내가 등록해 둔" 소스 목록을 사용한다.
+    # 따라서 Render에 BLOG_FEEDS/YOUTUBE_CHANNEL_IDS/TELEGRAM_SOURCE_CHANNELS를
+    # 새로 만들 필요가 없으며, 사용자가 나중에 명시적으로 값을 넣으면 그 값이 우선한다.
+    settings = replace(
+        settings,
+        blog_feeds=settings.blog_feeds or legacy_blog_feeds,
+        youtube_channel_ids=settings.youtube_channel_ids or legacy_youtube_channels,
+        telegram_source_channels=settings.telegram_source_channels or legacy_telegram_channels,
+    )
 
     if settings.discord_news_channel_id == 0:
         raise ConfigError("DISCORD_NEWS_CHANNEL_ID가 설정되지 않았습니다.")
