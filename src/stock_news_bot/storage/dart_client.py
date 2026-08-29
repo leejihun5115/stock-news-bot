@@ -88,6 +88,19 @@ CREATE TABLE IF NOT EXISTS dart_watched_stocks (
 
 _META_LAST_REFRESHED = "corp_code_last_refreshed_at"
 
+# 일반 명사/흔한 단어와 우연히 이름이 겹치는 상장사명.
+# (예: "남성" — 상호 그대로는 실제 코스닥 상장사지만, 뉴스 문맥의 절대
+# 다수는 "20대 남성", "이 남성" 같은 일반 명사 용법이다.) 이 목록에 있는
+# 이름은 본문에 _FINANCE_CONTEXT_RE에 걸리는 금융 문맥 신호가 함께 있을
+# 때만 종목으로 인정한다. 새로운 오탐 사례가 보고되면 여기에 추가한다.
+_AMBIGUOUS_COMMON_WORD_NAMES = {"남성"}
+
+_FINANCE_CONTEXT_RE = re.compile(
+    r"주가|주식|종목|코스피|코스닥|상한가|하한가|급등|급락|거래량|시가총액|"
+    r"실적|매출|영업이익|공시|배당|유상증자|무상증자|자사주|상장|IPO|증권가|"
+    r"목표주가|투자의견|㈜|\(주\)"
+)
+
 
 @dataclass(slots=True)
 class CompanyMatch:
@@ -356,8 +369,15 @@ class DartClient:
         if not text:
             return None
         for match in self._load_name_cache():
-            if match.corp_name in text:
-                return match
+            if match.corp_name not in text:
+                continue
+            if match.corp_name in _AMBIGUOUS_COMMON_WORD_NAMES and not _FINANCE_CONTEXT_RE.search(text):
+                # "남성"(男性)처럼 일반 명사와 우연히 겹치는 종목명은, 본문에
+                # 주가/실적/공시 같은 금융 문맥 신호가 함께 있을 때만 종목으로
+                # 인정한다. 그렇지 않으면(예: "실종 20대 남성 숨진채 발견"
+                # 같은 일반 사회 기사) 이 후보는 건너뛰고 다음 후보를 본다.
+                continue
+            return match
         return None
 
     def find_by_name(self, corp_name: str) -> CompanyMatch | None:

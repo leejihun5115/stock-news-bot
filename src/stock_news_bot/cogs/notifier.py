@@ -521,6 +521,7 @@ def _clean_display_title(title: str) -> str:
     return value or (title or "").strip()
 
 
+
 def _meaningful_core(core: list[str], title: str) -> list[str]:
     normalized_title = re.sub(r"\W", "", title)
     result = []

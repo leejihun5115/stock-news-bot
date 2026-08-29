@@ -191,6 +191,36 @@ def test_related_theme_shown_as_fallback_when_theme_missing():
     assert "🏷️ 관련 테마: 특수산업" in summary
 
 
+def test_google_news_blog_publisher_tail_is_stripped_from_title():
+    """구글 뉴스로 수집된 블로그 검색 결과는 제목 끝에
+    " : 네이버 블로그 - Naver Blog"처럼 출처가 두 겹으로 붙는다.
+    제목에는 이 출처 꼬리가 보이면 안 된다(사용자 제보: "제목에 뒤에 이렇게
+    신문사나 출처 안나오면 좋겠어")."""
+    item = _sample_item(
+        title="모태펀드 관광·국민안전계정 GP에…인피니툼·호라이즌·현대차증권 : 네이버 블로그 - Naver Blog",
+        url="https://news.google.com/rss/articles/AbCdEf?oc=5",
+        source_kind="blog",
+        summary="합병 관련 기사 본문",
+    )
+    summary = build_message_summary(item)
+    assert "네이버 블로그" not in summary
+    assert "Naver Blog" not in summary
+    # 🔔은 상장사(현대차증권) 인식 마킹이라 정상 — 출처 꼬리만 제거되면 된다.
+    assert "모태펀드 관광·국민안전계정 GP에…인피니툼·호라이즌·🔔현대차증권" in summary
+
+
+def test_regular_google_news_publisher_tail_is_still_stripped():
+    """일반 뉴스(구글 뉴스 검색)의 " - 언론사명" 꼬리 제거는 기존대로 유지된다."""
+    item = _sample_item(
+        title="AI 반도체 수요 급증…삼성전자 수혜 전망 - 이투데이",
+        url="https://news.google.com/rss/articles/XyZ?oc=5",
+        source_kind="news",
+    )
+    summary = build_message_summary(item)
+    assert "이투데이" not in summary
+    assert "AI 반도체 수요 급증…🔔삼성전자 수혜 전망" in summary
+
+
 def test_dart_query_parameter_is_part_of_dedup_key_but_tracking_is_ignored():
     from stock_news_bot.models import NewsItem
     from datetime import datetime, timezone

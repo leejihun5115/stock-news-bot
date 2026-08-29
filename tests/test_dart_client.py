@@ -75,6 +75,26 @@ def test_match_company_returns_none_when_no_match(client):
     assert client.match_company("어느 중소형주 급등") is None
 
 
+def test_match_company_rejects_ambiguous_common_word_without_finance_context(client):
+    """"남성"은 실제 코스닥 상장사명이지만 뉴스 대부분은 "20대 남성"처럼
+    일반 명사로 쓴다. 금융 문맥 신호(주가/실적/공시 등)가 없으면 종목으로
+    인정하지 않아야 한다 (스크린샷으로 제보된 오탐: 실종자 사망 기사가
+    [남성] 종목 뉴스로 잘못 분류됨)."""
+    _seed_corp_codes(client, [("00300001", "남성", "004270")])
+    match = client.match_company("제주서 실종 20대 남성 숨진채 발견…신고 25시간만")
+    assert match is None
+
+
+def test_match_company_accepts_ambiguous_common_word_with_finance_context(client):
+    """반대로, 진짜 "남성" 종목 뉴스(주가/실적 등 금융 문맥 동반)는
+    정상적으로 매칭되어야 한다 — 오탐 방지가 과도한 차단으로 이어지면
+    안 된다."""
+    _seed_corp_codes(client, [("00300001", "남성", "004270")])
+    match = client.match_company("남성 주가 오늘 상한가 기록")
+    assert match is not None
+    assert match.corp_name == "남성"
+
+
 def test_find_by_name_exact_match(client):
     _seed_corp_codes(client, [("00126380", "삼성전자", "005930")])
     match = client.find_by_name("삼성전자")
