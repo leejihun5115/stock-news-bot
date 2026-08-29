@@ -86,12 +86,29 @@ services:
         sync: false
       - key: BLOG_FEEDS
         sync: false
+      - key: BLOG_SEARCH_QUERIES
+        sync: false
+      - key: BLOG_SEARCH_MAX_RESULTS
+        value: "10"
       - key: YOUTUBE_CHANNEL_IDS
         sync: false
       - key: TELEGRAM_SOURCE_CHANNELS
         sync: false
+      - key: TELEGRAM_SEARCH_QUERIES
+        sync: false
+      - key: TELEGRAM_SEARCH_MAX_RESULTS
+        value: "10"
+      - key: YOUTUBE_SEARCH_QUERIES
+        sync: false
+      - key: YOUTUBE_SEARCH_MAX_RESULTS
+        value: "10"
+      - key: YOUTUBE_SEARCH_INTERVAL_SECONDS
+        value: "60"
+      - key: SOURCE_SEARCH_INTERVAL_SECONDS
+        value: "60"
+      # 전체 수집 주기: 1분
       - key: FETCH_INTERVAL_SECONDS
-        value: "5"
+        value: "60"
       - key: NEWS_ANALYSIS_WORKERS
         value: "6"
       - key: NEWS_LOOKBACK_HOURS

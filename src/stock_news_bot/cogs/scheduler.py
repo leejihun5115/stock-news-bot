@@ -612,6 +612,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             len(self.settings.effective_feed_urls())
             + len(self.settings.blog_feeds)
             + len(self.settings.youtube_channel_ids)
+            + len(self.settings.youtube_search_queries)
             + len(self.settings.telegram_source_channels)
         )
         keyword_count = len(list(dict.fromkeys(self.settings.news_keywords)))

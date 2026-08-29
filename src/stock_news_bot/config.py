@@ -79,6 +79,16 @@ class Settings:
     rss_feeds: list[str] = field(default_factory=list)
     blog_feeds: list[str] = field(default_factory=list)
     youtube_channel_ids: list[str] = field(default_factory=list)
+    # 전체 YouTube 검색용 키워드. 비어 있으면 검색하지 않고 프로그램은 그대로 실행된다.
+    youtube_search_queries: list[str] = field(default_factory=list)
+    youtube_search_max_results: int = 10
+    youtube_search_interval_seconds: int = 60
+    # 나중에 종목/재료 검색어를 넣으면 등록 채널과 별도로 전체 검색한다.
+    blog_search_queries: list[str] = field(default_factory=list)
+    telegram_search_queries: list[str] = field(default_factory=list)
+    blog_search_max_results: int = 10
+    telegram_search_max_results: int = 10
+    source_search_interval_seconds: int = 60
     telegram_source_channels: list[str] = field(default_factory=list)
     news_keywords: list[str] = field(default_factory=list)
     enable_blog: bool = True
@@ -174,6 +184,14 @@ def load_settings() -> Settings:
         rss_feeds=_get_str_list("RSS_FEEDS"),
         blog_feeds=_get_str_list("BLOG_FEEDS") or _get_str_list("BLOG_RSS_FEEDS"),
         youtube_channel_ids=_get_str_list("YOUTUBE_CHANNEL_IDS"),
+        youtube_search_queries=_get_str_list("YOUTUBE_SEARCH_QUERIES"),
+        youtube_search_max_results=max(1, _get_int("YOUTUBE_SEARCH_MAX_RESULTS", 10)),
+        youtube_search_interval_seconds=max(60, _get_int("YOUTUBE_SEARCH_INTERVAL_SECONDS", 60)),
+        blog_search_queries=_get_str_list("BLOG_SEARCH_QUERIES"),
+        telegram_search_queries=_get_str_list("TELEGRAM_SEARCH_QUERIES"),
+        blog_search_max_results=max(1, _get_int("BLOG_SEARCH_MAX_RESULTS", 10)),
+        telegram_search_max_results=max(1, _get_int("TELEGRAM_SEARCH_MAX_RESULTS", 10)),
+        source_search_interval_seconds=max(60, _get_int("SOURCE_SEARCH_INTERVAL_SECONDS", 60)),
         telegram_source_channels=(
             _get_str_list("TELEGRAM_SOURCE_CHANNELS")
             or _get_str_list("TELEGRAM_CHANNEL_FILTERED")
@@ -236,7 +254,6 @@ def load_settings() -> Settings:
         "https://rss.blog.naver.com/cart10101.xml",
         "https://rss.blog.naver.com/zero_family.xml",
         "https://rss.blog.naver.com/pokara61.xml",
-        "https://contents.premium.naver.com/ystreet/irnote/rss",
     ]
     legacy_youtube_channels = [
         "GODofIT_official", "김단테", "easybio_shiba", "3protv", "syukaworld",

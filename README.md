@@ -190,3 +190,29 @@ Google은 해당 모델의 Developer API 무료 등급을 제공하지만 무료
 ## 무료 LLM 분석 fallback
 
 Gemini → OpenRouter `openrouter/free` → 기존 규칙 분석 순서로 자동 fallback합니다. 자세한 Render 환경변수는 `FREE_LLM_FALLBACK.md`를 참고하세요.
+
+
+### YouTube 전체 검색
+
+YouTube는 등록 채널 수집과 별도로 전체 검색을 지원합니다. 처음에는 검색어를 비워 둬도 프로그램이 정상 실행되며, 나중에 Render 환경변수에 검색어를 추가하면 됩니다.
+
+- `YOUTUBE_SEARCH_QUERIES`: 쉼표로 구분한 검색어 목록
+- `YOUTUBE_SEARCH_MAX_RESULTS`: 검색어당 최대 결과 수 (기본 10)
+- `YOUTUBE_SEARCH_INTERVAL_SECONDS`: 전체 검색 주기 (기본 60초)
+
+예: `YOUTUBE_SEARCH_QUERIES=삼성전자,HBM,AI 반도체`
+
+전체 검색 결과도 `source_kind=youtube`로 들어가므로 YouTube 학습용 소스 정책에 따라 점수와 무관하게 분석 Queue로 전달됩니다.
+
+
+### 블로그 / Telegram 전체 검색 준비
+
+등록된 피드는 그대로 유지하면서, 나중에 검색어를 넣으면 전체 공개 영역 검색도 별도로 수행하도록 준비되어 있습니다. 검색어가 비어 있으면 요청을 보내지 않습니다.
+
+- `BLOG_SEARCH_QUERIES`: 쉼표로 구분한 블로그 검색어
+- `BLOG_SEARCH_MAX_RESULTS`: 검색어당 최대 결과 수
+- `TELEGRAM_SEARCH_QUERIES`: 쉼표로 구분한 Telegram 검색어
+- `TELEGRAM_SEARCH_MAX_RESULTS`: 검색어당 최대 결과 수
+- `SOURCE_SEARCH_INTERVAL_SECONDS`: 블로그/Telegram 전체 검색 주기 (기본 60초)
+
+현재는 검색어를 입력하지 않아도 프로그램이 정상 실행되며, 등록 채널 수집만 계속합니다.
