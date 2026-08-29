@@ -120,7 +120,9 @@ def _company_context_lines(theme: str | None, company_profile: CompanyProfile, l
     """
     if not company_profile or not company_profile.company or company_profile.company not in listed:
         return []
-    related_theme = (theme or company_profile.industry or '').strip()
+    # 🏷[테마]가 이미 표시됐다면 여기서 같은 값을 또 보여주지 않는다.
+    # theme이 비어 있을 때만(=위쪽 테마 생성이 안 됐을 때만) industry로 보완한다.
+    related_theme = "" if theme else (company_profile.industry or "").strip()
     related_business = (company_profile.business or '').strip()
     if not related_theme and not related_business:
         return []
