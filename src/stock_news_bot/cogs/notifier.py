@@ -233,6 +233,31 @@ def build_amount_context(item: NewsItem) -> str | None:
     return "\n".join(lines)
 
 
+_STUDY_SOURCE_META = {
+    "youtube": ("📺", "YouTube"),
+    "blog": ("📝", "Blog"),
+    "telegram": ("✈️", "Telegram"),
+}
+
+def _short_source_name(source: str, kind: str, max_len: int = 18) -> str:
+    value = (source or "").strip()
+    if kind == "telegram":
+        value = re.sub(r"^Telegram\s+", "", value, flags=re.I).strip()
+    value = re.sub(r"\s+[-|·]\s*(?:YouTube|Youtube|RSS|Blog)$", "", value, flags=re.I).strip()
+    value = re.sub(r"\s+", " ", value)
+    if len(value) <= max_len:
+        return value
+    return value[: max_len - 1].rstrip() + "…"
+
+def _study_header(item: NewsItem) -> str | None:
+    meta = _STUDY_SOURCE_META.get(getattr(item, "source_kind", "news"))
+    if not meta:
+        return None
+    icon, label = meta
+    name = _short_source_name(item.source, item.source_kind) or "콘텐츠"
+    local_time = _display_time(item.published_at)
+    return f"{icon} [{label}]_{name}   ⏰ {local_time}"
+
 def _clean_display_title(title: str) -> str:
     """기사 제목 뒤에 붙은 매체명/출처 꼬리를 제거해 제목을 깔끔하게 표시한다."""
     value = (title or "").strip()
@@ -367,13 +392,19 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
     if not trade_reason:
         trade_reason = verdict_reason
     trade_condition = _verdict_condition(item, verdict)
-    verdict_label = f"{verdict} ({score}점)" if verdict != "⚪ 판단 보류" else verdict
-    lines += [
-        f"🎯 [매매 판단 상세] {verdict_label}",
-        f"{_INDENT}↳ 이유/근거 : {trade_reason}",
-        f"{_INDENT}↳ 판단 조건 : {trade_condition}",
-    ]
-    outlook = _build_outlook(item, verdict, analysis)
+    if _study_header(item):
+        lines += [
+            "📚 [공부 포인트]",
+            f"{_INDENT}↳ 원문을 바탕으로 핵심 개념과 산업 연결고리를 확인",
+        ]
+    else:
+        verdict_label = f"{verdict} ({score}점)" if verdict != "⚪ 판단 보류" else verdict
+        lines += [
+            f"🎯 [매매 판단 상세] {verdict_label}",
+            f"{_INDENT}↳ 이유/근거 : {trade_reason}",
+            f"{_INDENT}↳ 판단 조건 : {trade_condition}",
+        ]
+    outlook = [] if _study_header(item) else _build_outlook(item, verdict, analysis)
     if outlook:
         lines += ["", "🔮 [전망]", *[f"{_INDENT}↳ {_mark_in_text(x, listed)}" for x in outlook]]
     # 📅 [일정]에는 🔔 표시를 붙이지 않는다(일정/브리핑 성격의 텍스트는 그대로 둔다).
@@ -428,9 +459,10 @@ def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None
     listed = _listed_companies(display_company, related, company_profile, extra_text=" ".join([title, *analysis]))
     company_label = display_company
     title = _mark_in_text(title, listed)
+    study_header = _study_header(item)
 
     lines = [
-        f"📰 [{company_label}]   [{item.classification}]   ⏰ {local_time}",
+        study_header or f"📰 [{company_label}]   [{item.classification}]   ⏰ {local_time}",
         "",
         f"{title_prefix} **{title}**",
     ]
@@ -440,8 +472,9 @@ def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None
         lines += ["", "🎯 [관련주]", *[f"{_INDENT}↳ {_mark(c, listed)}" for c in related]]
     if analysis:
         lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {_mark_in_text(x, listed)}" for x in analysis]]
-    verdict_label = f"{verdict} ({score}점)" if verdict != "⚪ 판단 보류" else verdict
-    lines += ["", verdict_label]
+    if not _study_header(item):
+        verdict_label = f"{verdict} ({score}점)" if verdict != "⚪ 판단 보류" else verdict
+        lines += ["", verdict_label]
     if item.url:
         lines += ["", f"🔗 [기사 원문 보기]({item.url})"]
     return "\n".join(_push_body_inward(lines))
@@ -578,13 +611,19 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
         trade_reason = verdict_reason
     trade_reason = _mark_in_text(trade_reason, listed)
     trade_condition = _verdict_condition(item, verdict)
-    verdict_label = esc(verdict) + (f" ({score}점)" if verdict != "⚪ 판단 보류" else "")
-    lines += [
-        f"🎯 [매매 판단 상세] {verdict_label}",
-        f"{_INDENT}↳ 이유/근거 : {esc(trade_reason)}",
-        f"{_INDENT}↳ 판단 조건 : {esc(trade_condition)}",
-    ]
-    outlook = _build_outlook(item, verdict, analysis)
+    if _study_header(item):
+        lines += [
+            "📚 [공부 포인트]",
+            f"{_INDENT}↳ 원문을 바탕으로 핵심 개념과 산업 연결고리를 확인",
+        ]
+    else:
+        verdict_label = esc(verdict) + (f" ({score}점)" if verdict != "⚪ 판단 보류" else "")
+        lines += [
+            f"🎯 [매매 판단 상세] {verdict_label}",
+            f"{_INDENT}↳ 이유/근거 : {esc(trade_reason)}",
+            f"{_INDENT}↳ 판단 조건 : {esc(trade_condition)}",
+        ]
+    outlook = [] if _study_header(item) else _build_outlook(item, verdict, analysis)
     if outlook:
         lines += ["", "🔮 [전망]", *[f"{_INDENT}↳ {esc(_mark_in_text(x, listed))}" for x in outlook]]
     # 📅 [일정]에는 🔔 표시를 붙이지 않는다.
@@ -626,8 +665,9 @@ def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile 
     listed = _listed_companies(display_company, related, company_profile, extra_text=" ".join([title, *analysis]))
     title = _mark_in_text(title, listed)
     company_label = display_company
+    study_header = _study_header(item)
     lines = [
-        f"📰 [{esc(company_label)}]   [{esc(item.classification)}]   ⏰ {local_time}",
+        esc(study_header) if study_header else f"📰 [{esc(company_label)}]   [{esc(item.classification)}]   ⏰ {local_time}",
         "",
         f"{title_prefix} <b>{esc(title)}</b>",
     ]
@@ -637,8 +677,9 @@ def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile 
         lines += ["", "🎯 [관련주]", *[f"{_INDENT}↳ {esc(_mark(c, listed))}" for c in related]]
     if analysis:
         lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {esc(_mark_in_text(x, listed))}" for x in analysis]]
-    verdict_label = f"{esc(verdict)} ({score}점)" if verdict != "⚪ 판단 보류" else esc(verdict)
-    lines += ["", verdict_label]
+    if not _study_header(item):
+        verdict_label = f"{esc(verdict)} ({score}점)" if verdict != "⚪ 판단 보류" else esc(verdict)
+        lines += ["", verdict_label]
     if item.url:
         lines += ["", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
     return "\n".join(_push_body_inward(lines))

@@ -293,7 +293,7 @@ async def _fetch_telegram_channel(
         if not title:
             title = f"Telegram @{name} 게시물"
         link = mpost.group(1)
-        items.append(NewsItem(title=title[:500], url=urljoin("https://t.me/", link), source=f"Telegram @{name}", published_at=published, summary=title[:1000]))
+        items.append(NewsItem(title=title[:500], url=urljoin("https://t.me/", link), source=f"Telegram @{name}", published_at=published, summary=title[:1000], source_kind="telegram"))
     if not items:
         logger.warning("Telegram 공개 채널에서 게시물을 찾지 못했습니다: @%s", name)
     return items
@@ -319,6 +319,8 @@ async def fetch_source_feeds(
     if blog_feeds:
         blog_urls = list(dict.fromkeys(blog_feeds))
         blog_items, blog_errors = await fetch_all(blog_urls, timeout_seconds, max_retries)
+        for item in blog_items:
+            item.source_kind = "blog"
         items.extend(blog_items)
         errors.extend(blog_errors)
         logger.info("📝 블로그 RSS 수집: %d개 피드 URL → %d건 수집(오류 %d건)", len(blog_urls), len(blog_items), len(blog_errors))
@@ -332,6 +334,8 @@ async def fetch_source_feeds(
             )
         if youtube_urls:
             yt_items, yt_errors = await fetch_all(youtube_urls, timeout_seconds, max_retries)
+            for item in yt_items:
+                item.source_kind = "youtube"
             items.extend(yt_items)
             errors.extend(yt_errors)
             logger.info("📺 YouTube 수집: %d개 채널 → %d건 수집(오류 %d건)", len(youtube_urls), len(yt_items), len(yt_errors))

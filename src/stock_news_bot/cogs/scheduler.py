@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 
 _KST = ZoneInfo("Asia/Seoul")
 
+_STUDY_SOURCE_KINDS = {"youtube", "blog", "telegram"}
+
+def _is_study_source(item) -> bool:
+    return getattr(item, "source_kind", "news") in _STUDY_SOURCE_KINDS
+
+
 
 class SchedulerCog(commands.Cog, name="Scheduler"):
     def __init__(self, bot: commands.Bot):
@@ -336,6 +342,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                         history_hint=history_hint,
                         timeout_seconds=self.settings.llm_analysis_timeout_seconds,
                         max_chars=self.settings.llm_analysis_max_chars,
+                        study_mode=_is_study_source(item),
                     )
                     logger.info(
                         "🧪 LLM 진단 | 기사 분석 호출 종료 | 성공=%s | title=%s",
@@ -651,9 +658,19 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             )
 
         min_score = self.settings.news_value_mid
-        qualified = [item for item in classified if item.score >= min_score]
-        filtered_out = [item for item in classified if item.score < min_score]
+        # YouTube/블로그/Telegram은 투자점수용 뉴스가 아니라 사용자가 공부하기 위해
+        # 저장해 둔 콘텐츠다. 따라서 점수와 무관하게 제목/요약/분석/관련종목을
+        # 처리해 송출한다. 일반 뉴스/RSS만 기존 점수 필터를 적용한다.
+        study_items = [item for item in classified if _is_study_source(item)]
+        news_items = [item for item in classified if not _is_study_source(item)]
+        qualified = study_items + [item for item in news_items if item.score >= min_score]
+        filtered_out = [item for item in news_items if item.score < min_score]
         self._last_scan["filtered"] = len(filtered_out)
+        if study_items:
+            logger.info(
+                "📚 학습용 소스 무조건 Queue 대상: YouTube/Blog/Telegram %d건 (점수 필터 제외)",
+                len(study_items),
+            )
         if filtered_out:
             # 점수 미달로 걸러진 기사를 최대 5건까지 소스/점수와 함께 로그로
             # 남긴다. "블로그/유튜브/텔레그램에서 수집은 되는데 안 옴"이라는

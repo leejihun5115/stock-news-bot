@@ -25,6 +25,8 @@ class NewsItem:
     source: str
     published_at: datetime
     summary: str = ""
+    # 일반 뉴스(news)와 학습용 소스(youtube/blog/telegram)를 분리한다.
+    source_kind: str = "news"
 
     # classifier.py가 채워 넣는 필드들 (수집 시점에는 비어있다)
     sectors: list[str] = field(default_factory=list)

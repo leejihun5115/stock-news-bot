@@ -25,7 +25,7 @@ class LLMAnalysis:
     analysis: list[str] = field(default_factory=list)
 
 
-_SYSTEM_PROMPT = """당신은 한국 주식 뉴스의 팩트 기반 분석가다.
+_NEWS_SYSTEM_PROMPT = """당신은 한국 주식 뉴스의 팩트 기반 분석가다.
 기사에 없는 사실, 숫자, 계약 상대방, 실적 전망을 만들어내지 않는다.
 제공된 기사와 추출 사실만 사용한다. 투자 권유나 주가 방향을 단정하지 않는다.
 
@@ -37,10 +37,26 @@ _SYSTEM_PROMPT = """당신은 한국 주식 뉴스의 팩트 기반 분석가다
 - 기사에 없는 내용은 추측으로 채우지 말고 추가 확인 포인트로 분리한다.
 - 같은 문장 패턴을 매번 반복하지 않는다.
 - 핵심은 1~3개, 분석은 2~5개로 짧지만 정보 밀도 높게 작성한다.
-- 과거 데이터가 제공되면 단순 반복하지 말고 현재 뉴스와 연결되는 부분만 사용한다.
 
 반드시 JSON 객체 하나만 출력한다:
 {"title":"짧은 제목","core":["핵심 사실"],"analysis":["맥락과 영향","리스크 또는 확인 포인트"]}
+
+title/core/analysis에는 마크다운, 이모지, URL을 넣지 않는다.
+"""
+
+_STUDY_SYSTEM_PROMPT = """당신은 한국 주식/산업 공부를 돕는 팩트 기반 리서치 분석가다.
+이 콘텐츠는 매매점수 평가가 아니라 공부용 자료다. 투자 권유, 매수/매도, 주가 방향을 만들지 않는다.
+제공된 제목·본문·설명만 사용하고 없는 사실은 만들지 않는다.
+
+반드시 다음을 수행한다.
+- 제목: 원문 제목을 그대로 복사하지 말고, 핵심 주제가 한눈에 보이는 짧은 한국어 제목으로 다시 만든다.
+- 핵심: 콘텐츠에서 반드시 알아야 할 핵심 사실 2~3개.
+- 분석: 왜 중요한지, 산업/기업/밸류체인에 어떤 의미가 있는지, 추가로 확인할 리스크나 공부 포인트를 2~5개로 설명한다.
+- 콘텐츠에 국내 상장사와 연결되는 내용이 있으면 관련 기업을 분석 문장 안에서 명확히 언급한다. 억지로 종목을 만들지 않는다.
+- 내용이 부족하면 추측하지 말고 '원문에서 추가 확인 필요' 수준으로 표시한다.
+
+반드시 JSON 객체 하나만 출력한다:
+{"title":"짧은 공부용 제목","core":["핵심 사실"],"analysis":["왜 중요한지","관련 산업/기업 의미","추가 확인 포인트"]}
 
 title/core/analysis에는 마크다운, 이모지, URL을 넣지 않는다.
 """
@@ -124,10 +140,10 @@ def _parse_result(text: str) -> LLMAnalysis | None:
     return result if (result.title or result.core or result.analysis) else None
 
 
-def _call_gemini(*, api_key: str, model: str, article: str, timeout_seconds: int) -> LLMAnalysis | None:
+def _call_gemini(*, api_key: str, model: str, article: str, timeout_seconds: int, system_prompt: str) -> LLMAnalysis | None:
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload = {
-        "system_instruction": {"parts": [{"text": _SYSTEM_PROMPT}]},
+        "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": article}]}],
         "generationConfig": {
             "temperature": 0.35,
@@ -147,14 +163,14 @@ def _call_gemini(*, api_key: str, model: str, article: str, timeout_seconds: int
     return _parse_result(text)
 
 
-def _call_openrouter(*, api_key: str, model: str, article: str, timeout_seconds: int) -> LLMAnalysis | None:
+def _call_openrouter(*, api_key: str, model: str, article: str, timeout_seconds: int, system_prompt: str) -> LLMAnalysis | None:
     # openrouter/free는 무료 모델만 선택하는 공식 router다. 유료 모델로
     # 자동 승격하지 않도록 기본값을 고정한다.
     endpoint = "https://openrouter.ai/api/v1/chat/completions"
     payload = {
         "model": model or "openrouter/free",
         "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": article},
         ],
         "temperature": 0.35,
@@ -199,6 +215,7 @@ def analyze_news(
     history_hint: str = "",
     timeout_seconds: int = 45,
     max_chars: int = 9000,
+    study_mode: bool = False,
 ) -> LLMAnalysis | None:
     """Gemini -> OpenRouter 무료 모델 -> None 순서로 시도한다."""
     logger.info(
@@ -218,12 +235,13 @@ def analyze_news(
         amounts=amounts, progress_stage=progress_stage, theme=theme,
         score=score, history_hint=history_hint, max_chars=max_chars,
     )
+    system_prompt = _STUDY_SYSTEM_PROMPT if study_mode else _NEWS_SYSTEM_PROMPT
 
     if gemini_api_key:
         try:
             result = _call_gemini(
                 api_key=gemini_api_key, model=gemini_model,
-                article=article, timeout_seconds=timeout_seconds,
+                article=article, timeout_seconds=timeout_seconds, system_prompt=system_prompt,
             )
             if result:
                 logger.info("🧪 LLM 진단 | Gemini 성공 | 결과 길이=%d", len(result.analysis) + len(result.core))
@@ -241,7 +259,7 @@ def analyze_news(
         try:
             result = _call_openrouter(
                 api_key=openrouter_api_key, model=openrouter_model or "openrouter/free",
-                article=article, timeout_seconds=timeout_seconds,
+                article=article, timeout_seconds=timeout_seconds, system_prompt=system_prompt,
             )
             if result:
                 logger.info(
