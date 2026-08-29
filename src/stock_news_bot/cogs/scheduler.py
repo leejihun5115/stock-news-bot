@@ -184,15 +184,12 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         disk_ok = db_path.startswith("/var/data")
         warning = ""
         if on_render and not disk_ok:
-            warning = (
-                "\n\n⚠️ <b>DB_PATH가 영구 디스크 경로(/var/data)가 아닙니다.</b>\n"
-                f"현재 경로: {db_path}\n"
-                "이 상태면 재배포/재시작마다 데이터가 초기화됩니다. Render 대시보드에서 "
-                "이 서비스에 디스크(Disk)가 실제로 연결돼 있는지, 환경변수 DB_PATH가 "
-                "/var/data 아래를 가리키는지 확인하세요."
-            )
-            logger.warning(
-                "DB_PATH(%s)가 영구 디스크 경로가 아닙니다 — 재배포마다 초기화될 수 있습니다.",
+            # Free Web Service는 persistent disk를 붙일 수 없으므로,
+            # /tmp 사용 자체를 부팅 경고로 취급하지 않는다. 실제 영구
+            # 디스크(/var/data)가 연결되면 config가 자동으로 그 경로를 선택한다.
+            logger.info(
+                "Render persistent disk 미연결: 임시 DB 경로(%s)를 사용합니다. "
+                "Disk 연결 시 /var/data로 자동 전환됩니다.",
                 db_path,
             )
 

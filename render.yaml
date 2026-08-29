@@ -144,8 +144,8 @@ services:
       - key: LOG_LEVEL
         value: "INFO"
 
-      # Free Web Service에서는 persistent disk를 사용할 수 없으므로 /tmp를 사용한다.
-      # 영구 DB가 필요하면 Render 유료 플랜 + Disk를 연결하고 DB_PATH를 /var/data 아래로 변경한다.
+      # DB 경로는 코드에서 Render persistent disk(/var/data)를 자동 감지한다.
+      # 무료 플랜에서는 /tmp로 안전하게 폴백하고, Disk를 연결하면 /var/data로 자동 전환한다.
       - key: DB_PATH
         value: "/tmp/stock_news_bot.sqlite3"
       - key: LOG_DIR

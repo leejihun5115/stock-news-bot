@@ -187,6 +187,26 @@ class Settings:
         return self.rss_feeds
 
 
+def _resolve_db_path() -> Path:
+    """Resolve the SQLite path safely on Render and local environments.
+
+    On Render, an attached persistent disk is mounted at /var/data. If it is
+    available, prefer it even when an old DB_PATH such as data/... is still
+    present in the environment. On the free/ephemeral filesystem, fall back
+    to /tmp so the application never writes into an ambiguous relative path.
+    """
+    configured = Path(_get_str("DB_PATH", "./data/stock_news_bot.sqlite3")).expanduser()
+    if os.getenv("RENDER"):
+        persistent_root = Path("/var/data")
+        if persistent_root.is_dir() and os.access(persistent_root, os.W_OK):
+            if configured.is_absolute() and str(configured).startswith("/var/data/"):
+                return configured
+            return persistent_root / "stock_news_bot.sqlite3"
+        if not configured.is_absolute() or not str(configured).startswith("/tmp/"):
+            return Path("/tmp/stock_news_bot.sqlite3")
+    return configured
+
+
 def load_settings() -> Settings:
     settings = Settings(
         discord_token=_get_str("DISCORD_TOKEN", required=True),
@@ -225,7 +245,7 @@ def load_settings() -> Settings:
         startup_send_limit=max(1, _get_int("STARTUP_SEND_LIMIT", 8)),
         max_new_per_cycle=max(1, _get_int("MAX_NEW_PER_CYCLE", 8)),
         max_sent_per_hour=max(0, _get_int("MAX_SENT_PER_HOUR", 60)),
-        db_path=Path(_get_str("DB_PATH", "./data/stock_news_bot.sqlite3")),
+        db_path=_resolve_db_path(),
         dedup_retention_days=_get_int("DEDUP_RETENTION_DAYS", 14),
         history_lookback_days=_get_int("HISTORY_LOOKBACK_DAYS", 30),
         history_min_sample=_get_int("HISTORY_MIN_SAMPLE", 5),
