@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import os
 from collections import deque
 from datetime import datetime, timezone, timedelta
@@ -38,6 +39,37 @@ _STUDY_SOURCE_KINDS = {"youtube", "blog", "telegram"}
 def _is_study_source(item) -> bool:
     return getattr(item, "source_kind", "news") in _STUDY_SOURCE_KINDS
 
+
+def _is_largo_tv_exception(item) -> bool:
+    """라르고TV는 사용자가 지정한 예외 소스이므로 종목/점수 조건을 적용하지 않는다."""
+    source = str(getattr(item, "source", "") or "").lower()
+    title = str(getattr(item, "title", "") or "").lower()
+    return "라르고tv" in source or "largotv" in source or "라르고 tv" in source or "라르고tv" in title or "largotv" in title
+
+
+def _has_stock_selection_evidence(item) -> bool:
+    """상장종목 콘텐츠는 종목명과 함께 실제 선정 근거가 있어야 노출한다.
+
+    단순 종목명/테마 언급, 이모지, 감상/잡담은 제외한다.
+    원인·결과, 계약/수주/공급, 금액, 실적 수치, 승인/허가/임상/양산 등
+    투자자가 종목을 선정할 때 확인할 수 있는 구체적 근거가 하나 이상 필요하다.
+    """
+    company = str(getattr(item, "company", "") or "").strip()
+    if not company:
+        return False
+    text = f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')}".lower()
+    evidence = (
+        "계약", "공급", "납품", "수주", "투자", "증설", "양산", "출시",
+        "승인", "허가", "임상", "기술수출", "기술이전", "실적", "매출",
+        "영업이익", "순이익", "흑자전환", "적자전환", "자사주", "배당",
+        "인수", "합병", "신제품", "특허", "고객사", "수주잔고", "가이던스",
+        "목표주가", "투자의견", "급등", "급락", "상한가", "하한가",
+    )
+    has_numeric = bool(re.search(r"\d+(?:[.,]\d+)?\s?(?:%|억원|억|조원|조|만원|원|달러|USD)", text, re.I))
+    has_reason = bool(str(getattr(item, "reason", "") or "").strip())
+    has_amount = bool(getattr(item, "amounts", None))
+    has_progress = bool(str(getattr(item, "progress_stage", "") or "").strip())
+    return bool(has_reason or has_amount or has_progress or has_numeric or any(k in text for k in evidence))
 
 
 class SchedulerCog(commands.Cog, name="Scheduler"):
@@ -659,18 +691,22 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             )
 
         min_score = self.settings.news_value_mid
-        # YouTube/블로그/Telegram은 투자점수용 뉴스가 아니라 사용자가 공부하기 위해
-        # 저장해 둔 콘텐츠다. 따라서 점수와 무관하게 제목/요약/분석/관련종목을
-        # 처리해 송출한다. 일반 뉴스/RSS만 기존 점수 필터를 적용한다.
-        study_items = [item for item in classified if _is_study_source(item)]
+        # YouTube/블로그/Telegram도 MEDIUM 점수 기준을 적용한다.
+        # 단, 단순 종목명/테마/이모지/잡담은 차단하고 종목선정 근거가 있는
+        # 콘텐츠만 통과시킨다. 사용자가 지정한 라르고TV는 유일한 예외다.
+        study_items = [
+            item for item in classified
+            if _is_study_source(item)
+            and (_is_largo_tv_exception(item) or (item.score >= min_score and _has_stock_selection_evidence(item)))
+        ]
         news_items = [item for item in classified if not _is_study_source(item)]
         qualified = study_items + [item for item in news_items if item.score >= min_score]
-        filtered_out = [item for item in news_items if item.score < min_score]
+        filtered_out = [item for item in classified if item not in qualified]
         self._last_scan["filtered"] = len(filtered_out)
         if study_items:
             logger.info(
-                "📚 학습용 소스 무조건 Queue 대상: YouTube/Blog/Telegram %d건 (점수 필터 제외)",
-                len(study_items),
+                "📚 YouTube/Blog/Telegram 상장종목 콘텐츠 통과: %d건 (MEDIUM 점수 기준=%d)",
+                len(study_items), min_score,
             )
         if filtered_out:
             # 점수 미달로 걸러진 기사를 최대 5건까지 소스/점수와 함께 로그로

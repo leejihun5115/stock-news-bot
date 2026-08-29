@@ -96,7 +96,7 @@ class Settings:
     enable_telegram_channels: bool = True
     news_value_mid: int = 45
     news_value_high: int = 75
-    fetch_interval_seconds: int = 10
+    fetch_interval_seconds: int = 60
     fetch_timeout_seconds: int = 10
     fetch_max_retries: int = 3
     # 실시간 뉴스의 허용 시간창. 현재 시각보다 오래된 기사는 새 뉴스로 취급하지 않는다.
@@ -203,7 +203,7 @@ def load_settings() -> Settings:
         enable_telegram_channels=_get_str("ENABLE_TELEGRAM_CHANNELS", "true").lower() not in {"0", "false", "no", "off"},
         news_value_mid=_get_int("NEWS_SEND_MIN_SCORE", _get_int("MEDIUM_NEWS_SCORE", 45)),
         news_value_high=_get_int("STRONG_NEWS_SCORE", 75),
-        fetch_interval_seconds=max(5, _get_int("FETCH_INTERVAL_SECONDS", 5)),
+        fetch_interval_seconds=max(60, _get_int("FETCH_INTERVAL_SECONDS", 60)),
         fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),
         fetch_max_retries=_get_int("FETCH_MAX_RETRIES", 3),
         news_lookback_hours=max(0.5, _get_float("NEWS_LOOKBACK_HOURS", 24.0)),
@@ -235,47 +235,9 @@ def load_settings() -> Settings:
         log_dir=Path(_get_str("LOG_DIR", "./logs")),
     )
 
-    # 레거시 학습 콘텐츠 소스 복구:
-    # 예전 엔진은 YouTube/Telegram/블로그 대상을 코드에 기본 등록해 두어
-    # ENABLE 스위치만 켜도 수집이 시작됐다. 현재 버전은 환경변수만 읽도록
-    # 바뀌면서 대상 목록이 비어 있으면 해당 소스가 조용히 비활성화되는 문제가
-    # 생겼다. 환경변수가 명시되어 있으면 사용자 설정을 우선하고, 비어 있을
-    # 때만 예전 기본 소스 목록을 사용한다.
-    legacy_blog_feeds = [
-        "https://rss.blog.naver.com/ranto28.xml",
-        "https://rss.blog.naver.com/tosoha1.xml",
-        "https://rss.blog.naver.com/freechip.xml",
-        "https://rss.blog.naver.com/dkanchup.xml",
-        "https://rss.blog.naver.com/noruda11.xml",
-        "https://rss.blog.naver.com/richyun0108.xml",
-        "https://rss.blog.naver.com/crush212121.xml",
-        "https://rss.blog.naver.com/bsj7000.xml",
-        "https://rss.blog.naver.com/limsk1212.xml",
-        "https://rss.blog.naver.com/cart10101.xml",
-        "https://rss.blog.naver.com/zero_family.xml",
-        "https://rss.blog.naver.com/pokara61.xml",
-    ]
-    legacy_youtube_channels = [
-        "GODofIT_official", "김단테", "easybio_shiba", "3protv", "syukaworld",
-        "unrealtech", "understanding.", "eng_tv", "Ystreet", "wsaj",
-        "EZKIPOST-p4o", "blueoak1004",
-    ]
-    legacy_telegram_channels = [
-        "notRealDonaldTrump_kr", "newszzang", "stockdartalert",
-        "allsiljuk", "sunstudy", "shmstory", "bornlupin", "DrDtech",
-        "one_going", "HANAchina", "gaoshoukorea", "goddessTTF",
-        "theelec", "scalpinglove",
-    ]
-
-    # 환경변수가 비어 있을 때만 구버전의 "내가 등록해 둔" 소스 목록을 사용한다.
-    # 따라서 Render에 BLOG_FEEDS/YOUTUBE_CHANNEL_IDS/TELEGRAM_SOURCE_CHANNELS를
-    # 새로 만들 필요가 없으며, 사용자가 나중에 명시적으로 값을 넣으면 그 값이 우선한다.
-    settings = replace(
-        settings,
-        blog_feeds=settings.blog_feeds or legacy_blog_feeds,
-        youtube_channel_ids=settings.youtube_channel_ids or legacy_youtube_channels,
-        telegram_source_channels=settings.telegram_source_channels or legacy_telegram_channels,
-    )
+    # 소스는 오직 Render 환경변수/운영 설정에 등록된 대상만 사용한다.
+    # 과거 버전의 하드코딩 레거시 채널을 자동 복구하지 않는다.
+    # 따라서 등록하지 않은 Telegram/YouTube/Blog 채널이 임의로 노출되는 일이 없다.
 
     if settings.discord_news_channel_id == 0:
         raise ConfigError("DISCORD_NEWS_CHANNEL_ID가 설정되지 않았습니다.")

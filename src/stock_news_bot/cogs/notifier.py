@@ -289,7 +289,7 @@ def _study_header(item: NewsItem) -> str | None:
     ko_name = _nickname_ko(name)
     display_name = f"{name}({ko_name})" if ko_name and ko_name != name else name
     local_time = _display_time(item.published_at)
-    return f"{icon}[{label}]   🕵️ {display_name}   ⏰ {local_time}"
+    return f"{icon}[{label}]   🕵️{display_name}   ⏰{local_time}"
 
 def _clean_display_title(title: str) -> str:
     """기사 제목 뒤에 붙은 매체명/출처 꼬리를 제거해 제목을 깔끔하게 표시한다."""
@@ -427,7 +427,7 @@ def build_message(item: NewsItem, cumulative_line: str | None = None, price_reac
     trade_condition = _verdict_condition(item, verdict)
     if _study_header(item):
         lines += [
-            "📚 [공부 포인트]",
+            "🔑 [Key Point]",
             f"{_INDENT}↳ 원문을 바탕으로 핵심 개념과 산업 연결고리를 확인",
         ]
     else:
@@ -646,7 +646,7 @@ def build_telegram_text(item: NewsItem, cumulative_line: str | None = None, pric
     trade_condition = _verdict_condition(item, verdict)
     if _study_header(item):
         lines += [
-            "📚 [공부 포인트]",
+            "🔑 [Key Point]",
             f"{_INDENT}↳ 원문을 바탕으로 핵심 개념과 산업 연결고리를 확인",
         ]
     else:

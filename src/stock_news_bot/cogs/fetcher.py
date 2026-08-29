@@ -288,7 +288,15 @@ async def _fetch_youtube_page(
     name = channel.strip().lstrip("@")
     if not name:
         return []
-    urls = [f"https://www.youtube.com/@{name}/videos", f"https://www.youtube.com/c/{name}/videos"]
+    # UC 채널 ID가 그대로 등록된 경우 @UC... 로 접근하면 실제 채널을 찾지
+    # 못한다. 채널 ID URL을 먼저 시도하고, 그 다음 핸들/구형 URL을 시도한다.
+    if re.fullmatch(r"UC[A-Za-z0-9_-]{20,}", name):
+        urls = [
+            f"https://www.youtube.com/channel/{name}/videos",
+            f"https://www.youtube.com/channel/{name}",
+        ]
+    else:
+        urls = [f"https://www.youtube.com/@{name}/videos", f"https://www.youtube.com/c/{name}/videos", f"https://www.youtube.com/user/{name}/videos"]
     html = ""
     for url in urls:
         try:
@@ -663,13 +671,18 @@ async def fetch_source_feeds(
         async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 stock-news-bot/1.0", "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8"}) as session:
             for channel_name, feed_url in youtube_urls:
                 channel_items: list[NewsItem] = []
+                feed_errors: list[FetchError] = []
                 if feed_url:
-                    channel_items, channel_errors = await fetch_all([feed_url], timeout_seconds, max_retries)
-                    yt_errors.extend(channel_errors)
+                    channel_items, feed_errors = await fetch_all([feed_url], timeout_seconds, max_retries)
                 if not channel_items:
+                    # YouTube RSS가 404/500을 반환해도 채널 페이지에서 복구를 시도한다.
+                    # 페이지 fallback까지 성공하면 RSS 오류는 정상적인 복구 과정이므로
+                    # 최종 오류 목록에는 남기지 않는다.
                     channel_items = await _fetch_youtube_page(session, channel_name, timeout_seconds)
                     if channel_items:
                         logger.info("📺 YouTube 페이지 fallback 성공: %s → %d건", channel_name, len(channel_items))
+                    else:
+                        yt_errors.extend(feed_errors)
                 for item in channel_items:
                     item.source_kind = "youtube"
                     item.source = f"YouTube {channel_name}"
