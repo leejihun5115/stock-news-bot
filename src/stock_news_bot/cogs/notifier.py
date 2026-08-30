@@ -75,7 +75,7 @@ import discord
 from discord.ext import commands
 
 from stock_news_bot.models import ContractImpact, EarningsComparison, Importance, NewsItem
-from stock_news_bot.company_profile import CompanyProfile, bilingual_company_label, resolve_company_profile, is_listed_company, find_mentioned_companies
+from stock_news_bot.company_profile import CompanyProfile, bilingual_company_label, resolve_company_profile, is_listed_company, find_mentioned_companies, market_flag_of
 from stock_news_bot.cogs.analysis_engine import analyze_item
 from stock_news_bot.storage.fundamentals import get_fundamentals
 from stock_news_bot.storage.history import SectorStats
@@ -329,20 +329,28 @@ def _listed_companies(display_company: str, related: list[str], company_profile:
     return listed
 
 
+def _flag_marker(name: str) -> str:
+    """이름의 상장 시장에 맞는 국기 이모지를 반환한다(국내 🇰🇷 / 미국 🇺🇸).
+    시장을 확정할 수 없으면 기존처럼 🔔로 대체한다."""
+    return market_flag_of(name) or "🔔"
+
+
 def _mark(name: str, listed_companies: set[str]) -> str:
-    """상장사로 확인된 이름 앞에 🔔를 붙인다. 미국 상장사는 영문/한글 이름을
-    괄호로 함께 보여준다(예: 🔔엔비디아(NVIDIA), 🔔삼성전자)."""
-    return f"🔔{bilingual_company_label(name)}" if name in listed_companies else name
+    """상장사로 확인된 이름 앞에 상장 시장 국기(국내 🇰🇷 / 미국 🇺🇸)를 붙인다.
+    미국 상장사는 영문/한글 이름을 괄호로 함께 보여준다(예: 🇺🇸엔비디아(NVIDIA), 🇰🇷삼성전자)."""
+    return f"{_flag_marker(name)}{bilingual_company_label(name)}" if name in listed_companies else name
 
 
 def _mark_in_text(text: str, listed_companies: set[str]) -> str:
     """제목/핵심/분석/전망 등 본문 텍스트 안에 상장사 이름이 그대로 등장하면
-    그 앞에 🔔를 붙인다. (📅 [일정] 텍스트에는 호출하지 않는다.)"""
+    그 앞에 상장 시장 국기(국내 🇰🇷 / 미국 🇺🇸)를 붙인다. (📅 [일정] 텍스트에는 호출하지 않는다.)"""
     if not text or not listed_companies:
         return text
     for name in sorted(listed_companies, key=len, reverse=True):
-        marker = f"🔔{name}"
-        if not name or marker in text:
+        if not name:
+            continue
+        marker = f"{_flag_marker(name)}{name}"
+        if marker in text:
             continue
         text = text.replace(name, marker)
     return text

@@ -69,13 +69,13 @@ def test_related_stocks_and_theme_shown_in_summary_not_only_detail():
     discord_summary = build_message_summary(item)
     telegram_summary = build_telegram_summary_text(item)
     # 샘플 데이터엔 관련주/테마 추출 결과가 없을 수 있으므로, 헤더의
-    # 회사명 마킹만으로도 🔔 표시가 적용되는지 최소한 확인한다.
-    assert "🔔" in discord_summary or "삼성전자" in discord_summary
-    assert "🔔" in telegram_summary or "삼성전자" in telegram_summary
+    # 회사명 마킹만으로도 국기(🇰🇷/🇺🇸) 표시가 적용되는지 최소한 확인한다.
+    assert "🇰🇷" in discord_summary or "삼성전자" in discord_summary
+    assert "🇰🇷" in telegram_summary or "삼성전자" in telegram_summary
 
 
-def test_listed_company_marked_with_bell_and_bilingual_name():
-    """국내/미국 상장사는 🔔로 표시되고, 미국 상장사는 영문/한글 이름을 함께 보여준다."""
+def test_listed_company_marked_with_market_flag_and_bilingual_name():
+    """국내 상장사는 🇰🇷, 미국 상장사는 🇺🇸로 표시되고, 미국 상장사는 영문/한글 이름을 함께 보여준다."""
     from stock_news_bot.company_profile import bilingual_company_label
 
     assert bilingual_company_label("삼성전자") == "삼성전자"
@@ -207,8 +207,8 @@ def test_google_news_blog_publisher_tail_is_stripped_from_title():
     summary = build_message_summary(item)
     assert "네이버 블로그" not in summary
     assert "Naver Blog" not in summary
-    # 🔔은 상장사(현대차증권) 인식 마킹이라 정상 — 출처 꼬리만 제거되면 된다.
-    assert "모태펀드 관광·국민안전계정 GP에…인피니툼·호라이즌·🔔현대차증권" in summary
+    # 🇰🇷은 상장사(현대차증권) 인식 마킹이라 정상 — 출처 꼬리만 제거되면 된다.
+    assert "모태펀드 관광·국민안전계정 GP에…인피니툼·호라이즌·🇰🇷현대차증권" in summary
 
 
 def test_blog_publisher_tail_without_english_source_is_stripped():
@@ -222,7 +222,7 @@ def test_blog_publisher_tail_without_english_source_is_stripped():
     )
     summary = build_message_summary(item)
     assert "네이버 블로그" not in summary
-    assert "모태펀드 관광·국민안전계정 GP에…인피니툼·호라이즌·🔔현대차증권" in summary
+    assert "모태펀드 관광·국민안전계정 GP에…인피니툼·호라이즌·🇰🇷현대차증권" in summary
 
 
 def test_title_internal_colon_subtitle_is_preserved():
@@ -245,7 +245,7 @@ def test_regular_google_news_publisher_tail_is_still_stripped():
     )
     summary = build_message_summary(item)
     assert "이투데이" not in summary
-    assert "AI 반도체 수요 급증…🔔삼성전자 수혜 전망" in summary
+    assert "AI 반도체 수요 급증…🇰🇷삼성전자 수혜 전망" in summary
 
 
 def test_company_context_lines_hidden_when_only_placeholder_available():

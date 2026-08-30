@@ -163,6 +163,20 @@ def is_listed_company(company):
  if m and m.stock_code:return True
  return bool(_ticker(company))
 
+def market_flag_of(company: str) -> str:
+ """상장사 이름의 상장 시장을 국기 이모지로 반환한다(국내 🇰🇷 / 미국 🇺🇸).
+ is_listed_company()와 같은 기준(느린 위키 조회는 건너뜀)으로 판별하되,
+ 어느 시장인지까지 함께 알려준다. 상장사로 확인되지 않으면 빈 문자열을
+ 돌려준다(호출부에서 기존 🔔로 대체 표시할 수 있게)."""
+ company=(company or '').strip()
+ if not company:return ''
+ if _norm(company) in {_norm(x) for x in _KR_LISTED_ALIASES}:return '🇰🇷'
+ try:m=_get_dart().find_by_name(company)
+ except Exception:m=None
+ if m and m.stock_code:return '🇰🇷'
+ if _ticker(company):return '🇺🇸'
+ return ''
+
 _ALL_ALIAS_NAMES = sorted({*_KR_LISTED_ALIASES, *_US_KR_ALIASES}, key=len, reverse=True)
 
 def find_mentioned_companies(text: str) -> set[str]:
