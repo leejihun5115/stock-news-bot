@@ -593,11 +593,22 @@ class DartClient:
             logger.warning("DART 재무제표 응답 파싱 실패 (corp_code=%s): %s", corp_code, exc)
             return None
 
-        if payload.get("status") != "000":
-            logger.warning(
-                "DART 재무제표 조회 실패 (corp_code=%s): status=%s message=%s",
-                corp_code, payload.get("status"), payload.get("message"),
-            )
+        status = payload.get("status")
+        if status != "000":
+            if status == "013":
+                # DART API 자체 정의상 013은 "조회된 데이타가 없습니다" —
+                # 사업보고서를 아직 제출하지 않은 회사(신규상장 등)에서
+                # 흔히 나오는 정상 응답이지 오류가 아니다. 다음 재조회
+                # 주기에 자동으로 다시 시도되므로 조용히 넘어간다.
+                logger.info(
+                    "DART 재무제표 없음(정상, status=013) (corp_code=%s): %s",
+                    corp_code, payload.get("message"),
+                )
+            else:
+                logger.warning(
+                    "DART 재무제표 조회 실패 (corp_code=%s): status=%s message=%s",
+                    corp_code, status, payload.get("message"),
+                )
             return None
 
         items = payload.get("list", [])

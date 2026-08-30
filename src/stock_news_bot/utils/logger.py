@@ -79,4 +79,21 @@ def setup_logging(log_dir: Path, level: str = "INFO") -> None:
     # 안 되므로 getMessage()가 호출되지 않는다).
     logging.getLogger("pykrx").setLevel(logging.CRITICAL + 1)
 
+    # 위 setLevel은 pykrx가 `logging.getLogger("pykrx")`를 통해 로깅할 때만
+    # 먹힌다. 그런데 실제로는 pykrx/website/comm/util.py가 모듈 레벨
+    # `logging.info(args, kwargs)`를 직접 호출한다 — 이건 곧 root 로거
+    # 호출이라 위 설정이 적용되지 않고, 게다가 인자 형태도 잘못돼 있어
+    # 실제로 그 레코드가 포맷팅되는 순간 Python logging이 "Logging error"
+    # 진단(Message/Arguments)을 콘솔에 그대로 토해낸다.
+    # 우리 코드는 항상 `logging.getLogger(__name__)`으로만 로깅하고 절대
+    # root 로거(logging.info() 등 모듈 레벨 호출)를 직접 쓰지 않으므로,
+    # record.name == "root"인 로그는 전부 이런 서드파티발 버그성 호출로
+    # 간주해 root 로거 단계에서 걸러낸다. 자식 로거들이 전파(propagate)한
+    # 레코드는 이 필터를 거치지 않으므로 우리 자신의 로그에는 영향 없다.
+    class _DropBareRootLogs(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return record.name != "root"
+
+    root.addFilter(_DropBareRootLogs())
+
     _CONFIGURED = True

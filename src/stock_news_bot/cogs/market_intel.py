@@ -158,10 +158,20 @@ class MarketIntelCog(commands.Cog, name="MarketIntel"):
         today = datetime.now(timezone.utc).strftime("%Y%m%d")
 
         def _fetch() -> tuple[str, int] | None:
-            # pykrx는 휴장일에 빈 데이터프레임을 반환할 수 있어, 최근 7일을
-            # 거슬러 올라가며 가장 최근 값을 찾는다.
-            for days_back in range(0, 8):
-                date = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y%m%d")
+            # pykrx는 휴장일(주말/공휴일)에 빈 데이터프레임을 반환하거나
+            # 내부적으로 파싱 에러를 내며 조용히 실패하는데, 그때마다
+            # pykrx 라이브러리 자체가 콘솔에 진단 로그를 남긴다. 어차피
+            # 주말은 100% 휴장이라 조회할 필요가 없으므로, 최근 8개
+            # "평일" 후보만 만들어 실제 API 호출 횟수 자체를 줄인다
+            # (공휴일은 평일이라도 빈 데이터가 올 수 있어 여전히 폴백은 필요).
+            candidates: list[str] = []
+            cursor = datetime.now(timezone.utc)
+            while len(candidates) < 8:
+                if cursor.weekday() < 5:  # 0=월 ... 4=금
+                    candidates.append(cursor.strftime("%Y%m%d"))
+                cursor -= timedelta(days=1)
+
+            for date in candidates:
                 df = pykrx_stock.get_market_cap_by_date(date, date, stock_code)
                 if df is not None and not df.empty and "시가총액" in df.columns:
                     market_cap = int(df["시가총액"].iloc[-1])
@@ -170,7 +180,11 @@ class MarketIntelCog(commands.Cog, name="MarketIntel"):
 
         result = await self.bot.loop.run_in_executor(None, _fetch)
         if result is None:
-            logger.warning("시가총액 조회 실패 (종목코드=%s): 최근 7일 내 데이터 없음", stock_code)
+            # 최근 8영업일 내내 데이터가 없는 경우는 대부분 연휴/공휴일이 길게
+            # 이어졌거나 최근 상장/거래정지 등으로 실제 시세가 없는 정상적인
+            # 상황이다(에러가 아님). 다음 주기에 다시 시도하면 되므로 WARNING이
+            # 아니라 INFO로 남긴다.
+            logger.info("시가총액 조회 보류 (종목코드=%s): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도", stock_code)
             return
         as_of_date, market_cap = result
         self.market_store.set_market_cap(stock_code, market_cap, as_of_date)
