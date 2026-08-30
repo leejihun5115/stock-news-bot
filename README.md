@@ -116,7 +116,7 @@ STOCK_NEWS_BOT_SERVICE=stock-news-bot ./scripts/deploy.sh
 `GEMINI_API_KEY`를 설정하면 기존 규칙 엔진의 사실 추출을 유지하면서 Gemini AI이 기사 문맥, 실적 연결 가능성, 리스크, 추가 확인 포인트를 자연어로 보강합니다. 별도 유료 API 키는 필요하지 않습니다. LLM 서버가 없거나 호출이 실패하면 기존 규칙 분석으로 자동 폴백하므로 뉴스 송출 자체가 막히지 않습니다.
 
 - `GEMINI_API_KEY`: Google AI Studio에서 발급한 Gemini API 키
-- `LLM_MODEL`: 기본 `gemini-2.5-flash-lite`
+- `LLM_MODEL`: 기본 `gemini-3.5-flash-lite`
 - `LLM_ANALYSIS_ENABLED`: `true`/`false`
 - `LLM_ANALYSIS_TIMEOUT_SECONDS`: 기본 60초
 - `LLM_ANALYSIS_MAX_CHARS`: Gemini AI에 전달할 기사 본문 최대 문자 수, 기본 9000
@@ -166,7 +166,7 @@ Telegram Bot은 시작 시 `getMe`/`getChat` 검증과 webhook 정리 후 callba
 ## Render 무료 배포 + Gemini 무료 AI 분석
 
 이 프로젝트는 Render에서 별도의 Claude/Ollama 서버 없이 실행되도록 구성되어 있습니다.
-AI 분석은 Google AI Studio의 Gemini Developer API를 사용하며 기본 모델은 `gemini-2.5-flash-lite`입니다.
+AI 분석은 Google AI Studio의 Gemini Developer API를 사용하며 기본 모델은 `gemini-3.5-flash-lite`입니다.
 Google은 해당 모델의 Developer API 무료 등급을 제공하지만 무료 등급에는 사용량/요청 한도가 있으므로
 한도를 넘으면 봇은 자동으로 기존 규칙 기반 분석으로 폴백합니다.
 

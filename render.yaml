@@ -49,7 +49,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: LLM_MODEL
-        value: "gemini-2.5-flash-lite"
+        value: "gemini-3.5-flash-lite"
 
       # 2순위: OpenRouter 무료 모델만 사용하는 공식 free router
       # https://openrouter.ai/ 에서 발급한 키. 유료 모델로 자동 승격하지 않는다.

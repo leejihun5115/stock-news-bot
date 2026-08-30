@@ -144,7 +144,7 @@ class Settings:
 
     # 무료 LLM 3단계 fallback: Gemini -> OpenRouter free -> 규칙 엔진.
     gemini_api_key: str = ""
-    llm_model: str = "gemini-2.5-flash-lite"
+    llm_model: str = "gemini-3.5-flash-lite"
     openrouter_api_key: str = ""
     openrouter_model: str = "openrouter/free"
     llm_analysis_enabled: bool = True
@@ -261,7 +261,7 @@ def load_settings() -> Settings:
         price_reaction_min_sample=_get_int("PRICE_REACTION_MIN_SAMPLE", 5),
         price_reaction_retention_days=_get_int("PRICE_REACTION_RETENTION_DAYS", 90),
         gemini_api_key=_get_str("GEMINI_API_KEY"),
-        llm_model=_get_str("LLM_MODEL", "gemini-2.5-flash-lite"),
+        llm_model=_get_str("LLM_MODEL", "gemini-3.5-flash-lite"),
         openrouter_api_key=_get_str("OPENROUTER_API_KEY"),
         openrouter_model=_get_str("OPENROUTER_MODEL", "openrouter/free"),
         llm_analysis_enabled=_get_str("LLM_ANALYSIS_ENABLED", "true").lower() not in {"0", "false", "no", "off"},

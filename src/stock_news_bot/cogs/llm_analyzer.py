@@ -285,7 +285,7 @@ def _call_llm(
 def analyze_news(
     *,
     gemini_api_key: str = "",
-    gemini_model: str = "gemini-2.5-flash-lite",
+    gemini_model: str = "gemini-3.5-flash-lite",
     openrouter_api_key: str = "",
     openrouter_model: str = "openrouter/free",
     title: str,

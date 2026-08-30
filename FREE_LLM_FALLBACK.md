@@ -2,7 +2,7 @@
 
 이 프로젝트의 기사 분석은 다음 순서로 동작합니다.
 
-1. **Gemini Developer API** — 기본 `gemini-2.5-flash-lite`
+1. **Gemini Developer API** — 기본 `gemini-3.5-flash-lite`
 2. **OpenRouter** — 기본 `openrouter/free` (무료 모델만 선택하는 공식 router)
 3. **기존 `analysis_engine.py` 규칙 분석** — 두 API가 없거나 실패하면 그대로 사용
 
@@ -10,7 +10,7 @@
 
 ```env
 GEMINI_API_KEY=...
-LLM_MODEL=gemini-2.5-flash-lite
+LLM_MODEL=gemini-3.5-flash-lite
 OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=openrouter/free
 LLM_ANALYSIS_ENABLED=true
