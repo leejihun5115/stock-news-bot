@@ -32,7 +32,11 @@ CREATE TABLE IF NOT EXISTS sent_history (
     sectors     TEXT NOT NULL,
     score       INTEGER NOT NULL,
     importance  TEXT NOT NULL,
-    sent_at     TEXT NOT NULL
+    sent_at     TEXT NOT NULL,
+    company     TEXT NOT NULL DEFAULT '',
+    reason      TEXT NOT NULL DEFAULT '',
+    ai_core     TEXT NOT NULL DEFAULT '',
+    ai_analysis TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_sent_history_sent_at ON sent_history (sent_at);
 CREATE INDEX IF NOT EXISTS idx_sent_history_sectors ON sent_history (sectors);
@@ -65,6 +69,18 @@ class HistoryStore:
             self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL;")
             self._conn.executescript(_SCHEMA)
+            # 기존 DB에도 AI 학습용 컬럼을 안전하게 추가한다.
+            for column, definition in (
+                ("company", "TEXT NOT NULL DEFAULT ''"),
+                ("reason", "TEXT NOT NULL DEFAULT ''"),
+                ("ai_core", "TEXT NOT NULL DEFAULT ''"),
+                ("ai_analysis", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                try:
+                    self._conn.execute(f"ALTER TABLE sent_history ADD COLUMN {column} {definition}")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column name" not in str(exc).lower():
+                        raise
             self._conn.commit()
         except sqlite3.Error as exc:
             raise StorageError(f"이력 DB 초기화 실패 ({self.db_path}): {exc}") from exc
@@ -75,8 +91,9 @@ class HistoryStore:
             with closing(self._conn.cursor()) as cur:
                 cur.execute(
                     """INSERT INTO sent_history
-                       (dedup_key, title, sectors, score, importance, sent_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
+                       (dedup_key, title, sectors, score, importance, sent_at,
+                        company, reason, ai_core, ai_analysis)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         item.dedup_key,
                         item.title,
@@ -84,6 +101,10 @@ class HistoryStore:
                         item.score,
                         item.importance.value,
                         datetime.now(timezone.utc).isoformat(),
+                        item.company or "",
+                        item.reason or "",
+                        " | ".join(item.ai_core or []),
+                        " | ".join(item.ai_analysis or []),
                     ),
                 )
             self._conn.commit()
@@ -138,6 +159,51 @@ class HistoryStore:
             low=low,
             avg_score=avg_score,
         )
+
+    def similar_news_context(
+        self,
+        *,
+        company: str = "",
+        sectors: list[str] | None = None,
+        limit: int = 8,
+    ) -> str:
+        """최근 과거 뉴스의 핵심 분석을 AI 참고자료로 제공한다."""
+        company = (company or "").strip()
+        sectors = [s.strip() for s in (sectors or []) if s.strip()]
+        clauses = []
+        params: list[object] = []
+        if company:
+            clauses.append("company = ?")
+            params.append(company)
+        for sector in sectors[:3]:
+            clauses.append("(sectors = ? OR sectors LIKE ? OR sectors LIKE ? OR sectors LIKE ?)")
+            params.extend([sector, f"{sector},%", f"%,{sector}", f"%,{sector},%"])
+        if not clauses:
+            return ""
+        where = " OR ".join(clauses)
+        try:
+            rows = self._conn.execute(
+                f"""SELECT sent_at, company, sectors, score, importance, title, ai_core, ai_analysis
+                    FROM sent_history
+                    WHERE {where}
+                    ORDER BY sent_at DESC
+                    LIMIT ?""",
+                (*params, max(1, min(20, limit))),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageError(f"유사 과거 뉴스 조회 실패: {exc}") from exc
+
+        lines = []
+        for sent_at, corp, row_sectors, score, importance, title, ai_core, ai_analysis in rows:
+            core = str(ai_core or "").strip()
+            analysis = str(ai_analysis or "").strip()
+            if not core and not analysis:
+                continue
+            lines.append(
+                f"- {sent_at[:10]} | {corp or '시장'} | {title[:100]} | "
+                f"점수 {score} | {importance} | 핵심: {core[:180]} | 분석: {analysis[:240]}"
+            )
+        return "\n".join(lines)
 
     def total_count(self) -> int:
         """DB에 누적된 전체 발송 이력 건수.

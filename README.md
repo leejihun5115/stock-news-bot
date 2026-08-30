@@ -90,6 +90,28 @@ pytest
 STOCK_NEWS_BOT_SERVICE=stock-news-bot ./scripts/deploy.sh
 ```
 
+## 누적 DB를 AI 분석에 활용
+
+이 버전은 SQLite 누적 DB를 단순 중복방지 용도로만 쓰지 않고 AI 분석의
+과거 사례 참고자료로도 사용한다.
+
+- `sent_history`: 발송 성공 뉴스 + 기업/섹터 + AI 핵심/분석을 누적
+- `price_reaction`: 뉴스 발송 후 기준가, +1거래일, +3거래일 주가 반응을 누적
+- 새 뉴스 분석 전에 같은 종목/섹터의 과거 뉴스와 실제 주가 반응을 조회하여
+  LLM의 `누적 데이터 참고` 영역에 전달
+- 과거 데이터는 사실의 근거로 사용하되, LLM이 과거 수익률만으로 미래 주가를
+  단정하지 않도록 팩트 기반 원칙을 유지한다.
+
+### 재부팅 후 데이터 보존
+
+`/tmp/stock_news_bot.sqlite3`는 임시 파일시스템이므로 재부팅/재배포 후 사라질 수 있다.
+로컬/Docker에서는 영구 볼륨을 `/data` 등에 마운트하고 `DB_PATH=/data/stock_news_bot.sqlite3`
+로 설정한다.
+
+Render에서는 `/var/data`에 persistent disk가 연결된 경우에만 SQLite가 재시작 후에도 유지된다.
+Render Free Web Service에는 영구 디스크가 없으므로, Free 플랜에서 재시작 후에도 데이터를
+보존하려면 외부 PostgreSQL 같은 영구 DB로 이전해야 한다.
+
 ## Render에 배포하기
 
 이 버전은 Render **Free Web Service**에서 바로 실행할 수 있도록 구성되어 있습니다.

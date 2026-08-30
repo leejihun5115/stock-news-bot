@@ -258,6 +258,52 @@ class MarketDataStore:
             plus3_up_ratio=plus3_up,
         )
 
+    def historical_reaction_context(
+        self,
+        *,
+        company: str = "",
+        sector: str = "",
+        limit: int = 8,
+    ) -> str:
+        """누적 DB에서 현재 뉴스와 관련된 실제 과거 주가 반응 사례를 요약한다."""
+        company = (company or "").strip()
+        sector = (sector or "").strip()
+        clauses = []
+        params: list[object] = []
+        if company:
+            clauses.append("corp_name = ?")
+            params.append(company)
+        if sector:
+            clauses.append("sector = ?")
+            params.append(sector)
+        if not clauses:
+            return ""
+        where = " OR ".join(clauses)
+        try:
+            rows = self._conn.execute(
+                f"""SELECT sent_at, corp_name, sector, plus1_pct, plus3_pct
+                    FROM price_reaction
+                    WHERE ({where})
+                      AND (plus1_pct IS NOT NULL OR plus3_pct IS NOT NULL)
+                    ORDER BY sent_at DESC
+                    LIMIT ?""",
+                (*params, max(1, min(20, limit))),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise StorageError(f"과거 주가 반응 조회 실패: {exc}") from exc
+
+        lines = []
+        for sent_at, corp, row_sector, p1, p3 in rows:
+            parts = []
+            if p1 is not None:
+                parts.append(f"+1거래일 {p1:+.2f}%")
+            if p3 is not None:
+                parts.append(f"+3거래일 {p3:+.2f}%")
+            lines.append(
+                f"- {sent_at[:10]} | {corp or '시장'} | {row_sector or '-'} | " + ", ".join(parts)
+            )
+        return "\n".join(lines)
+
     def cleanup_old(self, retention_days: int) -> int:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
         try:

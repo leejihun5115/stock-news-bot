@@ -197,12 +197,15 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         disk_ok = db_path.startswith("/var/data")
         warning = ""
         if on_render and not disk_ok:
-            # Free Web Service는 persistent disk를 붙일 수 없으므로,
-            # /tmp 사용 자체를 부팅 경고로 취급하지 않는다. 실제 영구
-            # 디스크(/var/data)가 연결되면 config가 자동으로 그 경로를 선택한다.
-            logger.info(
+            # Render Free Web Service는 persistent disk를 사용할 수 없으므로
+            # /tmp DB는 재시작/재배포 시 사라질 수 있다.
+            warning = (
+                "\n⚠️ Render persistent disk 미연결: 현재 DB는 재시작/재배포 시 "
+                "사라질 수 있습니다. /var/data persistent disk 또는 외부 DB가 필요합니다."
+            )
+            logger.warning(
                 "Render persistent disk 미연결: 임시 DB 경로(%s)를 사용합니다. "
-                "Disk 연결 시 /var/data로 자동 전환됩니다.",
+                "재시작/재배포 시 데이터가 사라질 수 있습니다.",
                 db_path,
             )
 
@@ -402,12 +405,36 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     llm_enabled, has_gemini_key, has_openrouter_key, item.title[:80],
                 )
                 if llm_enabled and (has_gemini_key or has_openrouter_key):
-                    history_hint = (
-                        "과거 유사 섹터 "
-                        f"{stats.count}건, 평균 점수 {stats.avg_score:.1f}"
-                        if stats and stats.count >= self.settings.history_min_sample
-                        else ""
-                    )
+                    # 누적 DB를 단순 건수로만 보여주지 않고, 같은 종목/섹터의
+                    # 과거 실제 사례와 주가 반응을 함께 LLM에 제공한다.
+                    try:
+                        similar_news = await asyncio.to_thread(
+                            self.history_store.similar_news_context,
+                            company=item.company,
+                            sectors=item.sectors,
+                            limit=8,
+                        )
+                        reaction_context = await asyncio.to_thread(
+                            self.market_store.historical_reaction_context,
+                            company=item.company,
+                            sector=item.sectors[0] if item.sectors else "",
+                            limit=8,
+                        )
+                    except Exception:
+                        logger.exception("누적 AI 참고자료 조회 실패 | title=%s", item.title[:100])
+                        similar_news = ""
+                        reaction_context = ""
+
+                    history_parts = []
+                    if stats and stats.count >= self.settings.history_min_sample:
+                        history_parts.append(
+                            f"과거 유사 섹터 통계: {stats.count}건, 평균 점수 {stats.avg_score:.1f}"
+                        )
+                    if similar_news:
+                        history_parts.append("과거 유사 뉴스 사례:\n" + similar_news)
+                    if reaction_context:
+                        history_parts.append("과거 실제 주가 반응:\n" + reaction_context)
+                    history_hint = "\n".join(history_parts)
                     # RSS 요약만으로는 LLM도 "뻔한 이야기"만 만들 수밖에 없으므로,
                     # 실제 기사 원문 본문을 최대한 가져와 근거로 함께 넘긴다.
                     # 실패(비HTML, 접근 차단, SPA 등)하면 조용히 빈 문자열이

@@ -191,9 +191,11 @@ def _resolve_db_path() -> Path:
     """Resolve the SQLite path safely on Render and local environments.
 
     On Render, an attached persistent disk is mounted at /var/data. If it is
-    available, prefer it even when an old DB_PATH such as data/... is still
-    present in the environment. On the free/ephemeral filesystem, fall back
-    to /tmp so the application never writes into an ambiguous relative path.
+    available, prefer it even when an old DB_PATH such as /tmp/... is still
+    present in the environment. On Render Free, /var/data does not exist and
+    the filesystem is ephemeral; in that case we intentionally fall back to
+    /tmp. For true reboot-safe storage on Render, attach a persistent disk or
+    use an external database.
     """
     configured = Path(_get_str("DB_PATH", "./data/stock_news_bot.sqlite3")).expanduser()
     if os.getenv("RENDER"):
