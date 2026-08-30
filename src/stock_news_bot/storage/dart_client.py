@@ -101,6 +101,44 @@ _FINANCE_CONTEXT_RE = re.compile(
     r"목표주가|투자의견|㈜|\(주\)"
 )
 
+# 짧은 상장사명이 언론사/매체명의 "일부"로 우연히 포함되는 경우.
+# (예: "지디" — 실제 코스닥 상장사이지만, 기사 출처 표기 "지디넷코리아"
+# (ZDNet Korea)에 그대로 포함되어 있어 금융 문맥 신호와 무관하게 항상
+# 오탐이 발생한다. _AMBIGUOUS_COMMON_WORD_NAMES와 달리 이런 경우는 금융
+# 문맥이 있어도(뉴스 자체가 증시 기사이므로) 여전히 오탐이라, 대신
+# "해당 이름 뒤에 특정 글자가 바로 이어지면 매체명의 일부로 보고 건너뛴다"
+# 방식으로 처리한다. 새로운 오탐 사례가 보고되면 여기에 추가한다.
+_FALSE_POSITIVE_NAME_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "지디": ("넷",),  # "지디넷코리아"(ZDNet Korea)
+}
+
+
+def _has_genuine_company_mention(corp_name: str, text: str) -> bool:
+    """corp_name이 본문에 "매체명 일부"가 아닌 형태로 최소 한 번 등장하는지 확인한다."""
+    bad_suffixes = _FALSE_POSITIVE_NAME_SUFFIXES.get(corp_name)
+    if not bad_suffixes:
+        return corp_name in text
+    pattern = re.compile(
+        re.escape(corp_name) + "(?!" + "|".join(re.escape(s) for s in bad_suffixes) + ")"
+    )
+    return bool(pattern.search(text))
+
+
+# 뉴스 본문/제목에 정식 종목명 대신 흔히 쓰이는 줄임말(약칭). 정식
+# 종목명이 본문에 전혀 없을 때만 이 표로 한 번 더 시도한다(예: "삼전
+# 목표주가 상향"처럼 "삼성전자"라는 정식 명칭이 아예 안 나오는 경우).
+# 다른 뜻으로 거의 쓰이지 않는 확실한 약칭만 등록한다. 새로운 약칭
+# 누락 사례가 보고되면 이 표에 추가하면 된다.
+# ⚠️ 값은 DART corp_name 표기와 정확히 일치해야 매칭된다. 실 API 키로
+# 받은 실제 표기와 다르면(공백/영문 표기 차이 등) 조용히 매칭되지
+# 않으므로, 실사용 중 안 잡히는 사례가 있으면 표기를 맞춰야 한다.
+_ABBREVIATION_TO_CORP_NAME: dict[str, str] = {
+    "삼전": "삼성전자",
+    "하이닉스": "SK하이닉스",
+}
+
+
+
 
 @dataclass(slots=True)
 class CompanyMatch:
@@ -369,7 +407,7 @@ class DartClient:
         if not text:
             return None
         for match in self._load_name_cache():
-            if match.corp_name not in text:
+            if not _has_genuine_company_mention(match.corp_name, text):
                 continue
             if match.corp_name in _AMBIGUOUS_COMMON_WORD_NAMES and not _FINANCE_CONTEXT_RE.search(text):
                 # "남성"(男性)처럼 일반 명사와 우연히 겹치는 종목명은, 본문에
@@ -378,6 +416,12 @@ class DartClient:
                 # 같은 일반 사회 기사) 이 후보는 건너뛰고 다음 후보를 본다.
                 continue
             return match
+        # 정식 종목명이 본문에 전혀 없으면, 흔한 약칭 매핑 표로 한 번 더 시도한다.
+        for abbrev, corp_name in _ABBREVIATION_TO_CORP_NAME.items():
+            if abbrev in text:
+                match = self.find_by_name(corp_name)
+                if match is not None:
+                    return match
         return None
 
     def find_by_name(self, corp_name: str) -> CompanyMatch | None:

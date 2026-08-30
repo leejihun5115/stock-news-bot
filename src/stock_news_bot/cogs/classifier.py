@@ -144,6 +144,15 @@ _MACRO_ONLY_KEYWORDS = {
     "cpi", "pce", "환율", "원달러", "달러", "유가", "wti",
 }
 
+# "계약/실적/공시"처럼 실제 사업상 재료로 인정할 수 있는 신호. 아래
+# _macro_only_context / _personal_event_only_context가 함께 사용한다.
+_BUSINESS_MATERIAL_SIGNAL_KEYWORDS = (
+    "수주", "계약", "공급", "납품", "투자", "증설", "양산", "출시",
+    "승인", "허가", "임상", "기술수출", "기술이전", "실적", "매출",
+    "영업이익", "자사주", "배당", "인수", "합병", "신제품", "특허",
+    "주가", "주식", "종목", "급등", "급락", "상한가", "하한가", "공시",
+)
+
 
 def _macro_only_context(text: str, matched: list[str]) -> bool:
     """시장지수/금리 등 거시 배경만 있는 뉴스인지 판정한다.
@@ -154,13 +163,32 @@ def _macro_only_context(text: str, matched: list[str]) -> bool:
     macro_hits = [k for k in _MACRO_ONLY_KEYWORDS if k.lower() in low]
     if not macro_hits:
         return False
-    company_signal = any(k in low for k in (
-        "수주", "계약", "공급", "납품", "투자", "증설", "양산", "출시",
-        "승인", "허가", "임상", "기술수출", "기술이전", "실적", "매출",
-        "영업이익", "자사주", "배당", "인수", "합병", "신제품", "특허",
-        "주가", "주식", "종목", "급등", "급락", "상한가", "하한가",
-    ))
+    company_signal = any(k in low for k in _BUSINESS_MATERIAL_SIGNAL_KEYWORDS)
     return not company_signal
+
+
+# "긴급/속보"는 HIGH_IMPORTANCE_KEYWORDS에 있어 실제 사업 재료가 아니어도
+# 점수를 크게 올려버린다. 임원의 개인적인 인도적 활동/사고/부고처럼
+# 회사 실적·주가와 무관한 "동정" 기사에도 "긴급"이 흔히 붙어 오탐이
+# 발생한다 (제보: 회장 개인의 해외 재난 구조활동 기사가 [두산] 종목
+# 긴급 뉴스로 잘못 분류됨). 사업 재료 신호가 전혀 없을 때만 감점한다.
+_PERSONAL_EVENT_ONLY_KEYWORDS = {
+    "실종", "구조", "수색", "조난", "사망", "별세", "부고", "빈소",
+    "조문", "봉사활동", "기부금", "결혼식", "장례식",
+}
+
+
+def _personal_event_only_context(text: str) -> bool:
+    """임원/개인의 사고·인도적 활동 등 "동정" 기사인지 판정한다.
+
+    사업상 재료(계약/실적/공시 등) 신호가 함께 있으면 정상적으로 종목
+    뉴스로 취급한다.
+    """
+    hits = [k for k in _PERSONAL_EVENT_ONLY_KEYWORDS if k in text]
+    if not hits:
+        return False
+    business_signal = any(k in text for k in _BUSINESS_MATERIAL_SIGNAL_KEYWORDS)
+    return not business_signal
 
 
 def _contains_any(text: str, keywords: list[str]) -> list[str]:
@@ -186,6 +214,13 @@ def score_item(item: NewsItem) -> tuple[int, list[str], list[str]]:
     # 코스피/코스닥/나스닥/금리 등 거시환경만 담긴 뉴스는 종목 점수에 가산하지 않는다.
     # 기업의 직접 재료가 함께 있을 때만 기존 점수 규칙을 적용한다.
     if _macro_only_context(text, matched):
+        high_hits = []
+        medium_hits = []
+        sectors = []
+        matched = []
+    # "긴급/속보" 등으로 인해 임원 개인의 사고·인도적 활동 같은 "동정" 기사가
+    # 종목 재료로 오인되는 것도 같은 방식으로 걸러낸다.
+    if _personal_event_only_context(text):
         high_hits = []
         medium_hits = []
         sectors = []

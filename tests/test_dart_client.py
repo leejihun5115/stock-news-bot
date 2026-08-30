@@ -95,6 +95,55 @@ def test_match_company_accepts_ambiguous_common_word_with_finance_context(client
     assert match.corp_name == "남성"
 
 
+def test_match_company_rejects_name_embedded_in_media_outlet(client):
+    """"지디"는 실제 상장사명이지만, 언론사 "지디넷코리아"(ZDNet Korea)
+    표기 안에도 그대로 포함되어 있다. 출처 표기일 뿐인 경우 종목으로
+    잘못 인식하면 안 된다 (제보: 케빈 워시 비트코인 기사에 지디넷코리아가
+    관련주로 잘못 태깅됨)."""
+    _seed_corp_codes(client, [("00300002", "지디", "015710")])
+    match = client.match_company(
+        "케빈 워시 \"인플레 집중해야\"…비트코인, 3% 급락 - 지디넷코리아"
+    )
+    assert match is None
+
+
+def test_match_company_accepts_genuine_mention_alongside_media_outlet(client):
+    """언론사 출처 표기와 실제 종목 언급이 같은 본문에 함께 있으면,
+    진짜 언급 쪽으로 정상 매칭되어야 한다."""
+    _seed_corp_codes(client, [("00300002", "지디", "015710")])
+    match = client.match_company("지디넷코리아 보도에 따르면 지디 주가가 급등했다")
+    assert match is not None
+    assert match.corp_name == "지디"
+
+
+def test_match_company_resolves_common_abbreviation_samjeon(client):
+    """"삼전"처럼 정식 종목명("삼성전자")이 본문에 없는 흔한 약칭도
+    인식되어야 한다 (제보: 약칭만 쓴 뉴스가 종목 미인식으로 누락됨)."""
+    _seed_corp_codes(client, [("00126380", "삼성전자", "005930")])
+    match = client.match_company("삼전 목표주가 상향, 반도체 훈풍")
+    assert match is not None
+    assert match.corp_name == "삼성전자"
+
+
+def test_match_company_resolves_common_abbreviation_hynix(client):
+    """"하이닉스"처럼 정식 종목명("SK하이닉스")이 본문에 없는 흔한 약칭도
+    인식되어야 한다."""
+    _seed_corp_codes(client, [("00164779", "SK하이닉스", "000660")])
+    match = client.match_company("하이닉스 실적 서프라이즈")
+    assert match is not None
+    assert match.corp_name == "SK하이닉스"
+
+
+def test_match_company_prefers_full_name_over_abbreviation_when_both_present(client):
+    """정식 종목명이 본문에 이미 있으면 약칭 표를 따로 조회할 필요가 없다
+    (약칭 매핑이 정식 명칭 매칭을 방해하면 안 된다)."""
+    _seed_corp_codes(client, [("00126380", "삼성전자", "005930")])
+    match = client.match_company("삼성전자 주가 급등")
+    assert match is not None
+    assert match.corp_name == "삼성전자"
+
+
+
 def test_find_by_name_exact_match(client):
     _seed_corp_codes(client, [("00126380", "삼성전자", "005930")])
     match = client.find_by_name("삼성전자")

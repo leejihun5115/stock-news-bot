@@ -1,11 +1,13 @@
 from datetime import datetime, timezone
 
 from stock_news_bot.models import ContractImpact, EarningsComparison, NewsItem, Importance
+from stock_news_bot.company_profile import CompanyProfile
 from stock_news_bot.cogs.notifier import (
     build_message,
     build_message_summary,
     build_telegram_text,
     build_telegram_summary_text,
+    _company_context_lines,
 )
 
 
@@ -209,6 +211,31 @@ def test_google_news_blog_publisher_tail_is_stripped_from_title():
     assert "모태펀드 관광·국민안전계정 GP에…인피니툼·호라이즌·🔔현대차증권" in summary
 
 
+def test_blog_publisher_tail_without_english_source_is_stripped():
+    """영문 출처("- Naver Blog")가 뒤따르지 않고 " : 네이버 블로그"처럼
+    콜론+한글 출처만 단독으로 붙는 경우도 제거되어야 한다."""
+    item = _sample_item(
+        title="모태펀드 관광·국민안전계정 GP에…인피니툼·호라이즌·현대차증권 : 네이버 블로그",
+        url="https://news.google.com/rss/articles/GhIjKl?oc=5",
+        source_kind="blog",
+        summary="합병 관련 기사 본문",
+    )
+    summary = build_message_summary(item)
+    assert "네이버 블로그" not in summary
+    assert "모태펀드 관광·국민안전계정 GP에…인피니툼·호라이즌·🔔현대차증권" in summary
+
+
+def test_title_internal_colon_subtitle_is_preserved():
+    """제목 내부에 있는 진짜 콜론 부제목은 지워지면 안 된다(오탐 방지)."""
+    item = _sample_item(
+        title="이재명 정부 실적 : 주요 계획 발표",
+        url="https://news.google.com/rss/articles/MnOpQr?oc=5",
+        source_kind="news",
+    )
+    summary = build_message_summary(item)
+    assert "이재명 정부 실적 : 주요 계획 발표" in summary
+
+
 def test_regular_google_news_publisher_tail_is_still_stripped():
     """일반 뉴스(구글 뉴스 검색)의 " - 언론사명" 꼬리 제거는 기존대로 유지된다."""
     item = _sample_item(
@@ -219,6 +246,26 @@ def test_regular_google_news_publisher_tail_is_still_stripped():
     summary = build_message_summary(item)
     assert "이투데이" not in summary
     assert "AI 반도체 수요 급증…🔔삼성전자 수혜 전망" in summary
+
+
+def test_company_context_lines_hidden_when_only_placeholder_available():
+    """실제 업종/사업 정보를 못 찾아 placeholder 문구만 있으면 아예 줄
+    자체가 노출되면 안 된다."""
+    profile = CompanyProfile(
+        company="어떤회사", industry="업종 정보 확인 중", business="주요 사업 정보 확인 중"
+    )
+    lines = _company_context_lines(theme=None, company_profile=profile, listed={"어떤회사"})
+    assert lines == []
+
+
+def test_company_context_lines_shown_when_real_business_available():
+    """실제 사업 정보가 있으면 정상적으로 표시되어야 한다(과도한 차단 방지)."""
+    profile = CompanyProfile(
+        company="어떤회사", industry="반도체", business="반도체 및 관련 부품·장비 사업"
+    )
+    lines = _company_context_lines(theme=None, company_profile=profile, listed={"어떤회사"})
+    assert any("🏢 관련 사업: 반도체 및 관련 부품·장비 사업" in line for line in lines)
+    assert any("🏷️ 관련 테마: 반도체" in line for line in lines)
 
 
 def test_dart_query_parameter_is_part_of_dedup_key_but_tracking_is_ignored():

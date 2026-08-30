@@ -41,3 +41,24 @@ def test_is_noise_filters_short_titles():
 
 def test_is_noise_filters_photo_tag_titles():
     assert is_noise(_make_item("[포토] 여의도 증권가 풍경"))
+
+
+def test_classify_low_importance_for_executive_personal_event_without_business_signal():
+    """임원 개인의 사고/인도적 활동 등 "동정" 기사는 "긴급" 같은 키워드가
+    있어도 사업 재료가 없으면 종목 뉴스로 취급하면 안 된다 (제보: 회장의
+    해외 재난 구조활동 기사가 [두산] 긴급 종목 뉴스로 잘못 분류됨)."""
+    item = _make_item(
+        '박정원 두산 회장 긴급 네팔行, 민간헬기 수색 시도 지속 "직원 구조 총력전"'
+    )
+    result = classify_item(item)
+    assert result.importance == Importance.LOW
+    assert result.score == 0
+
+
+def test_classify_high_importance_when_urgent_business_signal_present():
+    """"긴급"이 진짜 사업 재료(수주/계약 등)와 함께 있으면 정상적으로
+    높은 중요도로 분류되어야 한다 — 동정 기사 필터가 과도하게 차단하면
+    안 된다."""
+    item = _make_item("두산에너빌리티, 원전 기자재 500억원 규모 긴급 수주 계약 체결")
+    result = classify_item(item)
+    assert result.importance == Importance.HIGH

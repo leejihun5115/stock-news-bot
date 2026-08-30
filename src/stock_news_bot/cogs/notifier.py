@@ -496,6 +496,16 @@ _ENGLISH_SOURCE_TAIL_RE = re.compile(
 # 2~8자인 짧은 고유명사이므로, 그 조건으로 범위를 좁혀 오탐(제목 내부의
 # 실제 문장이 잘려나가는 것)을 최소화한다.
 _SHORT_KOREAN_SOURCE_TAIL_RE = re.compile(r"\s+[-–—]\s+[가-힣]{2,8}$")
+# "... : 네이버 블로그"처럼 영문 출처("- Naver Blog")가 뒤따르지 않고
+# 콜론+한글 출처만 단독으로 붙는 경우도 있다. 이런 경우는 임의의 한글
+# 문구를 다 지우면 제목 내부의 진짜 부제("... : 실적 발표")까지 잘려나갈
+# 위험이 있으므로, 알려진 블로그/카페 플랫폼명으로만 범위를 좁혀 안전하게
+# 매칭한다. 새로운 플랫폼이 나오면 이 목록에 추가하면 된다.
+_KNOWN_BLOG_SOURCE_TAIL_RE = re.compile(
+    r"\s*[:：]\s*(?:네이버\s*(?:블로그|포스트|카페)"
+    r"|다음\s*(?:블로그|카페)"
+    r"|티스토리|브런치(?:스토리)?|카카오\s*뷰)$"
+)
 
 
 def _clean_display_title(title: str) -> str:
@@ -517,6 +527,9 @@ def _clean_display_title(title: str) -> str:
     value = _KNOWN_OUTLET_TAIL_RE.sub("", value).strip()
     # 4) "... - 네이트"처럼 짧은 한글 매체명 꼬리 제거(일반화된 패턴)
     value = _SHORT_KOREAN_SOURCE_TAIL_RE.sub("", value).strip()
+    # 5) "... : 네이버 블로그"처럼 영문 출처 없이 콜론+블로그/카페명만 단독으로
+    #    붙는 경우 제거(알려진 플랫폼명으로 범위 한정)
+    value = _KNOWN_BLOG_SOURCE_TAIL_RE.sub("", value).strip()
     # 과도하게 지워져 빈 문자열이 되면 안전하게 원본을 유지한다.
     return value or (title or "").strip()
 
