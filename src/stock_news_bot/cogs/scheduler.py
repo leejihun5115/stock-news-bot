@@ -133,6 +133,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             bot_token=self.settings.telegram_bot_token,
             chat_id=self.settings.telegram_chat_id,
             enabled=self.settings.telegram_alert_enabled,
+            default_min_score=self.settings.news_value_mid,
         )
         self.health = HealthMonitor(
             alerter=self.alerter,
@@ -809,7 +810,11 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 self.settings.news_lookback_hours, len(classified),
             )
 
-        min_score = self.settings.news_value_mid
+        from stock_news_bot.runtime_settings import get_min_score
+
+        # 텔레그램 '⚙️ 설정'에서 "뉴스강도 60으로 올려줘" 같은 명령으로 바꾼
+        # 값이 있으면 그 값을, 없으면 기존 NEWS_SEND_MIN_SCORE(.env) 기본값을 쓴다.
+        min_score = get_min_score(self.settings.news_value_mid)
         # YouTube/블로그/Telegram도 MEDIUM 점수 기준을 적용한다.
         # 단, 단순 종목명/테마/이모지/잡담은 차단하고 종목선정 근거가 있는
         # 콘텐츠만 통과시킨다. 사용자가 지정한 라르고TV는 유일한 예외다.
@@ -824,6 +829,17 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         normal_news = [item for item in news_items if item.source_kind != "dart"]
         qualified = study_items + [item for item in normal_news if item.score >= min_score]
         qualified += [item for item in dart_items if item.score >= dart_min]
+
+        from stock_news_bot.runtime_settings import get_keyword_filter_enabled
+
+        # 텔레그램 '⚙️ 설정'에서 "키워드 꺼줘"로 끄면, 점수만 통과하면
+        # NEWS_KEYWORDS와 무관하게 내보낸다. 켜져 있으면(기본값) 기존 동작 그대로.
+        if self.settings.news_keywords and get_keyword_filter_enabled(True):
+            keywords_lower = [kw.lower() for kw in self.settings.news_keywords]
+            qualified = [
+                item for item in qualified
+                if any(kw in item.title.lower() for kw in keywords_lower)
+            ]
         filtered_out = [item for item in classified if item not in qualified]
         self._last_scan["filtered"] = len(filtered_out)
         if study_items:

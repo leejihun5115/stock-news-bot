@@ -4,9 +4,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 from typing import Awaitable, Callable
 
 import aiohttp
+
+from stock_news_bot import runtime_settings
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +18,11 @@ DetailCallback = Callable[[str], Awaitable[str | None]]
 
 
 class TelegramAlerter:
-    def __init__(self, bot_token: str, chat_id: str, enabled: bool):
+    def __init__(self, bot_token: str, chat_id: str, enabled: bool, default_min_score: int = 45):
         self._bot_token = bot_token
         self._chat_id = chat_id
         self.enabled = enabled
+        self._default_min_score = default_min_score
         # token -> {"summary": 최초 요약 텍스트, "detail": 상세 텍스트, "button_label": 상세보기 버튼 라벨}
         # "🔙 원문으로" 버튼을 누르면 summary로 되돌리기 위해 요약도 함께 보관한다.
         self._details: dict[str, dict[str, str]] = {}
@@ -93,7 +97,12 @@ class TelegramAlerter:
             "text": message[:4000],
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
-            "reply_markup": {"inline_keyboard": [[{"text": f"🔓 {button_label}", "callback_data": f"s:{token}"}]]},
+            "reply_markup": {
+                "inline_keyboard": [
+                    [{"text": f"🔓 {button_label}", "callback_data": f"s:{token}"}],
+                    [{"text": "⚙️ 설정", "callback_data": "o:open"}],
+                ]
+            },
         }
         try:
             timeout = aiohttp.ClientTimeout(total=10)
@@ -103,6 +112,52 @@ class TelegramAlerter:
                         logger.error("텔레그램 뉴스 전송 실패(status=%s): %s", resp.status, await resp.text())
         except Exception:
             logger.exception("텔레그램 뉴스 전송 중 예외 발생")
+
+    def _settings_text(self) -> str:
+        snap = runtime_settings.snapshot(self._default_min_score)
+        keyword_state = "켜짐" if snap["keyword_filter_enabled"] else "꺼짐"
+        return (
+            "⚙️ <b>설정</b>\n\n"
+            f"· 뉴스강도(통과 점수): <b>{snap['min_score']}</b>\n"
+            f"· 뉴스 키워드 필터: <b>{keyword_state}</b>\n\n"
+            "이 채팅에 문장으로 바로 입력하면 즉시 반영됩니다.\n"
+            "예) <code>뉴스강도 60으로 올려줘</code>\n"
+            "예) <code>키워드 꺼줘</code> / <code>키워드 켜줘</code>"
+        )
+
+    async def _send_settings_screen(self, session: aiohttp.ClientSession, chat_id: int) -> None:
+        payload = {
+            "chat_id": chat_id,
+            "text": self._settings_text(),
+            "parse_mode": "HTML",
+        }
+        async with session.post(self._url("sendMessage"), json=payload) as resp:
+            if resp.status != 200:
+                logger.error("텔레그램 설정 화면 전송 실패(status=%s): %s", resp.status, await resp.text())
+
+    _INTENSITY_RE = re.compile(r"(강도|intensity)\D{0,6}(\d{1,3})")
+    _KEYWORD_ON_RE = re.compile(r"키워드.*(켜|활성|on)")
+    _KEYWORD_OFF_RE = re.compile(r"키워드.*(꺼|비활성|off)")
+
+    async def _handle_command_text(self, session: aiohttp.ClientSession, chat_id: int, text: str) -> None:
+        """설정 화면 안내를 보고 사용자가 채팅에 직접 친 문장을 파싱해서 즉시 반영한다."""
+        compact = text.strip()
+
+        m = self._INTENSITY_RE.search(compact.replace(" ", ""))
+        if m:
+            new_value = runtime_settings.set_min_score(int(m.group(2)))
+            await self.send(f"✅ 뉴스강도를 <b>{new_value}</b>(으)로 변경했습니다.")
+            return
+
+        if self._KEYWORD_ON_RE.search(compact.replace(" ", "")):
+            runtime_settings.set_keyword_filter_enabled(True)
+            await self.send("✅ 뉴스 키워드 필터를 켰습니다.")
+            return
+
+        if self._KEYWORD_OFF_RE.search(compact.replace(" ", "")):
+            runtime_settings.set_keyword_filter_enabled(False)
+            await self.send("✅ 뉴스 키워드 필터를 껐습니다.")
+            return
 
     def start_callback_polling(self) -> None:
         if not self.enabled or self._callback_task is not None:
@@ -130,7 +185,11 @@ class TelegramAlerter:
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 while not self._stop_event.is_set():
-                    params = {"timeout": 25, "allowed_updates": ["callback_query"], "offset": self._offset}
+                    params = {
+                        "timeout": 25,
+                        "allowed_updates": ["callback_query", "message"],
+                        "offset": self._offset,
+                    }
                     try:
                         async with session.get(self._url("getUpdates"), params=params) as resp:
                             if resp.status != 200:
@@ -139,6 +198,17 @@ class TelegramAlerter:
                             body = await resp.json()
                         for update in body.get("result", []):
                             self._offset = max(self._offset, int(update["update_id"]) + 1)
+
+                            message_update = update.get("message")
+                            if message_update:
+                                msg_chat_id = (message_update.get("chat") or {}).get("id")
+                                msg_text = message_update.get("text")
+                                # 봇이 뉴스를 보내는 채팅(TELEGRAM_CHAT_ID)에서 온 텍스트만
+                                # 설정 명령으로 취급한다. 매칭되는 문장이 아니면 조용히 무시.
+                                if msg_text and str(msg_chat_id) == str(self._chat_id):
+                                    await self._handle_command_text(session, msg_chat_id, msg_text)
+                                continue
+
                             callback = update.get("callback_query")
                             if not callback:
                                 continue
@@ -172,6 +242,9 @@ class TelegramAlerter:
                                 elif data.startswith("d:"):
                                     await self._delete_message(session, chat_id, message_id)
                                     answer_text = "삭제했습니다."
+                                elif data == "o:open":
+                                    await self._send_settings_screen(session, chat_id)
+                                    answer_text = "설정을 열었습니다."
                             await session.post(self._url("answerCallbackQuery"), json={"callback_query_id": callback["id"], "text": answer_text})
                     except asyncio.CancelledError:
                         raise
