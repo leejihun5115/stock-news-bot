@@ -188,24 +188,25 @@ class Settings:
 
 
 def _resolve_db_path() -> Path:
-    """Resolve the SQLite path safely on Render and local environments.
+    """Resolve the database path without ever silently using ephemeral storage.
 
-    On Render, an attached persistent disk is mounted at /var/data. If it is
-    available, prefer it even when an old DB_PATH such as /tmp/... is still
-    present in the environment. On Render Free, /var/data does not exist and
-    the filesystem is ephemeral; in that case we intentionally fall back to
-    /tmp. For true reboot-safe storage on Render, attach a persistent disk or
-    use an external database.
+    This bot treats the SQLite database as durable application state. On Render,
+    /var/data MUST be a mounted persistent disk. If it is missing, startup fails
+    loudly instead of falling back to /tmp, because a silent fallback makes the
+    bot appear healthy while destroying the accumulated history on restart.
     """
     configured = Path(_get_str("DB_PATH", "./data/stock_news_bot.sqlite3")).expanduser()
     if os.getenv("RENDER"):
         persistent_root = Path("/var/data")
-        if persistent_root.is_dir() and os.access(persistent_root, os.W_OK):
-            if configured.is_absolute() and str(configured).startswith("/var/data/"):
-                return configured
-            return persistent_root / "stock_news_bot.sqlite3"
-        if not configured.is_absolute() or not str(configured).startswith("/tmp/"):
-            return Path("/tmp/stock_news_bot.sqlite3")
+        if not (persistent_root.is_dir() and os.access(persistent_root, os.W_OK)):
+            raise RuntimeError(
+                "Render persistent disk is not mounted at /var/data. "
+                "Refusing to use /tmp because accumulated stock-news data must survive restarts. "
+                "Attach a persistent disk to /var/data and redeploy."
+            )
+        if configured.is_absolute() and str(configured).startswith("/var/data/"):
+            return configured
+        return persistent_root / "stock_news_bot.sqlite3"
     return configured
 
 

@@ -1,24 +1,28 @@
-# Render Blueprint - 무료 Web Service + Gemini -> OpenRouter 무료 LLM fallback
+# Render Blueprint - 영구 SQLite DB + Gemini -> OpenRouter 무료 LLM fallback
 #
 # 1) GitHub에 이 저장소를 push
 # 2) Render Dashboard -> New + -> Blueprint
 # 3) 저장소 선택
 # 4) sync:false 항목을 입력하면 바로 배포 가능
 #
-# Background Worker는 Render에서 무료 플랜 대상이 아니므로 Web Service를 사용한다.
+# SQLite 누적 DB를 재시작/재배포 후에도 보존하기 위해 유료 Web Service + Persistent Disk를 사용한다.
 # 앱은 /health와 /status HTTP 서버를 함께 열고 Discord 봇을 같은 프로세스에서 실행한다.
-# 무료 Web Service의 sleep 정책 때문에 완전한 24/7 연속 실행은 보장되지 않는다.
 services:
   - type: web
     name: stock-news-bot
     runtime: python
-    plan: free
+    plan: starter
     region: singapore
     branch: main
     buildCommand: "python --version && python -c \"import sys; assert sys.version_info[:2] == (3, 12), \\\"Python 3.12.x required; Render selected the wrong version\\\"\" && pip install -e ."
     startCommand: "python -m stock_news_bot"
     healthCheckPath: /health
     autoDeploy: true
+    numInstances: 1
+    disk:
+      name: stock-news-bot-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.7"
@@ -144,9 +148,9 @@ services:
       - key: LOG_LEVEL
         value: "INFO"
 
-      # DB는 /var/data를 우선 사용한다. Render Free에서 persistent disk가
-      # 없으면 config.py가 자동으로 /tmp로 폴백한다(재시작 시 데이터 소실).
-      # 영구 누적이 필요하면 Render persistent disk 또는 외부 DB를 사용한다.
+      # 누적 DB는 반드시 Persistent Disk 아래에 저장한다.
+      # config.py도 /var/data가 없으면 즉시 시작을 중단하여 /tmp로의
+      # 조용한 폴백을 방지한다.
       - key: DB_PATH
         value: "/var/data/stock_news_bot.sqlite3"
       - key: LOG_DIR

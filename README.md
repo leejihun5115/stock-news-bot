@@ -238,3 +238,22 @@ YouTube는 등록 채널 수집과 별도로 전체 검색을 지원합니다. �
 - `SOURCE_SEARCH_INTERVAL_SECONDS`: 블로그/Telegram 전체 검색 주기 (기본 60초)
 
 현재는 검색어를 입력하지 않아도 프로그램이 정상 실행되며, 등록 채널 수집만 계속합니다.
+
+## Render 누적 DB 영구 저장 (중요)
+
+이 버전은 뉴스 발송 이력과 주가 반응 추적 DB를 `/var/data/stock_news_bot.sqlite3`에 저장합니다.
+Render에서 DB를 재시작/재배포 후에도 유지하려면 `render.yaml`의 `starter` Web Service와
+`stock-news-bot-data` 1GB Persistent Disk가 함께 적용되어야 합니다.
+
+- DB 경로: `/var/data/stock_news_bot.sqlite3`
+- `/var/data`가 없으면 애플리케이션은 `/tmp`로 폴백하지 않고 시작을 중단합니다.
+- 따라서 `누적 DB 0건` 상태로 조용히 재시작되는 실수를 방지합니다.
+- Render Persistent Disk는 유료 Web Service에서 사용할 수 있으며, 디스크를 붙인 서비스는 단일 인스턴스로 운영해야 합니다.
+
+배포 후 로그에 다음과 같이 표시되어야 합니다.
+
+```text
+누적 DB 상태: 발송이력 N건, 주가반응 M건 (경로=/var/data/stock_news_bot.sqlite3)
+```
+
+재시작 후에도 N/M 값이 유지되면 영구 저장이 정상입니다.
