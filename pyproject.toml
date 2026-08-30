@@ -11,6 +11,7 @@ dependencies = [
     "tenacity>=8.2.3",
     "requests>=2.31.0",
     "pykrx>=1.2.8",
+    "googlenewsdecoder>=0.1.6",
 ]
 
 [project.optional-dependencies]
