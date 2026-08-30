@@ -28,6 +28,7 @@ from stock_news_bot.monitor.telegram_alert import TelegramAlerter, send_startup_
 from stock_news_bot.status import status as bot_status
 from stock_news_bot.storage.dart_client import DartClient
 from stock_news_bot.storage.dedup import DedupStore
+from stock_news_bot.storage.github_backup import backup_db
 from stock_news_bot.storage.history import HistoryStore
 from stock_news_bot.storage.market_data import MarketDataStore
 from stock_news_bot.utils.errors import BaseBotError
@@ -140,6 +141,8 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
 
         self.pipeline_loop.change_interval(seconds=self.settings.fetch_interval_seconds)
         self.health_loop.change_interval(seconds=self.settings.health_check_interval_seconds)
+        if self.settings.github_backup_enabled:
+            self.backup_loop.change_interval(seconds=self.settings.github_backup_interval_seconds)
 
     async def cog_load(self) -> None:
         # 수집 루프와 처리 worker를 분리한다. 기존의 한 사이클 전체 Lock 때문에
@@ -156,6 +159,14 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         )
         self.pipeline_loop.start()
         self.health_loop.start()
+        if self.settings.github_backup_enabled:
+            self.backup_loop.start()
+            logger.info(
+                "📦 GitHub DB 백업 루프 시작: 주기=%ss, repo=%s, path=%s",
+                self.settings.github_backup_interval_seconds,
+                self.settings.github_backup_repo,
+                self.settings.github_backup_path,
+            )
         logger.info(
             "⚡ 실시간 뉴스 파이프라인 시작: 수집주기=%ss / 분석worker=%d / Queue최대=%d",
             self.settings.fetch_interval_seconds,
@@ -195,13 +206,22 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         # 쌓이지 않고 매번 사라진다 — 이 경우를 명확히 경고한다.
         on_render = bool(os.getenv("RENDER"))
         disk_ok = db_path.startswith("/var/data")
+        backup_ok = self.settings.github_backup_enabled
         warning = ""
-        if on_render and not disk_ok:
+        if on_render and not disk_ok and backup_ok:
+            # 무료 플랜(디스크 없음) + GitHub 백업 모드. 재시작 시 최근 백업에서
+            # 복원되지만, 백업 주기 사이에 쌓인 데이터는 유실될 수 있다.
+            warning = (
+                f"\n📦 GitHub 백업 모드로 동작 중(repo={self.settings.github_backup_repo}, "
+                f"주기={self.settings.github_backup_interval_seconds}s): 재시작 시 최근 "
+                "백업에서 자동 복원됩니다. 단, 백업 주기 사이에 쌓인 데이터는 유실될 수 있습니다."
+            )
+        elif on_render and not disk_ok:
             # Render Free Web Service는 persistent disk를 사용할 수 없으므로
             # /tmp DB는 재시작/재배포 시 사라질 수 있다.
             warning = (
                 "\n⚠️ Render persistent disk 미연결: 현재 DB는 재시작/재배포 시 "
-                "사라질 수 있습니다. /var/data persistent disk 또는 외부 DB가 필요합니다."
+                "사라질 수 있습니다. /var/data persistent disk 또는 GITHUB_BACKUP_ENABLED가 필요합니다."
             )
             logger.warning(
                 "Render persistent disk 미연결: 임시 DB 경로(%s)를 사용합니다. "
@@ -227,6 +247,11 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
     def cog_unload(self) -> None:
         self.pipeline_loop.cancel()
         self.health_loop.cancel()
+        if self.settings.github_backup_enabled:
+            self.backup_loop.cancel()
+            # 종료 직전 최신 상태를 한 번 더 백업 시도한다(베스트 에포트).
+            # 실패해도 종료 자체를 막지 않는다.
+            asyncio.create_task(asyncio.to_thread(backup_db, self.settings))
         for task in self._analysis_workers:
             task.cancel()
         self._analysis_workers.clear()
@@ -888,6 +913,26 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         logger.exception("헬스체크 루프가 예상치 못하게 중단되었습니다", exc_info=exc)
         if not self.health_loop.is_running():
             self.health_loop.restart()
+
+    @tasks.loop(seconds=300)
+    async def backup_loop(self) -> None:
+        """무료 플랜(디스크 없음) 대응: 현재 DB를 주기적으로 GitHub에 백업한다.
+
+        GITHUB_BACKUP_ENABLED=true일 때만 cog_load()에서 시작된다.
+        requests(동기 라이브러리) 호출이라 asyncio 루프를 막지 않도록
+        스레드로 분리한다.
+        """
+        await asyncio.to_thread(backup_db, self.settings)
+
+    @backup_loop.before_loop
+    async def _before_backup(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @backup_loop.error
+    async def _on_backup_loop_error(self, exc: BaseException) -> None:
+        logger.exception("GitHub 백업 루프가 예상치 못하게 중단되었습니다", exc_info=exc)
+        if not self.backup_loop.is_running():
+            self.backup_loop.restart()
 
 
 async def setup(bot: commands.Bot) -> None:

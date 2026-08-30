@@ -157,6 +157,15 @@ class Settings:
     log_level: str = "INFO"
     log_dir: Path = Path("./logs")
 
+    # 무료 플랜(Persistent Disk 미지원) 대응: GitHub 저장소를 외부 백업소로
+    # 사용해 부팅 시 최근 백업을 복원하고, 주기적으로 현재 DB를 커밋한다.
+    github_backup_enabled: bool = False
+    github_backup_token: str = ""
+    github_backup_repo: str = ""  # "owner/repo" 형식
+    github_backup_path: str = "backups/stock_news_bot.sqlite3"
+    github_backup_branch: str = "main"
+    github_backup_interval_seconds: int = 300
+
     @property
     def telegram_alert_enabled(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_chat_id)
@@ -194,9 +203,15 @@ def _resolve_db_path() -> Path:
     /var/data MUST be a mounted persistent disk. If it is missing, startup fails
     loudly instead of falling back to /tmp, because a silent fallback makes the
     bot appear healthy while destroying the accumulated history on restart.
+
+    Exception: if GITHUB_BACKUP_ENABLED=true, the bot restores/backs up the DB
+    via a GitHub repo instead of a persistent disk (see storage/github_backup.py),
+    so the /var/data requirement is skipped — a local ephemeral path is fine
+    because it gets repopulated from the last GitHub backup on every boot.
     """
     configured = Path(_get_str("DB_PATH", "./data/stock_news_bot.sqlite3")).expanduser()
-    if os.getenv("RENDER"):
+    github_backup_enabled = _get_bool("GITHUB_BACKUP_ENABLED", False)
+    if os.getenv("RENDER") and not github_backup_enabled:
         persistent_root = Path("/var/data")
         if not (persistent_root.is_dir() and os.access(persistent_root, os.W_OK)):
             raise RuntimeError(
@@ -274,6 +289,12 @@ def load_settings() -> Settings:
         health_check_interval_seconds=_get_int("HEALTH_CHECK_INTERVAL_SECONDS", 300),
         log_level=_get_str("LOG_LEVEL", "INFO"),
         log_dir=Path(_get_str("LOG_DIR", "./logs")),
+        github_backup_enabled=_get_bool("GITHUB_BACKUP_ENABLED", False),
+        github_backup_token=_get_str("GITHUB_BACKUP_TOKEN"),
+        github_backup_repo=_get_str("GITHUB_BACKUP_REPO"),
+        github_backup_path=_get_str("GITHUB_BACKUP_PATH", "backups/stock_news_bot.sqlite3"),
+        github_backup_branch=_get_str("GITHUB_BACKUP_BRANCH", "main"),
+        github_backup_interval_seconds=max(60, _get_int("GITHUB_BACKUP_INTERVAL_SECONDS", 300)),
     )
 
     # 소스는 오직 Render 환경변수/운영 설정에 등록된 대상만 사용한다.
@@ -282,6 +303,11 @@ def load_settings() -> Settings:
 
     if settings.discord_news_channel_id == 0:
         raise ConfigError("DISCORD_NEWS_CHANNEL_ID가 설정되지 않았습니다.")
+    if settings.github_backup_enabled and not (settings.github_backup_token and settings.github_backup_repo):
+        raise ConfigError(
+            "GITHUB_BACKUP_ENABLED=true인 경우 GITHUB_BACKUP_TOKEN과 GITHUB_BACKUP_REPO가 "
+            "모두 설정되어야 합니다."
+        )
     if not settings.news_keywords and not settings.rss_feeds and not (settings.enable_blog and settings.blog_feeds) and not (settings.enable_youtube and settings.youtube_channel_ids) and not (settings.enable_telegram_channels and settings.telegram_source_channels):
         raise ConfigError(
             "NEWS_KEYWORDS/RSS_FEEDS/BLOG_FEEDS/YOUTUBE_CHANNEL_IDS/TELEGRAM_SOURCE_CHANNELS 중 하나 이상이 설정되어야 합니다."

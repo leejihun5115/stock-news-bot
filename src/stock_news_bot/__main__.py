@@ -105,6 +105,12 @@ def main() -> None:
         setup_logging(settings.log_dir, settings.log_level)
         logger.info("stock-news-bot 시작")
 
+        if settings.github_backup_enabled:
+            stage = "GitHub 백업에서 DB 복원"
+            from stock_news_bot.storage.github_backup import restore_db
+
+            restore_db(settings)
+
         stage = "봇 인스턴스 생성 / 코그 로드"
         from stock_news_bot.bot import create_bot
 

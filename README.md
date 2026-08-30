@@ -90,6 +90,11 @@ pytest
 STOCK_NEWS_BOT_SERVICE=stock-news-bot ./scripts/deploy.sh
 ```
 
+`render.yaml`은 기본적으로 Render **무료** 웹서비스로 배포되도록 구성되어
+있습니다. 무료 플랜은 Persistent Disk를 지원하지 않으므로, 대신 GitHub
+저장소를 이용해 누적 DB를 백업/복원합니다. 설정 방법은
+`FREE_DB_ACCUMULATION.md`를 참고하세요.
+
 ## 누적 DB를 AI 분석에 활용
 
 이 버전은 SQLite 누적 DB를 단순 중복방지 용도로만 쓰지 않고 AI 분석의
