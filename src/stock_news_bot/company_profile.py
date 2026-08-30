@@ -81,6 +81,34 @@ _US_KR_ALIASES={
  'ARM':'ARM','암홀딩스':'ARM',
 }
 
+# 국내 뉴스에서 자주 쓰는 중국 상장사(홍콩/A주/미국 ADR 포함) 한글명/약칭.
+# 알리바바·JD·바이두 등은 미국에도 ADR로 상장돼 있어 SEC 목록에 걸릴 수
+# 있지만, 국내 뉴스 맥락에서는 "중국 기업"으로 인식하는 것이 사용자
+# 요구사항이므로 US 티커 매핑보다 이 목록을 우선 확인한다(market_flag_of).
+_CN_KR_ALIASES={
+ '알리바바':'Alibaba','알리바바그룹':'Alibaba',
+ '텐센트':'Tencent','텐센트홀딩스':'Tencent',
+ '비야디':'BYD',
+ '샤오미':'Xiaomi',
+ '니오':'NIO',
+ '징동닷컴':'JD.com','징동':'JD.com','JD닷컴':'JD.com',
+ '바이두':'Baidu',
+ '메이투안':'Meituan',
+ '핀둬둬':'PDD Holdings','핀뒤뒤':'PDD Holdings','테무':'PDD Holdings',
+ '닝더스다이':'CATL','CATL':'CATL',
+ '리오토':'Li Auto',
+ '샤오펑':'XPeng','샤오펑모터스':'XPeng',
+ '지리자동차':'Geely',
+ '차이나모바일':'China Mobile',
+ '페트로차이나':'PetroChina',
+ '시노펙':'Sinopec',
+ '항서제약':'Hengrui Pharmaceuticals',
+ '중국공상은행':'ICBC',
+ '넷이즈':'NetEase',
+ '스마이크':'SMIC','중신궈지':'SMIC',
+ '트립닷컴':'Trip.com',
+}
+
 # 티커 -> 영문 표기. 헤더/관련주에 🔔 표시를 붙일 때, 한글명으로 들어온
 # 미국 상장사는 영문명을 괄호로 함께 보여주기 위해 쓴다(예: 엔비디아(NVIDIA)).
 _US_TICKER_NAMES={
@@ -95,19 +123,29 @@ _US_TICKER_NAMES={
 
 
 def bilingual_company_label(company: str) -> str:
-    """미국 상장사는 반대 언어 이름을 괄호로 덧붙인다.
+    """미국/중국 상장사는 반대 언어 이름을 괄호로 덧붙인다.
 
     한글로 들어오면 영문을, 영문 이름/티커로 들어오면 한글을 붙인다.
     예: '엔비디아' -> '엔비디아(NVIDIA)', 'NVIDIA' -> 'NVIDIA(엔비디아)',
-    'NVDA' -> 'NVDA(엔비디아)'. 매핑을 못 찾으면(국내 상장사 등) 원래
-    이름을 그대로 돌려준다. 영문→한글 방향은 로컬 매핑을 우선 쓰고,
-    못 찾을 때만 SEC 목록 조회로 보완한다(오프라인이어도 흔한 종목은
-    바로 매칭된다).
+    'NVDA' -> 'NVDA(엔비디아)', '알리바바' -> '알리바바(Alibaba)'. 매핑을
+    못 찾으면(국내 상장사 등) 원래 이름을 그대로 돌려준다. 영문→한글
+    방향은 로컬 매핑을 우선 쓰고, 못 찾을 때만 SEC 목록 조회로 보완한다
+    (오프라인이어도 흔한 종목은 바로 매칭된다). 중국 상장사는 한글 별칭
+    <-> 영문 표기 매핑만 로컬로 두며(ADR 티커 유무와 무관), US 매핑보다
+    먼저 확인한다.
     """
     company = (company or '').strip()
     if not company:
         return company
     norm = _norm(company)
+    # 0) 한글 별칭 -> 영문 이름 (중국, US보다 우선)
+    for alias, en in _CN_KR_ALIASES.items():
+        if _norm(alias) == norm:
+            return f"{company}({en})" if _norm(en) != norm else company
+    # 0-1) 영문 이름 -> 한글 별칭 (중국)
+    for alias, en in _CN_KR_ALIASES.items():
+        if _norm(en) == norm:
+            return f"{company}({alias})" if _norm(alias) != norm else company
     # 1) 한글 별칭 -> 영문 이름
     for alias, ticker in _US_KR_ALIASES.items():
         if _norm(alias) == norm:
@@ -158,33 +196,44 @@ def is_listed_company(company):
  company=(company or '').strip()
  if not company:return False
  if _norm(company) in {_norm(x) for x in _KR_LISTED_ALIASES}:return True
+ if _is_cn_alias(company):return True
  try:m=_get_dart().find_by_name(company)
  except Exception:m=None
  if m and m.stock_code:return True
  return bool(_ticker(company))
 
+def _is_cn_alias(company: str) -> bool:
+ """한글/영문 이름이 중국 상장사 별칭 목록(_CN_KR_ALIASES)에 해당하는지 확인한다."""
+ norm=_norm(company)
+ for alias, en in _CN_KR_ALIASES.items():
+  if _norm(alias)==norm or _norm(en)==norm:return True
+ return False
+
 def market_flag_of(company: str) -> str:
- """상장사 이름의 상장 시장을 국기 이모지로 반환한다(국내 🇰🇷 / 미국 🇺🇸).
+ """상장사 이름의 상장 시장을 국기 이모지로 반환한다(국내 🇰🇷 / 중국 🇨🇳 / 미국 🇺🇸).
  is_listed_company()와 같은 기준(느린 위키 조회는 건너뜀)으로 판별하되,
- 어느 시장인지까지 함께 알려준다. 상장사로 확인되지 않으면 빈 문자열을
- 돌려준다(호출부에서 기존 🔔로 대체 표시할 수 있게)."""
+ 어느 시장인지까지 함께 알려준다. 알리바바·JD처럼 미국 ADR로도 상장된
+ 중국 기업은 US 티커 매칭보다 중국 별칭 목록을 먼저 확인해 🇨🇳으로
+ 표시한다. 상장사로 확인되지 않으면 빈 문자열을 돌려준다(호출부에서
+ 기존 🔔로 대체 표시할 수 있게)."""
  company=(company or '').strip()
  if not company:return ''
  if _norm(company) in {_norm(x) for x in _KR_LISTED_ALIASES}:return '🇰🇷'
  try:m=_get_dart().find_by_name(company)
  except Exception:m=None
  if m and m.stock_code:return '🇰🇷'
+ if _is_cn_alias(company):return '🇨🇳'
  if _ticker(company):return '🇺🇸'
  return ''
 
-_ALL_ALIAS_NAMES = sorted({*_KR_LISTED_ALIASES, *_US_KR_ALIASES}, key=len, reverse=True)
+_ALL_ALIAS_NAMES = sorted({*_KR_LISTED_ALIASES, *_US_KR_ALIASES, *_CN_KR_ALIASES}, key=len, reverse=True)
 
 def find_mentioned_companies(text: str) -> set[str]:
     """본문/제목 텍스트에 그대로 언급된 상장사 이름을 찾는다.
 
     관련주 추출(related_stocks) 결과에 없더라도, 제목·핵심·분석 등 텍스트
-    안에 국내 대표 상장사나 미국 상장사의 한글 별칭이 그대로 등장하면
-    상장사로 인식해 🔔 표시를 붙일 수 있게 한다(예: "엔비디아 AI 투자
+    안에 국내 대표 상장사나 미국/중국 상장사의 한글 별칭이 그대로 등장하면
+    상장사로 인식해 표시를 붙일 수 있게 한다(예: "엔비디아 AI 투자
     확대…삼성전자·SK하이닉스 수혜 이어질까"라는 제목에서 관련주 목록에
     없는 SK하이닉스·엔비디아도 찾아낸다). 로컬 별칭 테이블만 사용하고
     네트워크 조회(위키/DART/SEC)는 하지 않는다.
@@ -210,6 +259,8 @@ def resolve_company_profile(company,sectors=None):
   except Exception:m=None
   if m and m.stock_code:
    p.market_label='🇰🇷'; text,p.image_url=_wiki(company,'ko')
+  elif _is_cn_alias(company):
+   p.market_label='🇨🇳'; text,p.image_url=_wiki(company,'en')
   else:
    p.ticker=_ticker(company)
    if p.ticker:

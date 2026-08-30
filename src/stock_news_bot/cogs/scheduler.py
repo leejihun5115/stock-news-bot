@@ -74,6 +74,18 @@ def _has_stock_selection_evidence(item) -> bool:
     return bool(has_reason or has_amount or has_progress or has_numeric or any(k in text for k in evidence))
 
 
+def _lacks_market_relevance(result) -> bool:
+    """관련테마·관련주가 둘 다 없어서(=주식 시세와 관련짓거나 시황적으로
+    판단할 근거가 없는 뉴스) 발송할 가치가 없다고 볼 수 있는지 확인한다.
+
+    AnalysisResult.theme/related_stocks는 analyze_item()이 기사 본문에서
+    실제 사업 재료(수주/공급/실적/승인 등)를 찾아야만 채워진다. 둘 다
+    비어 있다는 것은 "종목명만 스치듯 언급됐거나 아예 시장과 무관한
+    뉴스"라는 뜻이므로, 이 경우엔 애초에 발송 대상에서 제외한다.
+    """
+    return not result.theme and not result.related_stocks
+
+
 class SchedulerCog(commands.Cog, name="Scheduler"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -361,6 +373,24 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     price_up_ratio=price_stats.plus1_up_ratio if price_stats else None,
                     price_avg_pct=price_stats.plus1_avg_pct if price_stats else None,
                 )
+
+                # 관련테마·관련주가 둘 다 없어서 주식 시세와 관련짓거나
+                # 시황적으로 판단할 근거가 없는 뉴스는 애초에 발송하지 않는다.
+                # (스터디 소스/DART 공시/라르고TV 예외는 각자 별도 기준으로
+                # 이미 필터링되므로 여기서는 건드리지 않는다.)
+                if (
+                    not _is_study_source(item)
+                    and not _is_largo_tv_exception(item)
+                    and item.source_kind != "dart"
+                    and _lacks_market_relevance(result)
+                ):
+                    self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
+                    logger.info(
+                        "🚫 관련테마/관련주 없음으로 제외 | score=%d | source=%s | %s",
+                        item.score, item.source, item.title[:100],
+                    )
+                    continue
+
                 # 1차 규칙 분석은 사실 추출/신뢰도 판정에 사용하고,
                 # 로컬 LLM은 그 결과를 바탕으로 맥락과 영향까지 자연어로 보강한다.
                 # API 오류나 잘못된 응답은 llm_analyzer 내부에서 안전하게 폴백한다.
