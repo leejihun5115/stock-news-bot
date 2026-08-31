@@ -134,9 +134,6 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             chat_id=self.settings.telegram_chat_id,
             enabled=self.settings.telegram_alert_enabled,
             default_min_score=self.settings.news_value_mid,
-            base_keywords=self.settings.news_keywords,
-            default_max_new_per_cycle=self.settings.max_new_per_cycle,
-            default_fetch_interval_seconds=self.settings.fetch_interval_seconds,
         )
         self.health = HealthMonitor(
             alerter=self.alerter,
@@ -290,14 +287,6 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         if self.paused:
             logger.debug("스케줄러 일시정지 상태 — 이번 사이클 건너뜀")
             return
-
-        # 텔레그램 '⚙️ 설정'에서 수집 주기를 바꿨으면 다음 사이클부터 반영한다.
-        from stock_news_bot.runtime_settings import get_variable as _get_variable
-
-        desired_interval = _get_variable("fetch_interval_seconds", self.settings.fetch_interval_seconds)
-        if self.pipeline_loop.seconds != desired_interval:
-            self.pipeline_loop.change_interval(seconds=desired_interval)
-            logger.info("수집 주기를 %s초로 변경했습니다.", desired_interval)
 
         was_failing = bot_status.last_run_ok is False
 
@@ -778,9 +767,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             + len(self.settings.youtube_search_queries)
             + len(self.settings.telegram_source_channels)
         )
-        from stock_news_bot.runtime_settings import get_keywords as _get_keywords
-
-        keyword_count = len(_get_keywords(self.settings.news_keywords))
+        keyword_count = len(list(dict.fromkeys(self.settings.news_keywords)))
         self._last_scan.update({
             "keywords": keyword_count,
             "feeds": feed_count,
@@ -847,9 +834,8 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
 
         # 텔레그램 '⚙️ 설정'에서 "키워드 꺼줘"로 끄면, 점수만 통과하면
         # NEWS_KEYWORDS와 무관하게 내보낸다. 켜져 있으면(기본값) 기존 동작 그대로.
-        runtime_keywords = _get_keywords(self.settings.news_keywords)
-        if runtime_keywords and get_keyword_filter_enabled(True):
-            keywords_lower = [kw.lower() for kw in runtime_keywords]
+        if self.settings.news_keywords and get_keyword_filter_enabled(True):
+            keywords_lower = [kw.lower() for kw in self.settings.news_keywords]
             qualified = [
                 item for item in qualified
                 if any(kw in item.title.lower() for kw in keywords_lower)
@@ -893,14 +879,11 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
 
         # 한 주기에 너무 많은 뉴스가 한꺼번에 들어오지 않게 제한한다.
         # 이후 수집에서 새로 발견되는 기사와 섞여도 채널이 폭주하지 않는다.
-        from stock_news_bot.runtime_settings import get_variable as _get_variable
-
-        max_new_per_cycle = _get_variable("max_new_per_cycle", self.settings.max_new_per_cycle)
-        if len(new_items) > max_new_per_cycle:
+        if len(new_items) > self.settings.max_new_per_cycle:
             # 최신 기사를 우선하되, 같은 주기 안에서는 발행시각 순으로 송출 Queue가 정렬한다.
             new_items = sorted(
                 new_items, key=lambda x: x.published_at, reverse=True
-            )[:max_new_per_cycle]
+            )[: self.settings.max_new_per_cycle]
 
         self._last_scan["new"] = len(new_items)
         queued = await self._enqueue_new_items(new_items)

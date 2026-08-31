@@ -18,25 +18,11 @@ DetailCallback = Callable[[str], Awaitable[str | None]]
 
 
 class TelegramAlerter:
-    def __init__(
-        self,
-        bot_token: str,
-        chat_id: str,
-        enabled: bool,
-        default_min_score: int = 45,
-        base_keywords: list[str] | None = None,
-        default_max_new_per_cycle: int = 3,
-        default_fetch_interval_seconds: int = 60,
-    ):
+    def __init__(self, bot_token: str, chat_id: str, enabled: bool, default_min_score: int = 45):
         self._bot_token = bot_token
         self._chat_id = chat_id
         self.enabled = enabled
         self._default_min_score = default_min_score
-        # NEWS_KEYWORDS(.env/Render 환경변수) 기준값. "키워드 추가/삭제" 명령은
-        # 이 기준값 위에 runtime_settings의 추가/삭제 오버라이드를 덧씌운다.
-        self._base_keywords = list(base_keywords or [])
-        self._default_max_new_per_cycle = default_max_new_per_cycle
-        self._default_fetch_interval_seconds = default_fetch_interval_seconds
         # token -> {"summary": 최초 요약 텍스트, "detail": 상세 텍스트, "button_label": 상세보기 버튼 라벨}
         # "🔙 원문으로" 버튼을 누르면 summary로 되돌리기 위해 요약도 함께 보관한다.
         self._details: dict[str, dict[str, str]] = {}
@@ -128,30 +114,16 @@ class TelegramAlerter:
             logger.exception("텔레그램 뉴스 전송 중 예외 발생")
 
     def _settings_text(self) -> str:
-        snap = runtime_settings.snapshot(self._default_min_score, self._base_keywords)
+        snap = runtime_settings.snapshot(self._default_min_score)
         keyword_state = "켜짐" if snap["keyword_filter_enabled"] else "꺼짐"
-        keywords = snap["keywords"]
-        keyword_preview = ", ".join(keywords[:15]) if keywords else "없음"
-        if len(keywords) > 15:
-            keyword_preview += f" 외 {len(keywords) - 15}개"
-        max_new = runtime_settings.get_variable("max_new_per_cycle", self._default_max_new_per_cycle)
-        interval = runtime_settings.get_variable("fetch_interval_seconds", self._default_fetch_interval_seconds)
-        lines = [
-            "⚙️ <b>설정</b>\n",
-            f"· 뉴스강도(통과 점수): <b>{snap['min_score']}</b>",
-            f"· 뉴스 키워드 필터: <b>{keyword_state}</b>",
-            f"· 키워드({len(keywords)}개): {keyword_preview}",
-            f"· 주기당 최대 전송: <b>{max_new}건</b>",
-            f"· 수집 주기: <b>{interval}초</b>\n",
-            "이 채팅에 문장으로 바로 입력하면 즉시 반영됩니다.",
-            "예) <code>뉴스강도 60으로 올려줘</code>",
-            "예) <code>키워드 꺼줘</code> / <code>키워드 켜줘</code>",
-            "예) <code>키워드 추가 삼성전자</code>",
-            "예) <code>키워드 삭제 삼성전자</code>",
-            "예) <code>최대전송 5건으로</code>",
-            "예) <code>수집주기 120초로</code>",
-        ]
-        return "\n".join(lines)
+        return (
+            "⚙️ <b>설정</b>\n\n"
+            f"· 뉴스강도(통과 점수): <b>{snap['min_score']}</b>\n"
+            f"· 뉴스 키워드 필터: <b>{keyword_state}</b>\n\n"
+            "이 채팅에 문장으로 바로 입력하면 즉시 반영됩니다.\n"
+            "예) <code>뉴스강도 60으로 올려줘</code>\n"
+            "예) <code>키워드 꺼줘</code> / <code>키워드 켜줘</code>"
+        )
 
     async def _send_settings_screen(self, session: aiohttp.ClientSession, chat_id: int) -> None:
         payload = {
@@ -164,32 +136,12 @@ class TelegramAlerter:
                 logger.error("텔레그램 설정 화면 전송 실패(status=%s): %s", resp.status, await resp.text())
 
     _INTENSITY_RE = re.compile(r"(강도|intensity)\D{0,6}(\d{1,3})")
-    # 키워드 추가/삭제는 "키워드 켜줘/꺼줘"(필터 on/off)보다 먼저 검사해야 한다 —
-    # 둘 다 "키워드"로 시작하는 문장이라서 순서가 뒤바뀌면 오탐한다.
-    _KEYWORD_ADD_RE = re.compile(r"키워드[\s:\-]{0,3}(?:추가|등록)[\s:\-]{1,3}([^\s,]+)")
-    _KEYWORD_REMOVE_RE = re.compile(r"키워드[\s:\-]{0,3}(?:삭제|제거)[\s:\-]{1,3}([^\s,]+)")
     _KEYWORD_ON_RE = re.compile(r"키워드.*(켜|활성|on)")
     _KEYWORD_OFF_RE = re.compile(r"키워드.*(꺼|비활성|off)")
-    _MAX_NEW_RE = re.compile(r"(최대\s*전송|주기당\s*최대)\D{0,6}(\d{1,3})")
-    _INTERVAL_RE = re.compile(r"(수집\s*주기|수집\s*간격)\D{0,6}(\d{1,5})")
 
     async def _handle_command_text(self, session: aiohttp.ClientSession, chat_id: int, text: str) -> None:
         """설정 화면 안내를 보고 사용자가 채팅에 직접 친 문장을 파싱해서 즉시 반영한다."""
         compact = text.strip()
-
-        m = self._KEYWORD_ADD_RE.search(compact)
-        if m:
-            keyword = m.group(1).strip("\"'.,!?")
-            runtime_settings.add_keyword(keyword)
-            await self.send(f"✅ 키워드 <b>{keyword}</b>를(을) 추가했습니다.")
-            return
-
-        m = self._KEYWORD_REMOVE_RE.search(compact)
-        if m:
-            keyword = m.group(1).strip("\"'.,!?")
-            runtime_settings.remove_keyword(keyword)
-            await self.send(f"✅ 키워드 <b>{keyword}</b>를(을) 삭제했습니다.")
-            return
 
         m = self._INTENSITY_RE.search(compact.replace(" ", ""))
         if m:
@@ -205,18 +157,6 @@ class TelegramAlerter:
         if self._KEYWORD_OFF_RE.search(compact.replace(" ", "")):
             runtime_settings.set_keyword_filter_enabled(False)
             await self.send("✅ 뉴스 키워드 필터를 껐습니다.")
-            return
-
-        m = self._MAX_NEW_RE.search(compact.replace(" ", ""))
-        if m:
-            new_value = runtime_settings.set_variable("max_new_per_cycle", int(m.group(2)))
-            await self.send(f"✅ 주기당 최대 전송을 <b>{new_value}건</b>으로 변경했습니다.")
-            return
-
-        m = self._INTERVAL_RE.search(compact.replace(" ", ""))
-        if m:
-            new_value = runtime_settings.set_variable("fetch_interval_seconds", int(m.group(2)))
-            await self.send(f"✅ 수집 주기를 <b>{new_value}초</b>로 변경했습니다. (다음 사이클부터 적용)")
             return
 
     def start_callback_polling(self) -> None:

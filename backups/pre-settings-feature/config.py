@@ -183,15 +183,10 @@ class Settings:
         """
         from urllib.parse import quote
 
-        from stock_news_bot import runtime_settings
-
-        # 텔레그램 '⚙️ 설정'에서 "키워드 추가/삭제"로 바꾼 결과가 있으면
-        # NEWS_KEYWORDS(기준값) 위에 그 결과를 덧씌운다.
-        keywords = runtime_settings.get_keywords(self.news_keywords)
-        if keywords:
+        if self.news_keywords:
             # 중복 키워드는 RSS 중복 호출과 같은 뉴스 후보 중복을 만들 수 있으므로
             # 입력 순서를 유지하면서 1회만 사용한다.
-            unique_keywords = list(dict.fromkeys(keywords))
+            unique_keywords = list(dict.fromkeys(self.news_keywords))
             return [
                 f"https://news.google.com/rss/search?q={quote(kw)}&hl=ko&gl=KR&ceid=KR:ko"
                 for kw in unique_keywords

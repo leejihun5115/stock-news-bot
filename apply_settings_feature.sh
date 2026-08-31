@@ -1,3 +1,895 @@
+#!/bin/bash
+set -e
+cd ~/stock-news-bot
+mkdir -p backups/pre-settings-feature
+cp "src/stock_news_bot/runtime_settings.py" backups/pre-settings-feature/ 2>/dev/null || true
+cp "src/stock_news_bot/config.py" backups/pre-settings-feature/ 2>/dev/null || true
+cp "src/stock_news_bot/monitor/telegram_alert.py" backups/pre-settings-feature/ 2>/dev/null || true
+cp "src/stock_news_bot/cogs/scheduler.py" backups/pre-settings-feature/ 2>/dev/null || true
+echo "백업 완료: backups/pre-settings-feature/"
+
+cat > src/stock_news_bot/runtime_settings.py << 'PYFILE_EOF'
+"""텔레그램 '⚙️ 설정' 명령으로 재시작 없이 즉시 바꿀 수 있는 런타임 설정.
+
+.env/Render 환경변수(NEWS_SEND_MIN_SCORE 등)는 기본값일 뿐이고, 여기 담긴
+override가 있으면 그 값이 우선한다. 프로세스가 재시작되면 override는
+초기화되고 다시 환경변수 기본값으로 돌아간다(영구 저장이 필요하면 추후
+DB에 옮기면 된다).
+"""
+from __future__ import annotations
+
+import threading
+
+_lock = threading.Lock()
+_overrides: dict[str, object] = {}
+
+
+def get_min_score(default: int) -> int:
+    """뉴스강도(점수 하한선). 낮을수록 더 많은 뉴스가 통과한다."""
+    with _lock:
+        return int(_overrides.get("min_score", default))
+
+
+def set_min_score(value: int) -> int:
+    value = max(0, min(100, int(value)))
+    with _lock:
+        _overrides["min_score"] = value
+    return value
+
+
+def get_keyword_filter_enabled(default: bool = True) -> bool:
+    with _lock:
+        return bool(_overrides.get("keyword_filter_enabled", default))
+
+
+def set_keyword_filter_enabled(value: bool) -> None:
+    with _lock:
+        _overrides["keyword_filter_enabled"] = bool(value)
+
+
+# ---------------------------------------------------------------------------
+# 키워드 신규/삭제: NEWS_KEYWORDS(.env/Render 환경변수)는 기준값 그대로 두고,
+# 여기서 "추가된 키워드"/"삭제된 키워드" 목록만 덧씌운다. get_keywords()가
+# 매번 기준 목록 + 추가 - 삭제를 계산해 최종 목록을 돌려준다.
+# ---------------------------------------------------------------------------
+
+def get_keywords(base_keywords: list[str]) -> list[str]:
+    """기준 키워드(NEWS_KEYWORDS)에 런타임 추가/삭제를 반영한 최종 목록."""
+    with _lock:
+        added = list(_overrides.get("keyword_added", []))
+        removed = set(_overrides.get("keyword_removed", []))
+    result = [kw for kw in base_keywords if kw not in removed]
+    for kw in added:
+        if kw not in result:
+            result.append(kw)
+    return list(dict.fromkeys(result))
+
+
+def add_keyword(keyword: str) -> list[str]:
+    keyword = keyword.strip()
+    with _lock:
+        added = list(_overrides.get("keyword_added", []))
+        removed = list(_overrides.get("keyword_removed", []))
+        if keyword in removed:
+            removed.remove(keyword)
+        if keyword and keyword not in added:
+            added.append(keyword)
+        _overrides["keyword_added"] = added
+        _overrides["keyword_removed"] = removed
+        return added
+
+
+def remove_keyword(keyword: str) -> list[str]:
+    keyword = keyword.strip()
+    with _lock:
+        added = list(_overrides.get("keyword_added", []))
+        removed = list(_overrides.get("keyword_removed", []))
+        if keyword in added:
+            added.remove(keyword)
+        if keyword and keyword not in removed:
+            removed.append(keyword)
+        _overrides["keyword_added"] = added
+        _overrides["keyword_removed"] = removed
+        return removed
+
+
+# ---------------------------------------------------------------------------
+# 그 외 조절 가능한 변수값들 (주기당 최대 전송 건수, 수집 주기 등).
+# 화이트리스트에 있는 이름만 텔레그램 채팅으로 바꿀 수 있게 허용한다.
+# ---------------------------------------------------------------------------
+
+# 이름 -> (허용 최소값, 허용 최대값, 사람이 읽을 설명)
+# 뉴스강도(min_score)와 키워드 필터는 이미 전용 명령이 있으므로 여기서는
+# 그 외의 조절 가능한 변수만 다룬다.
+ADJUSTABLE_VARIABLES: dict[str, tuple[int, int, str]] = {
+    "max_new_per_cycle": (1, 50, "주기당 최대 전송 건수"),
+    "fetch_interval_seconds": (10, 3600, "수집 주기(초)"),
+}
+
+
+def get_variable(name: str, default: int) -> int:
+    with _lock:
+        return int(_overrides.get(f"var:{name}", default))
+
+
+def set_variable(name: str, value: int) -> int:
+    if name not in ADJUSTABLE_VARIABLES:
+        raise KeyError(name)
+    lo, hi, _ = ADJUSTABLE_VARIABLES[name]
+    value = max(lo, min(hi, int(value)))
+    with _lock:
+        _overrides[f"var:{name}"] = value
+    return value
+
+
+def snapshot(default_min_score: int, base_keywords: list[str] | None = None) -> dict[str, object]:
+    with _lock:
+        added = list(_overrides.get("keyword_added", []))
+        removed = list(_overrides.get("keyword_removed", []))
+    return {
+        "min_score": get_min_score(default_min_score),
+        "keyword_filter_enabled": get_keyword_filter_enabled(True),
+        "keywords": get_keywords(base_keywords or []),
+        "keyword_added": added,
+        "keyword_removed": removed,
+    }
+PYFILE_EOF
+
+cat > src/stock_news_bot/config.py << 'PYFILE_EOF'
+"""
+설정 단일 진실 공급원(Single Source of Truth).
+
+이 모듈 외의 다른 모든 모듈은 os.getenv를 직접 호출하지 않고
+반드시 이 모듈이 만드는 `settings` 객체를 통해서만 설정값을 읽는다.
+이렇게 해야 "어떤 설정이 어디서 쓰이는지"를 한 곳에서 파악할 수 있고,
+환경변수 이름 오타 같은 실수를 임포트 시점에 바로 잡아낼 수 있다.
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from stock_news_bot.utils.errors import ConfigError
+
+load_dotenv(override=False)
+
+
+def _get_str(key: str, default: str | None = None, required: bool = False) -> str:
+    value = os.getenv(key, default)
+    if required and not value:
+        raise ConfigError(f"필수 환경변수 '{key}'가 설정되지 않았습니다. .env 파일을 확인하세요.")
+    return value or ""
+
+
+def _get_bool(key: str, default: bool) -> bool:
+    raw = os.getenv(key)
+    if raw is None or raw == "":
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ConfigError(f"환경변수 '{key}'는 true/false여야 합니다. 현재 값: {raw!r}")
+
+
+def _get_int(key: str, default: int) -> int:
+    raw = os.getenv(key)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ConfigError(f"환경변수 '{key}'는 정수여야 합니다. 현재 값: {raw!r}") from exc
+
+
+def _get_id_list(key: str) -> list[int]:
+    raw = os.getenv(key, "")
+    ids: list[int] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            ids.append(int(chunk))
+        except ValueError as exc:
+            raise ConfigError(f"환경변수 '{key}'의 값 '{chunk}'가 유효한 ID(정수)가 아닙니다.") from exc
+    return ids
+
+
+def _get_float(key: str, default: float) -> float:
+    raw = os.getenv(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"환경변수 '{key}'의 값 '{raw}'가 유효한 숫자가 아닙니다.") from exc
+
+
+def _get_str_list(key: str) -> list[str]:
+    raw = os.getenv(key, "")
+    return [chunk.strip() for chunk in raw.split(",") if chunk.strip()]
+
+
+@dataclass(frozen=True)
+class Settings:
+    discord_token: str
+    discord_guild_id: int | None
+    discord_news_channel_id: int
+    discord_admin_channel_id: int | None = None
+    discord_admin_user_ids: list[int] = field(default_factory=list)
+
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
+    rss_feeds: list[str] = field(default_factory=list)
+    blog_feeds: list[str] = field(default_factory=list)
+    youtube_channel_ids: list[str] = field(default_factory=list)
+    # 전체 YouTube 검색용 키워드. 비어 있으면 검색하지 않고 프로그램은 그대로 실행된다.
+    youtube_search_queries: list[str] = field(default_factory=list)
+    youtube_search_max_results: int = 10
+    youtube_search_interval_seconds: int = 60
+    # 나중에 종목/재료 검색어를 넣으면 등록 채널과 별도로 전체 검색한다.
+    blog_search_queries: list[str] = field(default_factory=list)
+    telegram_search_queries: list[str] = field(default_factory=list)
+    blog_search_max_results: int = 10
+    telegram_search_max_results: int = 10
+    source_search_interval_seconds: int = 60
+    telegram_source_channels: list[str] = field(default_factory=list)
+    news_keywords: list[str] = field(default_factory=list)
+    enable_blog: bool = True
+    enable_youtube: bool = True
+    enable_telegram_channels: bool = True
+    news_value_mid: int = 45
+    news_value_high: int = 75
+    fetch_interval_seconds: int = 60
+    fetch_timeout_seconds: int = 10
+    fetch_max_retries: int = 3
+    # 실시간 뉴스의 허용 시간창. 현재 시각보다 오래된 기사는 새 뉴스로 취급하지 않는다.
+    news_lookback_hours: float = 24.0
+    # 첫 부팅 때 과거 RSS에 쌓여 있던 기사를 한꺼번에 쏟지 않도록 최신 몇 건만 허용.
+    startup_send_limit: int = 5
+    # 한 번의 수집 주기에서 새로 송출 큐에 넣을 최대 건수.
+    max_new_per_cycle: int = 3
+    # 안전장치: 최근 1시간에 이보다 많이 송출하지 않는다. 0이면 제한 없음.
+    max_sent_per_hour: int = 0
+
+    db_path: Path = Path("./data/stock_news_bot.sqlite3")
+    dedup_retention_days: int = 14
+
+    # 누적 데이터 분석(섹터별 발송 이력 통계) 설정.
+    history_lookback_days: int = 30  # 최근 며칠 이력을 통계에 포함할지
+    history_min_sample: int = 5      # 이보다 표본이 적으면 "표본 부족"으로 표시
+    history_retention_days: int = 90  # 이력 DB 보관 기간 (통계용이라 dedup보다 길게)
+
+    # DART Open API / pykrx 연동 설정 (market_intel 코그).
+    # DART_API_KEY가 비어있으면 market_intel은 조용히 비활성화되고,
+    # classifier는 하드코딩 화이트리스트로만 종목명을 인식한다.
+    dart_api_key: str = ""
+    dart_disclosure_enabled: bool = False
+    dart_disclosure_min_score: int = 50
+    dart_disclosure_fetch_interval_seconds: int = 300
+    market_intel_interval_seconds: int = 3600  # 백그라운드 갱신 주기 (기본 1시간)
+    corp_code_refresh_interval_hours: int = 24  # 상장사 목록 재다운로드 주기
+    financials_refresh_interval_days: int = 7   # 관심종목 재무데이터 재조회 주기
+    price_reaction_lookback_days: int = 30      # 섹터별 주가 반응 통계 조회 기간
+    price_reaction_min_sample: int = 5          # 이보다 표본이 적으면 "표본 부족"으로 표시
+    price_reaction_retention_days: int = 90     # 주가 반응 추적 DB 보관 기간
+
+    # 무료 LLM 3단계 fallback: Gemini -> OpenRouter free -> 규칙 엔진.
+    gemini_api_key: str = ""
+    llm_model: str = "gemini-3.5-flash-lite"
+    openrouter_api_key: str = ""
+    openrouter_model: str = "openrouter/free"
+    llm_analysis_enabled: bool = True
+    llm_analysis_timeout_seconds: int = 60
+    llm_analysis_max_chars: int = 9000
+
+    health_stale_threshold_seconds: int = 1800
+    health_check_interval_seconds: int = 300
+
+    log_level: str = "INFO"
+    log_dir: Path = Path("./logs")
+
+    # 무료 플랜(Persistent Disk 미지원) 대응: GitHub 저장소를 외부 백업소로
+    # 사용해 부팅 시 최근 백업을 복원하고, 주기적으로 현재 DB를 커밋한다.
+    github_backup_enabled: bool = False
+    github_backup_token: str = ""
+    github_backup_repo: str = ""  # "owner/repo" 형식
+    github_backup_path: str = "backups/stock_news_bot.sqlite3"
+    github_backup_branch: str = "main"
+    github_backup_interval_seconds: int = 300
+
+    @property
+    def telegram_alert_enabled(self) -> bool:
+        return bool(self.telegram_bot_token and self.telegram_chat_id)
+
+    @property
+    def dart_enabled(self) -> bool:
+        return bool(self.dart_api_key)
+
+    def effective_feed_urls(self) -> list[str]:
+        """Render의 NEWS_KEYWORDS를 수집 키워드의 단일 원본으로 사용한다.
+
+        RSS_FEEDS는 레거시/진단용으로만 유지하고, NEWS_KEYWORDS가 있으면
+        항상 NEWS_KEYWORDS가 우선한다. 따라서 코드에 별도의 수집용 키워드
+        목록을 두지 않고 Render Environment Variables를 그대로 실행 기준으로 쓴다.
+        """
+        from urllib.parse import quote
+
+        from stock_news_bot import runtime_settings
+
+        # 텔레그램 '⚙️ 설정'에서 "키워드 추가/삭제"로 바꾼 결과가 있으면
+        # NEWS_KEYWORDS(기준값) 위에 그 결과를 덧씌운다.
+        keywords = runtime_settings.get_keywords(self.news_keywords)
+        if keywords:
+            # 중복 키워드는 RSS 중복 호출과 같은 뉴스 후보 중복을 만들 수 있으므로
+            # 입력 순서를 유지하면서 1회만 사용한다.
+            unique_keywords = list(dict.fromkeys(keywords))
+            return [
+                f"https://news.google.com/rss/search?q={quote(kw)}&hl=ko&gl=KR&ceid=KR:ko"
+                for kw in unique_keywords
+            ]
+
+        # NEWS_KEYWORDS가 완전히 비어 있는 경우에만 명시적 RSS_FEEDS를 허용한다.
+        return self.rss_feeds
+
+
+def _resolve_db_path() -> Path:
+    """Resolve the database path without ever silently using ephemeral storage.
+
+    This bot treats the SQLite database as durable application state. On Render,
+    /var/data MUST be a mounted persistent disk. If it is missing, startup fails
+    loudly instead of falling back to /tmp, because a silent fallback makes the
+    bot appear healthy while destroying the accumulated history on restart.
+
+    Exception: if GITHUB_BACKUP_ENABLED=true, the bot restores/backs up the DB
+    via a GitHub repo instead of a persistent disk (see storage/github_backup.py),
+    so the /var/data requirement is skipped — a local ephemeral path is fine
+    because it gets repopulated from the last GitHub backup on every boot.
+    """
+    configured = Path(_get_str("DB_PATH", "./data/stock_news_bot.sqlite3")).expanduser()
+    github_backup_enabled = _get_bool("GITHUB_BACKUP_ENABLED", False)
+    if os.getenv("RENDER") and not github_backup_enabled:
+        persistent_root = Path("/var/data")
+        if not (persistent_root.is_dir() and os.access(persistent_root, os.W_OK)):
+            raise RuntimeError(
+                "Render persistent disk is not mounted at /var/data. "
+                "Refusing to use /tmp because accumulated stock-news data must survive restarts. "
+                "Attach a persistent disk to /var/data and redeploy."
+            )
+        if configured.is_absolute() and str(configured).startswith("/var/data/"):
+            return configured
+        return persistent_root / "stock_news_bot.sqlite3"
+    return configured
+
+
+def load_settings() -> Settings:
+    settings = Settings(
+        discord_token=_get_str("DISCORD_TOKEN", required=True),
+        discord_guild_id=(_get_int("DISCORD_GUILD_ID", 0) or None),
+        discord_news_channel_id=_get_int("DISCORD_NEWS_CHANNEL_ID", 0),
+        discord_admin_channel_id=(_get_int("DISCORD_ADMIN_CHANNEL_ID", 0) or None),
+        discord_admin_user_ids=_get_id_list("DISCORD_ADMIN_USER_IDS"),
+        telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN"),
+        telegram_chat_id=_get_str("TELEGRAM_CHAT_ID"),
+        rss_feeds=_get_str_list("RSS_FEEDS"),
+        blog_feeds=_get_str_list("BLOG_FEEDS") or _get_str_list("BLOG_RSS_FEEDS"),
+        youtube_channel_ids=_get_str_list("YOUTUBE_CHANNEL_IDS"),
+        youtube_search_queries=_get_str_list("YOUTUBE_SEARCH_QUERIES"),
+        youtube_search_max_results=max(1, _get_int("YOUTUBE_SEARCH_MAX_RESULTS", 10)),
+        youtube_search_interval_seconds=max(60, _get_int("YOUTUBE_SEARCH_INTERVAL_SECONDS", 60)),
+        blog_search_queries=_get_str_list("BLOG_SEARCH_QUERIES"),
+        telegram_search_queries=_get_str_list("TELEGRAM_SEARCH_QUERIES"),
+        blog_search_max_results=max(1, _get_int("BLOG_SEARCH_MAX_RESULTS", 10)),
+        telegram_search_max_results=max(1, _get_int("TELEGRAM_SEARCH_MAX_RESULTS", 10)),
+        source_search_interval_seconds=max(60, _get_int("SOURCE_SEARCH_INTERVAL_SECONDS", 60)),
+        telegram_source_channels=(
+            _get_str_list("TELEGRAM_SOURCE_CHANNELS")
+            or _get_str_list("TELEGRAM_CHANNEL_FILTERED")
+            or _get_str_list("TELEGRAM_CHANNEL_FORCE")
+        ),
+        news_keywords=_get_str_list("NEWS_KEYWORDS"),
+        enable_blog=_get_str("ENABLE_BLOG", "true").lower() not in {"0", "false", "no", "off"},
+        enable_youtube=_get_str("ENABLE_YOUTUBE", "true").lower() not in {"0", "false", "no", "off"},
+        enable_telegram_channels=_get_str("ENABLE_TELEGRAM_CHANNELS", "true").lower() not in {"0", "false", "no", "off"},
+        news_value_mid=_get_int("NEWS_SEND_MIN_SCORE", _get_int("MEDIUM_NEWS_SCORE", 45)),
+        news_value_high=_get_int("STRONG_NEWS_SCORE", 75),
+        fetch_interval_seconds=max(60, _get_int("FETCH_INTERVAL_SECONDS", 60)),
+        fetch_timeout_seconds=_get_int("FETCH_TIMEOUT_SECONDS", 10),
+        fetch_max_retries=_get_int("FETCH_MAX_RETRIES", 3),
+        news_lookback_hours=max(0.5, _get_float("NEWS_LOOKBACK_HOURS", 24.0)),
+        startup_send_limit=max(1, _get_int("STARTUP_SEND_LIMIT", 8)),
+        max_new_per_cycle=max(1, _get_int("MAX_NEW_PER_CYCLE", 8)),
+        max_sent_per_hour=max(0, _get_int("MAX_SENT_PER_HOUR", 0)),
+        db_path=_resolve_db_path(),
+        dedup_retention_days=_get_int("DEDUP_RETENTION_DAYS", 14),
+        history_lookback_days=_get_int("HISTORY_LOOKBACK_DAYS", 30),
+        history_min_sample=_get_int("HISTORY_MIN_SAMPLE", 5),
+        history_retention_days=_get_int("HISTORY_RETENTION_DAYS", 90),
+        dart_api_key=_get_str("DART_API_KEY"),
+        dart_disclosure_enabled=_get_bool("DART_DISCLOSURE_ENABLED", False),
+        dart_disclosure_min_score=_get_int("DART_DISCLOSURE_MIN_SCORE", 50),
+        dart_disclosure_fetch_interval_seconds=_get_int("DART_DISCLOSURE_FETCH_INTERVAL_SECONDS", 300),
+        market_intel_interval_seconds=_get_int("MARKET_INTEL_INTERVAL_SECONDS", 3600),
+        corp_code_refresh_interval_hours=_get_int("CORP_CODE_REFRESH_INTERVAL_HOURS", 24),
+        financials_refresh_interval_days=_get_int("FINANCIALS_REFRESH_INTERVAL_DAYS", 7),
+        price_reaction_lookback_days=_get_int("PRICE_REACTION_LOOKBACK_DAYS", 30),
+        price_reaction_min_sample=_get_int("PRICE_REACTION_MIN_SAMPLE", 5),
+        price_reaction_retention_days=_get_int("PRICE_REACTION_RETENTION_DAYS", 90),
+        gemini_api_key=_get_str("GEMINI_API_KEY"),
+        llm_model=_get_str("LLM_MODEL", "gemini-3.5-flash-lite"),
+        openrouter_api_key=_get_str("OPENROUTER_API_KEY"),
+        openrouter_model=_get_str("OPENROUTER_MODEL", "openrouter/free"),
+        llm_analysis_enabled=_get_str("LLM_ANALYSIS_ENABLED", "true").lower() not in {"0", "false", "no", "off"},
+        llm_analysis_timeout_seconds=max(5, _get_int("LLM_ANALYSIS_TIMEOUT_SECONDS", 20)),
+        llm_analysis_max_chars=max(2000, _get_int("LLM_ANALYSIS_MAX_CHARS", 9000)),
+        health_stale_threshold_seconds=_get_int("HEALTH_STALE_THRESHOLD_SECONDS", 1800),
+        health_check_interval_seconds=_get_int("HEALTH_CHECK_INTERVAL_SECONDS", 300),
+        log_level=_get_str("LOG_LEVEL", "INFO"),
+        log_dir=Path(_get_str("LOG_DIR", "./logs")),
+        github_backup_enabled=_get_bool("GITHUB_BACKUP_ENABLED", False),
+        github_backup_token=_get_str("GITHUB_BACKUP_TOKEN"),
+        github_backup_repo=_get_str("GITHUB_BACKUP_REPO"),
+        github_backup_path=_get_str("GITHUB_BACKUP_PATH", "backups/stock_news_bot.sqlite3"),
+        github_backup_branch=_get_str("GITHUB_BACKUP_BRANCH", "main"),
+        github_backup_interval_seconds=max(60, _get_int("GITHUB_BACKUP_INTERVAL_SECONDS", 300)),
+    )
+
+    # 소스는 오직 Render 환경변수/운영 설정에 등록된 대상만 사용한다.
+    # 과거 버전의 하드코딩 레거시 채널을 자동 복구하지 않는다.
+    # 따라서 등록하지 않은 Telegram/YouTube/Blog 채널이 임의로 노출되는 일이 없다.
+
+    if settings.discord_news_channel_id == 0:
+        raise ConfigError("DISCORD_NEWS_CHANNEL_ID가 설정되지 않았습니다.")
+    if settings.github_backup_enabled and not (settings.github_backup_token and settings.github_backup_repo):
+        raise ConfigError(
+            "GITHUB_BACKUP_ENABLED=true인 경우 GITHUB_BACKUP_TOKEN과 GITHUB_BACKUP_REPO가 "
+            "모두 설정되어야 합니다."
+        )
+    if not settings.news_keywords and not settings.rss_feeds and not (settings.enable_blog and settings.blog_feeds) and not (settings.enable_youtube and settings.youtube_channel_ids) and not (settings.enable_telegram_channels and settings.telegram_source_channels):
+        raise ConfigError(
+            "NEWS_KEYWORDS/RSS_FEEDS/BLOG_FEEDS/YOUTUBE_CHANNEL_IDS/TELEGRAM_SOURCE_CHANNELS 중 하나 이상이 설정되어야 합니다."
+        )
+
+    # Render 환경변수에 실제로 로드된 수집 키워드 수를 부팅 시 기록한다.
+    # 키워드가 다른 값으로 들어왔는지 로그만 봐도 즉시 확인할 수 있게 한다.
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    _log.info(
+        "수집 설정 로드 완료: NEWS_KEYWORDS=%d개, RSS_FEEDS=%d개, 실제 사용=%s",
+        len(settings.news_keywords),
+        len(settings.rss_feeds),
+        "NEWS_KEYWORDS" if settings.news_keywords else "RSS_FEEDS",
+    )
+
+    return settings
+
+
+settings = load_settings()
+PYFILE_EOF
+
+cat > src/stock_news_bot/monitor/telegram_alert.py << 'PYFILE_EOF'
+"""텔레그램 장애 알림과 뉴스 상세 매매정보 버튼."""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+import re
+from typing import Awaitable, Callable
+
+import aiohttp
+
+from stock_news_bot import runtime_settings
+
+logger = logging.getLogger(__name__)
+
+_API_BASE = "https://api.telegram.org/bot{token}/{method}"
+DetailCallback = Callable[[str], Awaitable[str | None]]
+
+
+class TelegramAlerter:
+    def __init__(
+        self,
+        bot_token: str,
+        chat_id: str,
+        enabled: bool,
+        default_min_score: int = 45,
+        base_keywords: list[str] | None = None,
+        default_max_new_per_cycle: int = 3,
+        default_fetch_interval_seconds: int = 60,
+    ):
+        self._bot_token = bot_token
+        self._chat_id = chat_id
+        self.enabled = enabled
+        self._default_min_score = default_min_score
+        # NEWS_KEYWORDS(.env/Render 환경변수) 기준값. "키워드 추가/삭제" 명령은
+        # 이 기준값 위에 runtime_settings의 추가/삭제 오버라이드를 덧씌운다.
+        self._base_keywords = list(base_keywords or [])
+        self._default_max_new_per_cycle = default_max_new_per_cycle
+        self._default_fetch_interval_seconds = default_fetch_interval_seconds
+        # token -> {"summary": 최초 요약 텍스트, "detail": 상세 텍스트, "button_label": 상세보기 버튼 라벨}
+        # "🔙 원문으로" 버튼을 누르면 summary로 되돌리기 위해 요약도 함께 보관한다.
+        self._details: dict[str, dict[str, str]] = {}
+        self._callback_task: asyncio.Task | None = None
+        self._stop_event = asyncio.Event()
+        self._offset = 0
+
+    def _url(self, method: str) -> str:
+        return _API_BASE.format(token=self._bot_token, method=method)
+
+    async def validate(self) -> tuple[bool, str]:
+        """Bot token/chat ID가 실제 Telegram API에서 유효한지 확인한다."""
+        if not self.enabled:
+            return False, "TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID 미설정"
+        timeout = aiohttp.ClientTimeout(total=10)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(self._url("getMe")) as resp:
+                    body = await resp.json(content_type=None)
+                    if resp.status != 200 or not body.get("ok"):
+                        return False, f"getMe 실패: {body.get('description', resp.status)}"
+                async with session.get(self._url("getChat"), params={"chat_id": self._chat_id}) as resp:
+                    body = await resp.json(content_type=None)
+                    if resp.status != 200 or not body.get("ok"):
+                        return False, f"getChat 실패: {body.get('description', resp.status)}"
+                # 이 봇은 callback polling을 사용하므로 기존 webhook이 남아 있으면
+                # getUpdates가 409 Conflict가 된다. webhook은 제거하되 pending update는 버리지 않는다.
+                async with session.post(self._url("deleteWebhook"), json={"drop_pending_updates": False}) as resp:
+                    if resp.status != 200:
+                        logger.warning("Telegram deleteWebhook 실패(status=%s)", resp.status)
+            return True, "Telegram Bot API/Chat 정상"
+        except Exception as exc:
+            return False, f"Telegram API 연결 실패: {exc}"
+
+    async def send(self, message: str) -> None:
+        if not self.enabled:
+            logger.debug("텔레그램 알림 비활성화: %s", message)
+            return
+        payload = {
+            "chat_id": self._chat_id,
+            "text": message[:4000],
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        try:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(self._url("sendMessage"), json=payload) as resp:
+                    if resp.status != 200:
+                        logger.error("텔레그램 알림 전송 실패(status=%s): %s", resp.status, await resp.text())
+        except Exception:
+            logger.exception("텔레그램 알림 전송 중 예외 발생")
+
+    async def send_news(self, message: str, *, button_label: str, callback_data: str, detail: str) -> None:
+        """뉴스와 함께 인라인 버튼을 전송하고 상세정보를 서버 메모리에 등록한다.
+
+        callback_data(item.dedup_key, 64자 sha256 hex)는 그 자체로 이미
+        텔레그램 callback_data 바이트 제한(64바이트)을 꽉 채우므로 접두사를
+        붙일 여유가 없다 — 대신 내부적으로 짧은 토큰을 새로 만들어 그 토큰만
+        주고받고, 실제 상세 내용은 self._details[token]에 보관한다.
+        """
+        if not self.enabled:
+            return
+        token = hashlib.sha1(callback_data.encode("utf-8")).hexdigest()[:12]
+        self._details[token] = {"summary": message, "detail": detail, "button_label": button_label}
+        if len(self._details) > 300:
+            # 오래된 항목부터 정리. 딕셔너리 삽입순서를 이용한다.
+            for key in list(self._details)[:100]:
+                self._details.pop(key, None)
+        payload = {
+            "chat_id": self._chat_id,
+            "text": message[:4000],
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "reply_markup": {
+                "inline_keyboard": [
+                    [{"text": f"🔓 {button_label}", "callback_data": f"s:{token}"}],
+                    [{"text": "⚙️ 설정", "callback_data": "o:open"}],
+                ]
+            },
+        }
+        try:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(self._url("sendMessage"), json=payload) as resp:
+                    if resp.status != 200:
+                        logger.error("텔레그램 뉴스 전송 실패(status=%s): %s", resp.status, await resp.text())
+        except Exception:
+            logger.exception("텔레그램 뉴스 전송 중 예외 발생")
+
+    def _settings_text(self) -> str:
+        snap = runtime_settings.snapshot(self._default_min_score, self._base_keywords)
+        keyword_state = "켜짐" if snap["keyword_filter_enabled"] else "꺼짐"
+        keywords = snap["keywords"]
+        keyword_preview = ", ".join(keywords[:15]) if keywords else "없음"
+        if len(keywords) > 15:
+            keyword_preview += f" 외 {len(keywords) - 15}개"
+        max_new = runtime_settings.get_variable("max_new_per_cycle", self._default_max_new_per_cycle)
+        interval = runtime_settings.get_variable("fetch_interval_seconds", self._default_fetch_interval_seconds)
+        lines = [
+            "⚙️ <b>설정</b>\n",
+            f"· 뉴스강도(통과 점수): <b>{snap['min_score']}</b>",
+            f"· 뉴스 키워드 필터: <b>{keyword_state}</b>",
+            f"· 키워드({len(keywords)}개): {keyword_preview}",
+            f"· 주기당 최대 전송: <b>{max_new}건</b>",
+            f"· 수집 주기: <b>{interval}초</b>\n",
+            "이 채팅에 문장으로 바로 입력하면 즉시 반영됩니다.",
+            "예) <code>뉴스강도 60으로 올려줘</code>",
+            "예) <code>키워드 꺼줘</code> / <code>키워드 켜줘</code>",
+            "예) <code>키워드 추가 삼성전자</code>",
+            "예) <code>키워드 삭제 삼성전자</code>",
+            "예) <code>최대전송 5건으로</code>",
+            "예) <code>수집주기 120초로</code>",
+        ]
+        return "\n".join(lines)
+
+    async def _send_settings_screen(self, session: aiohttp.ClientSession, chat_id: int) -> None:
+        payload = {
+            "chat_id": chat_id,
+            "text": self._settings_text(),
+            "parse_mode": "HTML",
+        }
+        async with session.post(self._url("sendMessage"), json=payload) as resp:
+            if resp.status != 200:
+                logger.error("텔레그램 설정 화면 전송 실패(status=%s): %s", resp.status, await resp.text())
+
+    _INTENSITY_RE = re.compile(r"(강도|intensity)\D{0,6}(\d{1,3})")
+    # 키워드 추가/삭제는 "키워드 켜줘/꺼줘"(필터 on/off)보다 먼저 검사해야 한다 —
+    # 둘 다 "키워드"로 시작하는 문장이라서 순서가 뒤바뀌면 오탐한다.
+    _KEYWORD_ADD_RE = re.compile(r"키워드[\s:\-]{0,3}(?:추가|등록)[\s:\-]{1,3}([^\s,]+)")
+    _KEYWORD_REMOVE_RE = re.compile(r"키워드[\s:\-]{0,3}(?:삭제|제거)[\s:\-]{1,3}([^\s,]+)")
+    _KEYWORD_ON_RE = re.compile(r"키워드.*(켜|활성|on)")
+    _KEYWORD_OFF_RE = re.compile(r"키워드.*(꺼|비활성|off)")
+    _MAX_NEW_RE = re.compile(r"(최대\s*전송|주기당\s*최대)\D{0,6}(\d{1,3})")
+    _INTERVAL_RE = re.compile(r"(수집\s*주기|수집\s*간격)\D{0,6}(\d{1,5})")
+
+    async def _handle_command_text(self, session: aiohttp.ClientSession, chat_id: int, text: str) -> None:
+        """설정 화면 안내를 보고 사용자가 채팅에 직접 친 문장을 파싱해서 즉시 반영한다."""
+        compact = text.strip()
+
+        m = self._KEYWORD_ADD_RE.search(compact)
+        if m:
+            keyword = m.group(1).strip("\"'.,!?")
+            runtime_settings.add_keyword(keyword)
+            await self.send(f"✅ 키워드 <b>{keyword}</b>를(을) 추가했습니다.")
+            return
+
+        m = self._KEYWORD_REMOVE_RE.search(compact)
+        if m:
+            keyword = m.group(1).strip("\"'.,!?")
+            runtime_settings.remove_keyword(keyword)
+            await self.send(f"✅ 키워드 <b>{keyword}</b>를(을) 삭제했습니다.")
+            return
+
+        m = self._INTENSITY_RE.search(compact.replace(" ", ""))
+        if m:
+            new_value = runtime_settings.set_min_score(int(m.group(2)))
+            await self.send(f"✅ 뉴스강도를 <b>{new_value}</b>(으)로 변경했습니다.")
+            return
+
+        if self._KEYWORD_ON_RE.search(compact.replace(" ", "")):
+            runtime_settings.set_keyword_filter_enabled(True)
+            await self.send("✅ 뉴스 키워드 필터를 켰습니다.")
+            return
+
+        if self._KEYWORD_OFF_RE.search(compact.replace(" ", "")):
+            runtime_settings.set_keyword_filter_enabled(False)
+            await self.send("✅ 뉴스 키워드 필터를 껐습니다.")
+            return
+
+        m = self._MAX_NEW_RE.search(compact.replace(" ", ""))
+        if m:
+            new_value = runtime_settings.set_variable("max_new_per_cycle", int(m.group(2)))
+            await self.send(f"✅ 주기당 최대 전송을 <b>{new_value}건</b>으로 변경했습니다.")
+            return
+
+        m = self._INTERVAL_RE.search(compact.replace(" ", ""))
+        if m:
+            new_value = runtime_settings.set_variable("fetch_interval_seconds", int(m.group(2)))
+            await self.send(f"✅ 수집 주기를 <b>{new_value}초</b>로 변경했습니다. (다음 사이클부터 적용)")
+            return
+
+    def start_callback_polling(self) -> None:
+        if not self.enabled or self._callback_task is not None:
+            return
+        self._stop_event.clear()
+        self._callback_task = asyncio.create_task(self._poll_callbacks(), name="telegram-callback-poller")
+
+    async def stop_callback_polling(self) -> None:
+        if self._callback_task is None:
+            return
+        self._stop_event.set()
+        self._callback_task.cancel()
+        try:
+            await self._callback_task
+        except asyncio.CancelledError:
+            pass
+        self._callback_task = None
+
+    async def _poll_callbacks(self) -> None:
+        """인라인 버튼 클릭을 받아 원본 뉴스 메시지 자체를 상세 내용으로
+        바꿔친다(디스코드의 edit_message()와 같은 방식). 새 메시지를 채팅
+        맨 아래에 보내지 않으므로, 뉴스가 많이 쌓인 채팅 중간에서 버튼을
+        눌러도 상세 내용이 항상 그 자리에서 열린다."""
+        timeout = aiohttp.ClientTimeout(total=35)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                while not self._stop_event.is_set():
+                    params = {
+                        "timeout": 25,
+                        "allowed_updates": ["callback_query", "message"],
+                        "offset": self._offset,
+                    }
+                    try:
+                        async with session.get(self._url("getUpdates"), params=params) as resp:
+                            if resp.status != 200:
+                                await asyncio.sleep(3)
+                                continue
+                            body = await resp.json()
+                        for update in body.get("result", []):
+                            self._offset = max(self._offset, int(update["update_id"]) + 1)
+
+                            message_update = update.get("message")
+                            if message_update:
+                                msg_chat_id = (message_update.get("chat") or {}).get("id")
+                                msg_text = message_update.get("text")
+                                # 봇이 뉴스를 보내는 채팅(TELEGRAM_CHAT_ID)에서 온 텍스트만
+                                # 설정 명령으로 취급한다. 매칭되는 문장이 아니면 조용히 무시.
+                                if msg_text and str(msg_chat_id) == str(self._chat_id):
+                                    await self._handle_command_text(session, msg_chat_id, msg_text)
+                                continue
+
+                            callback = update.get("callback_query")
+                            if not callback:
+                                continue
+                            data = callback.get("data", "")
+                            message = callback.get("message") or {}
+                            chat_id = (message.get("chat") or {}).get("id")
+                            message_id = message.get("message_id")
+                            answer_text = ""
+                            if chat_id is not None and message_id is not None:
+                                if data.startswith("s:"):
+                                    token = data[2:]
+                                    entry = self._details.get(token)
+                                    if entry:
+                                        await self._edit_to_detail(session, chat_id, message_id, entry["detail"], token)
+                                        answer_text = "상세 매매정보를 표시했습니다."
+                                    else:
+                                        await self._edit_to_expired(session, chat_id, message_id)
+                                        answer_text = "상세정보가 만료되었습니다."
+                                elif data.startswith("b:"):
+                                    token = data[2:]
+                                    entry = self._details.get(token)
+                                    if entry:
+                                        await self._edit_to_summary(
+                                            session, chat_id, message_id,
+                                            entry["summary"], token, entry["button_label"],
+                                        )
+                                        answer_text = "원문으로 돌아갔습니다."
+                                    else:
+                                        await self._edit_to_expired(session, chat_id, message_id)
+                                        answer_text = "상세정보가 만료되었습니다."
+                                elif data.startswith("d:"):
+                                    await self._delete_message(session, chat_id, message_id)
+                                    answer_text = "삭제했습니다."
+                                elif data == "o:open":
+                                    await self._send_settings_screen(session, chat_id)
+                                    answer_text = "설정을 열었습니다."
+                            await session.post(self._url("answerCallbackQuery"), json={"callback_query_id": callback["id"], "text": answer_text})
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.exception("텔레그램 버튼 처리 중 오류")
+                        await asyncio.sleep(3)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("텔레그램 callback polling 종료")
+
+    async def _edit_to_detail(
+        self,
+        session: aiohttp.ClientSession,
+        chat_id: int,
+        message_id: int,
+        detail: str,
+        token: str,
+    ) -> None:
+        """원본 뉴스 메시지를 상세 내용으로 편집하고, 버튼을 "🔙 원문으로" + "🗑️ 삭제"로 교체한다."""
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": detail[:4000],
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "reply_markup": {"inline_keyboard": [[
+                {"text": "🔙 원문으로", "callback_data": f"b:{token}"},
+                {"text": "🗑️ 삭제", "callback_data": f"d:{token}"},
+            ]]},
+        }
+        async with session.post(self._url("editMessageText"), json=payload) as resp:
+            if resp.status != 200:
+                logger.error("텔레그램 상세정보 편집 실패(status=%s): %s", resp.status, await resp.text())
+
+    async def _edit_to_summary(
+        self,
+        session: aiohttp.ClientSession,
+        chat_id: int,
+        message_id: int,
+        summary: str,
+        token: str,
+        button_label: str,
+    ) -> None:
+        """"🔙 원문으로" 버튼을 눌렀을 때 상세 내용을 다시 요약 화면으로 되돌린다.
+        같은 메시지를 편집만 할 뿐 새 메시지를 보내지 않는다(디스코드의
+        edit_message()로 요약으로 되돌아가는 것과 동일한 방식)."""
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": summary[:4000],
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "reply_markup": {"inline_keyboard": [[{"text": f"🔓 {button_label}", "callback_data": f"s:{token}"}]]},
+        }
+        async with session.post(self._url("editMessageText"), json=payload) as resp:
+            if resp.status != 200:
+                logger.error("텔레그램 원문으로 편집 실패(status=%s): %s", resp.status, await resp.text())
+
+    async def _edit_to_expired(self, session: aiohttp.ClientSession, chat_id: int, message_id: int) -> None:
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": "📊 상세정보가 만료되었습니다(봇 재시작 등으로 서버 메모리에서 사라짐). 최신 뉴스를 확인해주세요.",
+            "parse_mode": "HTML",
+        }
+        async with session.post(self._url("editMessageText"), json=payload) as resp:
+            if resp.status != 200:
+                logger.error("텔레그램 상세정보 만료 편집 실패(status=%s): %s", resp.status, await resp.text())
+
+    async def _delete_message(self, session: aiohttp.ClientSession, chat_id: int, message_id: int) -> None:
+        payload = {"chat_id": chat_id, "message_id": message_id}
+        async with session.post(self._url("deleteMessage"), json=payload) as resp:
+            if resp.status != 200:
+                logger.error("텔레그램 메시지 삭제 실패(status=%s): %s", resp.status, await resp.text())
+
+
+async def send_startup_probe(alerter: TelegramAlerter) -> None:
+    """기동 시 텔레그램 알림 경로가 실제로 살아있는지 한 번 찔러본다.
+
+    BOT_TOKEN/CHAT_ID는 설정돼 있지만 실제로는 전송이 막힌 경우(토큰
+    오타, 봇이 채팅방에서 차단됨 등)를 장애가 실제로 터질 때까지 기다리지
+    않고 배포 직후 로그/텔레그램에서 바로 알아챌 수 있게 한다.
+
+    scheduler.py의 SchedulerCog.cog_load()에서 백그라운드 태스크로
+    호출된다 (이전 버전에서는 이 함수가 여기 정의돼 있지 않아
+    ImportError로 scheduler 코그 자체가 로드되지 못하던 버그가 있었음).
+    """
+    if not alerter.enabled:
+        logger.debug("텔레그램 알림이 비활성화되어 있어 기동 probe를 건너뜁니다.")
+        return
+
+    ok, detail = await alerter.validate()
+    if not ok:
+        logger.error("🚨 Telegram Bot 검증 실패: %s", detail)
+        return
+    alerter.start_callback_polling()
+
+    from datetime import datetime, timedelta, timezone
+
+    kst = timezone(timedelta(hours=9))
+    now = datetime.now(timezone.utc).astimezone(kst).strftime("%Y-%m-%d %H:%M:%S")
+    await alerter.send(
+        f"🔔 [stock-news-bot] 텔레그램 알림 경로 점검 · KST={now}\n"
+        "이 메시지가 정상적으로 도착했다면 장애 발생 시 알림도 정상적으로 전달됩니다."
+    )
+PYFILE_EOF
+
+cat > src/stock_news_bot/cogs/scheduler.py << 'PYFILE_EOF'
 """전체 파이프라인(수집→분류→중복제거→알림)을 주기적으로 실행한다."""
 from __future__ import annotations
 
@@ -970,3 +1862,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(SchedulerCog(bot))
+PYFILE_EOF
+
+echo "4개 파일 덮어쓰기 완료"
+git diff --stat
