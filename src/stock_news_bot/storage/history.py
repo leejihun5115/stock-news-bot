@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -65,6 +66,14 @@ class HistoryStore:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # asyncio.to_thread로 여러 뉴스 항목이 동시에 처리되면 스레드풀의
+        # 서로 다른 스레드가 같은 sqlite3 커넥션에 동시에 execute()를
+        # 호출할 수 있다. check_same_thread=False는 "다른 스레드에서
+        # 써도 된다"는 것이지 "동시에 여러 스레드가 써도 안전하다"는
+        # 뜻이 아니라서, 동시 접근 시 "bad parameter or other API misuse"
+        # 같은 InterfaceError가 간헐적으로 발생할 수 있다. 커넥션 단위
+        # 락으로 직렬화해 이를 방지한다.
+        self._lock = threading.Lock()
         try:
             self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL;")
@@ -88,26 +97,27 @@ class HistoryStore:
     def record_sent(self, item: NewsItem) -> None:
         """전송 성공한 뉴스 1건을 이력에 기록한다. (전송 성공 후에만 호출할 것)"""
         try:
-            with closing(self._conn.cursor()) as cur:
-                cur.execute(
-                    """INSERT INTO sent_history
-                       (dedup_key, title, sectors, score, importance, sent_at,
-                        company, reason, ai_core, ai_analysis)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        item.dedup_key,
-                        item.title,
-                        ",".join(item.sectors),
-                        item.score,
-                        item.importance.value,
-                        datetime.now(timezone.utc).isoformat(),
-                        item.company or "",
-                        item.reason or "",
-                        " | ".join(item.ai_core or []),
-                        " | ".join(item.ai_analysis or []),
-                    ),
-                )
-            self._conn.commit()
+            with self._lock:
+                with closing(self._conn.cursor()) as cur:
+                    cur.execute(
+                        """INSERT INTO sent_history
+                           (dedup_key, title, sectors, score, importance, sent_at,
+                            company, reason, ai_core, ai_analysis)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            item.dedup_key,
+                            item.title,
+                            ",".join(item.sectors),
+                            item.score,
+                            item.importance.value,
+                            datetime.now(timezone.utc).isoformat(),
+                            item.company or "",
+                            item.reason or "",
+                            " | ".join(item.ai_core or []),
+                            " | ".join(item.ai_analysis or []),
+                        ),
+                    )
+                self._conn.commit()
         except sqlite3.Error as exc:
             raise StorageError(f"이력 기록 실패: {exc}") from exc
 
@@ -119,29 +129,34 @@ class HistoryStore:
         """
         cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
         try:
-            cur = self._conn.execute(
-                """SELECT importance, score FROM sent_history
-                   WHERE sent_at >= ?
-                     AND (sectors = ? OR sectors LIKE ? OR sectors LIKE ? OR sectors LIKE ?)""",
-                (
-                    cutoff,
-                    sector,
-                    f"{sector},%",
-                    f"%,{sector}",
-                    f"%,{sector},%",
-                ),
-            )
-            rows = cur.fetchall()
+            with self._lock:
+                cur = self._conn.execute(
+                    """SELECT importance, score FROM sent_history
+                       WHERE sent_at >= ?
+                         AND (sectors = ? OR sectors LIKE ? OR sectors LIKE ? OR sectors LIKE ?)""",
+                    (
+                        cutoff,
+                        sector,
+                        f"{sector},%",
+                        f"%,{sector}",
+                        f"%,{sector},%",
+                    ),
+                )
+                rows = cur.fetchall()
         except sqlite3.Error as exc:
             raise StorageError(f"섹터 통계 조회 실패: {exc}") from exc
 
         # 오래된/손상된 SQLite 행이 섞여도 뉴스 송출 자체가 중단되지 않도록
         # (importance, score) 2개 컬럼을 모두 가진 정상 행만 통계에 사용한다.
+        # score가 NULL인 행까지 들어오면 sum()에서 int + None으로 죽으므로
+        # score가 실제 숫자인 행만 평균 계산 대상으로 삼는다.
         valid_rows = []
         for row in rows:
             if not isinstance(row, (tuple, list)) or len(row) != 2:
                 continue
             imp, score = row
+            if not isinstance(score, (int, float)):
+                continue
             valid_rows.append((imp, score))
 
         count = len(valid_rows)
@@ -182,14 +197,15 @@ class HistoryStore:
             return ""
         where = " OR ".join(clauses)
         try:
-            rows = self._conn.execute(
-                f"""SELECT sent_at, company, sectors, score, importance, title, ai_core, ai_analysis
-                    FROM sent_history
-                    WHERE {where}
-                    ORDER BY sent_at DESC
-                    LIMIT ?""",
-                (*params, max(1, min(20, limit))),
-            ).fetchall()
+            with self._lock:
+                rows = self._conn.execute(
+                    f"""SELECT sent_at, company, sectors, score, importance, title, ai_core, ai_analysis
+                        FROM sent_history
+                        WHERE {where}
+                        ORDER BY sent_at DESC
+                        LIMIT ?""",
+                    (*params, max(1, min(20, limit))),
+                ).fetchall()
         except sqlite3.Error as exc:
             raise StorageError(f"유사 과거 뉴스 조회 실패: {exc}") from exc
 
@@ -215,8 +231,9 @@ class HistoryStore:
         눈으로 바로 확인할 수 있게 한다.
         """
         try:
-            cur = self._conn.execute("SELECT COUNT(*) FROM sent_history")
-            return int(cur.fetchone()[0])
+            with self._lock:
+                cur = self._conn.execute("SELECT COUNT(*) FROM sent_history")
+                return int(cur.fetchone()[0])
         except sqlite3.Error as exc:
             raise StorageError(f"이력 전체 건수 조회 실패: {exc}") from exc
 
@@ -224,10 +241,11 @@ class HistoryStore:
         """retention_days보다 오래된 이력을 지우고 삭제된 행 수를 반환한다."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
         try:
-            with closing(self._conn.cursor()) as cur:
-                cur.execute("DELETE FROM sent_history WHERE sent_at < ?", (cutoff,))
-                deleted = cur.rowcount
-            self._conn.commit()
+            with self._lock:
+                with closing(self._conn.cursor()) as cur:
+                    cur.execute("DELETE FROM sent_history WHERE sent_at < ?", (cutoff,))
+                    deleted = cur.rowcount
+                self._conn.commit()
             return deleted
         except sqlite3.Error as exc:
             raise StorageError(f"이력 정리 실패: {exc}") from exc

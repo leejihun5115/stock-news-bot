@@ -75,6 +75,26 @@ def _has_stock_selection_evidence(item) -> bool:
     return bool(has_reason or has_amount or has_progress or has_numeric or any(k in text for k in evidence))
 
 
+_MARKET_CONDITION_TERMS = (
+    "코스피", "코스닥", "나스닥", "다우", "s&p", "s&p500", "증시", "장마감",
+    "마감시황", "시황", "환율", "달러", "원화", "국채", "금리", "기준금리",
+    "연준", "fomc", "인플레이션", "물가", "외국인 매수", "외국인 매도",
+    "기관 매수", "기관 매도", "수급", "투자심리", "급등락", "변동성",
+    "지수", "반도체 업종", "테마주", "순환매",
+)
+
+
+def _is_market_condition_content(item) -> bool:
+    """개별 종목이 아니라 시장 전반(시황) 이야기인지 확인한다.
+
+    라르고TV가 아닌 나머지 유튜브/블로그/Telegram 콘텐츠 중, 특정 상장종목이
+    본문에 잡히지 않았더라도 코스피/환율/금리 같은 시황 관련 내용이면
+    송출 대상으로 인정한다.
+    """
+    text = f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')}".lower()
+    return any(term in text for term in _MARKET_CONDITION_TERMS)
+
+
 def _lacks_market_relevance(result) -> bool:
     """관련테마·관련주가 둘 다 없어서(=주식 시세와 관련짓거나 시황적으로
     판단할 근거가 없는 뉴스) 발송할 가치가 없다고 볼 수 있는지 확인한다.
@@ -840,13 +860,20 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         # 텔레그램 '⚙️ 설정'에서 "뉴스강도 60으로 올려줘" 같은 명령으로 바꾼
         # 값이 있으면 그 값을, 없으면 기존 NEWS_SEND_MIN_SCORE(.env) 기본값을 쓴다.
         min_score = get_min_score(self.settings.news_value_mid)
-        # YouTube/블로그/Telegram도 MEDIUM 점수 기준을 적용한다.
-        # 단, 단순 종목명/테마/이모지/잡담은 차단하고 종목선정 근거가 있는
-        # 콘텐츠만 통과시킨다. 사용자가 지정한 라르고TV는 유일한 예외다.
+        # YouTube/블로그/Telegram 필터 규칙:
+        #   1) 라르고TV는 무조건 통과 (점수/종목 조건 모두 면제)
+        #   2) 그 외 소스는 (a) 상장종목이 본문에 등장하거나
+        #      (b) 코스피/환율/금리 같은 시황 관련 내용이면 통과
+        #   단순 이모지/감상/잡담/빈 게시물(제목 추출 실패로 대체된 텍스트
+        #   등)은 위 (a)(b) 어디에도 안 걸려 자연스럽게 걸러진다.
         study_items = [
             item for item in classified
             if _is_study_source(item)
-            and (_is_largo_tv_exception(item) or (item.score >= min_score and _has_stock_selection_evidence(item)))
+            and (
+                _is_largo_tv_exception(item)
+                or bool(str(getattr(item, "company", "") or "").strip())
+                or _is_market_condition_content(item)
+            )
         ]
         news_items = [item for item in classified if not _is_study_source(item)]
         dart_min = max(0, int(getattr(self.settings, "dart_disclosure_min_score", 50)))
@@ -859,12 +886,23 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
 
         # 텔레그램 '⚙️ 설정'에서 "키워드 꺼줘"로 끄면, 점수만 통과하면
         # NEWS_KEYWORDS와 무관하게 내보낸다. 켜져 있으면(기본값) 기존 동작 그대로.
+        #
+        # 주의: 이 NEWS_KEYWORDS는 뉴스 검색용 키워드라서 유튜브 영상/블로그
+        # 글/Telegram 게시물 "제목"에는 원래 안 들어있는 경우가 대부분이다.
+        # study_items(유튜브/블로그/Telegram)에까지 이 필터를 그대로 적용하면
+        # 위에서 이미 (라르고TV/상장종목 언급/시황 내용 기준으로) 골라둔
+        # 항목이 제목에 키워드가 없다는 이유만으로 거의 다 다시 걸러져서
+        # "유튜브/블로그/Telegram이 실행이 안 되는 것처럼" 보이는 원인이었다.
+        # study_items는 이미 자체 기준으로 걸렀으므로 이 키워드 필터에서는
+        # 제외하고, 일반 뉴스(news_items)에만 적용한다.
         runtime_keywords = _get_keywords(self.settings.news_keywords)
         if runtime_keywords and get_keyword_filter_enabled(True):
             keywords_lower = [kw.lower() for kw in runtime_keywords]
+            study_keys = {item.dedup_key for item in study_items}
             qualified = [
                 item for item in qualified
-                if any(kw in item.title.lower() for kw in keywords_lower)
+                if item.dedup_key in study_keys
+                or any(kw in item.title.lower() for kw in keywords_lower)
             ]
         filtered_out = [item for item in classified if item not in qualified]
         self._last_scan["filtered"] = len(filtered_out)
