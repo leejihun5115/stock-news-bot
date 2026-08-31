@@ -113,8 +113,10 @@ class TelegramAlerter:
             "disable_web_page_preview": True,
             "reply_markup": {
                 "inline_keyboard": [
-                    [{"text": f"🔓 {button_label}", "callback_data": f"s:{token}"}],
-                    [{"text": "⚙️ 설정", "callback_data": "o:open"}],
+                    [
+                        {"text": f"🔓 {button_label}", "callback_data": f"s:{token}"},
+                        {"text": "⚙️ 설정", "callback_data": "o:open"},
+                    ],
                 ]
             },
         }
@@ -158,6 +160,9 @@ class TelegramAlerter:
             "chat_id": chat_id,
             "text": self._settings_text(),
             "parse_mode": "HTML",
+            "reply_markup": {
+                "inline_keyboard": [[{"text": "❌ 닫기", "callback_data": "d:settings"}]]
+            },
         }
         async with session.post(self._url("sendMessage"), json=payload) as resp:
             if resp.status != 200:
@@ -358,7 +363,14 @@ class TelegramAlerter:
             "text": summary[:4000],
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
-            "reply_markup": {"inline_keyboard": [[{"text": f"🔓 {button_label}", "callback_data": f"s:{token}"}]]},
+            "reply_markup": {
+                "inline_keyboard": [
+                    [
+                        {"text": f"🔓 {button_label}", "callback_data": f"s:{token}"},
+                        {"text": "⚙️ 설정", "callback_data": "o:open"},
+                    ],
+                ]
+            },
         }
         async with session.post(self._url("editMessageText"), json=payload) as resp:
             if resp.status != 200:

@@ -265,14 +265,12 @@ def _build_impact_block(item: NewsItem, *, html: bool = False) -> list[str]:
         if comp is None:
             return [
                 "🔥 실적 주요 공시",
-                f"🟢 주가 영향: {_trade_verdict(item)[0]}",
                 "📊 실적 비교 데이터: 아직 연동되지 않음",
                 "→ DART/공시 원문에서 실제 매출·영업이익·순이익 확인 필요",
             ]
-        label, impact = _earnings_impact(comp)
+        label, _impact = _earnings_impact(comp)
         lines = [
             label,
-            f"🟢 주가 영향: {impact}",
             f"📊 실적 비교 | {comp.prior_label or '이전'} → {comp.period_label or '이번'}",
             _earnings_table(comp),
         ]
@@ -297,7 +295,6 @@ def _build_impact_block(item: NewsItem, *, html: bool = False) -> list[str]:
 
     lines = [
         "🚀 대형 공급계약·수주",
-        "🟢 주가 영향: 매우 긍정" if ratio_pct is not None and ratio_pct >= 30 else "🟢 주가 영향: 긍정",
         "💰 계약 주요 내용",
         f"계약금액: {amount_text}",
     ]

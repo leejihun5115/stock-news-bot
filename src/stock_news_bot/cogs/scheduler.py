@@ -535,6 +535,18 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 item.analysis_title = result.title
                 item.classification = result.classification
                 item.confidence = result.confidence
+                # 히스토리(DB)에는 "실제로 사용자에게 보낸 내용"과 항상 일치하는
+                # 값을 남긴다. notifier.py의 _analysis_parts()가 화면에 보여줄 때
+                # `item.ai_core or result.core` / `item.ai_analysis or result.analysis`
+                # 로 규칙엔진 결과를 폴백하는데, 여기서 폴백을 안 해두면 LLM이
+                # 비어도 화면엔 분석이 나가지만 DB(ai_core/ai_analysis 컬럼)는
+                # 빈 채로 남는다 — 그러면 다음 기사 분석 때 history_store가
+                # 참고자료로 주는 "과거 유사 뉴스 사례"에서 이 기사만 분석 내용이
+                # 통째로 빠져, 누적 데이터를 활용한 LLM 분석 품질이 점점 낮아진다.
+                if not item.ai_core:
+                    item.ai_core = list(result.core)
+                if not item.ai_analysis:
+                    item.ai_analysis = list(result.analysis)
 
                 # 분석이 끝나면 실제 송출은 별도 단일 worker로 넘긴다.
                 # priority = 기사 발행시각이므로 준비된 기사도 오래된 순서로 송출된다.
@@ -653,7 +665,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                         )
                         await self.alerter.send_news(
                             summary_text,
-                            button_label="Key Point     🔗상세보기",
+                            button_label="상세보기",
                             callback_data=item.dedup_key,
                             detail=detail_text,
                         )
