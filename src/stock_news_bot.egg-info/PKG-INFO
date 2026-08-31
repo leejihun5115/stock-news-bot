@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: stock-news-bot
+Version: 1.0.0
+Summary: 실시간 주식 뉴스 수집/분류/알림 디스코드 봇
+Requires-Python: <3.13,>=3.12
+Requires-Dist: discord.py>=2.7.1
+Requires-Dist: aiohttp>=3.13.0
+Requires-Dist: feedparser>=6.0.11
+Requires-Dist: python-dotenv>=1.0.1
+Requires-Dist: tenacity>=8.2.3
+Requires-Dist: requests>=2.31.0
+Requires-Dist: pykrx>=1.2.8
+Requires-Dist: googlenewsdecoder>=0.1.6
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23.0; extra == "dev"

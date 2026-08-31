@@ -1,0 +1,200 @@
+# Render Blueprint (무료 플랜) - GitHub 백업/복원 누적 DB + Gemini -> OpenRouter 무료 LLM fallback
+#
+# 1) GitHub에 이 저장소를 push
+# 2) (별도) 백업 전용 GitHub 저장소(비공개 권장)를 하나 만들고,
+#    "repo" 권한을 가진 Personal Access Token을 발급한다.
+#    https://github.com/settings/tokens -> Fine-grained tokens 권장 (해당 repo만 Contents: R/W)
+# 3) Render Dashboard -> New + -> Blueprint -> 이 저장소 선택
+# 4) sync:false 항목(토큰 포함)을 입력하면 바로 배포 가능
+#
+# Render 무료 웹서비스는 Persistent Disk를 지원하지 않는다. 대신 부팅 시
+# GITHUB_BACKUP_REPO에서 최근 백업을 내려받아 로컬 SQLite를 복원하고,
+# GITHUB_BACKUP_INTERVAL_SECONDS 주기로 현재 DB를 다시 커밋한다
+# (src/stock_news_bot/storage/github_backup.py). 백업 주기 사이에 재시작이
+# 발생하면 그 사이 데이터는 유실될 수 있다 — 더 촘촘한 보존이 필요하면
+# 유료 Persistent Disk나 Turso 같은 외부 상시 DB로 전환한다.
+#
+# 무료 웹서비스는 15분간 요청이 없으면 슬립된다. 봇을 상시 깨어있게 하려면
+# UptimeRobot 등으로 /health를 주기적으로(예: 10분마다) 호출해준다.
+#
+# 앱은 /health와 /status HTTP 서버를 함께 열고 Discord 봇을 같은 프로세스에서 실행한다.
+services:
+  - type: web
+    name: stock-news-bot
+    runtime: python
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: "python --version && python -c \"import sys; assert sys.version_info[:2] == (3, 12), \\\"Python 3.12.x required; Render selected the wrong version\\\"\" && pip install -e ."
+    startCommand: "python -m stock_news_bot"
+    healthCheckPath: /health
+    autoDeploy: true
+    numInstances: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      # Render 로그가 버퍼링 없이 실시간으로 찍히게 한다(부팅 로그 포함).
+      # 이게 없으면 stdout이 파이프로 연결될 때 파이썬이 출력을 모았다가
+      # 한꺼번에 내보내서, 로그가 늦게 몰아서 찍히는 것처럼 보인다.
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
+      # Discord / Telegram
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: DISCORD_NEWS_CHANNEL_ID
+        sync: false
+      - key: DISCORD_ADMIN_CHANNEL_ID
+        sync: false
+      - key: DISCORD_ADMIN_USER_IDS
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+
+      # 1순위: Gemini Developer API 무료 등급
+      # Google AI Studio에서 발급한 키. 없어도 2순위 OpenRouter로 동작한다.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: "gemini-3.5-flash-lite"
+
+      # 2순위: OpenRouter 무료 모델만 사용하는 공식 free router
+      # https://openrouter.ai/ 에서 발급한 키. 유료 모델로 자동 승격하지 않는다.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: "openrouter/free"
+      - key: LLM_ANALYSIS_ENABLED
+        value: "true"
+      - key: LLM_ANALYSIS_TIMEOUT_SECONDS
+        value: "20"
+      - key: LLM_ANALYSIS_MAX_CHARS
+        value: "9000"
+
+      # DART / 시장 데이터
+      - key: DART_API_KEY
+      # DART_API_KEY가 비어 있으면 부팅 시 ConfigError로 바로 실패한다
+      # (config.py의 dart_disclosure_enabled 검증 참고) — 반드시 키를 먼저 채울 것.
+      - key: DART_DISCLOSURE_ENABLED
+        value: "true"
+      - key: DART_DISCLOSURE_MIN_SCORE
+        value: "50"
+      - key: DART_DISCLOSURE_FETCH_INTERVAL_SECONDS
+        value: "300"
+        sync: false
+      - key: MARKET_INTEL_INTERVAL_SECONDS
+        value: "3600"
+
+      # 국내/미국장 마켓 브리핑 (market_briefing 코그) — 종목 뉴스와 별개로
+      # 정해진 시각에 지수/거시 시황 헤드라인을 요약 발송한다.
+      - key: MARKET_BRIEFING_ENABLED
+        value: "true"
+      - key: MARKET_BRIEFING_KR_TIMES
+        value: "08:40,15:40"
+      - key: MARKET_BRIEFING_US_TIMES
+        value: "07:00"
+      - key: MARKET_BRIEFING_KR_QUERY
+        value: "코스피 코스닥 마감 시황"
+      - key: MARKET_BRIEFING_US_QUERY
+        value: "뉴욕증시 마감 다우 나스닥"
+      - key: MARKET_BRIEFING_MAX_ITEMS
+        value: "5"
+      - key: MARKET_BRIEFING_LOOKBACK_HOURS
+        value: "20"
+      # pykrx(>=1.2.8)가 시작 시 data.krx.co.kr 로그인을 시도한다. 선택 사항 —
+      # 비워두면 "KRX 로그인 실패" 메시지만 남기고 기존처럼 비로그인 상태로
+      # 시세 조회를 계속한다(market_intel.py가 예외를 모두 흡수하므로 봇
+      # 동작에는 영향 없음). data.krx.co.kr(정보데이터시스템) 계정이 있으면
+      # 채워서 인증 세션을 쓸 수 있다.
+      - key: KRX_ID
+        sync: false
+      - key: KRX_PW
+        sync: false
+
+      # 뉴스 수집
+      - key: NEWS_KEYWORDS
+        sync: false
+      - key: RSS_FEEDS
+        sync: false
+      - key: BLOG_FEEDS
+        sync: false
+      - key: BLOG_SEARCH_QUERIES
+        sync: false
+      - key: BLOG_SEARCH_MAX_RESULTS
+        value: "10"
+      - key: YOUTUBE_CHANNEL_IDS
+        sync: false
+      - key: TELEGRAM_SOURCE_CHANNELS
+        sync: false
+      - key: TELEGRAM_SEARCH_QUERIES
+        sync: false
+      - key: TELEGRAM_SEARCH_MAX_RESULTS
+        value: "10"
+      - key: YOUTUBE_SEARCH_QUERIES
+        sync: false
+      - key: YOUTUBE_SEARCH_MAX_RESULTS
+        value: "10"
+      - key: YOUTUBE_SEARCH_INTERVAL_SECONDS
+        value: "60"
+      - key: SOURCE_SEARCH_INTERVAL_SECONDS
+        value: "60"
+      # 전체 수집 주기: 1분
+      - key: FETCH_INTERVAL_SECONDS
+        value: "60"
+      - key: NEWS_ANALYSIS_WORKERS
+        value: "6"
+      - key: NEWS_LOOKBACK_HOURS
+        value: "24"
+      - key: STARTUP_SEND_LIMIT
+        value: "8"
+      - key: MAX_NEW_PER_CYCLE
+        value: "8"
+      - key: MAX_SENT_PER_HOUR
+        value: "60"
+      - key: NEWS_SEND_MIN_SCORE
+        value: "40"
+      - key: MEDIUM_NEWS_SCORE
+        value: "40"
+      - key: STRONG_NEWS_SCORE
+        value: "70"
+
+      # 시간대 / 상태 / 로그
+      - key: TZ
+        value: "UTC"
+      - key: NEWS_US_TIMEZONE
+        value: "America/New_York"
+      - key: NEWS_KR_TIMEZONE
+        value: "Asia/Seoul"
+      - key: HEALTH_STALE_THRESHOLD_SECONDS
+        value: "1800"
+      - key: LOG_LEVEL
+        value: "INFO"
+
+      # 무료 플랜: Persistent Disk가 없으므로 로컬 경로(컨테이너 임시
+      # 파일시스템)에 DB를 두고, 아래 GITHUB_BACKUP_*로 영속성을 확보한다.
+      - key: DB_PATH
+        value: "./data/stock_news_bot.sqlite3"
+      - key: LOG_DIR
+        value: "/tmp/logs"
+
+      # GitHub 백업/복원 (무료 데이터 누적) — config.py가 GITHUB_BACKUP_ENABLED=true면
+      # /var/data 필수 체크를 건너뛴다.
+      - key: GITHUB_BACKUP_ENABLED
+        value: "true"
+      # repo 권한(Fine-grained면 해당 repo Contents: Read & Write) 토큰.
+      - key: GITHUB_BACKUP_TOKEN
+        sync: false
+      # "owner/repo" 형식. 비공개 저장소 권장 (DB에 기사 원문/분석 텍스트 포함).
+      - key: GITHUB_BACKUP_REPO
+        sync: false
+      - key: GITHUB_BACKUP_PATH
+        value: "backups/stock_news_bot.sqlite3"
+      - key: GITHUB_BACKUP_BRANCH
+        value: "main"
+      # 백업 주기(초). 이 값보다 짧은 간격으로 재시작되면 그 사이 데이터는 유실될 수 있다.
+      - key: GITHUB_BACKUP_INTERVAL_SECONDS
+        value: "300"
