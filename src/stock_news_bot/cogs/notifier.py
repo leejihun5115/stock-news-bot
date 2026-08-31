@@ -67,15 +67,19 @@ import json
 import logging
 import os
 import re
+import subprocess
 from datetime import timezone
 from html import escape as html_escape
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import discord
 from discord.ext import commands
 
+from stock_news_bot import runtime_settings
 from stock_news_bot.models import ContractImpact, EarningsComparison, Importance, NewsItem
 from stock_news_bot.company_profile import CompanyProfile, bilingual_company_label, resolve_company_profile, is_listed_company, find_mentioned_companies, market_flag_of
+from stock_news_bot.cogs.admin import is_admin
 from stock_news_bot.cogs.analysis_engine import analyze_item
 from stock_news_bot.storage.fundamentals import get_fundamentals
 from stock_news_bot.storage.history import SectorStats
@@ -283,27 +287,42 @@ def _build_impact_block(item: NewsItem, *, html: bool = False) -> list[str]:
 
     contract = item.contract_impact
     amount = contract.contract_amount if contract else None
-    if amount is None and item.amounts:
-        amount_text = item.amounts[0]
-    else:
-        amount_text = _fmt_amount(amount)
+    amount_text = item.amounts[0] if (amount is None and item.amounts) else _fmt_amount(amount)
+    won = amount if amount is not None else (_parse_amount_to_won(item.amounts[0]) if item.amounts else None)
+
+    fundamentals = get_fundamentals(item.company) if item.company else None
+    revenue = contract.recent_revenue if (contract and contract.recent_revenue is not None) else (fundamentals.revenue if fundamentals else None)
+    market_cap = fundamentals.market_cap if fundamentals else None
+    ratio_pct = contract.contract_revenue_ratio_pct if (contract and contract.contract_revenue_ratio_pct is not None) else (won / revenue * 100 if (won and revenue) else None)
+
     lines = [
         "🚀 대형 공급계약·수주",
-        "🟢 주가 영향: 매우 긍정" if contract and contract.contract_revenue_ratio_pct is not None and contract.contract_revenue_ratio_pct >= 30 else "🟢 주가 영향: 긍정",
+        "🟢 주가 영향: 매우 긍정" if ratio_pct is not None and ratio_pct >= 30 else "🟢 주가 영향: 긍정",
         "💰 계약 주요 내용",
         f"계약금액: {amount_text}",
     ]
-    if contract:
-        if contract.recent_revenue is not None:
-            lines += [f"최근 매출: {_fmt_amount(contract.recent_revenue)}"]
-        if contract.contract_revenue_ratio_pct is not None:
-            lines += [f"계약/매출: {contract.contract_revenue_ratio_pct:.1f}%"]
-        if contract.counterparty:
-            lines += [f"계약상대: {contract.counterparty}"]
-        if contract.contract_type:
-            lines += [f"계약유형: {contract.contract_type}"]
+    if contract and contract.counterparty:
+        lines += [f"계약상대: {contract.counterparty}"]
+    if contract and contract.contract_type:
+        lines += [f"계약유형: {contract.contract_type}"]
+
+    if ratio_pct is not None:
+        lines += [
+            f"최근 매출: {_fmt_amount(revenue)}",
+            f"계약/매출: {ratio_pct:.1f}% (계약금액이 최근 매출의 {ratio_pct:.1f}%에 해당)",
+        ]
+    elif revenue is not None or market_cap is not None:
+        ref = []
+        if revenue is not None:
+            ref.append(f"최근 매출 {_fmt_amount(revenue)}")
+        if market_cap is not None:
+            ref.append(f"시가총액 {_fmt_amount(market_cap)}")
+        lines += [
+            "📊 계약 규모 비교: 계약금액이 명확히 확인되지 않아 정확한 비율은 계산하지 못했어요.",
+            f"참고로 이 회사 규모는 {', '.join(ref)} 수준이에요 — 계약 규모를 가늠하는 데 참고하세요.",
+        ]
     else:
-        lines += ["📊 계약 규모 비교: 최근 매출 데이터가 없어 비율을 계산하지 않음"]
+        lines += ["📊 계약 규모 비교: 이 회사의 매출·시가총액 데이터가 아직 없어 비교하지 못했어요."]
     return lines
 
 
@@ -783,6 +802,99 @@ def build_embed_summary(item: NewsItem, company_profile: CompanyProfile | None =
     return embed
 
 
+def _append_keywords_to_env(keywords: list[str]) -> int:
+    """.env의 NEWS_KEYWORDS에 새 키워드를 추가한다. 실제 반영에는 봇 재시작이 필요하다."""
+    env_path = Path(__file__).resolve().parents[3] / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return 0
+    idx = None
+    existing = ""
+    for i, line in enumerate(lines):
+        if line.startswith("NEWS_KEYWORDS="):
+            idx = i
+            existing = line[len("NEWS_KEYWORDS="):]
+            break
+    current = [k.strip() for k in existing.split(",") if k.strip()]
+    new_only = [k for k in keywords if k and k not in current]
+    if not new_only:
+        return 0
+    new_line = "NEWS_KEYWORDS=" + ",".join(current + new_only)
+    if idx is not None:
+        lines[idx] = new_line
+    else:
+        lines.append(new_line)
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return len(new_only)
+
+
+class SettingsModal(discord.ui.Modal, title="봇 설정"):
+    """⚙️ 설정 버튼으로 여는 팝업. 뉴스 강도/키워드 필터는 즉시 적용되고,
+    새 키워드 추가는 .env에 반영한 뒤 봇을 재시작해야 적용된다."""
+
+    min_score_input = discord.ui.TextInput(
+        label="뉴스 강도 (0~100, 비워두면 유지)",
+        placeholder="예: 50",
+        required=False,
+        max_length=3,
+    )
+    keyword_filter_input = discord.ui.TextInput(
+        label="키워드 필터 on/off (비워두면 유지)",
+        placeholder="on 또는 off",
+        required=False,
+        max_length=10,
+    )
+    new_keywords_input = discord.ui.TextInput(
+        label="새 키워드 추가 (쉼표로 구분, 비워두면 안함)",
+        placeholder="예: 2차전지, 로봇, AI반도체",
+        required=False,
+        style=discord.TextStyle.paragraph,
+        max_length=500,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        results: list[str] = []
+
+        raw_score = self.min_score_input.value.strip()
+        if raw_score:
+            try:
+                value = runtime_settings.set_min_score(int(raw_score))
+                results.append(f"✅ 뉴스 강도: {value}점으로 변경 (즉시 적용)")
+            except ValueError:
+                results.append("⚠️ 뉴스 강도는 숫자로 입력해주세요.")
+
+        raw_filter = self.keyword_filter_input.value.strip().lower()
+        if raw_filter in ("on", "켜짐", "true", "1"):
+            runtime_settings.set_keyword_filter_enabled(True)
+            results.append("✅ 키워드 필터: 켜짐으로 변경 (즉시 적용)")
+        elif raw_filter in ("off", "꺼짐", "false", "0"):
+            runtime_settings.set_keyword_filter_enabled(False)
+            results.append("✅ 키워드 필터: 꺼짐으로 변경 (즉시 적용)")
+        elif raw_filter:
+            results.append("⚠️ 키워드 필터는 on 또는 off로 입력해주세요.")
+
+        will_restart = False
+        raw_keywords = self.new_keywords_input.value.strip()
+        if raw_keywords:
+            keywords = [k.strip() for k in raw_keywords.split(",") if k.strip()]
+            added = _append_keywords_to_env(keywords) if keywords else 0
+            if added:
+                results.append(f"✅ 키워드 {added}개 추가 — 적용을 위해 봇을 재시작합니다 (약 10초 소요)")
+                will_restart = True
+            elif keywords:
+                results.append("ℹ️ 입력한 키워드가 이미 등록되어 있어 추가하지 않았어요.")
+
+        if not results:
+            results.append("변경된 항목이 없습니다.")
+
+        await interaction.response.send_message("\n".join(results), ephemeral=True)
+
+        if will_restart:
+            await asyncio.sleep(1.0)
+            subprocess.Popen(["sudo", "systemctl", "restart", "stock-news-bot"])
+
+
 class DetailView(discord.ui.View):
     """상세보기로 바뀐 뒤 붙는 버튼 두 개 — "🔙 원문으로"(요약 화면으로
     되돌아가기)와 "🗑️ 삭제".
@@ -852,7 +964,14 @@ class TradePointView(discord.ui.View):
         self._detail_embed = detail_embed
         self._jump_link_added = False
 
-    @discord.ui.button(label="Key Point     🔗상세보기", emoji="🔓", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="설정", emoji="⚙️", style=discord.ButtonStyle.secondary)
+    async def open_settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not is_admin(interaction.client, interaction.user.id):
+            await interaction.response.send_message("⚠️ 설정은 관리자만 변경할 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.send_modal(SettingsModal())
+
+    @discord.ui.button(label="상세보기", emoji="🔍", style=discord.ButtonStyle.primary)
     async def show_detail(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         try:
             message = interaction.message
