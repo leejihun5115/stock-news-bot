@@ -24,6 +24,7 @@ _COG_KOREAN_NAME = {
     "stock_news_bot.cogs.classifier": "뉴스 분류기",
     "stock_news_bot.cogs.notifier": "알림 전송기",
     "stock_news_bot.cogs.market_intel": "시세 연동(DART/pykrx)",
+    "stock_news_bot.cogs.market_briefing": "국내/미국장 브리핑",
     "stock_news_bot.cogs.scheduler": "자동 스케줄러",
     "stock_news_bot.cogs.admin": "관리자 명령",
 }

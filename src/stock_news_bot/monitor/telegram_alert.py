@@ -8,6 +8,7 @@ import re
 from typing import Awaitable, Callable
 
 import aiohttp
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from stock_news_bot import runtime_settings
 
@@ -15,6 +16,13 @@ logger = logging.getLogger(__name__)
 
 _API_BASE = "https://api.telegram.org/bot{token}/{method}"
 DetailCallback = Callable[[str], Awaitable[str | None]]
+
+# 뉴스 발송(send/send_news)에 한해서만 재시도한다. fetcher.py의 _fetch_raw와
+# 동일한 지수 백오프 정책 — 일시적 타임아웃/연결 오류로 뉴스 하나가 통째로
+# 유실되는 걸 막는다. callback polling(_poll_callbacks)은 자체적으로 이미
+# 무한 루프+3초 대기 재시도 구조라 별도로 감싸지 않는다.
+_SEND_RETRY_ATTEMPTS = 3
+_SEND_TIMEOUT_SECONDS = 15
 
 
 class TelegramAlerter:
@@ -82,13 +90,39 @@ class TelegramAlerter:
             "disable_web_page_preview": True,
         }
         try:
-            timeout = aiohttp.ClientTimeout(total=10)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(self._url("sendMessage"), json=payload) as resp:
-                    if resp.status != 200:
-                        logger.error("텔레그램 알림 전송 실패(status=%s): %s", resp.status, await resp.text())
+            await self._post_with_retry("sendMessage", payload, log_label="텔레그램 알림")
         except Exception:
-            logger.exception("텔레그램 알림 전송 중 예외 발생")
+            logger.exception("텔레그램 알림 전송 중 예외 발생(재시도 %d회 모두 실패)", _SEND_RETRY_ATTEMPTS)
+
+    async def _post_with_retry(self, method: str, payload: dict, *, log_label: str) -> None:
+        """일시적 타임아웃/연결 오류에 한해 지수 백오프로 재시도한다.
+
+        이전 버전은 재시도가 전혀 없어서, 순간적인 네트워크 지연(타임아웃)
+        하나로 뉴스 한 건이 텔레그램에서 조용히 통째로 유실됐다
+        (로그에는 "텔레그램 뉴스 전송 중 예외 발생"만 남고 재전송은 없었음).
+        """
+        timeout = aiohttp.ClientTimeout(total=_SEND_TIMEOUT_SECONDS)
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(_SEND_RETRY_ATTEMPTS),
+            wait=wait_exponential(multiplier=1, min=1, max=8),
+            retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
+            reraise=True,
+        ):
+            with attempt:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(self._url(method), json=payload) as resp:
+                        if resp.status == 429:
+                            # Telegram rate limit — Retry-After 초만큼 기다렸다가 재시도.
+                            body = await resp.json(content_type=None)
+                            retry_after = float((body.get("parameters") or {}).get("retry_after", 3))
+                            logger.warning("%s: 429 rate limit, %.1f초 후 재시도", log_label, retry_after)
+                            await asyncio.sleep(retry_after)
+                            raise aiohttp.ClientError(f"429 rate limited (retry_after={retry_after})")
+                        if resp.status != 200:
+                            text = await resp.text()
+                            logger.error("%s 전송 실패(status=%s): %s", log_label, resp.status, text)
+                            return
+                        return
 
     async def send_news(self, message: str, *, button_label: str, callback_data: str, detail: str) -> None:
         """뉴스와 함께 인라인 버튼을 전송하고 상세정보를 서버 메모리에 등록한다.
@@ -121,13 +155,9 @@ class TelegramAlerter:
             },
         }
         try:
-            timeout = aiohttp.ClientTimeout(total=10)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(self._url("sendMessage"), json=payload) as resp:
-                    if resp.status != 200:
-                        logger.error("텔레그램 뉴스 전송 실패(status=%s): %s", resp.status, await resp.text())
+            await self._post_with_retry("sendMessage", payload, log_label="텔레그램 뉴스")
         except Exception:
-            logger.exception("텔레그램 뉴스 전송 중 예외 발생")
+            logger.exception("텔레그램 뉴스 전송 중 예외 발생(재시도 %d회 모두 실패)", _SEND_RETRY_ATTEMPTS)
 
     def _settings_text(self) -> str:
         snap = runtime_settings.snapshot(self._default_min_score, self._base_keywords)

@@ -77,8 +77,10 @@ services:
 
       # DART / 시장 데이터
       - key: DART_API_KEY
+      # DART_API_KEY가 비어 있으면 부팅 시 ConfigError로 바로 실패한다
+      # (config.py의 dart_disclosure_enabled 검증 참고) — 반드시 키를 먼저 채울 것.
       - key: DART_DISCLOSURE_ENABLED
-        value: "false"
+        value: "true"
       - key: DART_DISCLOSURE_MIN_SCORE
         value: "50"
       - key: DART_DISCLOSURE_FETCH_INTERVAL_SECONDS
@@ -86,6 +88,23 @@ services:
         sync: false
       - key: MARKET_INTEL_INTERVAL_SECONDS
         value: "3600"
+
+      # 국내/미국장 마켓 브리핑 (market_briefing 코그) — 종목 뉴스와 별개로
+      # 정해진 시각에 지수/거시 시황 헤드라인을 요약 발송한다.
+      - key: MARKET_BRIEFING_ENABLED
+        value: "true"
+      - key: MARKET_BRIEFING_KR_TIMES
+        value: "08:40,15:40"
+      - key: MARKET_BRIEFING_US_TIMES
+        value: "07:00"
+      - key: MARKET_BRIEFING_KR_QUERY
+        value: "코스피 코스닥 마감 시황"
+      - key: MARKET_BRIEFING_US_QUERY
+        value: "뉴욕증시 마감 다우 나스닥"
+      - key: MARKET_BRIEFING_MAX_ITEMS
+        value: "5"
+      - key: MARKET_BRIEFING_LOOKBACK_HOURS
+        value: "20"
       # pykrx(>=1.2.8)가 시작 시 data.krx.co.kr 로그인을 시도한다. 선택 사항 —
       # 비워두면 "KRX 로그인 실패" 메시지만 남기고 기존처럼 비로그인 상태로
       # 시세 조회를 계속한다(market_intel.py가 예외를 모두 흡수하므로 봇

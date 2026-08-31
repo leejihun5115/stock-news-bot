@@ -150,6 +150,33 @@ Render Free Web Service에는 영구 디스크가 없으므로, Free 플랜에�
 
 AI 분석은 모델의 해석을 추가하는 기능이지 사실 검증을 대신하는 기능은 아닙니다. 금액·기업·진행단계 같은 핵심 사실과 신뢰도 점수는 기존 결정론적 엔진이 계속 담당합니다.
 
+## DART 실시간 공시 수집
+
+`DART_DISCLOSURE_ENABLED=true` + `DART_API_KEY`가 모두 설정돼야 동작합니다.
+켜지면 `fetcher.py`가 최근 하루치 DART 공시를 주기적으로(`DART_DISCLOSURE_FETCH_INTERVAL_SECONDS`,
+기본 300초) 가져와 일반 뉴스와 동일한 파이프라인(점수 필터 → 발송)을 탑니다.
+`DART_DISCLOSURE_ENABLED=true`인데 `DART_API_KEY`가 비어 있으면 부팅 시점에
+`ConfigError`로 즉시 실패하도록 막아뒀습니다(조용히 꺼진 채로 떠 있는 상태를
+방지). 켜져 있는지/꺼져 있는지는 부팅 로그의 "DART 실시간 공시 수집: 활성화/비활성화"
+줄로 바로 확인할 수 있습니다.
+
+## 국내/미국장 마켓 브리핑 (market_briefing 코그)
+
+종목 뉴스 파이프라인은 "관련주 없는 뉴스는 제외"가 원칙이라, 코스피/코스닥
+마감 시황이나 뉴욕증시 마감처럼 특정 종목명이 안 걸리는 지수/거시 뉴스는
+평소엔 자동으로 걸러집니다. 이 코그는 그 필터와 무관하게, 하루 중 정해진
+시각에 시황 헤드라인만 별도로 모아서 요약 발송합니다.
+
+- `MARKET_BRIEFING_ENABLED`: `true`로 켜야 동작 (기본 꺼짐)
+- `MARKET_BRIEFING_KR_TIMES`: 국내장 브리핑 발송 시각(KST, 콤마 구분). 기본 `08:40,15:40`
+- `MARKET_BRIEFING_US_TIMES`: 미국장 브리핑 발송 시각(KST). 기본 `07:00`(전날 미국장 마감 요약)
+- `MARKET_BRIEFING_KR_QUERY` / `MARKET_BRIEFING_US_QUERY`: 구글 뉴스 검색어
+- `MARKET_BRIEFING_MAX_ITEMS`: 회당 최대 헤드라인 수, 기본 5
+- `MARKET_BRIEFING_LOOKBACK_HOURS`: 몇 시간 이내 기사만 포함할지, 기본 20
+
+Discord 임베드와 텔레그램 메시지로 동시에 발송되며, 종목 점수/필터 로직에는
+전혀 관여하지 않습니다(완전히 별도 스케줄).
+
 ## 운영 시 흔한 오류와 원인
 
 - **"필수 환경변수가 설정되지 않았습니다"** → `.env` 확인. `config.py`가 임포트 시점에

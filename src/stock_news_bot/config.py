@@ -151,6 +151,17 @@ class Settings:
     llm_analysis_timeout_seconds: int = 60
     llm_analysis_max_chars: int = 9000
 
+    # 국내/미국장 마켓 브리핑 (market_briefing 코그).
+    # 종목 뉴스와 달리 "관련주 없음"으로 걸러지는 지수/거시 뉴스를 별도
+    # 스케줄로 하루 몇 차례 요약 발송한다.
+    market_briefing_enabled: bool = False
+    market_briefing_kr_times: list[str] = field(default_factory=lambda: ["08:40", "15:40"])
+    market_briefing_us_times: list[str] = field(default_factory=lambda: ["07:00"])
+    market_briefing_kr_query: str = "코스피 코스닥 마감 시황"
+    market_briefing_us_query: str = "뉴욕증시 마감 다우 나스닥"
+    market_briefing_max_items: int = 5
+    market_briefing_lookback_hours: float = 20.0
+
     health_stale_threshold_seconds: int = 1800
     health_check_interval_seconds: int = 300
 
@@ -290,6 +301,13 @@ def load_settings() -> Settings:
         llm_analysis_enabled=_get_str("LLM_ANALYSIS_ENABLED", "true").lower() not in {"0", "false", "no", "off"},
         llm_analysis_timeout_seconds=max(5, _get_int("LLM_ANALYSIS_TIMEOUT_SECONDS", 20)),
         llm_analysis_max_chars=max(2000, _get_int("LLM_ANALYSIS_MAX_CHARS", 9000)),
+        market_briefing_enabled=_get_bool("MARKET_BRIEFING_ENABLED", False),
+        market_briefing_kr_times=_get_str_list("MARKET_BRIEFING_KR_TIMES") or ["08:40", "15:40"],
+        market_briefing_us_times=_get_str_list("MARKET_BRIEFING_US_TIMES") or ["07:00"],
+        market_briefing_kr_query=_get_str("MARKET_BRIEFING_KR_QUERY", "코스피 코스닥 마감 시황"),
+        market_briefing_us_query=_get_str("MARKET_BRIEFING_US_QUERY", "뉴욕증시 마감 다우 나스닥"),
+        market_briefing_max_items=max(1, _get_int("MARKET_BRIEFING_MAX_ITEMS", 5)),
+        market_briefing_lookback_hours=max(1.0, _get_float("MARKET_BRIEFING_LOOKBACK_HOURS", 20.0)),
         health_stale_threshold_seconds=_get_int("HEALTH_STALE_THRESHOLD_SECONDS", 1800),
         health_check_interval_seconds=_get_int("HEALTH_CHECK_INTERVAL_SECONDS", 300),
         log_level=_get_str("LOG_LEVEL", "INFO"),
@@ -305,6 +323,25 @@ def load_settings() -> Settings:
     # 소스는 오직 Render 환경변수/운영 설정에 등록된 대상만 사용한다.
     # 과거 버전의 하드코딩 레거시 채널을 자동 복구하지 않는다.
     # 따라서 등록하지 않은 Telegram/YouTube/Blog 채널이 임의로 노출되는 일이 없다.
+
+    if settings.market_briefing_enabled:
+        for label, times in (
+            ("MARKET_BRIEFING_KR_TIMES", settings.market_briefing_kr_times),
+            ("MARKET_BRIEFING_US_TIMES", settings.market_briefing_us_times),
+        ):
+            for t in times:
+                parts = t.split(":")
+                if len(parts) != 2 or not all(p.isdigit() for p in parts):
+                    raise ConfigError(f"{label}의 시각 형식이 잘못됐습니다: {t!r} (예: '08:40')")
+                hh, mm = int(parts[0]), int(parts[1])
+                if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                    raise ConfigError(f"{label}의 시각 범위가 잘못됐습니다: {t!r}")
+
+    if settings.dart_disclosure_enabled and not settings.dart_api_key:
+        raise ConfigError(
+            "DART_DISCLOSURE_ENABLED=true인데 DART_API_KEY가 비어 있습니다. "
+            "DART 공시 수집은 DART_API_KEY 없이는 동작할 수 없습니다."
+        )
 
     if settings.discord_news_channel_id == 0:
         raise ConfigError("DISCORD_NEWS_CHANNEL_ID가 설정되지 않았습니다.")
@@ -328,6 +365,20 @@ def load_settings() -> Settings:
         len(settings.rss_feeds),
         "NEWS_KEYWORDS" if settings.news_keywords else "RSS_FEEDS",
     )
+
+    # DART 실시간 공시 수집 여부는 그동안 로그에 전혀 남지 않아서, 꺼져 있는지
+    # 켜져 있는데 그냥 결과가 없는 건지 운영 중에는 구분할 방법이 없었다.
+    # 부팅 시 상태를 명시적으로 한 줄 남긴다.
+    if settings.dart_disclosure_enabled:
+        _log.info(
+            "DART 실시간 공시 수집: 활성화 (주기=%d초, 최소점수=%d점)",
+            settings.dart_disclosure_fetch_interval_seconds,
+            settings.dart_disclosure_min_score,
+        )
+    else:
+        _log.info(
+            "DART 실시간 공시 수집: 비활성화 (DART_DISCLOSURE_ENABLED=true로 설정하면 켜집니다)"
+        )
 
     return settings
 
