@@ -32,7 +32,11 @@ from discord.ext import commands, tasks
 
 from stock_news_bot.cogs.fetcher import fetch_feed, fetch_source_feeds
 from stock_news_bot.cogs.llm_analyzer import analyze_news
-from stock_news_bot.global_market import collect_global_market_prompt
+from stock_news_bot.global_market import (
+    THEME_ORDER,
+    collect_global_market_prompt,
+    collect_theme_leader_stocks,
+)
 from stock_news_bot.models import NewsItem
 from stock_news_bot.monitor.telegram_alert import TelegramAlerter
 
@@ -68,6 +72,41 @@ def _parse_hhmm_kst(value: str) -> time:
     return time(hour=int(hh), minute=int(mm), tzinfo=_KST)
 
 
+_KR_MARKET_OPEN = time(9, 0, tzinfo=_KST)
+_KR_MARKET_CLOSE = time(15, 30, tzinfo=_KST)
+_US_EASTERN = ZoneInfo("America/New_York")
+_US_MARKET_OPEN_ET = time(9, 30)
+_US_MARKET_CLOSE_ET = time(16, 0)
+
+
+def _is_kr_market_hours(now_kst: datetime) -> bool:
+    """국내 정규장 시간(09:00~15:30 KST, 평일)인지 확인한다. 공휴일은 별도로
+    반영하지 않는다(추후 필요 시 휴장일 목록을 추가하면 된다)."""
+    if now_kst.weekday() >= 5:
+        return False
+    return _KR_MARKET_OPEN <= now_kst.timetz() <= _KR_MARKET_CLOSE
+
+
+def _is_us_market_hours(now_utc: datetime) -> bool:
+    """미국 정규장 시간(09:30~16:00 ET, 평일)인지 확인한다. America/New_York
+    타임존을 그대로 써서 서머타임(DST) 전환을 자동으로 반영한다."""
+    now_et = now_utc.astimezone(_US_EASTERN)
+    if now_et.weekday() >= 5:
+        return False
+    return _US_MARKET_OPEN_ET <= now_et.time() <= _US_MARKET_CLOSE_ET
+
+
+def _minutes_since_us_close(now_utc: datetime) -> float | None:
+    """지금이 미국 정규장 마감(16:00 ET) 이후 몇 분 지났는지 반환한다(장중/주말이면
+    None). America/New_York 기준이라 서머타임과 무관하게 항상 정확하다."""
+    now_et = now_utc.astimezone(_US_EASTERN)
+    if now_et.weekday() >= 5:
+        return None
+    close_et = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    delta = (now_et - close_et).total_seconds() / 60
+    return delta if delta >= 0 else None
+
+
 def _google_news_rss_url(query: str) -> str:
     return f"https://news.google.com/rss/search?q={quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
 
@@ -86,21 +125,24 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
             logger.info("마켓 브리핑(국내/미국장): 비활성화 (MARKET_BRIEFING_ENABLED=true로 설정하면 켜집니다)")
             return
 
-        kr_times = [_parse_hhmm_kst(t) for t in self.settings.market_briefing_kr_times]
+        # 국내: 장중(09:00~15:30 KST, 평일)에만 30분 간격으로 발송하고,
+        # 장마감 이후 한 번 더 "마감" 브리핑을 별도로 보낸다.
+        self.kr_briefing_loop = tasks.loop(minutes=30)(self._run_kr_briefing)
+        self.kr_close_loop = tasks.loop(time=[time(15, 40, tzinfo=_KST)])(self._run_kr_close_briefing)
 
-        # 국내 브리핑은 기존 설정 시각을 그대로 사용한다.
-        self.kr_briefing_loop = tasks.loop(time=kr_times)(self._run_kr_briefing)
-
-        # 미국장 브리핑은 설정된 특정 시각이 아니라 30분 간격으로 실행한다.
-        # 봇 기동 후 1회 실행되고 이후 30분마다 반복된다.
+        # 미국: 정규장 시간(09:30~16:00 ET, 평일)에만 30분 간격으로 발송한다.
+        # 마감 브리핑은 서머타임에 따라 KST 마감 시각이 05:00/06:00으로 바뀌므로,
+        # 두 후보 시각에 다 걸어두고 실제로 마감 직후(40분 이내)인 쪽만 함수
+        # 안에서 판별해 보낸다(중복 발송 방지).
         self.us_briefing_loop = tasks.loop(minutes=30)(self._run_us_briefing)
-        self.kr_briefing_loop.before_loop(self._before_loop)
-        self.us_briefing_loop.before_loop(self._before_loop)
-        self.kr_briefing_loop.start()
-        self.us_briefing_loop.start()
+        self.us_close_loop = tasks.loop(time=[time(5, 5, tzinfo=_KST), time(6, 5, tzinfo=_KST)])(self._run_us_close_briefing)
+
+        for loop in (self.kr_briefing_loop, self.kr_close_loop, self.us_briefing_loop, self.us_close_loop):
+            loop.before_loop(self._before_loop)
+        for loop in (self.kr_briefing_loop, self.kr_close_loop, self.us_briefing_loop, self.us_close_loop):
+            loop.start()
         logger.info(
-            "마켓 브리핑(국내/미국장): 활성화 (국내=%s KST, 미국=30분 간격)",
-            ", ".join(self.settings.market_briefing_kr_times),
+            "마켓 브리핑(국내/미국장): 활성화 (국내=장중 30분 간격+15:40 마감, 미국=장중 30분 간격+마감 자동감지)",
         )
 
     @commands.command(name="미국장브리핑", aliases=["usbriefing"])
@@ -110,7 +152,12 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
         await ctx.send("🇺🇸 미국장 브리핑 수동 실행을 시작합니다...")
 
         try:
-            await self._run_us_briefing()
+            await self._run_briefing(
+                label="미국",
+                emoji="🇺🇸",
+                title="미국장 브리핑",
+                query=self.settings.market_briefing_us_query,
+            )
             logger.info("🇺🇸 미국장 브리핑 수동 실행 완료")
         except Exception:
             logger.exception("🇺🇸 미국장 브리핑 수동 실행 실패")
@@ -120,15 +167,19 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
                 pass
 
     def cog_unload(self) -> None:
-        if getattr(self, "kr_briefing_loop", None):
-            self.kr_briefing_loop.cancel()
-        if getattr(self, "us_briefing_loop", None):
-            self.us_briefing_loop.cancel()
+        for attr in ("kr_briefing_loop", "kr_close_loop", "us_briefing_loop", "us_close_loop"):
+            loop = getattr(self, attr, None)
+            if loop:
+                loop.cancel()
 
     async def _before_loop(self) -> None:
         await self.bot.wait_until_ready()
 
     async def _run_kr_briefing(self) -> None:
+        now_kst = datetime.now(timezone.utc).astimezone(_KST)
+        if not _is_kr_market_hours(now_kst):
+            logger.info("국내 브리핑: 장중 시간이 아니라 이번 30분 주기는 건너뜁니다 (%s)", now_kst.strftime("%H:%M"))
+            return
         await self._run_briefing(
             label="국내",
             emoji="🇰🇷",
@@ -136,11 +187,37 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
             query=self.settings.market_briefing_kr_query,
         )
 
+    async def _run_kr_close_briefing(self) -> None:
+        await self._run_briefing(
+            label="국내 마감",
+            emoji="🇰🇷",
+            title="국내 증시 마감 브리핑",
+            query=self.settings.market_briefing_kr_query,
+        )
+
     async def _run_us_briefing(self) -> None:
+        now_utc = datetime.now(timezone.utc)
+        if not _is_us_market_hours(now_utc):
+            logger.info("미국장 브리핑: 장중 시간이 아니라 이번 30분 주기는 건너뜁니다")
+            return
         await self._run_briefing(
             label="미국",
             emoji="🇺🇸",
             title="미국장 브리핑",
+            query=self.settings.market_briefing_us_query,
+        )
+
+    async def _run_us_close_briefing(self) -> None:
+        now_utc = datetime.now(timezone.utc)
+        minutes_since_close = _minutes_since_us_close(now_utc)
+        # 서머타임에 따라 마감 시각이 05:00 또는 06:00 KST로 달라지므로,
+        # 두 후보 시각 다 걸어두고 실제 마감 직후(40분 이내)인 쪽만 보낸다.
+        if minutes_since_close is None or minutes_since_close > 40:
+            return
+        await self._run_briefing(
+            label="미국 마감",
+            emoji="🇺🇸",
+            title="미국장 마감 브리핑",
             query=self.settings.market_briefing_us_query,
         )
 
@@ -217,12 +294,44 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
         # 수집해서, 국내 종목 개별 분석 시 AI가 참고할 컨텍스트로 함께 넘긴다.
         # 수집 실패해도 브리핑 발송 자체는 막지 않는다(빈 컨텍스트로 계속 진행).
         global_market_context = ""
-        if label in ("국내", "미국"):
+        if label.startswith(("국내", "미국")):
             try:
                 global_market_context = await asyncio.to_thread(collect_global_market_prompt)
             except Exception:
                 logger.exception("%s 브리핑용 글로벌 시장 데이터 수집 실패 — 글로벌 컨텍스트 없이 진행합니다", label)
                 global_market_context = ""
+
+        # 국내/미국 브리핑 공통으로, 누적 뉴스 데이터에서 실제로 등장한
+        # 테마별 관련종목(유가/금리/환율/금/구리/천연가스/비트코인/반도체)을
+        # 집계해 덧붙인다(AI가 종목명을 지어내지 않고, 원문에 실제로
+        # 있었던 종목만 사용 — collect_theme_leader_stocks 참고). 미국장
+        # 브리핑에서도 seen_news에 쌓인 국내 상장사 매칭 결과를 그대로
+        # 재사용한다 — 미국발 테마 뉴스가 국내 어떤 종목과 함께 언급돼
+        # 왔는지 보여주는 용도라, 새 매칭 로직을 따로 만들지 않는다.
+        # 테마별로 데이터가 없으면 그 테마 섹션만 조용히 생략된다.
+        theme_leaders_context = ""
+        if label.startswith(("국내", "미국")):
+            theme_sections: list[str] = []
+            for theme_name in THEME_ORDER:
+                try:
+                    section = await asyncio.to_thread(
+                        collect_theme_leader_stocks, self.settings.db_path, theme_name, 3
+                    )
+                except Exception:
+                    logger.exception(
+                        "%s 브리핑용 '%s' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다",
+                        label, theme_name,
+                    )
+                    section = ""
+                if section:
+                    theme_sections.append(section)
+            theme_leaders_context = "\n\n".join(theme_sections)
+            if theme_leaders_context:
+                global_market_context = (
+                    f"{global_market_context}\n\n{theme_leaders_context}"
+                    if global_market_context
+                    else theme_leaders_context
+                )
 
         for item in items:
             try:
