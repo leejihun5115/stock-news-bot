@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass, field
 
 import requests
+import threading
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,8 @@ class LLMAnalysis:
     title: str = ""
     core: list[str] = field(default_factory=list)
     analysis: list[str] = field(default_factory=list)
+    score: int = 0
+    confidence: int = 0
 
 
 _NEWS_SYSTEM_PROMPT = """당신은 한국 주식 뉴스의 팩트 기반 분석가다.
@@ -182,7 +186,26 @@ def _parse_result(text: str) -> LLMAnalysis | None:
     return result if (result.title or result.core or result.analysis) else None
 
 
+_gemini_rate_lock = threading.Lock()
+_gemini_last_call_ts = 0.0
+_GEMINI_MIN_INTERVAL_SECONDS = 6.5
+
+
+def _wait_for_gemini_rate_limit() -> None:
+    """Gemini 무료 티어 요청 한도(429 Too Many Requests) 방지를 위해
+    호출 사이 최소 간격을 보장한다. 여러 스레드(worker)가 동시에 호출해도
+    전역 lock으로 순서를 맞춰 안전하게 동작한다."""
+    global _gemini_last_call_ts
+    with _gemini_rate_lock:
+        now = time.monotonic()
+        wait = _GEMINI_MIN_INTERVAL_SECONDS - (now - _gemini_last_call_ts)
+        if wait > 0:
+            time.sleep(wait)
+        _gemini_last_call_ts = time.monotonic()
+
+
 def _call_gemini(*, api_key: str, model: str, article: str, timeout_seconds: int, system_prompt: str) -> LLMAnalysis | None:
+    _wait_for_gemini_rate_limit()
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload = {
         "system_instruction": {"parts": [{"text": system_prompt}]},

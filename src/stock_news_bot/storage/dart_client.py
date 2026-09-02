@@ -107,21 +107,52 @@ _FINANCE_CONTEXT_RE = re.compile(
 # 오탐이 발생한다. _AMBIGUOUS_COMMON_WORD_NAMES와 달리 이런 경우는 금융
 # 문맥이 있어도(뉴스 자체가 증시 기사이므로) 여전히 오탐이라, 대신
 # "해당 이름 뒤에 특정 글자가 바로 이어지면 매체명의 일부로 보고 건너뛴다"
-# 방식으로 처리한다. 새로운 오탐 사례가 보고되면 여기에 추가한다.
+# 방식으로 처리한다. 아래 _GENERIC_PRESS_SUFFIXES로 흔한 패턴은 자동
+# 처리되므로, 여기는 그 목록에 없는 특이 사례만 개별 등록하면 된다.
 _FALSE_POSITIVE_NAME_SUFFIXES: dict[str, tuple[str, ...]] = {
     "지디": ("넷",),  # "지디넷코리아"(ZDNet Korea)
 }
 
+# 【매체명 오탐 일반화】
+# "OOO경제"(예: 한국경제/서울경제/아시아경제/헤럴드경제/매일경제),
+# "OOO일보"(조선일보/중앙일보/동아일보 등), "OOO신문/타임즈/데일리/저널/
+# 방송/포스트/투데이"처럼 한국 언론사 상호는 "지역·수식어 + 언론 업종
+# 접미사" 구조가 매우 흔하다. 종목명이 이런 접미사 바로 앞에 붙어서만
+# 등장하면(=본문 다른 곳에 진짜 종목 언급이 없으면) 십중팔구 언론사
+# 출처 표기이지 그 종목 얘기가 아니다. 이름별로 하나하나 등록하는 대신
+# 모든 종목명에 공통 적용해서, 새로 상장되거나 아직 안 걸린 조합도
+# 자동으로 걸러지게 한다.
+_GENERIC_PRESS_SUFFIXES = (
+    "경제", "일보", "신문", "타임즈", "데일리", "저널", "방송", "포스트", "투데이",
+)
+
 
 def _has_genuine_company_mention(corp_name: str, text: str) -> bool:
-    """corp_name이 본문에 "매체명 일부"가 아닌 형태로 최소 한 번 등장하는지 확인한다."""
-    bad_suffixes = _FALSE_POSITIVE_NAME_SUFFIXES.get(corp_name)
-    if not bad_suffixes:
-        return corp_name in text
+    """corp_name이 본문에 "다른 단어에 파묻힌 조각"이 아닌 독립된 형태로
+    최소 한 번 등장하는지 확인한다.
+
+    먼저 빠른 substring 검사로 본문에 아예 없으면 즉시 False(대부분의
+    후보가 여기서 걸러지므로 정규식 비용을 아낀다). 등장하더라도 앞뒤에
+    한글/영문/숫자가 바로 붙어 있으면(예: "선별대상"의 "대상",
+    "인플레이션"의 "레이", "NEWS"의 "NEW") 다른 단어 안에 파묻힌 것으로
+    보고 제외한다(단어 경계 검사, 2026-09-01 추가 — 짧은 종목명이 무관한
+    단어 속에 우연히 포함되어 오탐나는 사례가 반복 보고됨). 경계를
+    통과하더라도, 언론사 접미사가 바로 이어지는 경우는 매체명 표기로
+    보고 추가로 제외한다.
+    """
+    if corp_name not in text:
+        return False
+    curated = _FALSE_POSITIVE_NAME_SUFFIXES.get(corp_name, ())
+    bad_suffixes = tuple(dict.fromkeys(curated + _GENERIC_PRESS_SUFFIXES))
     pattern = re.compile(
-        re.escape(corp_name) + "(?!" + "|".join(re.escape(s) for s in bad_suffixes) + ")"
+        r"(?<![0-9A-Za-z\uac00-\ud7a3])"
+        + re.escape(corp_name)
+        + "(?!" + "|".join(re.escape(s) for s in bad_suffixes) + ")"
+        + r"(?![0-9A-Za-z\uac00-\ud7a3])"
     )
     return bool(pattern.search(text))
+
+
 
 
 # 뉴스 본문/제목에 정식 종목명 대신 흔히 쓰이는 줄임말(약칭). 정식

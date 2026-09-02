@@ -91,6 +91,7 @@ def remove_keyword(keyword: str) -> list[str]:
 # 뉴스강도(min_score)와 키워드 필터는 이미 전용 명령이 있으므로 여기서는
 # 그 외의 조절 가능한 변수만 다룬다.
 ADJUSTABLE_VARIABLES: dict[str, tuple[int, int, str]] = {
+    "deep_dive_min_score": (0, 100, "AI_선별한_뉴스 기준 점수(이 점수 이상만 AI 심층분석)"),
     "max_new_per_cycle": (1, 50, "주기당 최대 전송 건수"),
     "fetch_interval_seconds": (10, 3600, "수집 주기(초)"),
 }

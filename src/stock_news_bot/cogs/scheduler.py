@@ -31,6 +31,7 @@ from stock_news_bot.storage.dedup import DedupStore
 from stock_news_bot.storage.github_backup import backup_db
 from stock_news_bot.storage.history import HistoryStore
 from stock_news_bot.storage.market_data import MarketDataStore
+from stock_news_bot.schedule_engine import ScheduleEventStore, extract_events
 from stock_news_bot.utils.errors import BaseBotError
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,9 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         self.history_store = HistoryStore(self.settings.db_path)
         self.market_store = MarketDataStore(self.settings.db_path)
         self.dart_client = DartClient(self.settings.db_path)
+        # 일정 브리핑 엔진: 같은 db_path를 공유하는 별도 테이블(schedule_events).
+        # dedup.py/history.py와 같은 패턴으로 독립 커넥션을 연다.
+        self.schedule_store = ScheduleEventStore(self.settings.db_path)
         # 실시간 파이프라인: 수집과 분석/송출을 분리한다.
         # 수집 루프는 절대 송출 완료를 기다리지 않고 다음 피드를 확인한다.
         # 분석은 여러 worker가 병렬 처리하고, Discord/Telegram 송출은 별도
@@ -268,26 +272,71 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             "매번 0으로 초기화된다면 디스크 마운트를 확인해야 합니다." + warning
         )
 
-    def cog_unload(self) -> None:
-        self.pipeline_loop.cancel()
-        self.health_loop.cancel()
+    async def cog_unload(self) -> None:
+        # 2026-08-31 DB 손상 사고 재발 방지:
+        # task.cancel()은 "취소 요청"만 예약할 뿐 그 태스크가 실제로 멈출
+        # 때까지 기다려주지 않는다. 이전 코드는 cancel()만 호출하고 곧바로
+        # store.close()를 불렀기 때문에, 마침 그 순간 SQLite에 쓰기 중이던
+        # 태스크가 미처 끝나기 전에 DB 커넥션이 닫혀 파일이 손상될 수 있었다.
+        # 이제 cog_unload를 async로 바꾸고(discord.py가 코루틴이면 자동으로
+        # await해준다) 취소된 태스크들이 실제로 끝날 때까지 gather로 기다린
+        # 뒤에야 store를 닫는다.
+        loops = [self.pipeline_loop, self.health_loop]
         if self.settings.github_backup_enabled:
-            self.backup_loop.cancel()
-            # 종료 직전 최신 상태를 한 번 더 백업 시도한다(베스트 에포트).
-            # 실패해도 종료 자체를 막지 않는다.
-            asyncio.create_task(asyncio.to_thread(backup_db, self.settings))
-        for task in self._analysis_workers:
-            task.cancel()
+            loops.append(self.backup_loop)
+        tasks_to_await = []
+        for loop in loops:
+            loop.cancel()
+            loop_task = loop.get_task()
+            if loop_task is not None:
+                tasks_to_await.append(loop_task)
+
+        tasks_to_await.extend(self._analysis_workers)
         self._analysis_workers.clear()
         if self._send_worker_task:
-            self._send_worker_task.cancel()
+            tasks_to_await.append(self._send_worker_task)
             self._send_worker_task = None
+        for task in tasks_to_await:
+            task.cancel()
+        if tasks_to_await:
+            # run_in_executor/asyncio.to_thread로 돌아가는 백그라운드 스레드
+            # (LLM 분석, 기사 크롤링 등 느린 네트워크 호출 포함)는 task.cancel()로
+            # 즉시 멈추지 않는다 — 실행 중인 스레드가 자연히 끝날 때까지 코루틴이
+            # 계속 기다리게 된다. 이걸 무제한으로 기다리면 종료가 오래 걸리다
+            # 못해 불안정해질 수 있어(2026-08-31 SEGV 발생 확인) 20초로 상한을
+            # 둔다. SQLite 쓰기 자체는 보통 순식간에 끝나므로 20초면 충분하고,
+            # 혹시 넘기면 그 이후는 베스트 에포트로 넘어간다.
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks_to_await, return_exceptions=True),
+                    timeout=20,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "종료 대기 20초 초과 — 아직 끝나지 않은 백그라운드 작업(느린 네트워크 호출 등)이 "
+                    "있어 더 기다리지 않고 DB를 닫습니다."
+                )
+
         if self.alerter:
-            asyncio.create_task(self.alerter.stop_callback_polling())
+            try:
+                await self.alerter.stop_callback_polling()
+            except Exception:
+                logger.exception("종료 중 텔레그램 콜백 폴링 정지 실패")
+
+        if self.settings.github_backup_enabled:
+            # 종료 직전 최신 상태를 한 번 더 백업 시도한다(베스트 에포트).
+            # 실패해도 종료 자체를 막지 않는다. store를 닫기 전에 끝까지
+            # 기다려서, 종료 도중 DB 파일을 동시에 건드리지 않게 한다.
+            try:
+                await asyncio.to_thread(backup_db, self.settings)
+            except Exception:
+                logger.exception("종료 직전 백업 실패 (베스트 에포트이므로 종료는 계속 진행)")
+
         self.dedup_store.close()
         self.history_store.close()
         self.market_store.close()
         self.dart_client.close()
+        self.schedule_store.close()
 
     async def _notify_discord(self, *, title: str, description: str, ok: bool) -> None:
         channel_id = self.settings.discord_admin_channel_id or self.settings.discord_news_channel_id
@@ -451,17 +500,43 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     )
                     continue
 
+                # 일정 브리핑 엔진: 발송 여부 판정과는 완전히 독립적으로,
+                # 본문에 언급된 예정 이벤트(실적발표/주주총회/임상/상장 등)를
+                # 옆에서 계속 누적한다. 날짜 파싱 실패/이벤트 키워드 없음은
+                # 정상 경로(빈 리스트)이고, 그 외 예외는 베스트 에포트로
+                # 무시한다 — 일정 추출이 실패해도 원래 뉴스 발송은 절대
+                # 막지 않는다.
+                try:
+                    schedule_events = extract_events(item)
+                    if schedule_events:
+                        added = await asyncio.to_thread(
+                            self.schedule_store.add_events, schedule_events
+                        )
+                        if added:
+                            logger.info(
+                                "📅 일정 이벤트 %d건 신규 저장 | %s | %s",
+                                added, item.company, item.title[:80],
+                            )
+                except Exception:
+                    logger.exception(
+                        "일정 이벤트 추출/저장 실패(베스트 에포트) | title=%s",
+                        item.title[:100],
+                    )
+
                 # 1차 규칙 분석은 사실 추출/신뢰도 판정에 사용하고,
                 # 로컬 LLM은 그 결과를 바탕으로 맥락과 영향까지 자연어로 보강한다.
                 # API 오류나 잘못된 응답은 llm_analyzer 내부에서 안전하게 폴백한다.
                 llm_enabled = self.settings.llm_analysis_enabled
                 has_gemini_key = bool(self.settings.gemini_api_key)
                 has_openrouter_key = bool(self.settings.openrouter_api_key)
+                from stock_news_bot.runtime_settings import get_variable as _get_deep_dive_min_score
+                deep_dive_min_score = _get_deep_dive_min_score("deep_dive_min_score", 70)
+                passes_deep_dive_score = item.score >= deep_dive_min_score
                 logger.info(
-                    "🧪 LLM 진단 | 기사 분석 조건 | enabled=%s | Gemini키=%s | OpenRouter키=%s | title=%s",
-                    llm_enabled, has_gemini_key, has_openrouter_key, item.title[:80],
+                    "🧪 LLM 진단 | 기사 분석 조건 | enabled=%s | Gemini키=%s | OpenRouter키=%s | AI_선별한_뉴스기준=%d | score=%d | title=%s",
+                    llm_enabled, has_gemini_key, has_openrouter_key, deep_dive_min_score, item.score, item.title[:80],
                 )
-                if llm_enabled and (has_gemini_key or has_openrouter_key):
+                if passes_deep_dive_score and llm_enabled and (has_gemini_key or has_openrouter_key):
                     # 누적 DB를 단순 건수로만 보여주지 않고, 같은 종목/섹터의
                     # 과거 실제 사례와 주가 반응을 함께 LLM에 제공한다.
                     try:
@@ -977,6 +1052,10 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         )
 
         self.dedup_store.cleanup_old(self.settings.dedup_retention_days)
+        try:
+            self.schedule_store.cleanup_old(self.settings.schedule_event_retention_days)
+        except Exception:
+            logger.exception("일정 이벤트 정리 실패(베스트 에포트)")
         return {"fetched": len(items), "new": queued, "sent": 0}
 
     @tasks.loop(seconds=300)

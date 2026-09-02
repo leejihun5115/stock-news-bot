@@ -166,16 +166,19 @@ class TelegramAlerter:
         keyword_preview = ", ".join(keywords[:15]) if keywords else "없음"
         if len(keywords) > 15:
             keyword_preview += f" 외 {len(keywords) - 15}개"
+        deep_dive_score = runtime_settings.get_variable("deep_dive_min_score", 70)
         max_new = runtime_settings.get_variable("max_new_per_cycle", self._default_max_new_per_cycle)
         interval = runtime_settings.get_variable("fetch_interval_seconds", self._default_fetch_interval_seconds)
         lines = [
             "⚙️ <b>설정</b>\n",
+            f"· AI_선별한_뉴스 기준 점수: <b>{deep_dive_score}</b>",
             f"· 뉴스강도(통과 점수): <b>{snap['min_score']}</b>",
             f"· 뉴스 키워드 필터: <b>{keyword_state}</b>",
             f"· 키워드({len(keywords)}개): {keyword_preview}",
             f"· 주기당 최대 전송: <b>{max_new}건</b>",
             f"· 수집 주기: <b>{interval}초</b>\n",
             "이 채팅에 문장으로 바로 입력하면 즉시 반영됩니다.",
+            "예) <code>AI_선별한_뉴스 70으로 올려줘</code>",
             "예) <code>뉴스강도 60으로 올려줘</code>",
             "예) <code>키워드 꺼줘</code> / <code>키워드 켜줘</code>",
             "예) <code>키워드 추가 삼성전자</code>",
@@ -198,6 +201,7 @@ class TelegramAlerter:
             if resp.status != 200:
                 logger.error("텔레그램 설정 화면 전송 실패(status=%s): %s", resp.status, await resp.text())
 
+    _DEEP_DIVE_SCORE_RE = re.compile(r"(AI_선별한_뉴스|AI선별한뉴스|딥다이브|심층분석)\D{0,6}(\d{1,3})")
     _INTENSITY_RE = re.compile(r"(강도|intensity)\D{0,6}(\d{1,3})")
     # 키워드 추가/삭제는 "키워드 켜줘/꺼줘"(필터 on/off)보다 먼저 검사해야 한다 —
     # 둘 다 "키워드"로 시작하는 문장이라서 순서가 뒤바뀌면 오탐한다.
@@ -211,6 +215,12 @@ class TelegramAlerter:
     async def _handle_command_text(self, session: aiohttp.ClientSession, chat_id: int, text: str) -> None:
         """설정 화면 안내를 보고 사용자가 채팅에 직접 친 문장을 파싱해서 즉시 반영한다."""
         compact = text.strip()
+
+        m = self._DEEP_DIVE_SCORE_RE.search(compact.replace(" ", ""))
+        if m:
+            new_value = runtime_settings.set_variable("deep_dive_min_score", int(m.group(2)))
+            await self.send(f"✅ AI_선별한_뉴스 기준 점수를 <b>{new_value}</b>(으)로 변경했습니다.")
+            return
 
         m = self._KEYWORD_ADD_RE.search(compact)
         if m:
@@ -254,6 +264,18 @@ class TelegramAlerter:
             await self.send(f"✅ 수집 주기를 <b>{new_value}초</b>로 변경했습니다. (다음 사이클부터 적용)")
             return
 
+        await self.send(
+            "\u2753 \uba85\ub839\uc744 \uc774\ud574\ud558\uc9c0 \ubabb\ud588\uc5b4\uc694.\n\n"
+            "\uc0ac\uc6a9 \uac00\ub2a5\ud55c \uba85\ub839 \uc608\uc2dc:\n"
+            "\u00b7 AI_\uc120\ubcc4\ud55c_\ub274\uc2a4 70\n"
+            "\u00b7 \ud0a4\uc6cc\ub4dc \ucd94\uac00 \uc0bc\uc131\uc804\uc790\n"
+            "\u00b7 \ud0a4\uc6cc\ub4dc \uc0ad\uc81c \uc0bc\uc131\uc804\uc790\n"
+            "\u00b7 \ud0a4\uc6cc\ub4dc \ucf1c\uae30 / \ud0a4\uc6cc\ub4dc \ub054\uae30\n"
+            "\u00b7 \ub274\uc2a4\uac15\ub3c4 60\n"
+            "\u00b7 \uc218\uc9d1\uc8fc\uae30 90\n"
+            "\u00b7 \ucd5c\ub300\uc804\uc1a1 20"
+        )
+
     def start_callback_polling(self) -> None:
         if not self.enabled or self._callback_task is not None:
             return
@@ -276,7 +298,10 @@ class TelegramAlerter:
         바꿔친다(디스코드의 edit_message()와 같은 방식). 새 메시지를 채팅
         맨 아래에 보내지 않으므로, 뉴스가 많이 쌓인 채팅 중간에서 버튼을
         눌러도 상세 내용이 항상 그 자리에서 열린다."""
-        timeout = aiohttp.ClientTimeout(total=35)
+        # 45초: getUpdates에 넘기는 long-poll timeout(25초)에 여유를 더 줘서
+        # 네트워크가 살짝 느려질 때도 자체 타임아웃(TimeoutError)이 잦게
+        # 발생하지 않도록 한다(2026-08-31 기준 반복 ERROR 로그의 원인).
+        timeout = aiohttp.ClientTimeout(total=45)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 while not self._stop_event.is_set():
@@ -343,8 +368,18 @@ class TelegramAlerter:
                             await session.post(self._url("answerCallbackQuery"), json={"callback_query_id": callback["id"], "text": answer_text})
                     except asyncio.CancelledError:
                         raise
+                    except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                        # long-poll 특성상 가끔 발생하는 정상적인 일시적
+                        # 네트워크 지연/타임아웃이다. 트레이스백 없이
+                        # 짧게만 남기고 조용히 재시도한다.
+                        logger.warning(
+                            "텔레그램 폴링 중 일시적 네트워크 오류(%s: %s) — 3초 후 재시도",
+                            type(exc).__name__,
+                            exc,
+                        )
+                        await asyncio.sleep(3)
                     except Exception:
-                        logger.exception("텔레그램 버튼 처리 중 오류")
+                        logger.exception("텔레그램 버튼 처리 중 예기치 못한 오류")
                         await asyncio.sleep(3)
         except asyncio.CancelledError:
             return
