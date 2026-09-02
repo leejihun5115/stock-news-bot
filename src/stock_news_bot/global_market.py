@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
+import sqlite3
 from typing import Optional
 
 import yfinance as yf
+
+from stock_news_bot.storage.dart_client import DartClient
 
 logger = logging.getLogger(__name__)
 
@@ -356,6 +360,131 @@ def collect_global_market_prompt() -> str:
 
     snapshot = collect_global_market_snapshot()
     return snapshot.to_prompt() + build_market_impact_guide(snapshot)
+
+
+# ---------------------------------------------------------------------------
+# 테마 관련종목 (누적 뉴스 데이터 기반)
+#
+# 【원칙】AI가 기억이나 웹 검색으로 종목명을 지어내지 않는다. 오직 봇이
+# 실제로 수집·저장해온 뉴스 제목(seen_news.title)에 "진짜로" 등장한
+# 종목만, DART 상장사 매칭(dart_client.match_all_companies)으로 추출해
+# 집계한다. 데이터가 없으면 억지로 채우지 않고 빈 결과를 반환한다.
+#
+# 【순위 판단 기준】
+#   1순위: "상한가" + 테마 키워드가 함께 있는 기사에 등장한 종목
+#          (실제로 강하게 움직였다는 근거가 가장 강함)
+#   2순위: 1순위만으로 부족하면 "특징주" + 테마 키워드 기사로 보충
+#   동률이면 누적 등장 횟수, 그다음 최근 등장 시각 순으로 정렬한다.
+# ---------------------------------------------------------------------------
+
+THEME_KEYWORDS: dict[str, list[str]] = {
+    "유가": ["유가", "원유", "정유"],
+    "금리": ["금리", "기준금리", "국채금리"],
+    "환율": ["환율", "원달러", "원/달러"],
+    "금": ["금값", "국제금값", "금시세", "골드"],
+    "구리": ["구리", "구리값", "구리 가격"],
+    "천연가스": ["천연가스", "LNG"],
+    "비트코인": ["비트코인", "가상자산", "암호화폐"],
+    "반도체": ["반도체"],
+}
+
+# 국내 브리핑에 매번 순서대로 집계할 테마 목록(THEME_KEYWORDS의 키 그대로 사용).
+THEME_ORDER: list[str] = list(THEME_KEYWORDS.keys())
+
+
+def _fetch_theme_titles(
+    db_path: str,
+    keywords: list[str],
+    required_word: str,
+    limit: int = 300,
+) -> list[tuple[str, str]]:
+    """required_word(예: '상한가'/'특징주')와 테마 키워드가 함께 있는 기사
+    제목을 최신순으로 반환한다. (title, first_seen_at) 튜플 리스트."""
+
+    like_clauses = " OR ".join(["title LIKE ?"] * len(keywords))
+    query = (
+        f"SELECT title, first_seen_at FROM seen_news "
+        f"WHERE title LIKE ? AND ({like_clauses}) "
+        f"ORDER BY first_seen_at DESC LIMIT ?"
+    )
+    params: list[object] = [f"%{required_word}%"] + [f"%{kw}%" for kw in keywords] + [limit]
+
+    try:
+        with closing(sqlite3.connect(db_path)) as conn:
+            cur = conn.execute(query, params)
+            return cur.fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("테마 관련종목 집계용 뉴스 조회 실패 | %s", str(exc)[:300])
+        return []
+
+
+def collect_theme_leader_stocks(
+    db_path: str,
+    theme_name: str = "유가",
+    top_n: int = 3,
+) -> str:
+    """누적 뉴스 데이터에서 테마 관련 종목을 실제 언급 빈도/강도 순으로 뽑는다.
+
+    아무것도 못 찾으면 빈 문자열을 반환한다 — 이 경우 호출부는 이 섹션
+    자체를 생략해야 한다(데이터 없음을 억지로 채우지 않음).
+    """
+    keywords = THEME_KEYWORDS.get(theme_name, [])
+    if not keywords:
+        return ""
+
+    try:
+        dart_client = DartClient(db_path)
+    except Exception:
+        logger.exception("테마 관련종목 집계용 DART 클라이언트 초기화 실패")
+        return ""
+
+    try:
+        limit_up_rows = _fetch_theme_titles(db_path, keywords, "상한가")
+        featured_rows = _fetch_theme_titles(db_path, keywords, "특징주")
+
+        # corp_name -> {count, last_seen, limit_up}
+        stats: dict[str, dict] = {}
+
+        def _tally(rows: list[tuple[str, str]], is_limit_up: bool) -> None:
+            for title, seen_at in rows:
+                for match in dart_client.match_all_companies(title):
+                    entry = stats.setdefault(
+                        match.corp_name,
+                        {"count": 0, "last_seen": seen_at, "limit_up": False},
+                    )
+                    entry["count"] += 1
+                    if seen_at > entry["last_seen"]:
+                        entry["last_seen"] = seen_at
+                    if is_limit_up:
+                        entry["limit_up"] = True
+
+        _tally(limit_up_rows, True)
+        _tally(featured_rows, False)
+
+        if not stats:
+            logger.info("🛢 %s 테마 관련종목: 누적 데이터에서 찾지 못함", theme_name)
+            return ""
+
+        ranked = sorted(
+            stats.items(),
+            key=lambda kv: (kv[1]["limit_up"], kv[1]["count"], kv[1]["last_seen"]),
+            reverse=True,
+        )[:top_n]
+
+        rank_labels = ["대장주", "2등주", "3등주"]
+        lines = [f"🛢 [{theme_name} 테마 관련종목 — 누적 뉴스 데이터 기준]"]
+        for idx, (corp_name, info) in enumerate(ranked):
+            rank_label = rank_labels[idx] if idx < len(rank_labels) else f"{idx + 1}위"
+            evidence = "🔥상한가 이력" if info["limit_up"] else "특징주 언급"
+            last_seen_date = str(info["last_seen"])[:10]
+            lines.append(
+                f"- {rank_label}: {corp_name} ({evidence}, 누적 {info['count']}회, 최근 {last_seen_date})"
+            )
+        lines.append("* 실제 저장된 뉴스 원문에 등장한 종목만 집계한 결과이며, 매매 추천이 아닙니다.")
+
+        return "\n".join(lines)
+    finally:
+        dart_client.close()
 
 
 if __name__ == "__main__":
