@@ -31,7 +31,6 @@ from stock_news_bot.storage.dedup import DedupStore
 from stock_news_bot.storage.github_backup import backup_db
 from stock_news_bot.storage.history import HistoryStore
 from stock_news_bot.storage.market_data import MarketDataStore
-from stock_news_bot.schedule_engine import ScheduleEventStore, extract_events
 from stock_news_bot.utils.errors import BaseBotError
 
 logger = logging.getLogger(__name__)
@@ -133,7 +132,6 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         self.dart_client = DartClient(self.settings.db_path)
         # 일정 브리핑 엔진: 같은 db_path를 공유하는 별도 테이블(schedule_events).
         # dedup.py/history.py와 같은 패턴으로 독립 커넥션을 연다.
-        self.schedule_store = ScheduleEventStore(self.settings.db_path)
         # 실시간 파이프라인: 수집과 분석/송출을 분리한다.
         # 수집 루프는 절대 송출 완료를 기다리지 않고 다음 피드를 확인한다.
         # 분석은 여러 worker가 병렬 처리하고, Discord/Telegram 송출은 별도
@@ -349,6 +347,11 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             description=description[:4000],
             color=discord.Color.green() if ok else discord.Color.red(),
         )
+        from stock_news_bot.image_resolver import get_image_url_for_title as _get_image_url
+
+        image_url = _get_image_url(title)
+        if image_url:
+            embed.set_image(url=image_url)
         try:
             await channel.send(embed=embed)
         except discord.HTTPException:

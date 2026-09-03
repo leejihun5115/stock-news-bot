@@ -94,6 +94,25 @@ class TelegramAlerter:
         except Exception:
             logger.exception("텔레그램 알림 전송 중 예외 발생(재시도 %d회 모두 실패)", _SEND_RETRY_ATTEMPTS)
 
+    async def send_photo(self, photo_url: str, caption: str = "") -> None:
+        """이미지 URL과 함께 알림을 보낸다. photo_url이 비어 있으면 send()로 대체한다."""
+        if not photo_url:
+            await self.send(caption)
+            return
+        if not self.enabled:
+            logger.debug("텔레그램 알림 비활성화: %s", caption)
+            return
+        payload = {
+            "chat_id": self._chat_id,
+            "photo": photo_url,
+            "caption": caption[:1024],
+            "parse_mode": "HTML",
+        }
+        try:
+            await self._post_with_retry("sendPhoto", payload, log_label="텔레그램 이미지 알림")
+        except Exception:
+            logger.exception("텔레그램 이미지 알림 전송 중 예외 발생(재시도 %d회 모두 실패)", _SEND_RETRY_ATTEMPTS)
+
     async def _post_with_retry(self, method: str, payload: dict, *, log_label: str) -> None:
         """일시적 타임아웃/연결 오류에 한해 지수 백오프로 재시도한다.
 
