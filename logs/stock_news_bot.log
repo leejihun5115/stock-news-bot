@@ -11292,3 +11292,1204 @@ NameError: name 'extract_events' is not defined
 2026-09-03 19:15:18 | WARNING  | 🟡 | stock_news_bot.cogs.scheduler | 수집 실패: 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
 2026-09-03 19:15:19 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00631518): 조회된 데이타가 없습니다.
 2026-09-03 19:15:26 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=096770): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:15:28 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00601191): 조회된 데이타가 없습니다.
+2026-09-03 19:15:38 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=299030): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:15:39 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00117188): 조회된 데이타가 없습니다.
+2026-09-03 19:15:47 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=004800): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:15:49 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01386916): 조회된 데이타가 없습니다.
+2026-09-03 19:15:51 | INFO     | 🟢 | __main__ | stock-news-bot 시작
+2026-09-03 19:15:54 | INFO     | 🟢 | stock_news_bot.storage.github_backup | ✅ GitHub 백업에서 DB 복원 완료: data/stock_news_bot.sqlite3 (40952.0KB)
+2026-09-03 19:15:55 | WARNING  | 🟡 | discord.client | PyNaCl is not installed, voice will NOT be supported
+2026-09-03 19:15:55 | WARNING  | 🟡 | discord.client | davey is not installed, voice will NOT be supported
+2026-09-03 19:15:55 | WARNING  | 🟡 | discord.ext.commands.bot | Privileged message content intent is missing, commands may not work as expected.
+2026-09-03 19:15:55 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 뉴스 수집기 (stock_news_bot.cogs.fetcher)
+2026-09-03 19:15:55 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 뉴스 분류기 (stock_news_bot.cogs.classifier)
+2026-09-03 19:15:55 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 알림 전송기 (stock_news_bot.cogs.notifier)
+2026-09-03 19:15:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 📦 GitHub DB 백업 루프 시작: 주기=60s, repo=leejihun5115/stock-news-bot, path=backups/stock_news_bot.sqlite3
+2026-09-03 19:15:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 실시간 뉴스 파이프라인 시작: 수집주기=60s / 분석worker=6 / Queue최대=500
+2026-09-03 19:15:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 설정 | enabled=True | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free
+2026-09-03 19:15:55 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 자동 스케줄러 (stock_news_bot.cogs.scheduler)
+2026-09-03 19:15:58 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 시세 연동(DART/pykrx) (stock_news_bot.cogs.market_intel)
+2026-09-03 19:15:58 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 마켓 브리핑(국내/미국장): 활성화 (국내=장중 30분 간격+15:40 마감, 미국=장중 30분 간격+마감 자동감지)
+2026-09-03 19:15:58 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 국내/미국장 브리핑 (stock_news_bot.cogs.market_briefing)
+2026-09-03 19:15:58 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 관리자 명령 (stock_news_bot.cogs.admin)
+2026-09-03 19:15:58 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 누적 DB 상태: 발송이력 1855건, 주가반응 789건 (경로=data/stock_news_bot.sqlite3)
+2026-09-03 19:16:02 | INFO     | 🟢 | stock_news_bot.bot | 로그인 완료: ♣실전은_타이밍#6787 (id=1542322984927109171)
+2026-09-03 19:16:02 | INFO     | 🟢 | stock_news_bot.bot | ⚡ Discord READY까지 부팅 소요: 7.78초
+2026-09-03 19:16:02 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | Render NEWS_KEYWORDS 적용: 214개 키워드 → 214개 RSS 검색 피드
+2026-09-03 19:16:02 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 국내 브리핑: 장중 시간이 아니라 이번 30분 주기는 건너뜁니다 (04:16)
+2026-09-03 19:16:03 | INFO     | 🟢 | stock_news_bot.bot | ✅ 통제소 부팅 완료 메시지 전송 성공: 채널=1542330154766962709
+2026-09-03 19:16:03 | INFO     | 🟢 | stock_news_bot.bot | 슬래시 명령 전역 동기화 완료
+2026-09-03 19:16:03 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00126380): 조회된 데이타가 없습니다.
+2026-09-03 19:16:18 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:16:18 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-03 19:16:18 | WARNING  | 🟡 | stock_news_bot.cogs.market_briefing | 미국장 브리핑 RSS 일부 수집 실패: 1건
+2026-09-03 19:16:20 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=005930): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:16:21 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(42.4MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:16:22 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00126362): 조회된 데이타가 없습니다.
+2026-09-03 19:16:30 | ERROR    | 🔴 | yfinance | $KS=F: possibly delisted; no price data found  (period=5d)
+2026-09-03 19:16:30 | WARNING  | 🟡 | stock_news_bot.global_market | 글로벌 지표 데이터 없음 | 코스피 선물 | KS=F
+2026-09-03 19:16:30 | INFO     | 🟢 | stock_news_bot.global_market | 🌎 글로벌 시장 데이터 수집 완료 | 31/32
+2026-09-03 19:16:32 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 미국 브리핑용 '유가' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 462, in collect_theme_leader_stocks
+    _tally(featured_rows, False)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-03 19:16:32 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=006400): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:16:33 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00258801): 조회된 데이타가 없습니다.
+2026-09-03 19:16:34 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 미국 브리핑용 '금리' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 462, in collect_theme_leader_stocks
+    _tally(featured_rows, False)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-03 19:16:34 | INFO     | 🟢 | stock_news_bot.global_market | 🛢 환율 테마 관련종목: 누적 데이터에서 찾지 못함
+2026-09-03 19:16:36 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 미국 브리핑용 '금' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 462, in collect_theme_leader_stocks
+    _tally(featured_rows, False)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-03 19:16:37 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 미국 브리핑용 '구리' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 462, in collect_theme_leader_stocks
+    _tally(featured_rows, False)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-03 19:16:39 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 미국 브리핑용 '천연가스' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 461, in collect_theme_leader_stocks
+    _tally(limit_up_rows, True)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-03 19:16:40 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 미국 브리핑용 '비트코인' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 461, in collect_theme_leader_stocks
+    _tally(limit_up_rows, True)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-03 19:16:41 | WARNING  | 🟡 | discord.gateway | Can't keep up, shard ID None websocket is 42.0s behind.
+2026-09-03 19:16:42 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 미국 브리핑용 '반도체' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 461, in collect_theme_leader_stocks
+    _tally(limit_up_rows, True)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-03 19:16:42 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-03 19:16:43 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=035720): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:16:44 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00164779): 조회된 데이타가 없습니다.
+2026-09-03 19:16:44 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-03 19:16:44 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 🇺🇸 미국장 AI 분석 완료 | 탈모 신약은 어떤게 진행되고 있을까?
+2026-09-03 19:16:44 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-03 19:16:50 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-03 19:16:51 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 🇺🇸 미국장 AI 분석 완료 | [美특징주]타이슨푸드, 급락…소고기 마진 압박에 실적 전망 또 하향
+2026-09-03 19:16:51 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-03 19:16:52 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=000660): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:16:53 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01515323): 조회된 데이타가 없습니다.
+2026-09-03 19:16:56 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-03 19:16:57 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 🇺🇸 미국장 AI 분석 완료 | [美특징주]로빈후드, 급등…도이체방크 예측시장 긍정 평가
+2026-09-03 19:16:57 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-03 19:17:01 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=373220): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:17:02 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00106641): 조회된 데이타가 없습니다.
+2026-09-03 19:17:03 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-03 19:17:05 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 🇺🇸 미국장 AI 분석 완료 | [美특징주]넷스코프, 상승…분기 실적·전망치 양호
+2026-09-03 19:17:05 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-03 19:17:10 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-03 19:17:10 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 🇺🇸 미국장 AI 분석 완료 | [美특징주]빅토리아시크릿, 엇갈린 실적에 실망…12%대 급락
+2026-09-03 19:17:12 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=000270): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:17:14 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00398701): 조회된 데이타가 없습니다.
+2026-09-03 19:17:14 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 미국 브리핑 발송 완료 | 기사 5건 | 검색어='뉴욕증시 마감 다우 나스닥'
+2026-09-03 19:17:20 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=066970): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:17:20 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(42.4MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:17:21 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01258710): 조회된 데이타가 없습니다.
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 닥터조의 쉬운 바이오 → 10건
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 시황맨TV → 10건
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 안될공학 → 10건
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 엔지니어TV → 10건
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: EZ KIPOST → 10건
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 삼프로TV → 10건
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 언더스탠딩 → 10건
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: IT의 신 이형수 → 10건
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 월가아재 → 10건
+2026-09-03 19:17:21 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 슈카월드 → 10건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 내일은 투자왕 단테 → 10건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 와이스트릿 → 10건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색 완료: 검색어=12개 → 120건 수집(오류 0건)
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @notRealDonaldTrump_kr → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @newszzang → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @stockdartalert → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @allsiljuk → 6건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @sunstudy → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @shmstory → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @bornlupin → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @DrDtech → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @one_going → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @HANAchina → 19건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @gaoshoukorea → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @goddessTTF → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @theelec → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @scalpinglove → 17건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @rocket_news1 → 20건
+2026-09-03 19:17:22 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 전체 수집: 15개 채널에서 282건
+2026-09-03 19:17:23 | WARNING  | 🟡 | stock_news_bot.cogs.scheduler | 수집 실패: 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:17:26 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=302430): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:17:28 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01412822): 조회된 데이타가 없습니다.
+2026-09-03 19:17:37 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=336370): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:17:38 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00480783): 조회된 데이타가 없습니다.
+2026-09-03 19:17:48 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=091580): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:17:49 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00113997): 조회된 데이타가 없습니다.
+2026-09-03 19:18:00 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=020150): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:18:01 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00807379): 조회된 데이타가 없습니다.
+2026-09-03 19:18:16 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=243840): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:18:17 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00117300): 조회된 데이타가 없습니다.
+2026-09-03 19:18:28 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=002710): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:18:29 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00177816): 조회된 데이타가 없습니다.
+2026-09-03 19:18:29 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(42.4MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 첫 부팅 배치: 최근 24.0시간 중 최신 8건만 Queue에 등록합니다.
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 📚 YouTube/Blog/Telegram 상장종목 콘텐츠 통과: 1건 (MEDIUM 점수 기준=50)
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=45 | source="반도체소재" - Google 뉴스 | 美 기업 4곳, 한국에 20억달러 투자… 반도체 소재·장비 키운다 - 조선일보
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=40 | source="바이오" - Google 뉴스 | 삼성바이오 '3조 유증' 결단… "장기투자 완주 위해" - 머니투데이 - 머니투데이
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=40 | source="반도체" - Google 뉴스 | 정부, 美 반도체 등 4개 기업 투자 유치…3조원 규모 - v.daum.net
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=40 | source="반도체소재" - Google 뉴스 | 정부, 美 반도체 등 4개 기업 투자 유치…3조원 규모 - 네이트
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=0 | source="특허" - Google 뉴스 | 퓨처슈티컬스와 아우라 사이언티픽, 커피 열매 특허 분쟁 해결하면서 FC 특허권 인정하고 CognatiQ®로 원활한 전환 착수 - peopleview.co.kr
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 이번 주기 점수 미달 제외: 7건(기준 50점 미만) — 자세한 항목은 위 로그 참고
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 실시간 수집 완료: 수집=20194 / 최근24.0h=8 / 필터통과=1 / 신규=1 / Queue등록=1 / Queue잔량=1 / 오류=1
+2026-09-03 19:18:47 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 정리 실패(베스트 에포트)
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 1059, in _run_pipeline_once
+    self.schedule_store.cleanup_old(self.settings.schedule_event_retention_days)
+    ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SchedulerCog' object has no attribute 'schedule_store'
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=078600): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | Render NEWS_KEYWORDS 적용: 214개 키워드 → 214개 RSS 검색 피드
+2026-09-03 19:18:47 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=[미국 특징주] 타이슨푸드, 한 달 만에 또 실적 전망 하향…7%대 하락 (뉴스핌) https://www.newspim.com/news/view/20260904000030 타이슨푸
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=45 | title=[미국 특징주] 타이슨푸드, 한 달 만에 또 실적 전망 하향…7%대 하락 (뉴스핌) https://www.newspim.com/news/view
+2026-09-03 19:18:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=0 | queue=1 | [미국 특징주] 타이슨푸드, 한 달 만에 또 실적 전망 하향…7%대 하락 (뉴스핌) https://www.newspim.com/news/view/20260904000030 타이슨푸
+2026-09-03 19:18:48 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00536541): 조회된 데이타가 없습니다.
+2026-09-03 19:18:51 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=0 | published=2026-09-03T19:10:51+00:00 | [미국 특징주] 타이슨푸드, 한 달 만에 또 실적 전망 하향…7%대 하락 (뉴스핌) https://www.newspim.com/news/view/20260904000030 타이슨푸드 주가 7% 하락, 거래가격은 51
+2026-09-03 19:19:00 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=086520): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:19:01 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00595191): 조회된 데이타가 없습니다.
+2026-09-03 19:19:13 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=093370): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:19:14 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01279698): 조회된 데이타가 없습니다.
+2026-09-03 19:19:19 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(43.8MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:19:23 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=0011T0): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:19:24 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00263371): 조회된 데이타가 없습니다.
+2026-09-03 19:19:32 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=039340): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:19:33 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00112165): 조회된 데이타가 없습니다.
+2026-09-03 19:19:41 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=092200): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:19:42 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00155276): 조회된 데이타가 없습니다.
+2026-09-03 19:19:50 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=003670): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:19:51 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00136226): 조회된 데이타가 없습니다.
+2026-09-03 19:19:59 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=065350): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:20:00 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00631518): 조회된 데이타가 없습니다.
+2026-09-03 19:20:04 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:20:04 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-03 19:20:05 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 닥터조의 쉬운 바이오 → 10건
+2026-09-03 19:20:05 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 시황맨TV → 10건
+2026-09-03 19:20:05 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 언더스탠딩 → 10건
+2026-09-03 19:20:05 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 엔지니어TV → 10건
+2026-09-03 19:20:05 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 삼프로TV → 10건
+2026-09-03 19:20:05 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: IT의 신 이형수 → 10건
+2026-09-03 19:20:05 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 와이스트릿 → 10건
+2026-09-03 19:20:05 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 월가아재 → 10건
+2026-09-03 19:20:05 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 슈카월드 → 10건
+2026-09-03 19:20:05 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 안될공학 → 10건
+2026-09-03 19:20:05 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 내일은 투자왕 단테 → 10건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: EZ KIPOST → 10건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색 완료: 검색어=12개 → 120건 수집(오류 0건)
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=096770): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @notRealDonaldTrump_kr → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @newszzang → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @stockdartalert → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @allsiljuk → 6건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @sunstudy → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @shmstory → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @bornlupin → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @DrDtech → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @one_going → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @HANAchina → 19건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @gaoshoukorea → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @goddessTTF → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @theelec → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @scalpinglove → 17건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @rocket_news1 → 20건
+2026-09-03 19:20:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 전체 수집: 15개 채널에서 282건
+2026-09-03 19:20:07 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00601191): 조회된 데이타가 없습니다.
+2026-09-03 19:20:08 | WARNING  | 🟡 | stock_news_bot.cogs.scheduler | 수집 실패: 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:20:17 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=299030): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:20:18 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00117188): 조회된 데이타가 없습니다.
+2026-09-03 19:20:23 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(43.8MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:20:28 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=004800): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:20:30 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01386916): 조회된 데이타가 없습니다.
+2026-09-03 19:20:40 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=361610): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:20:41 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00173740): 조회된 데이타가 없습니다.
+2026-09-03 19:20:51 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=005450): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:20:52 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00152686): 조회된 데이타가 없습니다.
+2026-09-03 19:21:06 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 📚 YouTube/Blog/Telegram 상장종목 콘텐츠 통과: 94건 (MEDIUM 점수 기준=50)
+2026-09-03 19:21:06 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=75 | source="이더리움" - Google 뉴스 | 코인시장 다시 변동성 구간…봉크(BONK) 11%대 급락, 미국 금리와 이란 전쟁이 변수 - CBC뉴스
+2026-09-03 19:21:06 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source="하이브" - Google 뉴스 | [속보]경찰, 방시혁 ‘사기적 부정거래’ 혐의로 송치…수사 20개월 만 - 경향신문
+2026-09-03 19:21:06 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source=Telegram @rocket_news1 | [중국 특징주] 中 LED 대표기업 '삼안광전', 최대주주 파산 구조조정 신... (뉴스핌) https://www.newspim.com/news/view/20260903001004
+2026-09-03 19:21:06 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=60 | source=Telegram @bornlupin | 브로드컴 Q3 FY2026 어닝콜 중 공급 병목 관련 ① 가장 중요한 구속력있는 병목: 부지·전력·쉘(Land, Power, Shell) “우리는 각 고객과 매우 긴밀하게 협력하면
+2026-09-03 19:21:06 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=55 | source="목표주가상향" - Google 뉴스 | 하나금융지주, 하반기 실적 개선 기대… 목표주가 16만원으로 상향 - 신한투자증권 - S저널
+2026-09-03 19:21:06 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 이번 주기 점수 미달 제외: 4104건(기준 50점 미만) — 자세한 항목은 위 로그 참고
+2026-09-03 19:21:06 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=007810): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:21:06 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=70 | source="급등" - Google 뉴스 | [뉴욕 금가격] 월러 '비둘기' 발언에 3% 급등 - KB Think
+2026-09-03 19:21:06 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=트럼프, DEI 대학에 ‘면세 박탈’ 초강수…미국 사립학교 1만8천 곳 영향 [공부의여신 네트워크] 재무부와 IRS가 입학·장학금·대출·운동부·교내시설 등에서 인종·피부색·출신국가
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:21:06 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=0 | title=트럼프, DEI 대학에 ‘면세 박탈’ 초강수…미국 사립학교 1만8천 곳 영향 [공부의여신 네트워크] 재무부와 IRS가 입학·장학금·대출·운동부·
+2026-09-03 19:21:06 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=4 | queue=1 | 트럼프, DEI 대학에 ‘면세 박탈’ 초강수…미국 사립학교 1만8천 곳 영향 [공부의여신 네트워크] 재무부와 IRS가 입학·장학금·대출·운동부·교내시설 등에서 인종·피부색·출신국가
+2026-09-03 19:21:07 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=50 | source="계약" - Google 뉴스 | 크루소, 제인 스트리트와 130억 달러 규모 클라우드 계약 - Investing.com 한국어
+2026-09-03 19:21:07 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=[미국 특징주] 레노버·에이서, 엔비디아 RTX 칩 탑재 첫 윈도 PC 10월 출... (뉴스핌) https://www.newspim.com/news/view/20260904000
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:21:07 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=40 | title=[미국 특징주] 레노버·에이서, 엔비디아 RTX 칩 탑재 첫 윈도 PC 10월 출... (뉴스핌) https://www.newspim.com/n
+2026-09-03 19:21:07 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=2 | queue=1 | [미국 특징주] 레노버·에이서, 엔비디아 RTX 칩 탑재 첫 윈도 PC 10월 출... (뉴스핌) https://www.newspim.com/news/view/20260904000
+2026-09-03 19:21:07 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=[글로벌 특징주] 엔스케일, 로봇 스타트업 피겨와 35억달러 AI 컴퓨팅 계... (뉴스핌) https://www.newspim.com/news/view/20260904000022
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:21:07 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=55 | title=[글로벌 특징주] 엔스케일, 로봇 스타트업 피겨와 35억달러 AI 컴퓨팅 계... (뉴스핌) https://www.newspim.com/news
+2026-09-03 19:21:07 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=5 | queue=2 | [글로벌 특징주] 엔스케일, 로봇 스타트업 피겨와 35억달러 AI 컴퓨팅 계... (뉴스핌) https://www.newspim.com/news/view/20260904000022
+2026-09-03 19:21:07 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 실시간 수집 완료: 수집=20142 / 최근24.0h=4473 / 필터통과=369 / 신규=8 / Queue등록=8 / Queue잔량=1 / 오류=1
+2026-09-03 19:21:07 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 정리 실패(베스트 에포트)
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 1059, in _run_pipeline_once
+    self.schedule_store.cleanup_old(self.settings.schedule_event_retention_days)
+    ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SchedulerCog' object has no attribute 'schedule_store'
+2026-09-03 19:21:07 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=베어드, 클라임 바이오 목표주가 $25로 상향... 임상 데이터 긍정적 - Investing.com 한국어
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:21:07 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=55 | title=베어드, 클라임 바이오 목표주가 $25로 상향... 임상 데이터 긍정적 - Investing.com 한국어
+2026-09-03 19:21:07 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=0 | queue=3 | 베어드, 클라임 바이오 목표주가 $25로 상향... 임상 데이터 긍정적 - Investing.com 한국어
+2026-09-03 19:21:07 | INFO     | 🟢 | stock_news_bot.company_profile | 회사 프로필 조회 실패(대상): Expecting value: line 1 column 1 (char 0)
+2026-09-03 19:21:08 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=80 | source="신규수주" - Google 뉴스 | 슈퍼 X AI 테크놀로지, 자사주 매입·아태 수주 5,880만 달러 확보로 급등 - 매일경제 마켓
+2026-09-03 19:21:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | Render NEWS_KEYWORDS 적용: 214개 키워드 → 214개 RSS 검색 피드
+2026-09-03 19:21:08 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=📊 고용 데이터 및 월러 발언 이후 연준 금리 동결 확률 급등 9월 연준 금리 동결 확률이 상승 중이며, Kalshi는 현재 동결 확률을 56%로, 25bp 인상 확률을 41%로 
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:21:08 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=75 | title=📊 고용 데이터 및 월러 발언 이후 연준 금리 동결 확률 급등 9월 연준 금리 동결 확률이 상승 중이며, Kalshi는 현재 동결 확률을 56%
+2026-09-03 19:21:08 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00120021): 조회된 데이타가 없습니다.
+2026-09-03 19:21:18 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 본문 확보 | 길이=0 | url=https://t.me/gaoshoukorea/64006
+2026-09-03 19:21:18 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-03 19:21:19 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 상장사 목록 갱신 완료: 3988개
+2026-09-03 19:21:19 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | DART 상장사 목록 갱신 완료: 3988개
+2026-09-03 19:21:20 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-03 19:21:21 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 호출 종료 | 성공=True | title=📊 고용 데이터 및 월러 발언 이후 연준 금리 동결 확률 급등 9월 연준 금리 동결 확률이 상승 중이며, Kalshi는 현재 동결 확률을 56%
+2026-09-03 19:21:21 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🤖 무료 LLM 분석 보강 완료 | Gemini -> OpenRouter -> 규칙 엔진 | 📊 고용 데이터 및 월러 발언 이후 연준 금리 동결 확률 급등 9월 연준 금리 동결 확률이 상승 중이며, Kalshi는 현재 동결 확률을 56%로, 25bp 인상 확률을 41%로 
+2026-09-03 19:21:21 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=4 | queue=4 | 📊 고용 데이터 및 월러 발언 이후 연준 금리 동결 확률 급등 9월 연준 금리 동결 확률이 상승 중이며, Kalshi는 현재 동결 확률을 56%로, 25bp 인상 확률을 41%로 
+2026-09-03 19:21:23 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=4 | published=2026-09-03T17:22:29+00:00 | 트럼프, DEI 대학에 ‘면세 박탈’ 초강수…미국 사립학교 1만8천 곳 영향 [공부의여신 네트워크] 재무부와 IRS가 입학·장학금·대출·운동부·교내시설 등에서 인종·피부색·출신국가·민족을 기준으로 혜택을 부여하는 사
+2026-09-03 19:21:25 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=003550): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:21:26 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00109693): 조회된 데이타가 없습니다.
+2026-09-03 19:21:26 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=3 | published=2026-09-03T16:07:33+00:00 | 📊 고용 데이터 및 월러 발언 이후 연준 금리 동결 확률 급등 9월 연준 금리 동결 확률이 상승 중이며, Kalshi는 현재 동결 확률을 56%로, 25bp 인상 확률을 41%로 반영하고 있음. 이는 실업수당 청구 
+2026-09-03 19:21:31 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=2 | published=2026-09-03T17:03:00+00:00 | 베어드, 클라임 바이오 목표주가 $25로 상향... 임상 데이터 긍정적 - Investing.com 한국어
+2026-09-03 19:21:34 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=000210): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:21:35 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=1 | published=2026-09-03T17:15:38+00:00 | [글로벌 특징주] 엔스케일, 로봇 스타트업 피겨와 35억달러 AI 컴퓨팅 계... (뉴스핌) https://www.newspim.com/news/view/20260904000022 엔스케일은 로봇 스타트업 피겨에 최
+2026-09-03 19:21:35 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(43.9MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:21:35 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01042650): 조회된 데이타가 없습니다.
+2026-09-03 19:21:38 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=0 | published=2026-09-03T18:51:15+00:00 | [미국 특징주] 레노버·에이서, 엔비디아 RTX 칩 탑재 첫 윈도 PC 10월 출... (뉴스핌) https://www.newspim.com/news/view/20260904000029 엔비디아 주가 상승, RTX 
+2026-09-03 19:21:44 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=115180): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:21:45 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01256864): 조회된 데이타가 없습니다.
+2026-09-03 19:21:53 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=298380): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:21:55 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00842619): 조회된 데이타가 없습니다.
+2026-09-03 19:22:03 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=141080): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:22:04 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00877059): 조회된 데이타가 없습니다.
+2026-09-03 19:22:14 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=207940): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:22:15 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00121941): 조회된 데이타가 없습니다.
+2026-09-03 19:22:21 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.0MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:22:23 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=001680): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:22:24 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00956930): 조회된 데이타가 없습니다.
+2026-09-03 19:22:26 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:22:26 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-03 19:22:27 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 닥터조의 쉬운 바이오 → 10건
+2026-09-03 19:22:27 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 언더스탠딩 → 10건
+2026-09-03 19:22:27 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 안될공학 → 10건
+2026-09-03 19:22:27 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 시황맨TV → 10건
+2026-09-03 19:22:27 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: EZ KIPOST → 10건
+2026-09-03 19:22:27 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 월가아재 → 10건
+2026-09-03 19:22:27 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 슈카월드 → 10건
+2026-09-03 19:22:27 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 와이스트릿 → 10건
+2026-09-03 19:22:27 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 엔지니어TV → 10건
+2026-09-03 19:22:27 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 내일은 투자왕 단테 → 10건
+2026-09-03 19:22:27 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 삼프로TV → 10건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: IT의 신 이형수 → 10건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색 완료: 검색어=12개 → 120건 수집(오류 0건)
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @notRealDonaldTrump_kr → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @newszzang → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @stockdartalert → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @allsiljuk → 6건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @sunstudy → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @shmstory → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @bornlupin → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @DrDtech → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @one_going → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @HANAchina → 19건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @gaoshoukorea → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @goddessTTF → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @theelec → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @scalpinglove → 17건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @rocket_news1 → 20건
+2026-09-03 19:22:28 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 전체 수집: 15개 채널에서 282건
+2026-09-03 19:22:29 | WARNING  | 🟡 | stock_news_bot.cogs.scheduler | 수집 실패: 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:22:29 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=170900): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:22:30 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00413046): 조회된 데이타가 없습니다.
+2026-09-03 19:22:39 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=068270): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:22:41 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01226234): 조회된 데이타가 없습니다.
+2026-09-03 19:22:50 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=338840): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:22:51 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01374443): 조회된 데이타가 없습니다.
+2026-09-03 19:23:00 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=287840): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:23:02 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00415868): 조회된 데이타가 없습니다.
+2026-09-03 19:23:12 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=087010): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:23:14 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00665676): 조회된 데이타가 없습니다.
+2026-09-03 19:23:27 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.0MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:23:28 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 📚 YouTube/Blog/Telegram 상장종목 콘텐츠 통과: 93건 (MEDIUM 점수 기준=50)
+2026-09-03 19:23:28 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=75 | source="이더리움" - Google 뉴스 | 코인시장 다시 변동성 구간…봉크(BONK) 11%대 급락, 미국 금리와 이란 전쟁이 변수 - CBC뉴스
+2026-09-03 19:23:28 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source="하이브" - Google 뉴스 | [속보]경찰, 방시혁 ‘사기적 부정거래’ 혐의로 송치…수사 20개월 만 - 경향신문
+2026-09-03 19:23:28 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source=Telegram @rocket_news1 | [중국 특징주] 中 LED 대표기업 '삼안광전', 최대주주 파산 구조조정 신... (뉴스핌) https://www.newspim.com/news/view/20260903001004
+2026-09-03 19:23:28 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=60 | source=Telegram @bornlupin | 브로드컴 Q3 FY2026 어닝콜 중 공급 병목 관련 ① 가장 중요한 구속력있는 병목: 부지·전력·쉘(Land, Power, Shell) “우리는 각 고객과 매우 긴밀하게 협력하면
+2026-09-03 19:23:28 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=55 | source="목표주가상향" - Google 뉴스 | 하나금융지주, 하반기 실적 개선 기대… 목표주가 16만원으로 상향 - 신한투자증권 - S저널
+2026-09-03 19:23:28 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 이번 주기 점수 미달 제외: 4087건(기준 50점 미만) — 자세한 항목은 위 로그 참고
+2026-09-03 19:23:28 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=127710): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=75 | source="AI" - Google 뉴스 | [미국 특징주] 팔란티어, PwC와 제휴 확대…기업용 AI·M&A·ERP 현대화 정조준 - 뉴스핌
+2026-09-03 19:23:29 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=[미국 특징주] 캠벨, 실적 전망 하향·배당 삭감에 10%대 급락 (뉴스핌) https://www.newspim.com/news/view/20260904000001 NY증시에서 캠
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=75 | title=[미국 특징주] 캠벨, 실적 전망 하향·배당 삭감에 10%대 급락 (뉴스핌) https://www.newspim.com/news/view/202
+2026-09-03 19:23:29 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=[AI시대, 권력 대이동-삼성바이오에피스] AI·디지털 트윈으로 신약개발 가속…'바이오 권력지도' 바꾼다 - 포인트데일리
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=50 | title=[AI시대, 권력 대이동-삼성바이오에피스] AI·디지털 트윈으로 신약개발 가속…'바이오 권력지도' 바꾼다 - 포인트데일리
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=2 | queue=1 | [AI시대, 권력 대이동-삼성바이오에피스] AI·디지털 트윈으로 신약개발 가속…'바이오 권력지도' 바꾼다 - 포인트데일리
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 실시간 수집 완료: 수집=20283 / 최근24.0h=4450 / 필터통과=363 / 신규=8 / Queue등록=8 / Queue잔량=4 / 오류=1
+2026-09-03 19:23:29 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 정리 실패(베스트 에포트)
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 1059, in _run_pipeline_once
+    self.schedule_store.cleanup_old(self.settings.schedule_event_retention_days)
+    ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SchedulerCog' object has no attribute 'schedule_store'
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | Render NEWS_KEYWORDS 적용: 214개 키워드 → 214개 RSS 검색 피드
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=70 | source="M&A" - Google 뉴스 | M&A로 몸집 불린 사조 장남…밀가루·전분당 담합에 부채 '눈덩이' - 네이트
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=70 | source="M&A" - Google 뉴스 | M&A로 몸집 불린 사조 장남…밀가루·전분당 담합에 부채 '눈덩이' - v.daum.net
+2026-09-03 19:23:29 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=이란에서의 우리 군사 작전을 정확하게 보도하기를 거부하는 반역적인 인간 쓰레기들에게 알리건대, 우리는 이번 작전이나 혹은 일어날 가능성이 거의 없는 그 어떤 다른 전쟁(그럴 가능성
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=0 | title=이란에서의 우리 군사 작전을 정확하게 보도하기를 거부하는 반역적인 인간 쓰레기들에게 알리건대, 우리는 이번 작전이나 혹은 일어날 가능성이 거의 
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=2 | queue=1 | 이란에서의 우리 군사 작전을 정확하게 보도하기를 거부하는 반역적인 인간 쓰레기들에게 알리건대, 우리는 이번 작전이나 혹은 일어날 가능성이 거의 없는 그 어떤 다른 전쟁(그럴 가능성
+2026-09-03 19:23:29 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=>>AI 수요에 힘입은 TSMC의 역사적 확장: 장비 구매 수요 2배 •TSMC의 장비 수요가 6개월여 만에 약 90% 급증했음. 전 세계적으로 약 20개의 웨이퍼 공장이 동시에 
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=50 | title=>>AI 수요에 힘입은 TSMC의 역사적 확장: 장비 구매 수요 2배 •TSMC의 장비 수요가 6개월여 만에 약 90% 급증했음. 전 세계적으로
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=0 | queue=2 | >>AI 수요에 힘입은 TSMC의 역사적 확장: 장비 구매 수요 2배 •TSMC의 장비 수요가 6개월여 만에 약 90% 급증했음. 전 세계적으로 약 20개의 웨이퍼 공장이 동시에 
+2026-09-03 19:23:29 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=[홍콩 특징주] Kimi 만든 '문샷AI', 홍콩 상장신청서 비공개 제출 (뉴스핌) https://www.newspim.com/news/view/20260903001280 중국 L
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=40 | title=[홍콩 특징주] Kimi 만든 '문샷AI', 홍콩 상장신청서 비공개 제출 (뉴스핌) https://www.newspim.com/news/view
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=3 | queue=3 | [홍콩 특징주] Kimi 만든 '문샷AI', 홍콩 상장신청서 비공개 제출 (뉴스핌) https://www.newspim.com/news/view/20260903001280 중국 L
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 본문 확보 | 길이=0 | url=https://t.me/rocket_news1/33294
+2026-09-03 19:23:29 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-03 19:23:30 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00145109): 조회된 데이타가 없습니다.
+2026-09-03 19:23:31 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-03 19:23:31 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 호출 종료 | 성공=True | title=[미국 특징주] 캠벨, 실적 전망 하향·배당 삭감에 10%대 급락 (뉴스핌) https://www.newspim.com/news/view/202
+2026-09-03 19:23:31 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🤖 무료 LLM 분석 보강 완료 | Gemini -> OpenRouter -> 규칙 엔진 | [미국 특징주] 캠벨, 실적 전망 하향·배당 삭감에 10%대 급락 (뉴스핌) https://www.newspim.com/news/view/20260904000001 NY증시에서 캠
+2026-09-03 19:23:31 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=5 | queue=4 | [미국 특징주] 캠벨, 실적 전망 하향·배당 삭감에 10%대 급락 (뉴스핌) https://www.newspim.com/news/view/20260904000001 NY증시에서 캠
+2026-09-03 19:23:33 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=4 | published=2026-09-03T16:05:00+00:00 | [AI시대, 권력 대이동-삼성바이오에피스] AI·디지털 트윈으로 신약개발 가속…'바이오 권력지도' 바꾼다 - 포인트데일리
+2026-09-03 19:23:36 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=3 | published=2026-09-03T14:58:09+00:00 | 이란에서의 우리 군사 작전을 정확하게 보도하기를 거부하는 반역적인 인간 쓰레기들에게 알리건대, 우리는 이번 작전이나 혹은 일어날 가능성이 거의 없는 그 어떤 다른 전쟁(그럴 가능성은 극히 낮지만!)에서 사용할 수 있
+2026-09-03 19:23:38 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=000100): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:23:39 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00200275): 조회된 데이타가 없습니다.
+2026-09-03 19:23:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=2 | published=2026-09-03T15:19:27+00:00 | [홍콩 특징주] Kimi 만든 '문샷AI', 홍콩 상장신청서 비공개 제출 (뉴스핌) https://www.newspim.com/news/view/20260903001280 중국 LLM 스타트업 문샷AI가 홍콩거래소에
+2026-09-03 19:23:42 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=1 | published=2026-09-03T15:39:52+00:00 | >>AI 수요에 힘입은 TSMC의 역사적 확장: 장비 구매 수요 2배 •TSMC의 장비 수요가 6개월여 만에 약 90% 급증했음. 전 세계적으로 약 20개의 웨이퍼 공장이 동시에 건설되고 있음에도 생산능력은 여전히 
+2026-09-03 19:23:48 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=0 | published=2026-09-03T15:58:02+00:00 | [미국 특징주] 캠벨, 실적 전망 하향·배당 삭감에 10%대 급락 (뉴스핌) https://www.newspim.com/news/view/20260904000001 NY증시에서 캠벨 주가 10% 넘게 하락해 21.2
+2026-09-03 19:23:48 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=040300): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:23:49 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00160588): 조회된 데이타가 없습니다.
+2026-09-03 19:23:56 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=000880): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:23:58 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00261443): 조회된 데이타가 없습니다.
+2026-09-03 19:24:08 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=036570): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:24:09 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00863038): 조회된 데이타가 없습니다.
+2026-09-03 19:24:18 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=313760): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:24:19 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00115931): 조회된 데이타가 없습니다.
+2026-09-03 19:24:22 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.0MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:24:27 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=039840): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:24:28 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00144155): 조회된 데이타가 없습니다.
+2026-09-03 19:24:35 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=003600): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:24:35 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00197759): 조회된 데이타가 없습니다.
+2026-09-03 19:24:38 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:24:38 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-03 19:24:38 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: EZ KIPOST → 10건
+2026-09-03 19:24:38 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 안될공학 → 10건
+2026-09-03 19:24:38 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 닥터조의 쉬운 바이오 → 10건
+2026-09-03 19:24:38 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 삼프로TV → 10건
+2026-09-03 19:24:38 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 언더스탠딩 → 10건
+2026-09-03 19:24:38 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 내일은 투자왕 단테 → 10건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 월가아재 → 10건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 시황맨TV → 10건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: IT의 신 이형수 → 10건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 엔지니어TV → 10건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 슈카월드 → 10건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 와이스트릿 → 10건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색 완료: 검색어=12개 → 120건 수집(오류 0건)
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @notRealDonaldTrump_kr → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @newszzang → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @stockdartalert → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @allsiljuk → 6건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @sunstudy → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @shmstory → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @bornlupin → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @DrDtech → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @one_going → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @HANAchina → 19건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @gaoshoukorea → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @goddessTTF → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @theelec → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @scalpinglove → 17건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @rocket_news1 → 20건
+2026-09-03 19:24:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 전체 수집: 15개 채널에서 282건
+2026-09-03 19:24:40 | WARNING  | 🟡 | stock_news_bot.cogs.scheduler | 수집 실패: 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:24:42 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=025560): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:24:43 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00159023): 조회된 데이타가 없습니다.
+2026-09-03 19:24:53 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=017670): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:24:54 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00601641): 조회된 데이타가 없습니다.
+2026-09-03 19:25:04 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=197210): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:25:06 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00105952): 조회된 데이타가 없습니다.
+2026-09-03 19:25:16 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=006260): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:25:17 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00154718): 조회된 데이타가 없습니다.
+2026-09-03 19:25:26 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.0MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:25:26 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=082920): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:25:27 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00361008): 조회된 데이타가 없습니다.
+2026-09-03 19:25:38 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 📚 YouTube/Blog/Telegram 상장종목 콘텐츠 통과: 93건 (MEDIUM 점수 기준=50)
+2026-09-03 19:25:38 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=75 | source="이더리움" - Google 뉴스 | 코인시장 다시 변동성 구간…봉크(BONK) 11%대 급락, 미국 금리와 이란 전쟁이 변수 - CBC뉴스
+2026-09-03 19:25:38 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source="하이브" - Google 뉴스 | [속보]경찰, 방시혁 ‘사기적 부정거래’ 혐의로 송치…수사 20개월 만 - 경향신문
+2026-09-03 19:25:38 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source=Telegram @rocket_news1 | [중국 특징주] 中 LED 대표기업 '삼안광전', 최대주주 파산 구조조정 신... (뉴스핌) https://www.newspim.com/news/view/20260903001004
+2026-09-03 19:25:38 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=60 | source=Telegram @bornlupin | 브로드컴 Q3 FY2026 어닝콜 중 공급 병목 관련 ① 가장 중요한 구속력있는 병목: 부지·전력·쉘(Land, Power, Shell) “우리는 각 고객과 매우 긴밀하게 협력하면
+2026-09-03 19:25:38 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=55 | source="목표주가상향" - Google 뉴스 | 하나금융지주, 하반기 실적 개선 기대… 목표주가 16만원으로 상향 - 신한투자증권 - S저널
+2026-09-03 19:25:38 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 이번 주기 점수 미달 제외: 4096건(기준 50점 미만) — 자세한 항목은 위 로그 참고
+2026-09-03 19:25:38 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=082740): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:25:38 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=75 | source="실적호조" - Google 뉴스 | [美특징주]시에나, 3Q 실적 호조에도 연간 가이던스 부담…주가 10% 급락 - edaily.co.kr
+2026-09-03 19:25:39 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=오늘 미장 개장은 -테슬라 흐름 좋고 (사이버캡 공개행사) -코인주들 흐름 좋고 (코인베이스, 스트래티지, 서클, 로빈후드) -코인 반등, 금 반등 -유가는 강하지만, 금리는 소폭
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=0 | title=오늘 미장 개장은 -테슬라 흐름 좋고 (사이버캡 공개행사) -코인주들 흐름 좋고 (코인베이스, 스트래티지, 서클, 로빈후드) -코인 반등, 금 
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=2 | queue=1 | 오늘 미장 개장은 -테슬라 흐름 좋고 (사이버캡 공개행사) -코인주들 흐름 좋고 (코인베이스, 스트래티지, 서클, 로빈후드) -코인 반등, 금 반등 -유가는 강하지만, 금리는 소폭
+2026-09-03 19:25:39 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=한화오션, 대만 양밍해운 LNG 컨테이너선 6척 또 수주 - 조선일보
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=50 | title=한화오션, 대만 양밍해운 LNG 컨테이너선 6척 또 수주 - 조선일보
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=1 | queue=1 | 한화오션, 대만 양밍해운 LNG 컨테이너선 6척 또 수주 - 조선일보
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=50 | source="계약" - Google 뉴스 | “치매·암 다 된다더니…” 80세 고객의 보험계약, 열어보니 ‘진단비 0원’ - 한국NGO신문
+2026-09-03 19:25:39 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=12월까지 '헷지'해서라도 버텨라…공매도 수급에서 드러난 '7월과 다른 하락'ㅣ명민준, 박가영, 이지환 [주린이 구조대]
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=0 | title=12월까지 '헷지'해서라도 버텨라…공매도 수급에서 드러난 '7월과 다른 하락'ㅣ명민준, 박가영, 이지환 [주린이 구조대]
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=4 | queue=2 | 12월까지 '헷지'해서라도 버텨라…공매도 수급에서 드러난 '7월과 다른 하락'ㅣ명민준, 박가영, 이지환 [주린이 구조대]
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=50 | source="목표주가상향" - Google 뉴스 | 트루이스트, AI 성장 힘입어 스노우플레이크 목표주가 상향 - Investing.com 한국어
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 실시간 수집 완료: 수집=20285 / 최근24.0h=4464 / 필터통과=368 / 신규=8 / Queue등록=8 / Queue잔량=1 / 오류=1
+2026-09-03 19:25:39 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 정리 실패(베스트 에포트)
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 1059, in _run_pipeline_once
+    self.schedule_store.cleanup_old(self.settings.schedule_event_retention_days)
+    ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SchedulerCog' object has no attribute 'schedule_store'
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | Render NEWS_KEYWORDS 적용: 214개 키워드 → 214개 RSS 검색 피드
+2026-09-03 19:25:39 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=D의 테크투자, 20260903 정리 보고서 ✅ 핵심 결론 ● AI 인프라 실수요는 CAPEX, 계약잔고, 서버·네트워킹 매출로 가시화됐다. ▸ 계약잔고보다 후속 매출과 영업현금흐
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=60 | title=D의 테크투자, 20260903 정리 보고서 ✅ 핵심 결론 ● AI 인프라 실수요는 CAPEX, 계약잔고, 서버·네트워킹 매출로 가시화됐다. ▸
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=5 | queue=3 | D의 테크투자, 20260903 정리 보고서 ✅ 핵심 결론 ● AI 인프라 실수요는 CAPEX, 계약잔고, 서버·네트워킹 매출로 가시화됐다. ▸ 계약잔고보다 후속 매출과 영업현금흐
+2026-09-03 19:25:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=50 | source="목표주가상향" - Google 뉴스 | Truist, AI 수요에 HP Enterprise 목표주가 상향 - Investing.com 한국어
+2026-09-03 19:25:40 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00136378): 조회된 데이타가 없습니다.
+2026-09-03 19:25:42 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=3 | published=2026-09-03T14:40:40+00:00 | 오늘 미장 개장은 -테슬라 흐름 좋고 (사이버캡 공개행사) -코인주들 흐름 좋고 (코인베이스, 스트래티지, 서클, 로빈후드) -코인 반등, 금 반등 -유가는 강하지만, 금리는 소폭 내리고, 엔화 강하고 *금욜밤 고용
+2026-09-03 19:25:46 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=2 | published=2026-09-03T14:24:38.946814+00:00 | 12월까지 '헷지'해서라도 버텨라…공매도 수급에서 드러난 '7월과 다른 하락'ㅣ명민준, 박가영, 이지환 [주린이 구조대]
+2026-09-03 19:25:48 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=004170): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:25:49 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01316245): 조회된 데이타가 없습니다.
+2026-09-03 19:25:49 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=1 | published=2026-09-03T14:26:29+00:00 | D의 테크투자, 20260903 정리 보고서 ✅ 핵심 결론 ● AI 인프라 실수요는 CAPEX, 계약잔고, 서버·네트워킹 매출로 가시화됐다. ▸ 계약잔고보다 후속 매출과 영업현금흐름 전환을 확인한다. ● 장기금리와 
+2026-09-03 19:25:49 | INFO     | 🟢 | stock_news_bot.company_profile | 회사 프로필 조회 실패(한화오션): Expecting value: line 1 column 1 (char 0)
+2026-09-03 19:25:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=0 | published=2026-09-03T15:33:00+00:00 | 한화오션, 대만 양밍해운 LNG 컨테이너선 6척 또 수주 - 조선일보
+2026-09-03 19:25:56 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=298040): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:25:57 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00311030): 조회된 데이타가 없습니다.
+2026-09-03 19:26:05 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=037620): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:26:07 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00113261): 조회된 데이타가 없습니다.
+2026-09-03 19:26:16 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=010170): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:26:17 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00983271): 조회된 데이타가 없습니다.
+2026-09-03 19:26:22 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.1MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:26:27 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=181710): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:26:28 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00231363): 조회된 데이타가 없습니다.
+2026-09-03 19:26:36 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=032640): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:26:38 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00170558): 조회된 데이타가 없습니다.
+2026-09-03 19:26:44 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=021240): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:26:45 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00126371): 조회된 데이타가 없습니다.
+2026-09-03 19:26:49 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 닥터조의 쉬운 바이오 → 10건
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 시황맨TV → 10건
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 엔지니어TV → 10건
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 안될공학 → 10건
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: EZ KIPOST → 10건
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 와이스트릿 → 10건
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 월가아재 → 10건
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: IT의 신 이형수 → 10건
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 언더스탠딩 → 10건
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 내일은 투자왕 단테 → 10건
+2026-09-03 19:26:49 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 슈카월드 → 10건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 삼프로TV → 10건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색 완료: 검색어=12개 → 120건 수집(오류 0건)
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @notRealDonaldTrump_kr → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @newszzang → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @stockdartalert → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @allsiljuk → 6건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @sunstudy → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @shmstory → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @bornlupin → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @DrDtech → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @one_going → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @HANAchina → 19건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @gaoshoukorea → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @goddessTTF → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @theelec → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @scalpinglove → 17건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @rocket_news1 → 20건
+2026-09-03 19:26:50 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 전체 수집: 15개 채널에서 282건
+2026-09-03 19:26:51 | WARNING  | 🟡 | stock_news_bot.cogs.scheduler | 수집 실패: 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:26:51 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=009150): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:26:52 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00105961): 조회된 데이타가 없습니다.
+2026-09-03 19:27:00 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=011070): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:27:02 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01627363): 조회된 데이타가 없습니다.
+2026-09-03 19:27:07 | WARNING  | 🟡 | discord.gateway | Can't keep up, shard ID None websocket is 42.2s behind.
+2026-09-03 19:27:13 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=490470): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:27:14 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00102858): 조회된 데이타가 없습니다.
+2026-09-03 19:27:24 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=010130): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:27:26 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00161046): 조회된 데이타가 없습니다.
+2026-09-03 19:27:27 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.1MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:27:36 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=002390): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:27:37 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00828761): 조회된 데이타가 없습니다.
+2026-09-03 19:27:59 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 📚 YouTube/Blog/Telegram 상장종목 콘텐츠 통과: 93건 (MEDIUM 점수 기준=50)
+2026-09-03 19:27:59 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=75 | source="이더리움" - Google 뉴스 | 코인시장 다시 변동성 구간…봉크(BONK) 11%대 급락, 미국 금리와 이란 전쟁이 변수 - CBC뉴스
+2026-09-03 19:27:59 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source="하이브" - Google 뉴스 | [속보]경찰, 방시혁 ‘사기적 부정거래’ 혐의로 송치…수사 20개월 만 - 경향신문
+2026-09-03 19:27:59 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source=Telegram @rocket_news1 | [중국 특징주] 中 LED 대표기업 '삼안광전', 최대주주 파산 구조조정 신... (뉴스핌) https://www.newspim.com/news/view/20260903001004
+2026-09-03 19:27:59 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=60 | source=Telegram @bornlupin | 브로드컴 Q3 FY2026 어닝콜 중 공급 병목 관련 ① 가장 중요한 구속력있는 병목: 부지·전력·쉘(Land, Power, Shell) “우리는 각 고객과 매우 긴밀하게 협력하면
+2026-09-03 19:27:59 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=55 | source="목표주가상향" - Google 뉴스 | 하나금융지주, 하반기 실적 개선 기대… 목표주가 16만원으로 상향 - 신한투자증권 - S저널
+2026-09-03 19:27:59 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 이번 주기 점수 미달 제외: 4082건(기준 50점 미만) — 자세한 항목은 위 로그 참고
+2026-09-03 19:27:59 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=228670): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:27:59 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=70 | source="자사주매입" - Google 뉴스 | 17에듀케이션앤테크놀러지, 1000만 달러 자사주 매입 프로그램 승인으로 급등 - 매일경제 마켓
+2026-09-03 19:27:59 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=[Dr. J's Global Insight] 전세계 국채값 추락 - 전쟁·부채·AI가 쌓은 '채권 화산'이 터졌다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:27:59 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=0 | title=[Dr. J's Global Insight] 전세계 국채값 추락 - 전쟁·부채·AI가 쌓은 '채권 화산'이 터졌다
+2026-09-03 19:27:59 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=0 | queue=1 | [Dr. J's Global Insight] 전세계 국채값 추락 - 전쟁·부채·AI가 쌓은 '채권 화산'이 터졌다
+2026-09-03 19:28:00 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=50 | source="계약" - Google 뉴스 | AeroVironment, 미 육군으로부터 4억 6,480만 달러 규모 레이저 방어 시스템 계약 수주 - Investing.com 한국어
+2026-09-03 19:28:00 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=✅ 특징주 종목 : 레이(228670) 뉴욕증시 개장 전 특징주...스노우플레이크·넷스코프↑ VS 넷앱·휴렛팩... (뉴스핌) https://www.newspim.com/news/
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:28:00 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=70 | title=✅ 특징주 종목 : 레이(228670) 뉴욕증시 개장 전 특징주...스노우플레이크·넷스코프↑ VS 넷앱·휴렛팩... (뉴스핌) https://w
+2026-09-03 19:28:00 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=70 | source="급등" - Google 뉴스 | 테슬라 주식, 오늘 4% 급등하는 이유는? - Investing.com 한국어
+2026-09-03 19:28:00 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=70 | source="급등" - Google 뉴스 | 오늘 SpaceX 주가가 3% 급등하는 이유는? - Investing.com 한국어
+2026-09-03 19:28:00 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=70 | source="급등" - Google 뉴스 | 제네스코, 2026년 2분기 예상치 상회... 주가 10% 급등 - Investing.com 한국어
+2026-09-03 19:28:00 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 실시간 수집 완료: 수집=20253 / 최근24.0h=4452 / 필터통과=370 / 신규=8 / Queue등록=8 / Queue잔량=1 / 오류=1
+2026-09-03 19:28:00 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 정리 실패(베스트 에포트)
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 1059, in _run_pipeline_once
+    self.schedule_store.cleanup_old(self.settings.schedule_event_retention_days)
+    ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SchedulerCog' object has no attribute 'schedule_store'
+2026-09-03 19:28:00 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | Render NEWS_KEYWORDS 적용: 214개 키워드 → 214개 RSS 검색 피드
+2026-09-03 19:28:00 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=Figure의 목표는 범용 로봇 공학(General Robotics) 과제를 해결하는 것입니다 지난 2년 동안 우리는 3세대에 걸친 로봇 전반에 걸쳐 'Helix(헬릭스)'를 개발
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:28:00 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=40 | title=Figure의 목표는 범용 로봇 공학(General Robotics) 과제를 해결하는 것입니다 지난 2년 동안 우리는 3세대에 걸친 로봇 전반에
+2026-09-03 19:28:00 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=0 | queue=1 | Figure의 목표는 범용 로봇 공학(General Robotics) 과제를 해결하는 것입니다 지난 2년 동안 우리는 3세대에 걸친 로봇 전반에 걸쳐 'Helix(헬릭스)'를 개발
+2026-09-03 19:28:01 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01050738): 조회된 데이타가 없습니다.
+2026-09-03 19:28:03 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 본문 확보 | 길이=0 | url=https://t.me/rocket_news1/33292
+2026-09-03 19:28:03 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-03 19:28:07 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-03 19:28:07 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 호출 종료 | 성공=True | title=✅ 특징주 종목 : 레이(228670) 뉴욕증시 개장 전 특징주...스노우플레이크·넷스코프↑ VS 넷앱·휴렛팩... (뉴스핌) https://w
+2026-09-03 19:28:07 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🤖 무료 LLM 분석 보강 완료 | Gemini -> OpenRouter -> 규칙 엔진 | ✅ 특징주 종목 : 레이(228670) 뉴욕증시 개장 전 특징주...스노우플레이크·넷스코프↑ VS 넷앱·휴렛팩... (뉴스핌) https://www.newspim.com/news/
+2026-09-03 19:28:07 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=3 | queue=2 | ✅ 특징주 종목 : 레이(228670) 뉴욕증시 개장 전 특징주...스노우플레이크·넷스코프↑ VS 넷앱·휴렛팩... (뉴스핌) https://www.newspim.com/news/
+2026-09-03 19:28:12 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=2 | published=2026-09-03T13:59:04+00:00 | [Dr. J's Global Insight] 전세계 국채값 추락 - 전쟁·부채·AI가 쌓은 '채권 화산'이 터졌다
+2026-09-03 19:28:14 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=304100): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:28:16 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00163345): 조회된 데이타가 없습니다.
+2026-09-03 19:28:24 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=1 | published=2026-09-03T13:21:18+00:00 | Figure의 목표는 범용 로봇 공학(General Robotics) 과제를 해결하는 것입니다 지난 2년 동안 우리는 3세대에 걸친 로봇 전반에 걸쳐 'Helix(헬릭스)'를 개발해 왔습니다 Helix는 완전한 자율
+2026-09-03 19:28:24 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=012030): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:28:25 | INFO     | 🟢 | stock_news_bot.company_profile | 회사 프로필 조회 실패(레이): Expecting value: line 1 column 1 (char 0)
+2026-09-03 19:28:25 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00136864): 조회된 데이타가 없습니다.
+2026-09-03 19:28:26 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.1MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:28:31 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=0 | published=2026-09-03T13:53:14+00:00 | ✅ 특징주 종목 : 레이(228670) 뉴욕증시 개장 전 특징주...스노우플레이크·넷스코프↑ VS 넷앱·휴렛팩... (뉴스핌) https://www.newspim.com/news/view/20260903001271 
+2026-09-03 19:28:34 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=009270): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:28:36 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01466373): 조회된 데이타가 없습니다.
+2026-09-03 19:28:43 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=459550): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:28:45 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00963976): 조회된 데이타가 없습니다.
+2026-09-03 19:28:54 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=255220): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:28:55 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01370517): 조회된 데이타가 없습니다.
+2026-09-03 19:29:12 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=475040): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:29:13 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01437432): 조회된 데이타가 없습니다.
+2026-09-03 19:29:22 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=383930): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:29:23 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00867034): 조회된 데이타가 없습니다.
+2026-09-03 19:29:28 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.1MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:29:29 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=176750): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:29:29 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:29:29 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-03 19:29:29 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00453929): 조회된 데이타가 없습니다.
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 닥터조의 쉬운 바이오 → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 안될공학 → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 언더스탠딩 → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 월가아재 → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 엔지니어TV → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 내일은 투자왕 단테 → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 시황맨TV → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: EZ KIPOST → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 와이스트릿 → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: IT의 신 이형수 → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 삼프로TV → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 슈카월드 → 10건
+2026-09-03 19:29:30 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색 완료: 검색어=12개 → 120건 수집(오류 0건)
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @notRealDonaldTrump_kr → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @newszzang → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @stockdartalert → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @allsiljuk → 6건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @sunstudy → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @shmstory → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @bornlupin → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @DrDtech → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @one_going → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @HANAchina → 19건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @gaoshoukorea → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @goddessTTF → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @theelec → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @scalpinglove → 17건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @rocket_news1 → 20건
+2026-09-03 19:29:31 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 전체 수집: 15개 채널에서 282건
+2026-09-03 19:29:31 | WARNING  | 🟡 | stock_news_bot.cogs.scheduler | 수집 실패: 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:29:36 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=078160): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:29:37 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00128032): 조회된 데이타가 없습니다.
+2026-09-03 19:29:45 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=000520): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:29:47 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00216027): 조회된 데이타가 없습니다.
+2026-09-03 19:29:53 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=053030): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:29:54 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01544468): 조회된 데이타가 없습니다.
+2026-09-03 19:30:05 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=456070): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:30:07 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01319899): 조회된 데이타가 없습니다.
+2026-09-03 19:30:17 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=302440): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:30:19 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00871833): 조회된 데이타가 없습니다.
+2026-09-03 19:30:31 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.1MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 📚 YouTube/Blog/Telegram 상장종목 콘텐츠 통과: 93건 (MEDIUM 점수 기준=50)
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=75 | source="이더리움" - Google 뉴스 | 코인시장 다시 변동성 구간…봉크(BONK) 11%대 급락, 미국 금리와 이란 전쟁이 변수 - CBC뉴스
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source="하이브" - Google 뉴스 | [속보]경찰, 방시혁 ‘사기적 부정거래’ 혐의로 송치…수사 20개월 만 - 경향신문
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source=Telegram @rocket_news1 | [중국 특징주] 中 LED 대표기업 '삼안광전', 최대주주 파산 구조조정 신... (뉴스핌) https://www.newspim.com/news/view/20260903001004
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=60 | source=Telegram @bornlupin | 브로드컴 Q3 FY2026 어닝콜 중 공급 병목 관련 ① 가장 중요한 구속력있는 병목: 부지·전력·쉘(Land, Power, Shell) “우리는 각 고객과 매우 긴밀하게 협력하면
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=55 | source="목표주가상향" - Google 뉴스 | 하나금융지주, 하반기 실적 개선 기대… 목표주가 16만원으로 상향 - 신한투자증권 - S저널
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 이번 주기 점수 미달 제외: 4100건(기준 50점 미만) — 자세한 항목은 위 로그 참고
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=237690): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=70 | source="급등" - Google 뉴스 | 중동 긴장에 국제유가 급등…키움운용, 미국 에너지 ETF 1년 수익률 41.5% - 코리아리포트
+2026-09-03 19:30:32 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=피규어(Figure) CEO Brett Adcock 오늘 Figure는 NVIDIA Vera Rubin 플랫폼에 최대 10만 개의 GPU를 배치하기 위해 Nscale과 파트너십을 
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=0 | title=피규어(Figure) CEO Brett Adcock 오늘 Figure는 NVIDIA Vera Rubin 플랫폼에 최대 10만 개의 GPU를 배치
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=5 | queue=1 | 피규어(Figure) CEO Brett Adcock 오늘 Figure는 NVIDIA Vera Rubin 플랫폼에 최대 10만 개의 GPU를 배치하기 위해 Nscale과 파트너십을 
+2026-09-03 19:30:32 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=>닉 티미라오스: 연준 월러의 입장에 미묘한 전환 •닉 티미라오스는 연준 이사 월러의 입장이 7월 이후 근본적으로 바뀐 것은 아니지만, 성향은 뚜렷하게 전환됐다고 밝혔음. 이전에는
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=0 | title=>닉 티미라오스: 연준 월러의 입장에 미묘한 전환 •닉 티미라오스는 연준 이사 월러의 입장이 7월 이후 근본적으로 바뀐 것은 아니지만, 성향은 
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=1 | queue=1 | >닉 티미라오스: 연준 월러의 입장에 미묘한 전환 •닉 티미라오스는 연준 이사 월러의 입장이 7월 이후 근본적으로 바뀐 것은 아니지만, 성향은 뚜렷하게 전환됐다고 밝혔음. 이전에는
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=70 | source="인수" - Google 뉴스 | 애퍼지 테라퓨틱스, 애브비에 109억 달러 규모 피인수 완료…나스닥 상장폐지 절차 착수 - 데이터투자
+2026-09-03 19:30:32 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=연준의 윌러 가만히 앉아서 인내심을 갖고 지켜볼 용의가 있음 특정 수치를 못 박고 싶지는 않으나, 3개월 수치가 2.8%에 이른다면 괜찮은 수준임 수정치가 반영되면 근원 인플레이션
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=50 | title=연준의 윌러 가만히 앉아서 인내심을 갖고 지켜볼 용의가 있음 특정 수치를 못 박고 싶지는 않으나, 3개월 수치가 2.8%에 이른다면 괜찮은 수준
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=2 | queue=2 | 연준의 윌러 가만히 앉아서 인내심을 갖고 지켜볼 용의가 있음 특정 수치를 못 박고 싶지는 않으나, 3개월 수치가 2.8%에 이른다면 괜찮은 수준임 수정치가 반영되면 근원 인플레이션
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 실시간 수집 완료: 수집=20260 / 최근24.0h=4467 / 필터통과=367 / 신규=8 / Queue등록=8 / Queue잔량=2 / 오류=1
+2026-09-03 19:30:32 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 정리 실패(베스트 에포트)
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 1059, in _run_pipeline_once
+    self.schedule_store.cleanup_old(self.settings.schedule_event_retention_days)
+    ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SchedulerCog' object has no attribute 'schedule_store'
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | Render NEWS_KEYWORDS 적용: 214개 키워드 → 214개 RSS 검색 피드
+2026-09-03 19:30:32 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=•미국 금리 하락, 트레이더들은 연준의 금리인상 베팅을 축소 •앞서 연준 이사 월러는 인플레이션이 개선되는 조짐을 보이기 시작했다고 밝혔음 >美债上涨，交易员削减美联储加息押注，此前美
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=0 | title=•미국 금리 하락, 트레이더들은 연준의 금리인상 베팅을 축소 •앞서 연준 이사 월러는 인플레이션이 개선되는 조짐을 보이기 시작했다고 밝혔음 >美
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=5 | queue=3 | •미국 금리 하락, 트레이더들은 연준의 금리인상 베팅을 축소 •앞서 연준 이사 월러는 인플레이션이 개선되는 조짐을 보이기 시작했다고 밝혔음 >美债上涨，交易员削减美联储加息押注，此前美
+2026-09-03 19:30:32 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=[단독] 사우디 AI 기업 HUMAIN, 올해 대규모 글로벌 VC 펀드 출범 사우디아라비아의 국영 AI 기업 HUMAIN이 기존 계획이었던 100억 달러를 넘어서는 초대형 글로벌 
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=60 | title=[단독] 사우디 AI 기업 HUMAIN, 올해 대규모 글로벌 VC 펀드 출범 사우디아라비아의 국영 AI 기업 HUMAIN이 기존 계획이었던 10
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=3 | queue=4 | [단독] 사우디 AI 기업 HUMAIN, 올해 대규모 글로벌 VC 펀드 출범 사우디아라비아의 국영 AI 기업 HUMAIN이 기존 계획이었던 100억 달러를 넘어서는 초대형 글로벌 
+2026-09-03 19:30:32 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=>>엔비디아, Hugging Face 인수 합의…젠슨 황 “모델 자유 업로드·다운로드, 엔비디아 하드웨어 사용 강제하지 않을 것” •엔비디아는 AI 오픈소스 플랫폼 Hugging 
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=45 | title=>>엔비디아, Hugging Face 인수 합의…젠슨 황 “모델 자유 업로드·다운로드, 엔비디아 하드웨어 사용 강제하지 않을 것” •엔비디아는 
+2026-09-03 19:30:32 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=4 | queue=5 | >>엔비디아, Hugging Face 인수 합의…젠슨 황 “모델 자유 업로드·다운로드, 엔비디아 하드웨어 사용 강제하지 않을 것” •엔비디아는 AI 오픈소스 플랫폼 Hugging 
+2026-09-03 19:30:33 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00611736): 조회된 데이타가 없습니다.
+2026-09-03 19:30:36 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=5 | published=2026-09-03T13:13:55+00:00 | 피규어(Figure) CEO Brett Adcock 오늘 Figure는 NVIDIA Vera Rubin 플랫폼에 최대 10만 개의 GPU를 배치하기 위해 Nscale과 파트너십을 체결 했습니다. 초기에 35억 달러를
+2026-09-03 19:30:39 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=4 | published=2026-09-03T12:41:29+00:00 | •미국 금리 하락, 트레이더들은 연준의 금리인상 베팅을 축소 •앞서 연준 이사 월러는 인플레이션이 개선되는 조짐을 보이기 시작했다고 밝혔음 >美债上涨，交易员削减美联储加息押注，此前美联储理事沃勒称通胀已显现改善迹象。 （来
+2026-09-03 19:30:41 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=092870): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:30:42 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00920379): 조회된 데이타가 없습니다.
+2026-09-03 19:30:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=3 | published=2026-09-03T12:50:27+00:00 | >>엔비디아, Hugging Face 인수 합의…젠슨 황 “모델 자유 업로드·다운로드, 엔비디아 하드웨어 사용 강제하지 않을 것” •엔비디아는 AI 오픈소스 플랫폼 Hugging Face를 129억3,000만 달러에
+2026-09-03 19:30:49 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=2 | published=2026-09-03T12:55:54+00:00 | [단독] 사우디 AI 기업 HUMAIN, 올해 대규모 글로벌 VC 펀드 출범 사우디아라비아의 국영 AI 기업 HUMAIN이 기존 계획이었던 100억 달러를 넘어서는 초대형 글로벌 벤처캐피털(VC) 펀드를 연내 출범 
+2026-09-03 19:30:50 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=356860): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:30:52 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00543107): 조회된 데이타가 없습니다.
+2026-09-03 19:30:52 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=1 | published=2026-09-03T12:59:06+00:00 | >닉 티미라오스: 연준 월러의 입장에 미묘한 전환 •닉 티미라오스는 연준 이사 월러의 입장이 7월 이후 근본적으로 바뀐 것은 아니지만, 성향은 뚜렷하게 전환됐다고 밝혔음. 이전에는 인플레이션에 대한 우려가 더 크고 
+2026-09-03 19:30:56 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=0 | published=2026-09-03T13:02:37+00:00 | 연준의 윌러 가만히 앉아서 인내심을 갖고 지켜볼 용의가 있음 특정 수치를 못 박고 싶지는 않으나, 3개월 수치가 2.8%에 이른다면 괜찮은 수준임 수정치가 반영되면 근원 인플레이션이 큰 폭으로 둔화할 가능성이 있음 
+2026-09-03 19:31:01 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=080580): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:31:02 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00442145): 조회된 데이타가 없습니다.
+2026-09-03 19:31:11 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=083930): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:31:12 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00572905): 조회된 데이타가 없습니다.
+2026-09-03 19:31:21 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=095340): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:31:22 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01170865): 조회된 데이타가 없습니다.
+2026-09-03 19:31:25 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.2MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:31:32 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=253590): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:31:33 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01032413): 조회된 데이타가 없습니다.
+2026-09-03 19:31:39 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=195870): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:31:40 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00593032): 조회된 데이타가 없습니다.
+2026-09-03 19:31:41 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:31:41 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 닥터조의 쉬운 바이오 → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 월가아재 → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 언더스탠딩 → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 시황맨TV → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 엔지니어TV → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: IT의 신 이형수 → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 안될공학 → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 슈카월드 → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 와이스트릿 → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 삼프로TV → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 내일은 투자왕 단테 → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: EZ KIPOST → 10건
+2026-09-03 19:31:42 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색 완료: 검색어=12개 → 120건 수집(오류 0건)
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @notRealDonaldTrump_kr → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @newszzang → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @stockdartalert → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @allsiljuk → 6건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @sunstudy → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @shmstory → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @bornlupin → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @DrDtech → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @one_going → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @HANAchina → 19건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @gaoshoukorea → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @goddessTTF → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @theelec → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @scalpinglove → 17건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @rocket_news1 → 20건
+2026-09-03 19:31:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 전체 수집: 15개 채널에서 282건
+2026-09-03 19:31:43 | WARNING  | 🟡 | stock_news_bot.cogs.scheduler | 수집 실패: 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:31:46 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=093050): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:31:47 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01462605): 조회된 데이타가 없습니다.
+2026-09-03 19:31:57 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=388050): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:31:58 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01208849): 조회된 데이타가 없습니다.
+2026-09-03 19:32:09 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=267320): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:32:10 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01211232): 조회된 데이타가 없습니다.
+2026-09-03 19:32:19 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=282880): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:32:20 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01563922): 조회된 데이타가 없습니다.
+2026-09-03 19:32:21 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.2MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:32:30 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=413390): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:32:31 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00356361): 조회된 데이타가 없습니다.
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 📚 YouTube/Blog/Telegram 상장종목 콘텐츠 통과: 94건 (MEDIUM 점수 기준=50)
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=75 | source="이더리움" - Google 뉴스 | 코인시장 다시 변동성 구간…봉크(BONK) 11%대 급락, 미국 금리와 이란 전쟁이 변수 - CBC뉴스
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source="하이브" - Google 뉴스 | [속보]경찰, 방시혁 ‘사기적 부정거래’ 혐의로 송치…수사 20개월 만 - 경향신문
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source=Telegram @rocket_news1 | [중국 특징주] 中 LED 대표기업 '삼안광전', 최대주주 파산 구조조정 신... (뉴스핌) https://www.newspim.com/news/view/20260903001004
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=60 | source=Telegram @bornlupin | 브로드컴 Q3 FY2026 어닝콜 중 공급 병목 관련 ① 가장 중요한 구속력있는 병목: 부지·전력·쉘(Land, Power, Shell) “우리는 각 고객과 매우 긴밀하게 협력하면
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=55 | source="목표주가상향" - Google 뉴스 | 하나금융지주, 하반기 실적 개선 기대… 목표주가 16만원으로 상향 - 신한투자증권 - S저널
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 이번 주기 점수 미달 제외: 4125건(기준 50점 미만) — 자세한 항목은 위 로그 참고
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=051910): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:32:43 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=미국 국채 금리 하락 이유. 월러 발언. 시황맨 크리스토퍼 월러 이사는 인플레 데이터에 놀라운 결과가 없다면 금리 유지하겠다고 발언 관세 영향이 완화되었을 가능성이 높고 에너지 가
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=0 | title=미국 국채 금리 하락 이유. 월러 발언. 시황맨 크리스토퍼 월러 이사는 인플레 데이터에 놀라운 결과가 없다면 금리 유지하겠다고 발언 관세 영향이
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=0 | queue=1 | 미국 국채 금리 하락 이유. 월러 발언. 시황맨 크리스토퍼 월러 이사는 인플레 데이터에 놀라운 결과가 없다면 금리 유지하겠다고 발언 관세 영향이 완화되었을 가능성이 높고 에너지 가
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=50 | source="계약" - Google 뉴스 | 사이큐리온, 연간 80만 달러 규모 계약 수주 - Investing.com 한국어
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=50 | source="계약" - Google 뉴스 | 레이크랜드, 홍콩서 내화성 비행 장비 계약 수주 - Investing.com 한국어
+2026-09-03 19:32:43 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=연준의 월러 AI 투자는 GDP의 타당한 구성 요소이며, AI는 생산성을 '확실하게' 끌어올릴 것 올해 GDP 성장률이 2%를 소폭 상회할 것으로 전망 노동 시장 또한 양호하며, 
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=45 | title=연준의 월러 AI 투자는 GDP의 타당한 구성 요소이며, AI는 생산성을 '확실하게' 끌어올릴 것 올해 GDP 성장률이 2%를 소폭 상회할 것으
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=1 | queue=1 | 연준의 월러 AI 투자는 GDP의 타당한 구성 요소이며, AI는 생산성을 '확실하게' 끌어올릴 것 올해 GDP 성장률이 2%를 소폭 상회할 것으로 전망 노동 시장 또한 양호하며, 
+2026-09-03 19:32:43 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=한화오션, 1.5조원 신규 수주 속 대금 회수 불확실성과 공시 정정 '주의' - 데일리연합
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=50 | title=한화오션, 1.5조원 신규 수주 속 대금 회수 불확실성과 공시 정정 '주의' - 데일리연합
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=0 | queue=2 | 한화오션, 1.5조원 신규 수주 속 대금 회수 불확실성과 공시 정정 '주의' - 데일리연합
+2026-09-03 19:32:43 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=Hugging Face CEO 129억 3,030만 달러 규모의 인수를 통해 엔비디아(NVIDIA)와 힘을 합치기로 했다는 소식을 전하게 되어 매우 기쁩니다. 허깅페이스(Huggi
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=50 | title=Hugging Face CEO 129억 3,030만 달러 규모의 인수를 통해 엔비디아(NVIDIA)와 힘을 합치기로 했다는 소식을 전하게 되어 
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=2 | queue=3 | Hugging Face CEO 129억 3,030만 달러 규모의 인수를 통해 엔비디아(NVIDIA)와 힘을 합치기로 했다는 소식을 전하게 되어 매우 기쁩니다. 허깅페이스(Huggi
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 실시간 수집 완료: 수집=20157 / 최근24.0h=4498 / 필터통과=373 / 신규=8 / Queue등록=8 / Queue잔량=1 / 오류=1
+2026-09-03 19:32:43 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 정리 실패(베스트 에포트)
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 1059, in _run_pipeline_once
+    self.schedule_store.cleanup_old(self.settings.schedule_event_retention_days)
+    ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SchedulerCog' object has no attribute 'schedule_store'
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | Render NEWS_KEYWORDS 적용: 214개 키워드 → 214개 RSS 검색 피드
+2026-09-03 19:32:43 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=NVIDIA, Hugging Face 인수 인수 개요 인수 금액: 129억 3,030만 달러(약 129억 3천만 달러) 목표: Hugging Face 플랫폼 규모 확장, 인프라 강
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=50 | title=NVIDIA, Hugging Face 인수 인수 개요 인수 금액: 129억 3,030만 달러(약 129억 3천만 달러) 목표: Hugging F
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=4 | queue=4 | NVIDIA, Hugging Face 인수 인수 개요 인수 금액: 129억 3,030만 달러(약 129억 3천만 달러) 목표: Hugging Face 플랫폼 규모 확장, 인프라 강
+2026-09-03 19:32:43 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=2시 증시 급락 이유는 블록딜? 시황맨 오후 증시 급락에 대한 원인 분석이 분분한데 쿠웨이트가 공격 받으며 중동 전선이 확대되고 있다는 분석. 다만 이건 장중 설명 드렸듯 이미 한
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:32:43 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=75 | title=2시 증시 급락 이유는 블록딜? 시황맨 오후 증시 급락에 대한 원인 분석이 분분한데 쿠웨이트가 공격 받으며 중동 전선이 확대되고 있다는 분석. 
+2026-09-03 19:32:44 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01351080): 조회된 데이타가 없습니다.
+2026-09-03 19:32:45 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 본문 확보 | 길이=0 | url=https://t.me/shmstory/8942
+2026-09-03 19:32:45 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-03 19:32:46 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-03 19:32:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 호출 종료 | 성공=True | title=2시 증시 급락 이유는 블록딜? 시황맨 오후 증시 급락에 대한 원인 분석이 분분한데 쿠웨이트가 공격 받으며 중동 전선이 확대되고 있다는 분석. 
+2026-09-03 19:32:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🤖 무료 LLM 분석 보강 완료 | Gemini -> OpenRouter -> 규칙 엔진 | 2시 증시 급락 이유는 블록딜? 시황맨 오후 증시 급락에 대한 원인 분석이 분분한데 쿠웨이트가 공격 받으며 중동 전선이 확대되고 있다는 분석. 다만 이건 장중 설명 드렸듯 이미 한
+2026-09-03 19:32:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=5 | queue=5 | 2시 증시 급락 이유는 블록딜? 시황맨 오후 증시 급락에 대한 원인 분석이 분분한데 쿠웨이트가 공격 받으며 중동 전선이 확대되고 있다는 분석. 다만 이건 장중 설명 드렸듯 이미 한
+2026-09-03 19:32:47 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=5 | published=2026-09-03T12:38:43+00:00 | 미국 국채 금리 하락 이유. 월러 발언. 시황맨 크리스토퍼 월러 이사는 인플레 데이터에 놀라운 결과가 없다면 금리 유지하겠다고 발언 관세 영향이 완화되었을 가능성이 높고 에너지 가격 상승이 경제 다른 부분에 영향을 
+2026-09-03 19:32:48 | INFO     | 🟢 | stock_news_bot.company_profile | 회사 프로필 조회 실패(캐리): Expecting value: line 1 column 1 (char 0)
+2026-09-03 19:32:53 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=358570): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:32:53 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=4 | published=2026-09-03T12:02:06+00:00 | 2시 증시 급락 이유는 블록딜? 시황맨 오후 증시 급락에 대한 원인 분석이 분분한데 쿠웨이트가 공격 받으며 중동 전선이 확대되고 있다는 분석. 다만 이건 장중 설명 드렸듯 이미 한참 전 뉴스라 2시 하락 이유로는 애
+2026-09-03 19:32:54 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00199252): 조회된 데이타가 없습니다.
+2026-09-03 19:32:57 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=3 | published=2026-09-03T12:20:03+00:00 | 한화오션, 1.5조원 신규 수주 속 대금 회수 불확실성과 공시 정정 '주의' - 데일리연합
+2026-09-03 19:33:02 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=2 | published=2026-09-03T12:22:05+00:00 | NVIDIA, Hugging Face 인수 인수 개요 인수 금액: 129억 3,030만 달러(약 129억 3천만 달러) 목표: Hugging Face 플랫폼 규모 확장, 인프라 강화, 전 세계 개발자 및 기관의 AI
+2026-09-03 19:33:03 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=028300): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:33:04 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00828497): 조회된 데이타가 없습니다.
+2026-09-03 19:33:09 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=1 | published=2026-09-03T12:37:04+00:00 | Hugging Face CEO 129억 3,030만 달러 규모의 인수를 통해 엔비디아(NVIDIA)와 힘을 합치기로 했다는 소식을 전하게 되어 매우 기쁩니다. 허깅페이스(Hugging Face)를 시작한 지 10년이
+2026-09-03 19:33:13 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=0 | published=2026-09-03T12:41:05+00:00 | 연준의 월러 AI 투자는 GDP의 타당한 구성 요소이며, AI는 생산성을 '확실하게' 끌어올릴 것 올해 GDP 성장률이 2%를 소폭 상회할 것으로 전망 노동 시장 또한 양호하며, 8월 고용 보고서도 유사한 흐름을 유
+2026-09-03 19:33:16 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=128940): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:33:17 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01658831): 조회된 데이타가 없습니다.
+2026-09-03 19:33:25 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.3MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:33:25 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=475830): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:33:26 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00919966): 조회된 데이타가 없습니다.
+2026-09-03 19:33:35 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=215600): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:33:37 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00111810): 조회된 데이타가 없습니다.
+2026-09-03 19:33:45 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=003090): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:33:46 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00401731): 조회된 데이타가 없습니다.
+2026-09-03 19:33:53 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=066570): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:33:53 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:33:53 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-03 19:33:53 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01168383): 조회된 데이타가 없습니다.
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 닥터조의 쉬운 바이오 → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 엔지니어TV → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 안될공학 → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 시황맨TV → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: EZ KIPOST → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 슈카월드 → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 내일은 투자왕 단테 → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 언더스탠딩 → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: IT의 신 이형수 → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 와이스트릿 → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 월가아재 → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 삼프로TV → 10건
+2026-09-03 19:33:54 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색 완료: 검색어=12개 → 120건 수집(오류 0건)
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @notRealDonaldTrump_kr → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @newszzang → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @stockdartalert → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @allsiljuk → 6건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @sunstudy → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @shmstory → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @bornlupin → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @DrDtech → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @one_going → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @HANAchina → 19건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @gaoshoukorea → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @goddessTTF → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @theelec → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @scalpinglove → 17건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @rocket_news1 → 20건
+2026-09-03 19:33:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 전체 수집: 15개 채널에서 282건
+2026-09-03 19:33:55 | WARNING  | 🟡 | stock_news_bot.cogs.scheduler | 수집 실패: 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:34:01 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=249420): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:34:02 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00149947): 조회된 데이타가 없습니다.
+2026-09-03 19:34:12 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=001060): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:34:13 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01397903): 조회된 데이타가 없습니다.
+2026-09-03 19:34:22 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=354200): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:34:23 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.3MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:34:23 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00450728): 조회된 데이타가 없습니다.
+2026-09-03 19:34:31 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=078610): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:34:33 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00372226): 조회된 데이타가 없습니다.
+2026-09-03 19:34:41 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=131290): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:34:43 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00164830): 조회된 데이타가 없습니다.
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 📚 YouTube/Blog/Telegram 상장종목 콘텐츠 통과: 93건 (MEDIUM 점수 기준=50)
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=75 | source="이더리움" - Google 뉴스 | 코인시장 다시 변동성 구간…봉크(BONK) 11%대 급락, 미국 금리와 이란 전쟁이 변수 - CBC뉴스
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source="하이브" - Google 뉴스 | [속보]경찰, 방시혁 ‘사기적 부정거래’ 혐의로 송치…수사 20개월 만 - 경향신문
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=70 | source=Telegram @rocket_news1 | [중국 특징주] 中 LED 대표기업 '삼안광전', 최대주주 파산 구조조정 신... (뉴스핌) https://www.newspim.com/news/view/20260903001004
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=60 | source=Telegram @bornlupin | 브로드컴 Q3 FY2026 어닝콜 중 공급 병목 관련 ① 가장 중요한 구속력있는 병목: 부지·전력·쉘(Land, Power, Shell) “우리는 각 고객과 매우 긴밀하게 협력하면
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 점수 미달로 제외(min=50) | score=55 | source="목표주가상향" - Google 뉴스 | 하나금융지주, 하반기 실적 개선 기대… 목표주가 16만원으로 상향 - 신한투자증권 - S저널
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 이번 주기 점수 미달 제외: 4101건(기준 50점 미만) — 자세한 항목은 위 로그 참고
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=009540): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=75 | source="급등" - Google 뉴스 | 와일리, 1분기 실적 부진에도 전망 재확인에 주가 7% 급등 - Investing.com 한국어
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=70 | source="급등" - Google 뉴스 | 아이큐어의 62% 급등, 적정가치 분석이 예측한 방법 - Investing.com 한국어
+2026-09-03 19:34:55 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=한화오션, LNG 컨테이너선 6척 수주 - 경향신문
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=50 | title=한화오션, LNG 컨테이너선 6척 수주 - 경향신문
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=4 | queue=1 | 한화오션, LNG 컨테이너선 6척 수주 - 경향신문
+2026-09-03 19:34:55 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=클라임 바이오, 신약 후보물질 'CLYM116' 임상 1상 긍정적 결과 발표 - 데이터투자
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=50 | title=클라임 바이오, 신약 후보물질 'CLYM116' 임상 1상 긍정적 결과 발표 - 데이터투자
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=3 | queue=1 | 클라임 바이오, 신약 후보물질 'CLYM116' 임상 1상 긍정적 결과 발표 - 데이터투자
+2026-09-03 19:34:55 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=H.C. 웨인라이트, 울트라제닉스 임상 실패에 목표주가 하향 - Investing.com 한국어
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=50 | title=H.C. 웨인라이트, 울트라제닉스 임상 실패에 목표주가 하향 - Investing.com 한국어
+2026-09-03 19:34:55 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=2 | queue=2 | H.C. 웨인라이트, 울트라제닉스 임상 실패에 목표주가 하향 - Investing.com 한국어
+2026-09-03 19:34:56 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=[공시] 더콘텐츠온·인바이츠바이오코아 '거래 정지', CJ ENM·경남제약 '공매도 금지' 등...39 - 뉴스티앤티
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:34:56 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=55 | title=[공시] 더콘텐츠온·인바이츠바이오코아 '거래 정지', CJ ENM·경남제약 '공매도 금지' 등...39 - 뉴스티앤티
+2026-09-03 19:34:56 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=5 | queue=3 | [공시] 더콘텐츠온·인바이츠바이오코아 '거래 정지', CJ ENM·경남제약 '공매도 금지' 등...39 - 뉴스티앤티
+2026-09-03 19:34:56 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 실시간 수집 완료: 수집=20277 / 최근24.0h=4467 / 필터통과=366 / 신규=8 / Queue등록=8 / Queue잔량=1 / 오류=1
+2026-09-03 19:34:56 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 정리 실패(베스트 에포트)
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 1059, in _run_pipeline_once
+    self.schedule_store.cleanup_old(self.settings.schedule_event_retention_days)
+    ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SchedulerCog' object has no attribute 'schedule_store'
+2026-09-03 19:34:56 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | Render NEWS_KEYWORDS 적용: 214개 키워드 → 214개 RSS 검색 피드
+2026-09-03 19:34:56 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🚫 관련테마/관련주 없음으로 제외 | score=50 | source="목표주가상향" - Google 뉴스 | 캐너코드, AI 모멘텀에 스노우플레이크 목표주가 상향 - Investing.com 한국어
+2026-09-03 19:34:56 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 일정 이벤트 추출/저장 실패(베스트 에포트) | title=클라임 바이오 주가, 긍정적 임상 결과에 17% 급등 - Investing.com 한국어
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/scheduler.py", line 513, in _analysis_worker
+    schedule_events = extract_events(item)
+                      ^^^^^^^^^^^^^^
+NameError: name 'extract_events' is not defined
+2026-09-03 19:34:56 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 조건 | enabled=True | Gemini키=True | OpenRouter키=True | AI_선별한_뉴스기준=70 | score=80 | title=클라임 바이오 주가, 긍정적 임상 결과에 17% 급등 - Investing.com 한국어
+2026-09-03 19:34:56 | INFO     | 🟢 | stock_news_bot.company_profile | 회사 프로필 조회 실패(아시아경제): Expecting value: line 1 column 1 (char 0)
+2026-09-03 19:34:57 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01205709): 조회된 데이타가 없습니다.
+2026-09-03 19:35:01 | INFO     | 🟢 | stock_news_bot.cogs.article_reader | 📄 구글 뉴스 링크 디코딩 실패(응답 없음) | https://news.google.com/rss/articles/CBMid0FVX3lxTE5obFRVZlo3bXpiMHJxLVNiLTNMTzZhTnhJclg5N3ZyTTdaZHp0YTBSZmZ6S0hUQ09zQkhCeGZUM2ZqZ0Z1N1Z1R2VDU3pLdUQ0RmRwTk43cERGVWlIXzI2dlZyM1ZUX2NOdHZVZDltdEFjVUliZzhj?oc=5
+2026-09-03 19:35:02 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 본문 확보 | 길이=0 | url=https://news.google.com/rss/articles/CBMid0FVX3lxTE5obFRVZlo3bXpiMHJxLVNiLTNMTzZhTnhJclg5N3ZyTTdaZHp0YTBSZmZ6S0hUQ09zQkhCeGZUM2ZqZ0Z1N1Z1R2VDU3pLdUQ0RmRwTk43cERGVWlIXzI2dlZyM1ZUX2NOdHZVZDltdEFjVUliZzhj?oc=5
+2026-09-03 19:35:02 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-03 19:35:03 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=3 | published=2026-09-03T11:41:00+00:00 | 한화오션, LNG 컨테이너선 6척 수주 - 경향신문
+2026-09-03 19:35:03 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-03 19:35:03 | INFO     | 🟢 | stock_news_bot.company_profile | 회사 프로필 조회 실패(인바이츠바이오코아): Expecting value: line 1 column 1 (char 0)
+2026-09-03 19:35:04 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 | 기사 분석 호출 종료 | 성공=True | title=클라임 바이오 주가, 긍정적 임상 결과에 17% 급등 - Investing.com 한국어
+2026-09-03 19:35:04 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🤖 무료 LLM 분석 보강 완료 | Gemini -> OpenRouter -> 규칙 엔진 | 클라임 바이오 주가, 긍정적 임상 결과에 17% 급등 - Investing.com 한국어
+2026-09-03 19:35:04 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧵 분석 완료 → 송출 Queue 대기 | worker=0 | queue=3 | 클라임 바이오 주가, 긍정적 임상 결과에 17% 급등 - Investing.com 한국어
+2026-09-03 19:35:06 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=267250): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:35:08 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01390344): 조회된 데이타가 없습니다.
+2026-09-03 19:35:10 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=3 | published=2026-09-03T11:38:57+00:00 | [공시] 더콘텐츠온·인바이츠바이오코아 '거래 정지', CJ ENM·경남제약 '공매도 금지' 등...39 - 뉴스티앤티
+2026-09-03 19:35:14 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=2 | published=2026-09-03T11:32:00+00:00 | 클라임 바이오 주가, 긍정적 임상 결과에 17% 급등 - Investing.com 한국어
+2026-09-03 19:35:15 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=329180): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:35:17 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01205842): 조회된 데이타가 없습니다.
+2026-09-03 19:35:18 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=1 | published=2026-09-03T11:42:00+00:00 | H.C. 웨인라이트, 울트라제닉스 임상 실패에 목표주가 하향 - Investing.com 한국어
+2026-09-03 19:35:21 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 뉴스 송출 완료 | discord=True | telegram=True | queue=0 | published=2026-09-03T11:52:25+00:00 | 클라임 바이오, 신약 후보물질 'CLYM116' 임상 1상 긍정적 결과 발표 - 데이터투자
+2026-09-03 19:35:24 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.3MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:35:25 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=267270): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:35:27 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01205851): 조회된 데이타가 없습니다.
+2026-09-03 19:35:35 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=267260): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:35:36 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00366438): 조회된 데이타가 없습니다.
+2026-09-03 19:35:44 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=062040): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:35:45 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01204056): 조회된 데이타가 없습니다.
+2026-09-03 19:35:54 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=352820): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:35:55 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00298687): 조회된 데이타가 없습니다.
+2026-09-03 19:36:06 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:36:06 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-03 19:36:06 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=039670): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 닥터조의 쉬운 바이오 → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 안될공학 → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 시황맨TV → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 월가아재 → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: EZ KIPOST → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 엔지니어TV → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 내일은 투자왕 단테 → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 슈카월드 → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: IT의 신 이형수 → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 언더스탠딩 → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00339391): 조회된 데이타가 없습니다.
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 삼프로TV → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 와이스트릿 → 10건
+2026-09-03 19:36:07 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색 완료: 검색어=12개 → 120건 수집(오류 0건)
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @notRealDonaldTrump_kr → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @newszzang → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @stockdartalert → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @allsiljuk → 6건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @sunstudy → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @shmstory → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @bornlupin → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @DrDtech → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @one_going → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @HANAchina → 19건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @gaoshoukorea → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @goddessTTF → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @theelec → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @scalpinglove → 17건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @rocket_news1 → 20건
+2026-09-03 19:36:08 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 전체 수집: 15개 채널에서 282건
+2026-09-03 19:36:09 | WARNING  | 🟡 | stock_news_bot.cogs.scheduler | 수집 실패: 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-03 19:36:12 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(44.3MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-03 19:36:18 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=272210): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
