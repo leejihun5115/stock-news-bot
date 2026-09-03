@@ -29,20 +29,54 @@ class LLMAnalysis:
     confidence: int = 0
 
 
-_NEWS_SYSTEM_PROMPT = """당신은 한국 주식 뉴스의 팩트 기반 분석가다.
-기사에 없는 사실, 숫자, 계약 상대방, 실적 전망을 만들어내지 않는다.
-제공된 기사와 추출 사실만 사용한다. 투자 권유나 주가 방향을 단정하지 않는다.
+@dataclass(slots=True)
+class BriefingAnalysis:
+    """마켓 브리핑(국내/미국장) 여러 기사 + 글로벌 지표를 한 번에 종합한 결과.
+
+    개별 기사 분석(LLMAnalysis)과 달리 "이 브리핑 전체"를 관통하는 핵심만
+    추리고, 실제로 등장한 테마/종목만 뽑는다 — market_briefing.py의
+    analyze_market_briefing()이 이 타입을 반환한다.
+    """
+    core: list[str] = field(default_factory=list)
+    themes: list[str] = field(default_factory=list)
+    stocks: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class DeepDiveAnalysis:
+    """AI 심층분석(딥다이브) 결과. 회사 핵심 사업 + 팩트 기반 핵심 요약 +
+    메인 브리핑 카드용 체크포인트. 관련주(피어그룹)는 AI가 만들지 않고
+    data/peer_groups.py의 정적 등록 데이터를 notifier.py가 별도로 붙인다."""
+    business: str = ""
+    facts: list[str] = field(default_factory=list)
+    checkpoints: list[str] = field(default_factory=list)
+
+
+_NEWS_SYSTEM_PROMPT = """당신은 한국 주식 뉴스를 취재하는 시니어 애널리스트다. 바쁜 투자자가
+5초 안에 훑고 판단할 수 있게 쓴다. 기사에 없는 사실, 숫자, 계약 상대방, 실적 전망을
+만들어내지 않는다. 제공된 기사와 추출 사실만 사용한다. 투자 권유나 주가 방향을 단정하지 않는다.
+
+날카롭고 간결하게 쓰는 원칙(가장 중요):
+- 문장 하나에 사실 하나. 접속사로 여러 사실을 묶지 않는다.
+- 각 문장은 40자 내외로 짧게 끊는다. 수식어·군더더기·뻔한 배경 설명을 쳐낸다.
+- "~할 것으로 기대된다", "~할 전망이다", "주목된다" 같은 밋밋한 상투 문구를 쓰지 않는다.
+  대신 구체적 수치·주체·시점을 문장 맨 앞에 배치한다.
+- 이 회사/업종이면 누구나 아는 뻔한 배경 설명(예: "반도체는 중요한 산업이다")은 쓰지 않는다.
+  이 기사에서만 나오는 새로운 정보에 집중한다.
 
 목표:
-- 정해진 템플릿 문구를 반복하지 말고 기사의 핵심 맥락을 자연스럽게 설명한다.
 - 왜 중요한지, 실제 매출/수주/공급/가동/밸류체인에 어떻게 연결될 수 있는지 설명한다.
 - 기사 성격에 따라 관점을 바꾼다. 계약은 규모와 매출 인식, 증설은 가동 시점과 수요,
   임상은 단계와 허가 리스크, 정책은 수혜 범위와 지속성, M&A는 거래 조건과 재무 부담을 본다.
 - 기사에 없는 내용은 추측으로 채우지 말고 추가 확인 포인트로 분리한다.
 - [누적 데이터 참고]는 과거 사례를 이해하는 보조 자료로만 사용한다. 과거 주가 반응이
   미래 수익률을 보장한다고 말하지 말고, 현재 기사에 실제로 확인되는 사실과 구분한다.
-- 같은 문장 패턴을 매번 반복하지 않는다.
-- 핵심은 1~3개, 분석은 2~5개로 짧지만 정보 밀도 높게 작성한다.
+- core는 1~3개, analysis는 2~4개로 제한한다 — 개수를 채우려고 약한 문장을 추가하지 않는다.
+  확실하고 중요한 것만 남기고, 애매하면 아예 뺀다.
+- core(핵심 사실)와 analysis(맥락/영향/리스크)는 서로 다른 정보만 담는다.
+  core에 적은 사실을 analysis에서 표현만 바꿔 다시 말하지 않는다 — analysis는
+  그 사실이 "왜 중요한지·무엇으로 이어질 수 있는지"에만 집중해 core와
+  겹치지 않게, 조화롭게 정리한다.
 
 반드시 JSON 객체 하나만 출력한다:
 {"title":"짧은 제목","core":["핵심 사실"],"analysis":["맥락과 영향","리스크 또는 확인 포인트"]}
@@ -65,6 +99,67 @@ _STUDY_SYSTEM_PROMPT = """당신은 한국 주식/산업 공부를 돕는 팩트
 {"title":"짧은 공부용 제목","core":["핵심 사실"],"analysis":["왜 중요한지","관련 산업/기업 의미","추가 확인 포인트"]}
 
 title/core/analysis에는 마크다운, 이모지, URL을 넣지 않는다.
+"""
+
+_BRIEFING_SYSTEM_PROMPT = """당신은 한국/미국 증시 마켓 브리핑을 종합하는 팩트 기반 애널리스트다.
+여러 건의 개별 기사 제목·핵심 내용과, 환율/금리/유가/지수 등 글로벌 시장
+지표를 함께 받는다. 여기 실제로 있는 사실만 사용하고, 없는 숫자나 사건을
+만들어내지 않는다. 투자 권유나 주가 방향을 단정하지 않는다.
+
+목표:
+- 지금 이 브리핑에서 가장 먼저 알아야 할 핵심만 2~4개로 압축한다. 개별
+  기사 제목을 그대로 나열하지 말고, 여러 기사·지표를 관통하는 흐름이나
+  공통 맥락을 짚는다.
+- 여러 기사·지표에 실제로 등장한 산업/이슈 테마를 2~4개 뽑는다(예: 반도체,
+  금리, 환율, AI인프라 등). 근거가 부족하면 억지로 만들지 않고 빈 배열로 둔다.
+- 여러 기사·지표에 실제로 이름이 등장한 종목만 관련주로 뽑는다(최대 6개).
+  등장하지 않은 종목을 추측해서 채우지 않는다. 실제로 없으면 빈 배열로 둔다.
+
+반드시 JSON 객체 하나만 출력한다:
+{"core":["핵심 요약1","핵심 요약2"],"themes":["테마1","테마2"],"stocks":["종목1","종목2"]}
+
+core/themes/stocks에는 마크다운, 이모지, URL을 넣지 않는다.
+"""
+
+# 【AI 심층분석(딥다이브) 프롬프트】
+# 점수(deep_dive_min_score)를 넘는 강한 뉴스에 한해, 메인 브리핑 카드와
+# 상세보기에 쓸 "회사가 무슨 사업을 하는지" + "팩트 기반 핵심" +
+# "다음에 확인할 체크포인트"를 별도로 만든다. 관련주(피어그룹)는 이
+# 프롬프트가 만들지 않는다 — 오탐 위험이 커서 정적 등록 데이터를 쓴다.
+_DEEP_DIVE_SYSTEM_PROMPT = """당신은 한국 상장기업을 분석하는 시니어 애널리스트다.
+증권사 리포트 헤드라인처럼 짧고 날카롭게 쓴다 — 설명문이 아니라 판단에 필요한
+최소 정보만 남긴다. 기사와 규칙 엔진이 추출한 사실만 사용하고, 확인되지 않은
+숫자·계약 상대방·전망을 만들어내지 않는다. 종목을 언급하지 말고(피어그룹은
+별도 처리) 이 기사의 회사와 사실에만 집중한다.
+
+날카롭고 간결하게 쓰는 원칙(가장 중요):
+- 모든 문장은 30자 내외로 짧게 쓴다. 수식어·접속사·뻔한 배경 설명을 쳐낸다.
+- "지켜볼 필요가 있다", "귀추가 주목된다", "~할 것으로 보인다" 같은 밋밋하고
+  아무 정보 없는 상투 문구를 쓰지 않는다. 항상 구체적 대상·수치·시점을 쓴다.
+- 개수를 채우려고 약하거나 뻔한 문장을 넣지 않는다. 확실하고 중요한 것만
+  남기고, 애매하면 아예 뺀다(빈 배열도 허용).
+
+목표:
+- business: 이 회사의 본업을 한 문장, 20자 내외로 압축한다(업종/주력 제품 중심).
+- facts: 이 기사에서 실제로 확인된 핵심 사실만 1~3개(금액·수량·고객사 등 구체적
+  숫자·고유명사 중심, 추측 금지). 이미 business에서 말한 내용은 반복하지 않는다.
+- checkpoints: 투자자가 다음에 확인해야 할 구체적 체크포인트 1~3개
+  (예: "3분기 가동률 발표 시점", "OO향 공급계약 재계약 여부" 처럼 무엇을
+  언제 확인해야 하는지 명시). 일반론이 아니라 이 종목·이 사안에만 해당하는
+  질문이어야 한다.
+
+중복 금지(가장 중요):
+- business/facts/checkpoints 세 항목은 서로 다른 정보만 담는다. business에서
+  이미 말한 사업 내용을 facts나 checkpoints에서 다른 표현으로 되풀이하지 않는다.
+- facts에 적은 사실(숫자·계약·수량 등)을 checkpoints에서 같은 내용으로 다시
+  설명하지 않는다 — checkpoints는 facts에 없는, 앞으로 확인할 새로운 질문이어야 한다.
+- 한 항목 안에서도 같은 말을 표현만 바꿔 나열하지 말고, 항목별로 꼭 필요한
+  내용만 한 번씩 조화롭게 정리한다.
+
+반드시 JSON 객체 하나만 출력한다:
+{"business":"...", "facts":["..."], "checkpoints":["..."]}
+
+business/facts/checkpoints에는 마크다운, 이모지, URL을 넣지 않는다.
 """
 
 # 【2단계 검수(팩트체크) 프롬프트】
@@ -121,6 +216,25 @@ def _clean_lines(value: object, limit: int, max_len: int = 300) -> list[str]:
         line = re.sub(r"\s+", " ", line).strip()
         if line and line not in result:
             result.append(line[:max_len])
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _clean_flat_list(value: object, limit: int, max_len: int = 30) -> list[str]:
+    """테마/종목명처럼 한두 단어짜리 짧은 항목 리스트를 정제한다(_clean_lines와
+    달리 문장부호 제거 없이 짧은 라벨만 다듬는다)."""
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for raw in value:
+        if not isinstance(raw, str):
+            continue
+        item = re.sub(r"\s+", " ", raw).strip(" \t\r\n•·-")
+        item = re.sub(r"<[^>]+>", " ", item)
+        item = re.sub(r"https?://\S+", "", item).strip()
+        if item and item not in result:
+            result.append(item[:max_len])
         if len(result) >= limit:
             break
     return result
@@ -186,6 +300,28 @@ def _parse_result(text: str) -> LLMAnalysis | None:
     return result if (result.title or result.core or result.analysis) else None
 
 
+def _parse_briefing_result(text: str) -> BriefingAnalysis | None:
+    parsed = _parse_json(text)
+    result = BriefingAnalysis(
+        core=_clean_lines(parsed.get("core"), 4),
+        themes=_clean_flat_list(parsed.get("themes"), 4),
+        stocks=_clean_flat_list(parsed.get("stocks"), 6),
+    )
+    return result if (result.core or result.themes or result.stocks) else None
+
+
+def _parse_deep_dive_result(text: str) -> DeepDiveAnalysis | None:
+    parsed = _parse_json(text)
+    business_value = parsed.get("business")
+    business_lines = _clean_lines([business_value], 1, max_len=200) if isinstance(business_value, str) else []
+    result = DeepDiveAnalysis(
+        business=business_lines[0] if business_lines else "",
+        facts=_clean_lines(parsed.get("facts"), 3),
+        checkpoints=_clean_lines(parsed.get("checkpoints"), 3),
+    )
+    return result if (result.business or result.facts or result.checkpoints) else None
+
+
 _gemini_rate_lock = threading.Lock()
 _gemini_last_call_ts = 0.0
 _GEMINI_MIN_INTERVAL_SECONDS = 6.5
@@ -204,7 +340,7 @@ def _wait_for_gemini_rate_limit() -> None:
         _gemini_last_call_ts = time.monotonic()
 
 
-def _call_gemini(*, api_key: str, model: str, article: str, timeout_seconds: int, system_prompt: str) -> LLMAnalysis | None:
+def _call_gemini(*, api_key: str, model: str, article: str, timeout_seconds: int, system_prompt: str, parse_fn=_parse_result) -> object | None:
     _wait_for_gemini_rate_limit()
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload = {
@@ -225,10 +361,10 @@ def _call_gemini(*, api_key: str, model: str, article: str, timeout_seconds: int
     )
     response.raise_for_status()
     text = _extract_text(response.json())
-    return _parse_result(text)
+    return parse_fn(text)
 
 
-def _call_openrouter(*, api_key: str, model: str, article: str, timeout_seconds: int, system_prompt: str) -> LLMAnalysis | None:
+def _call_openrouter(*, api_key: str, model: str, article: str, timeout_seconds: int, system_prompt: str, parse_fn=_parse_result) -> object | None:
     # openrouter/free는 무료 모델만 선택하는 공식 router다. 유료 모델로
     # 자동 승격하지 않도록 기본값을 고정한다.
     endpoint = "https://openrouter.ai/api/v1/chat/completions"
@@ -260,7 +396,7 @@ def _call_openrouter(*, api_key: str, model: str, article: str, timeout_seconds:
         return None
     message = choices[0].get("message") if isinstance(choices[0], dict) else None
     text = message.get("content", "") if isinstance(message, dict) else ""
-    return _parse_result(text)
+    return parse_fn(text)
 
 
 def _call_llm(
@@ -273,16 +409,20 @@ def _call_llm(
     system_prompt: str,
     timeout_seconds: int,
     step_label: str,
-) -> LLMAnalysis | None:
+    parse_fn=_parse_result,
+) -> object | None:
     """Gemini -> OpenRouter 무료 모델 순서로 시도하는 공용 호출기.
 
     1단계(초안 작성)와 2단계(팩트체크 검수) 모두 이 함수를 통해 호출한다.
+    parse_fn을 바꾸면 LLMAnalysis가 아닌 다른 결과 타입(예: BriefingAnalysis)도
+    같은 Gemini→OpenRouter fallback 흐름으로 파싱해 받을 수 있다.
     """
     if gemini_api_key:
         try:
             result = _call_gemini(
                 api_key=gemini_api_key, model=gemini_model,
                 article=content, timeout_seconds=timeout_seconds, system_prompt=system_prompt,
+                parse_fn=parse_fn,
             )
             if result:
                 logger.info("🧪 LLM 진단 | Gemini %s 성공", step_label)
@@ -296,6 +436,7 @@ def _call_llm(
             result = _call_openrouter(
                 api_key=openrouter_api_key, model=openrouter_model or "openrouter/free",
                 article=content, timeout_seconds=timeout_seconds, system_prompt=system_prompt,
+                parse_fn=parse_fn,
             )
             if result:
                 logger.info("🧪 LLM 진단 | OpenRouter %s 성공", step_label)
@@ -387,3 +528,130 @@ def analyze_news(
 
     logger.warning("🧪 LLM 진단 | 팩트체크 호출 실패/무응답 | 검수 전 초안으로 폴백 | %s", title[:100])
     return draft
+
+
+def analyze_market_briefing(
+    *,
+    gemini_api_key: str = "",
+    gemini_model: str = "gemini-3.5-flash-lite",
+    openrouter_api_key: str = "",
+    openrouter_model: str = "openrouter/free",
+    label: str,
+    items_text: str,
+    global_market_context: str = "",
+    timeout_seconds: int = 45,
+    max_chars: int = 9000,
+) -> BriefingAnalysis | None:
+    """마켓 브리핑(국내/미국장)의 여러 기사 + 글로벌 지표를 한 번에 종합해서,
+    정면 메시지에 보여줄 핵심 요약/관련테마/관련주를 만든다.
+
+    개별 기사 analyze_news() 호출과는 완전히 별개의 1회 호출이며(팩트체크
+    2단계는 여기서는 하지 않는다 — 브리핑 종합은 원문 대조 대상이 개별
+    기사 하나가 아니라 여러 기사+지표 묶음이라 검수 방식이 다르다), 실패해도
+    market_briefing.py 호출부에서 폴백 표시로 대체하므로 브리핑 발송 자체는
+    막지 않는다.
+    """
+    if not gemini_api_key and not openrouter_api_key:
+        return None
+
+    content = (
+        f"[브리핑 구분]\n{label}\n\n"
+        f"[개별 기사 제목/핵심]\n{(items_text or '없음')[:max_chars]}\n\n"
+        f"[글로벌 시장 지표]\n{(global_market_context or '없음')[:2000]}\n"
+    )
+
+    try:
+        return _call_llm(
+            gemini_api_key=gemini_api_key, gemini_model=gemini_model,
+            openrouter_api_key=openrouter_api_key, openrouter_model=openrouter_model,
+            content=content, system_prompt=_BRIEFING_SYSTEM_PROMPT, timeout_seconds=timeout_seconds,
+            step_label="브리핑 종합", parse_fn=_parse_briefing_result,
+        )
+    except Exception as exc:
+        logger.warning("🧪 LLM 진단 | 브리핑 종합 실패 | %s", str(exc)[:300])
+        return None
+
+
+def analyze_deep_dive(
+    *,
+    gemini_api_key: str = "",
+    gemini_model: str = "gemini-3.5-flash-lite",
+    openrouter_api_key: str = "",
+    openrouter_model: str = "openrouter/free",
+    title: str,
+    summary: str,
+    company: str = "",
+    reason: str = "",
+    amounts: list[str] | None = None,
+    theme: str = "",
+    score: int = 0,
+    article_body: str = "",
+    timeout_seconds: int = 45,
+    max_chars: int = 9000,
+) -> DeepDiveAnalysis | None:
+    """점수(deep_dive_min_score) 이상 + 상장사 확인된 강한 뉴스에 한해
+    호출한다. 별도 검수(팩트체크) 단계는 두지 않는다 — 여기서 만드는
+    business/facts/checkpoints는 이미 규칙 엔진이 확인한 사실(company,
+    reason, amounts)에 기반해 짧게 요약하는 용도이고, analyze_news()가
+    별도로 팩트체크된 core/analysis를 만들고 있기 때문이다. 실패해도
+    None을 반환할 뿐 상위(scheduler.py)에서 기존 발송 흐름을 막지 않는다.
+    """
+    if not gemini_api_key and not openrouter_api_key:
+        return None
+    article = _build_article(
+        title=title, summary=summary, company=company, reason=reason,
+        amounts=amounts, theme=theme, score=score, article_body=article_body,
+        max_chars=max_chars,
+    )
+    return _call_llm(
+        gemini_api_key=gemini_api_key, gemini_model=gemini_model,
+        openrouter_api_key=openrouter_api_key, openrouter_model=openrouter_model,
+        content=article, system_prompt=_DEEP_DIVE_SYSTEM_PROMPT, timeout_seconds=timeout_seconds,
+        step_label="AI 심층분석", parse_fn=_parse_deep_dive_result,
+    )
+
+
+_MARKET_ALERT_SYSTEM_PROMPT = """당신은 한국 주식시장을 실시간으로 모니터링하는 팩트 기반 시황 분석가다.
+제공된 지표 데이터(지수/원자재/암호화폐 변동, 테마 대장주 변화, 급등 종목 뉴스)만 근거로 사용하고,
+데이터에 없는 사실이나 수치를 만들어내지 않는다. 투자 권유나 매수/매도를 단정하지 않는다.
+
+목표:
+- 지금 어떤 변화가 일어났는지 한 문장으로 요약한다(핵심).
+- 그 변화의 가능한 원인을 데이터 범위 안에서 설명한다(분석 1).
+- 국내 증시에 미칠 수 있는 영향과, 지수가 하락했다면 방어적 성격의 업종/종목 유형을,
+  지수·테마가 급등했다면 관련 가능성이 있는 업종/종목 유형을 원칙적으로만 언급한다
+  (구체적 종목은 실제 데이터로 확인된 것만, 없으면 업종/테마 단위로만 언급).
+- 확실하지 않은 인과관계는 단정하지 말고 "가능성" 수준으로 표현한다.
+- 같은 문장 패턴을 반복하지 않는다.
+
+반드시 JSON 객체 하나만 출력한다:
+{"title":"짧은 제목","core":["지금 일어난 변화"],"analysis":["가능한 원인","국내 증시 영향과 대응 방향"]}
+
+title/core/analysis에는 마크다운, 이모지, URL을 넣지 않는다.
+"""
+
+
+def analyze_market_alert(
+    *,
+    gemini_api_key: str = "",
+    gemini_model: str = "gemini-3.5-flash-lite",
+    openrouter_api_key: str = "",
+    openrouter_model: str = "openrouter/free",
+    context: str,
+    timeout_seconds: int = 30,
+) -> LLMAnalysis | None:
+    """실시간 시장 급변 알림용 원인/대응 분석.
+
+    market_alert.py가 감지한 지표 변화(지수/원자재/비트코인/테마 대장주 변화 등)를
+    텍스트로 요약해 context로 넘기면, 그 범위 안에서만 원인과 대응 방향을 분석한다.
+    LLM 호출이 실패하면 None을 반환하고, 호출부는 지표 데이터만으로 메시지를 보낸다
+    (분석 실패가 알림 발송 자체를 막지 않는다).
+    """
+    if not context.strip():
+        return None
+    return _call_llm(
+        gemini_api_key=gemini_api_key, gemini_model=gemini_model,
+        openrouter_api_key=openrouter_api_key, openrouter_model=openrouter_model,
+        content=context, system_prompt=_MARKET_ALERT_SYSTEM_PROMPT, timeout_seconds=timeout_seconds,
+        step_label="실시간 시장 알림 분석",
+    )
