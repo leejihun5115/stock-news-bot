@@ -949,7 +949,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             if _is_study_source(item)
             and (
                 _is_largo_tv_exception(item)
-                or bool(str(getattr(item, "company", "") or "").strip())
+                or _has_stock_selection_evidence(item)
                 or _is_market_condition_content(item)
             )
         ]
