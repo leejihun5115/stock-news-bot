@@ -104,6 +104,34 @@ def restore_db(settings: Settings) -> bool:
     if not settings.github_backup_enabled:
         return False
 
+    db_path = Path(settings.db_path)
+    if db_path.exists():
+        # 로컬 DB가 이미 있고 멀쩡하면 GitHub 백업으로 덮어쓸 이유가 없다.
+        # 예전에는 이 체크 없이 부팅할 때마다 무조건 덮어썼는데, 재시작이
+        # 짧은 간격으로 반복되는 상황(크래시 루프)과 겹치면 쓰기 도중
+        # 파일이 잘려 DB가 손상되는 사고로 이어졌다.
+        try:
+            _check_conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            try:
+                _result = _check_conn.execute("PRAGMA integrity_check;").fetchone()
+            finally:
+                _check_conn.close()
+            if _result and _result[0] == "ok":
+                logger.info(
+                    "로컬 DB가 이미 정상 상태입니다(%s) — GitHub 복원을 건너뜁니다.",
+                    db_path,
+                )
+                return False
+            logger.warning(
+                "로컬 DB(%s)가 손상된 것으로 보입니다(integrity_check=%s) — GitHub 백업으로 복원을 시도합니다.",
+                db_path, _result,
+            )
+        except sqlite3.Error:
+            logger.exception(
+                "로컬 DB(%s) 무결성 확인 중 오류 — GitHub 백업으로 복원을 시도합니다.",
+                db_path,
+            )
+
     try:
         # raw=True: 1MB가 넘는 파일도 (100MB까지) 항상 실제 바이트를 그대로
         # 받는다. 기본 헤더로 받으면 1MB 초과 시 content가 빈 문자열로 와서
@@ -141,7 +169,6 @@ def restore_db(settings: Settings) -> bool:
         )
         return False
 
-    db_path = Path(settings.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db_path.write_bytes(raw)
     logger.info(

@@ -44,10 +44,23 @@ def _is_study_source(item) -> bool:
 
 
 def _is_largo_tv_exception(item) -> bool:
-    """라르고TV는 사용자가 지정한 예외 소스이므로 종목/점수 조건을 적용하지 않는다."""
+    """라르고TV(텔레그램 채널 @scalpinglove)는 사용자가 지정한 예외 소스이므로
+    종목/점수 조건을 적용하지 않는다.
+
+    과거에는 source/title 텍스트에 "라르고tv"/"largotv" 문자열이 그대로
+    있어야만 매칭됐는데, 실제 채널명은 scalpinglove라 사실상 매칭되는 일이
+    거의 없었다. 채널명(@scalpinglove) 자체도 함께 인식하도록 추가한다.
+    """
     source = str(getattr(item, "source", "") or "").lower()
     title = str(getattr(item, "title", "") or "").lower()
-    return "라르고tv" in source or "largotv" in source or "라르고 tv" in source or "라르고tv" in title or "largotv" in title
+    return (
+        "라르고tv" in source
+        or "largotv" in source
+        or "라르고 tv" in source
+        or "라르고tv" in title
+        or "largotv" in title
+        or "@scalpinglove" in source
+    )
 
 
 def _has_stock_selection_evidence(item) -> bool:
@@ -438,12 +451,17 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 # 시황적으로 판단할 근거가 없는 뉴스는 애초에 발송하지 않는다.
                 # (스터디 소스/DART 공시/라르고TV 예외는 각자 별도 기준으로
                 # 이미 필터링되므로 여기서는 건드리지 않는다.)
-                if (
-                    not _is_study_source(item)
-                    and not _is_largo_tv_exception(item)
-                    and item.source_kind != "dart"
-                    and _lacks_market_relevance(result)
-                ):
+                # 단, study_source가 "막연한 시황 키워드"만으로 통과한
+                # 경우(_has_stock_selection_evidence가 False)는 실질 근거가
+                # 없는 것이므로 이 필터를 그대로 적용받아 테마/관련주가 둘
+                # 다 없으면 걸러지도록 한다 — 텅 빈 "OO 관련 시장 영향
+                # 주목" 메시지가 나가는 것을 막기 위함.
+                exempt = (
+                    _is_largo_tv_exception(item)
+                    or item.source_kind == "dart"
+                    or (_is_study_source(item) and _has_stock_selection_evidence(item))
+                )
+                if not exempt and _lacks_market_relevance(result):
                     self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
                     logger.info(
                         "🚫 관련테마/관련주 없음으로 제외 | score=%d | source=%s | %s",
@@ -871,7 +889,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             if _is_study_source(item)
             and (
                 _is_largo_tv_exception(item)
-                or bool(str(getattr(item, "company", "") or "").strip())
+                or _has_stock_selection_evidence(item)
                 or _is_market_condition_content(item)
             )
         ]
