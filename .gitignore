@@ -14,3 +14,7 @@ data/*.sqlite3.bak*
 data/*.sqlite3.corrupted*
 data/*.sqlite3.old
 logs/*.log
+data/*.sqlite3*
+data/*.bak*
+data/*.corrupted*
+*.zip
