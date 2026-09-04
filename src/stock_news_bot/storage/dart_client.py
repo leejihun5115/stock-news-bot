@@ -455,6 +455,30 @@ class DartClient:
                     return match
         return None
 
+    def match_all_companies(self, text: str) -> list[CompanyMatch]:
+        """match_company()와 같은 오탐방지 로직을 쓰되, 첫 매칭에서 멈추지
+        않고 본문에 실제 등장하는 상장사를 전부(제한 없이) 찾아 반환한다.
+
+        "특징주"처럼 한 기사에 여러 종목이 언급되는 경우, 대장주뿐 아니라
+        2등주·3등주까지 놓치지 않기 위한 용도. AI가 종목명을 추측하는 게
+        아니라, match_company()와 동일하게 DART 상장사 캐시에서 본문에
+        실제로 등장하는 이름만 규칙 기반으로 골라낸다.
+        """
+        results: list[CompanyMatch] = []
+        seen_names: set[str] = set()
+        for candidate in self._name_cache():
+            if candidate.corp_name in seen_names:
+                continue
+            if candidate.corp_name not in text:
+                continue
+            if not _has_genuine_company_mention(candidate.corp_name, text):
+                continue
+            if candidate.corp_name in _AMBIGUOUS_COMMON_WORD_NAMES and not _FINANCE_CONTEXT_RE.search(text):
+                continue
+            results.append(candidate)
+            seen_names.add(candidate.corp_name)
+        return results
+
     def find_by_name(self, corp_name: str) -> CompanyMatch | None:
         """정확한 종목명으로 캐시에서 조회한다 (fundamentals.py에서 사용)."""
         cur = self._conn.execute(
