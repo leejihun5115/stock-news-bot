@@ -111,6 +111,7 @@ _FINANCE_CONTEXT_RE = re.compile(
 # 처리되므로, 여기는 그 목록에 없는 특이 사례만 개별 등록하면 된다.
 _FALSE_POSITIVE_NAME_SUFFIXES: dict[str, tuple[str, ...]] = {
     "지디": ("넷",),  # "지디넷코리아"(ZDNet Korea)
+    "배럴": ("당",),  # "배럴당"(유가 단위, 상장사 "배럴"과 오인 방지)
 }
 
 # 【매체명 오탐 일반화】
