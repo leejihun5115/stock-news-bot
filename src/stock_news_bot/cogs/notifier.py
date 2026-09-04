@@ -291,8 +291,9 @@ def _build_impact_block(item: NewsItem, *, html: bool = False) -> list[str]:
     market_cap = fundamentals.market_cap if fundamentals else None
     ratio_pct = contract.contract_revenue_ratio_pct if (contract and contract.contract_revenue_ratio_pct is not None) else (won / revenue * 100 if (won and revenue) else None)
 
-    if amount is None and not item.amounts and revenue is None and market_cap is None:
-        # 계약금액도, 참고할 매출/시총도 전혀 없으면 형식적인 섹션을 생략한다.
+    if amount is None:
+        # 실제 계약금액이 확인되지 않으면(원문 금액 후보나 매출/시총만 있어도)
+        # "대형 공급계약" 같은 형식적인 섹션을 보여주지 않는다.
         return []
 
     lines = [
@@ -774,7 +775,7 @@ def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None
     if theme:
         lines += ["", f"🏷 [테마] : {theme}"]
     if related:
-        lines += ["", "🎯 [관련주]  " + " / ".join(_mark(c, listed) for c in related)]
+        lines += ["", "🎯 [관련주]  " + " / ".join(related)]
     if analysis:
         lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {_mark_in_text(x, listed)}" for x in analysis]]
     company_context = _company_context_lines(theme, company_profile, listed)
@@ -1089,7 +1090,7 @@ def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile 
     if theme:
         lines += ["", f"🏷 [테마] : {esc(theme)}"]
     if related:
-        lines += ["", "🎯 [관련주]  " + " / ".join(esc(_mark(c, listed)) for c in related)]
+        lines += ["", "🎯 [관련주]  " + " / ".join(esc(c) for c in related)]
     if analysis:
         lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {esc(_mark_in_text(x, listed))}" for x in analysis]]
     company_context = _company_context_lines(theme, company_profile, listed)
