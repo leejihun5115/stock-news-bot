@@ -1307,3 +1307,237 @@ AttributeError: 'SchedulerCog' object has no attribute 'schedule_store'
 2026-09-04 00:06:42 | INFO     | 🟢 | __main__ | 종료 신호를 받아 정상 종료합니다.
 2026-09-04 00:06:43 | DEBUG    | 🟢 | urllib3.connectionpool | https://api.github.com:443 "PUT /repos/leejihun5115/stock-news-bot/contents/backups/stock_news_bot.sqlite3 HTTP/1.1" 422 250
 2026-09-04 00:06:43 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(43.5MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-04 00:19:37 | INFO     | 🟢 | __main__ | stock-news-bot 시작
+2026-09-04 00:19:41 | INFO     | 🟢 | stock_news_bot.storage.github_backup | ✅ GitHub 백업에서 DB 복원 완료: data/stock_news_bot.sqlite3 (40952.0KB)
+2026-09-04 00:19:41 | WARNING  | 🟡 | discord.client | PyNaCl is not installed, voice will NOT be supported
+2026-09-04 00:19:41 | WARNING  | 🟡 | discord.client | davey is not installed, voice will NOT be supported
+2026-09-04 00:19:42 | WARNING  | 🟡 | discord.ext.commands.bot | Privileged message content intent is missing, commands may not work as expected.
+2026-09-04 00:19:42 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 뉴스 수집기 (stock_news_bot.cogs.fetcher)
+2026-09-04 00:19:42 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 뉴스 분류기 (stock_news_bot.cogs.classifier)
+2026-09-04 00:19:42 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 알림 전송기 (stock_news_bot.cogs.notifier)
+2026-09-04 00:19:42 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 📦 GitHub DB 백업 루프 시작: 주기=60s, repo=leejihun5115/stock-news-bot, path=backups/stock_news_bot.sqlite3
+2026-09-04 00:19:42 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | ⚡ 실시간 뉴스 파이프라인 시작: 수집주기=60s / 분석worker=6 / Queue최대=500
+2026-09-04 00:19:42 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 🧪 LLM 진단 설정 | enabled=True | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free
+2026-09-04 00:19:42 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 자동 스케줄러 (stock_news_bot.cogs.scheduler)
+2026-09-04 00:19:44 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 시세 연동(DART/pykrx) (stock_news_bot.cogs.market_intel)
+2026-09-04 00:19:44 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 마켓 브리핑(국내/미국장): 활성화 (국내=장중 30분 간격+15:40 마감, 미국=장중 30분 간격+마감 자동감지)
+2026-09-04 00:19:44 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 국내/미국장 브리핑 (stock_news_bot.cogs.market_briefing)
+2026-09-04 00:19:44 | INFO     | 🟢 | stock_news_bot.bot | 코그 로드 완료: 관리자 명령 (stock_news_bot.cogs.admin)
+2026-09-04 00:19:44 | INFO     | 🟢 | stock_news_bot.cogs.scheduler | 누적 DB 상태: 발송이력 1976건, 주가반응 860건 (경로=data/stock_news_bot.sqlite3)
+2026-09-04 00:19:47 | INFO     | 🟢 | stock_news_bot.bot | 로그인 완료: ♣실전은_타이밍#6787 (id=1542322984927109171)
+2026-09-04 00:19:47 | INFO     | 🟢 | stock_news_bot.bot | ⚡ Discord READY까지 부팅 소요: 5.64초
+2026-09-04 00:19:47 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | Render NEWS_KEYWORDS 적용: 214개 키워드 → 214개 RSS 검색 피드
+2026-09-04 00:19:47 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 미국장 브리핑: 장중 시간이 아니라 이번 30분 주기는 건너뜁니다
+2026-09-04 00:19:47 | INFO     | 🟢 | stock_news_bot.bot | ✅ 통제소 부팅 완료 메시지 전송 성공: 채널=1542330154766962709
+2026-09-04 00:19:48 | INFO     | 🟢 | stock_news_bot.bot | 슬래시 명령 전역 동기화 완료
+2026-09-04 00:19:48 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00126380): 조회된 데이타가 없습니다.
+2026-09-04 00:19:55 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-04 00:19:55 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-04 00:19:55 | WARNING  | 🟡 | stock_news_bot.cogs.market_briefing | 미국장 브리핑 RSS 일부 수집 실패: 1건
+2026-09-04 00:19:56 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=005930): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-04 00:19:56 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(43.5MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
+2026-09-04 00:19:57 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00126362): 조회된 데이타가 없습니다.
+2026-09-04 00:19:59 | ERROR    | 🔴 | yfinance | $KS=F: possibly delisted; no price data found  (period=5d)
+2026-09-04 00:19:59 | WARNING  | 🟡 | stock_news_bot.global_market | 글로벌 지표 데이터 없음 | 코스피 선물 | KS=F
+2026-09-04 00:19:59 | INFO     | 🟢 | stock_news_bot.global_market | 🌎 글로벌 시장 데이터 수집 완료 | 31/32
+2026-09-04 00:19:59 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 국내 브리핑용 '유가' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 462, in collect_theme_leader_stocks
+    _tally(featured_rows, False)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-04 00:20:00 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 국내 브리핑용 '금리' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 462, in collect_theme_leader_stocks
+    _tally(featured_rows, False)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-04 00:20:00 | INFO     | 🟢 | stock_news_bot.global_market | 🛢 환율 테마 관련종목: 누적 데이터에서 찾지 못함
+2026-09-04 00:20:00 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 국내 브리핑용 '금' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 462, in collect_theme_leader_stocks
+    _tally(featured_rows, False)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-04 00:20:00 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 국내 브리핑용 '구리' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 462, in collect_theme_leader_stocks
+    _tally(featured_rows, False)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-04 00:20:00 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 국내 브리핑용 '천연가스' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 461, in collect_theme_leader_stocks
+    _tally(limit_up_rows, True)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-04 00:20:01 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 국내 브리핑용 '비트코인' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 461, in collect_theme_leader_stocks
+    _tally(limit_up_rows, True)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-04 00:20:01 | ERROR    | 🔴 | stock_news_bot.cogs.market_briefing | 국내 브리핑용 '반도체' 테마 관련종목 집계 실패 — 이 테마만 생략하고 진행합니다
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_briefing.py", line 317, in _run_briefing
+    section = await asyncio.to_thread(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 461, in collect_theme_leader_stocks
+    _tally(limit_up_rows, True)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/global_market.py", line 450, in _tally
+    for match in dart_client.match_all_companies(title):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DartClient' object has no attribute 'match_all_companies'
+2026-09-04 00:20:01 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-04 00:20:02 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-04 00:20:02 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 🇺🇸 미국장 AI 분석 완료 | 스카이랩스, 코스닥 상장 첫날 15%대 하락 출발
+2026-09-04 00:20:02 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-04 00:20:03 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=006400): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-04 00:20:04 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00258801): 조회된 데이타가 없습니다.
+2026-09-04 00:20:08 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-04 00:20:08 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 🇺🇸 미국장 AI 분석 완료 | 코스피, 美 금리인상 우려 완화에 1%대 강세…코스닥도 상승
+2026-09-04 00:20:08 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-04 00:20:10 | ERROR    | 🔴 | stock_news_bot.cogs.market_intel | 주가 반응 확정 작업 실패 — 다음 주기에 재시도합니다.
+Traceback (most recent call last):
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_intel.py", line 222, in price_reaction_loop
+    await self._resolve_offset_prices(
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/cogs/market_intel.py", line 267, in _resolve_offset_prices
+    set_fn(pending.dedup_key, date=date, close=close)
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/storage/market_data.py", line 184, in set_plus1
+    base_close = self._get_base_close(dedup_key)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leejihun5115/stock-news-bot/src/stock_news_bot/storage/market_data.py", line 211, in _get_base_close
+    cur = self._conn.execute(
+          ^^^^^^^^^^^^^^^^^^^
+sqlite3.DatabaseError: database disk image is malformed
+2026-09-04 00:20:12 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=035720): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-04 00:20:12 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00164779): 조회된 데이타가 없습니다.
+2026-09-04 00:20:15 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-04 00:20:15 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 🇺🇸 미국장 AI 분석 완료 | "2년 전 공포 떠오른다"…코스피 갑자기 '출렁' 무슨 일? [분석+]
+2026-09-04 00:20:15 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-04 00:20:18 | WARNING  | 🟡 | stock_news_bot.cogs.fetcher | RSS 개별 수집 실패(다른 피드는 계속 진행): 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-04 00:20:18 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 📝 블로그 RSS 수집: 13개 피드 URL → 600건 수집(오류 1건)
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: EZ KIPOST → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 내일은 투자왕 단테 → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 닥터조의 쉬운 바이오 → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 시황맨TV → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 월가아재 → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 안될공학 → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 언더스탠딩 → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=000660): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: IT의 신 이형수 → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 와이스트릿 → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 엔지니어TV → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 슈카월드 → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색: 삼프로TV → 10건
+2026-09-04 00:20:19 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | 🔎 YouTube 전체검색 완료: 검색어=12개 → 120건 수집(오류 0건)
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @notRealDonaldTrump_kr → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @newszzang → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @stockdartalert → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @allsiljuk → 6건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @sunstudy → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @shmstory → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @bornlupin → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @DrDtech → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @one_going → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @HANAchina → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @gaoshoukorea → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @goddessTTF → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @theelec → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @scalpinglove → 17건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 채널 수집: @rocket_news1 → 20건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | ✈️ Telegram 전체 수집: 15개 채널에서 283건
+2026-09-04 00:20:20 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01515323): 조회된 데이타가 없습니다.
+2026-09-04 00:20:20 | WARNING  | 🟡 | stock_news_bot.cogs.scheduler | 수집 실패: 'https://contents.premium.naver.com/ystreet/irnote/rss' 수집 실패: 404, message='Not Found', url='https://contents.premium.naver.com/ystreet/irnote/rss'
+2026-09-04 00:20:21 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-04 00:20:22 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 🇺🇸 미국장 AI 분석 완료 | "전기는 사고 전자는 팔았다"…초고수의 엇갈린 삼성 베팅
+2026-09-04 00:20:22 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | 호출 시작 | Gemini키=True | OpenRouter키=True | Gemini모델=gemini-3.5-flash-lite | OpenRouter모델=openrouter/free | 본문확보=False
+2026-09-04 00:20:26 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=373220): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-04 00:20:27 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00106641): 조회된 데이타가 없습니다.
+2026-09-04 00:20:28 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 1단계(초안) 성공
+2026-09-04 00:20:28 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 🇺🇸 미국장 AI 분석 완료 | 키옥시아, '쌍둥이 동생' 샌디스크에 주가 뒤진 이유
+2026-09-04 00:20:32 | ERROR    | 🔴 | stock_news_bot.cogs.scheduler | 파이프라인 실행 중 오류: 중복 기록 실패: database disk image is malformed
+2026-09-04 00:20:33 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=000270): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-04 00:20:34 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00398701): 조회된 데이타가 없습니다.
+2026-09-04 00:20:34 | INFO     | 🟢 | stock_news_bot.cogs.llm_analyzer | 🧪 LLM 진단 | Gemini 브리핑 종합 성공
+2026-09-04 00:20:35 | INFO     | 🟢 | stock_news_bot.cogs.market_briefing | 국내 브리핑 발송 완료 | 기사 5건 | 검색어='코스피 코스닥 마감 시황'
+2026-09-04 00:20:40 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=066970): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-04 00:20:41 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01258710): 조회된 데이타가 없습니다.
+2026-09-04 00:20:46 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=302430): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-04 00:20:47 | INFO     | 🟢 | stock_news_bot.cogs.fetcher | Render NEWS_KEYWORDS 적용: 214개 키워드 → 214개 RSS 검색 피드
+2026-09-04 00:20:47 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=01412822): 조회된 데이타가 없습니다.
+2026-09-04 00:20:53 | INFO     | 🟢 | stock_news_bot.cogs.market_intel | 시가총액 조회 보류 (종목코드=336370): 최근 영업일 내 데이터 없음 — 다음 주기에 재시도
+2026-09-04 00:20:54 | INFO     | 🟢 | stock_news_bot.storage.dart_client | DART 재무제표 없음(정상, status=013) (corp_code=00480783): 조회된 데이타가 없습니다.
+2026-09-04 00:20:54 | WARNING  | 🟡 | stock_news_bot.storage.github_backup | GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(43.5MB). DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.
