@@ -7,14 +7,14 @@
 # TODO: 아래 URL들을 실제 이미지 링크(png/jpg 등)로 교체해주세요.
 # 예: 이미지 호스팅 서비스(imgur, GitHub raw 등)에 올린 뒤 직접 링크(URL)를 넣으면 됨.
 IMAGE_MAPPING: dict[str, str] = {
-    "CIRCUIT_BREAKER": "https://raw.githubusercontent.com/leejihun5115/stock-news-bot/main/assets/alert_images/circuit_breaker.png",  # 서킷브레이커
-    "SIDECAR": "https://raw.githubusercontent.com/leejihun5115/stock-news-bot/main/assets/alert_images/sidecar.png",  # 사이드카
-    "KOSPI_FALL": "https://raw.githubusercontent.com/leejihun5115/stock-news-bot/main/assets/alert_images/kospi_fall.png",  # 코스피 급락/하락
-    "KOSPI_RISE": "https://raw.githubusercontent.com/leejihun5115/stock-news-bot/main/assets/alert_images/kospi_rise.png",  # 코스피 급등/상승
-    "KOSDAQ_FALL": "https://raw.githubusercontent.com/leejihun5115/stock-news-bot/main/assets/alert_images/kosdaq_fall.png",  # 코스닥 급락/하락
-    "KOSDAQ_RISE": "https://raw.githubusercontent.com/leejihun5115/stock-news-bot/main/assets/alert_images/kosdaq_rise.png",  # 코스닥 급등/상승
-    "US_BRIEFING": "https://raw.githubusercontent.com/leejihun5115/stock-news-bot/main/assets/alert_images/us_briefing.png",  # 미국장 브리핑
-    "MARKET_WARNING": "https://raw.githubusercontent.com/leejihun5115/stock-news-bot/main/assets/alert_images/market_warning.png",  # VI/거래정지/투자경고 등
+    "CIRCUIT_BREAKER": "",  # 서킷브레이커
+    "SIDECAR": "",  # 사이드카
+    "KOSPI_FALL": "",  # 코스피 급락/하락
+    "KOSPI_RISE": "",  # 코스피 급등/상승
+    "KOSDAQ_FALL": "",  # 코스닥 급락/하락
+    "KOSDAQ_RISE": "",  # 코스닥 급등/상승
+    "US_BRIEFING": "",  # 미국장 브리핑
+    "MARKET_WARNING": "",  # VI/거래정지/투자경고 등
 }
 
 
