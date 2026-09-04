@@ -253,6 +253,7 @@ def _build_impact_block(item: NewsItem, *, html: bool = False) -> list[str]:
     """주가 민감 재료를 '데이터 → 변화 → 근거' 순으로 표시한다.
 
     구조화 데이터가 없으면 수치를 만들어내지 않고 제목/공시 금액만 사용한다.
+    실질적인 근거 데이터가 전혀 없으면 형식적인 문구 대신 섹션 자체를 생략한다.
     """
     kind = _impact_kind(item)
     if not kind:
@@ -263,11 +264,8 @@ def _build_impact_block(item: NewsItem, *, html: bool = False) -> list[str]:
             fundamentals = get_fundamentals(item.company)
             comp = fundamentals.comparison if fundamentals else None
         if comp is None:
-            return [
-                "🔥 실적 주요 공시",
-                "📊 실적 비교 데이터: 아직 연동되지 않음",
-                "→ DART/공시 원문에서 실제 매출·영업이익·순이익 확인 필요",
-            ]
+            # 실적 비교 데이터가 없으면 형식적인 안내문 대신 섹션 자체를 생략한다.
+            return []
         label, _impact = _earnings_impact(comp)
         lines = [
             label,
@@ -293,6 +291,10 @@ def _build_impact_block(item: NewsItem, *, html: bool = False) -> list[str]:
     market_cap = fundamentals.market_cap if fundamentals else None
     ratio_pct = contract.contract_revenue_ratio_pct if (contract and contract.contract_revenue_ratio_pct is not None) else (won / revenue * 100 if (won and revenue) else None)
 
+    if amount is None and not item.amounts and revenue is None and market_cap is None:
+        # 계약금액도, 참고할 매출/시총도 전혀 없으면 형식적인 섹션을 생략한다.
+        return []
+
     lines = [
         "🚀 대형 공급계약·수주",
         "💰 계약 주요 내용",
@@ -314,12 +316,7 @@ def _build_impact_block(item: NewsItem, *, html: bool = False) -> list[str]:
             ref.append(f"최근 매출 {_fmt_amount(revenue)}")
         if market_cap is not None:
             ref.append(f"시가총액 {_fmt_amount(market_cap)}")
-        lines += [
-            "📊 계약 규모 비교: 계약금액이 명확히 확인되지 않아 정확한 비율은 계산하지 못했어요.",
-            f"참고로 이 회사 규모는 {', '.join(ref)} 수준이에요 — 계약 규모를 가늠하는 데 참고하세요.",
-        ]
-    else:
-        lines += ["📊 계약 규모 비교: 이 회사의 매출·시가총액 데이터가 아직 없어 비교하지 못했어요."]
+        lines += [f"참고로 이 회사 규모는 {', '.join(ref)} 수준이에요 — 계약 규모를 가늠하는 데 참고하세요."]
     return lines
 
 
@@ -357,9 +354,14 @@ def _mark(name: str, listed_companies: set[str]) -> str:
     return f"{_flag_marker(name)}{bilingual_company_label(name)}" if name in listed_companies else name
 
 
+_BOUNDARY_CHARS = r"0-9A-Za-z\uac00-\ud7a3"
+
+
 def _mark_in_text(text: str, listed_companies: set[str]) -> str:
     """제목/핵심/분석/전망 등 본문 텍스트 안에 상장사 이름이 그대로 등장하면
-    그 앞에 상장 시장 국기(국내 🇰🇷 / 미국 🇺🇸)를 붙인다. (📅 [일정] 텍스트에는 호출하지 않는다.)"""
+    그 앞에 상장 시장 국기(국내 🇰🇷 / 미국 🇺🇸)를 붙인다. (📅 [일정] 텍스트에는 호출하지 않는다.)
+    단어 경계를 확인해서, 다른 단어 속에 우연히 포함된 경우(예: "타이드"가
+    "펩타이드" 안에 들어있는 경우)에는 붙이지 않는다."""
     if not text or not listed_companies:
         return text
     for name in sorted(listed_companies, key=len, reverse=True):
@@ -368,7 +370,10 @@ def _mark_in_text(text: str, listed_companies: set[str]) -> str:
         marker = f"{_flag_marker(name)}{name}"
         if marker in text:
             continue
-        text = text.replace(name, marker)
+        pattern = re.compile(
+            rf"(?<![{_BOUNDARY_CHARS}]){re.escape(name)}(?![{_BOUNDARY_CHARS}])"
+        )
+        text = pattern.sub(marker, text)
     return text
 
 
@@ -769,7 +774,7 @@ def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None
     if theme:
         lines += ["", f"🏷 [테마] : {theme}"]
     if related:
-        lines += ["", "🎯 [관련주]", *[f"{_INDENT}↳ {_mark(c, listed)}" for c in related]]
+        lines += ["", "🎯 [관련주]  " + " / ".join(_mark(c, listed) for c in related)]
     if analysis:
         lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {_mark_in_text(x, listed)}" for x in analysis]]
     company_context = _company_context_lines(theme, company_profile, listed)
@@ -1084,7 +1089,7 @@ def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile 
     if theme:
         lines += ["", f"🏷 [테마] : {esc(theme)}"]
     if related:
-        lines += ["", "🎯 [관련주]", *[f"{_INDENT}↳ {esc(_mark(c, listed))}" for c in related]]
+        lines += ["", "🎯 [관련주]  " + " / ".join(esc(_mark(c, listed)) for c in related)]
     if analysis:
         lines += ["", "🧠 [분석]", *[f"{_INDENT}↳ {esc(_mark_in_text(x, listed))}" for x in analysis]]
     company_context = _company_context_lines(theme, company_profile, listed)
