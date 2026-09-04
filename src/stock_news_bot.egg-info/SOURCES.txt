@@ -5,6 +5,7 @@ src/stock_news_bot/__main__.py
 src/stock_news_bot/bot.py
 src/stock_news_bot/company_profile.py
 src/stock_news_bot/config.py
+src/stock_news_bot/global_market.py
 src/stock_news_bot/models.py
 src/stock_news_bot/runtime_settings.py
 src/stock_news_bot/status.py
@@ -21,9 +22,12 @@ src/stock_news_bot/cogs/article_reader.py
 src/stock_news_bot/cogs/classifier.py
 src/stock_news_bot/cogs/fetcher.py
 src/stock_news_bot/cogs/llm_analyzer.py
+src/stock_news_bot/cogs/market_briefing.py
 src/stock_news_bot/cogs/market_intel.py
 src/stock_news_bot/cogs/notifier.py
 src/stock_news_bot/cogs/scheduler.py
+src/stock_news_bot/data/__init__.py
+src/stock_news_bot/data/peer_groups.py
 src/stock_news_bot/monitor/__init__.py
 src/stock_news_bot/monitor/health.py
 src/stock_news_bot/monitor/telegram_alert.py

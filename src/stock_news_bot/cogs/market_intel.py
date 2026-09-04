@@ -23,6 +23,7 @@ pykrx는 pyproject.toml의 필수 의존성이지만, 혹시 설치가 안 된 �
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -80,10 +81,28 @@ class MarketIntelCog(commands.Cog, name="MarketIntel"):
         self.watched_stock_loop.start()
         self.price_reaction_loop.start()
 
-    def cog_unload(self) -> None:
-        self.corp_code_loop.cancel()
-        self.watched_stock_loop.cancel()
-        self.price_reaction_loop.cancel()
+    async def cog_unload(self) -> None:
+        # scheduler.py와 동일한 이유(2026-08-31 SEGV, 이후 DB 손상 4회 재발 확인)로
+        # 취소만 하고 바로 close()하면 watched_stock_loop 등이 market_store에
+        # 쓰기 중이던 도중 DB가 닫혀 손상될 수 있다. 취소 후 실제로 끝날 때까지
+        # (최대 20초) 기다린 뒤에 닫는다.
+        loops = (self.corp_code_loop, self.watched_stock_loop, self.price_reaction_loop)
+        for loop in loops:
+            loop.cancel()
+        tasks_to_await = [
+            task for task in (loop.get_task() for loop in loops) if task is not None
+        ]
+        if tasks_to_await:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks_to_await, return_exceptions=True),
+                    timeout=20,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "market_intel 종료 대기 20초 초과 — 아직 끝나지 않은 백그라운드 작업이 "
+                    "있어 더 기다리지 않고 DB를 닫습니다."
+                )
         self.dart_client.close()
         self.market_store.close()
 

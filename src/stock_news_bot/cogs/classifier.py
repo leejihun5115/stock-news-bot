@@ -36,17 +36,45 @@ MEDIUM_IMPORTANCE_KEYWORDS = [
 ]
 
 # 【근거/금액/종목 추출】
-# "급등/상한가"나 "실적"류 키워드는 그 자체로는 아무 정보가 없다 — 왜
-# 급등했는지, 얼마나 실적이 좋아졌는지가 빠지면 오해를 유발하는 헤드라인일
-# 뿐이다. 그렇다고 해서 근거가 없다고 뉴스 자체를 막아버리면(제외) 정작
-# 사용자가 "속보라 아직 이유가 안 나온 것"과 "구독 목록에 아예 안 들어온 것"을
-# 구분할 수 없게 된다. 그래서 여기서는 절대 제외하지 않고, 대신 본문에서
-# 이유/금액/종목명을 최대한 뽑아내어 메시지에 그대로 붙인다. 못 찾으면
-# "이유 명시 안됨"처럼 그 사실 자체를 명시한다 (거짓으로 근거를 지어내지 않음).
+# "급등/상한가"나 "실적"류 헤드라인은 그 자체로는 아무 정보가 없다 — 왜
+# 급등했는지, 얼마나 실적이 좋아졌는지가 빠지면 오해를 유발할 뿐이다.
+# 우선 본문에서 이유/금액/종목명을 최대한 뽑아내어 메시지에 붙이고,
+# 그래도 근거를 하나도 못 찾으면 (사용자 요청에 따라) 아예 발송하지
+# 않는다 — 이전 버전은 "이유 명시 안됨"으로 표시만 하고 그대로 보냈으나,
+# 근거 없는 급등/실적 헤드라인은 오해만 유발한다는 판단하에 발송 자체를
+# 막도록 변경함 (see: _lacks_required_evidence).
 EVIDENCE_TRIGGER_KEYWORDS = [
     "급등", "급락", "상한가", "하한가",
     "실적발표", "어닝쇼크", "어닝서프라이즈", "실적",
 ]
+
+# 【덕담성 뉴스 제외】
+# "지원/기대/협약/방문/축하/격려/위문/환영/기부/봉사" 같은 단어는 그 자체로는
+# 실질적인 사업 재료가 아니다. 임원 동정, 사회공헌, 의례적 행사 보도자료가
+# 이런 단어만으로 이루어져 있으면서도 회사명이 함께 등장한다는 이유만으로
+# 종목 뉴스로 잘못 분류되는 경우가 많다 (예: "A전자, 지역아동센터 방문해
+# 학용품 지원"). 아래 신호가 있고 실질 사업 재료(수주/계약/투자/공시 등)가
+# 전혀 없으면 덕담성 뉴스로 보고 점수를 0으로 만들어 발송하지 않는다.
+_COURTESY_ONLY_KEYWORDS = {
+    "지원", "기대", "협약", "방문", "축하", "격려", "위문", "환영",
+    "기부", "봉사", "후원", "동참", "감사패", "기념식", "간담회",
+}
+
+
+def _courtesy_only_context(text: str) -> bool:
+    """덕담/의례성 단어만 있고 실질 사업 재료가 없는 뉴스인지 판정한다.
+
+    구체적인 금액(예: "500억원")이 함께 언급되면 의례적 협약이 아니라
+    실제 규모가 있는 사업/후원 계약일 가능성이 높으므로 덕담성으로 보지
+    않는다 — _BUSINESS_MATERIAL_SIGNAL_KEYWORDS에 없는 "협약" 같은
+    단어라도, 금액이 붙어 있으면 실질 재료로 인정한다.
+    """
+    hits = [k for k in _COURTESY_ONLY_KEYWORDS if k in text]
+    if not hits:
+        return False
+    business_signal = any(k in text for k in _BUSINESS_MATERIAL_SIGNAL_KEYWORDS)
+    has_amount = bool(_AMOUNT_PATTERN.search(text))
+    return not (business_signal or has_amount)
 
 # 근거로 인정하는 패턴 3종
 _EVIDENCE_PERCENT_PATTERN = re.compile(r"\d+(\.\d+)?\s?%")
@@ -228,6 +256,13 @@ def score_item(item: NewsItem) -> tuple[int, list[str], list[str]]:
         medium_hits = []
         sectors = []
         matched = []
+    # 지원/협약/방문/축하 등 덕담성 단어만 있고 실질 사업 재료가 없는
+    # 뉴스도 같은 방식으로 걸러낸다 (사회공헌/의례성 보도자료 오탐 방지).
+    if _courtesy_only_context(text):
+        high_hits = []
+        medium_hits = []
+        sectors = []
+        matched = []
     matched = sorted(set(matched))
 
     if high_hits:
@@ -303,6 +338,19 @@ def is_noise(item: NewsItem) -> bool:
     return any(p.search(item.title) for p in _NOISE_PATTERNS)
 
 
+def _lacks_required_evidence(item: NewsItem) -> bool:
+    """급등/급락/상한가/실적 등 트리거 헤드라인인데 본문에서 근거를 전혀
+    찾지 못했는지 판정한다 (classify_item()이 채운 item.reason/amounts 기준).
+
+    True면 발송 대상에서 제외한다 — "왜"가 전혀 없는 급등/실적 헤드라인은
+    오해만 유발하므로, 이유 없이 그대로 보내는 대신 발송 자체를 막는다.
+    """
+    text = f"{item.title} {item.summary}"
+    if not any(kw in text for kw in EVIDENCE_TRIGGER_KEYWORDS):
+        return False
+    return not item.reason and not item.amounts
+
+
 class ClassifierCog(commands.Cog, name="Classifier"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -320,19 +368,24 @@ class ClassifierCog(commands.Cog, name="Classifier"):
         return match.corp_name
 
     def classify(self, items: list[NewsItem]) -> list[NewsItem]:
-        """노이즈([포토] 등 짧은 제목)만 걸러내고, 나머지는 절대 제외하지 않는다.
+        """노이즈([포토] 등 짧은 제목) 필터링 + 분류 + 근거 없는 급등/실적
+        헤드라인 제외까지 수행한다.
 
-        급등/실적 키워드가 있는데 근거가 없는 뉴스도 여기서는 통과시킨다 —
-        classify_item()이 채워 넣은 item.reason이 비어있으면, 그 사실 자체를
-        notifier가 메시지에 "이유 명시 안됨"으로 표시한다.
+        급등/실적 등 키워드가 헤드라인에 있는데 classify_item()이 본문에서
+        item.reason/amounts를 전혀 못 찾은 경우, 이제는 "이유 명시 안됨"으로
+        표시만 하고 보내는 대신 아예 발송 대상에서 제외한다
+        (_lacks_required_evidence). 덕담성 뉴스(_courtesy_only_context)와
+        매체명 오탐(dart_client._has_genuine_company_mention)은 score_item/
+        company_matcher 단계에서 이미 score=0 / company="" 로 걸러진다.
         """
         filtered = [item for item in items if not is_noise(item)]
-        return classify_all(
+        classified = classify_all(
             filtered,
             news_value_mid=self.settings.news_value_mid,
             news_value_high=self.settings.news_value_high,
             company_matcher=self._company_matcher,
         )
+        return [item for item in classified if not _lacks_required_evidence(item)]
 
     def record_watched_companies(self, items: list[NewsItem]) -> int:
         """분류 중에는 DB를 쓰지 않고, 분류가 끝난 뒤 회사 등장 기록을 일괄 저장한다."""
