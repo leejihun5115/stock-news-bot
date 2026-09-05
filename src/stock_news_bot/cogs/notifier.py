@@ -81,6 +81,8 @@ from stock_news_bot.models import ContractImpact, EarningsComparison, Importance
 from stock_news_bot.company_profile import CompanyProfile, bilingual_company_label, resolve_company_profile, is_listed_company, find_mentioned_companies, market_flag_of
 from stock_news_bot.cogs.admin import is_admin
 from stock_news_bot.cogs.analysis_engine import analyze_item
+from stock_news_bot.config import load_settings
+from stock_news_bot.storage.dart_client import DartClient
 from stock_news_bot.storage.fundamentals import get_fundamentals
 from stock_news_bot.storage.history import SectorStats
 from stock_news_bot.storage.market_data import SectorPriceStats
@@ -576,8 +578,35 @@ def _meaningful_core(core: list[str], title: str) -> list[str]:
     return result[:3]
 
 
+_notifier_dart_client = None
+_notifier_dart_client_failed = False
+
+
+def _get_notifier_dart_client():
+    """관련주 2등주/3등주 매칭용 DartClient를 지연 생성해 재사용한다.
+
+    company_profile.py의 지연 초기화 패턴과 동일하게, 최초 실패 시
+    이후 호출에서는 매번 재시도하지 않고 None을 반환해(기존 동작과
+    동일하게 1등주만 나옴) 조용히 fail-open한다.
+    """
+    global _notifier_dart_client, _notifier_dart_client_failed
+    if _notifier_dart_client is not None:
+        return _notifier_dart_client
+    if _notifier_dart_client_failed:
+        return None
+    try:
+        _notifier_dart_client = DartClient(load_settings().db_path)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "관련주 2등주/3등주용 DartClient 초기화 실패 — 1등주만 표시됩니다."
+        )
+        _notifier_dart_client_failed = True
+        return None
+    return _notifier_dart_client
+
+
 def _analysis_parts(item: NewsItem):
-    result = analyze_item(item)
+    result = analyze_item(item, dart_client=_get_notifier_dart_client())
     title = _clean_display_title(item.analysis_title or result.title)
     core = _meaningful_core(item.ai_core or result.core, title)
     analysis = []
