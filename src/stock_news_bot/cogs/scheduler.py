@@ -604,7 +604,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 exempt = (
                     _is_largo_tv_exception(item)
                     or item.source_kind == "dart"
-                    or (_is_study_source(item) and _has_stock_selection_evidence(item))
+                    or _has_stock_selection_evidence(item)
                 )
                 if not exempt and _lacks_market_relevance(result):
                     self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)

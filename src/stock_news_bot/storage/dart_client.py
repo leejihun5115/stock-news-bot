@@ -467,7 +467,7 @@ class DartClient:
         """
         results: list[CompanyMatch] = []
         seen_names: set[str] = set()
-        for candidate in self._name_cache():
+        for candidate in self._load_name_cache():
             if candidate.corp_name in seen_names:
                 continue
             if candidate.corp_name not in text:

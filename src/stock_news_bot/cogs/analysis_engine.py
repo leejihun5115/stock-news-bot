@@ -166,7 +166,7 @@ def _theme(text: str) -> str | None:
     return max(hits)[1] if hits else None
 
 
-def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = False, data_lines: list[str] | None = None, history_count: int = 0, history_avg_score: float | None = None, price_count: int = 0, price_up_ratio: float | None = None, price_avg_pct: float | None = None) -> AnalysisResult:
+def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = False, data_lines: list[str] | None = None, history_count: int = 0, history_avg_score: float | None = None, price_count: int = 0, price_up_ratio: float | None = None, price_avg_pct: float | None = None, dart_client=None) -> AnalysisResult:
     text = re.sub(r"\s+", " ", f"{_clean_title(item.title)} {item.summary}").strip()
     sentences = _sentences(item.summary) or _sentences(item.title)
     core: list[str] = []
@@ -201,6 +201,19 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
             reasons[item.company] = f"기사에서 확인된 근거: {item.reason}"
         elif item.amounts:
             reasons[item.company] = f"기사에서 확인된 금액 정보: {', '.join(item.amounts[:3])}"
+
+    # classifier가 기사당 1개만 추출하는 item.company의 한계를 보완한다.
+    # dart_client가 주어진 경우에만 동작하고(하위호환을 위해 기본값 None),
+    # 미제공 시 기존 동작과 100% 동일하다. AI 추측이 아니라
+    # related_stocks_engine의 dart_client 재매칭(오탐방지 포함)을 그대로 쓴다.
+    if dart_client is not None and len(related) < 3:
+        from stock_news_bot.related_stocks_engine import find_additional_related_stocks
+        extra = find_additional_related_stocks(
+            text, dart_client, exclude=set(related), limit=3 - len(related)
+        )
+        for corp_name in extra:
+            related.append(corp_name)
+            reasons.setdefault(corp_name, "기사 본문에 실제 언급된 상장사(추가 매칭)")
 
     if upgraded:
         classification = "업그레이드"
