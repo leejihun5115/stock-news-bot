@@ -15,6 +15,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from stock_news_bot.utils.errors import ConfigError
+from stock_news_bot.cogs.content_sources import load_source_env_settings
 
 load_dotenv(override=False)
 
@@ -141,7 +142,6 @@ class Settings:
     price_reaction_lookback_days: int = 30      # 섹터별 주가 반응 통계 조회 기간
     price_reaction_min_sample: int = 5          # 이보다 표본이 적으면 "표본 부족"으로 표시
     price_reaction_retention_days: int = 90     # 주가 반응 추적 DB 보관 기간
-    schedule_event_retention_days: int = 60  # 일정 이벤트 DB 보관 기간
 
     # 무료 LLM 3단계 fallback: Gemini -> OpenRouter free -> 규칙 엔진.
     gemini_api_key: str = ""
@@ -162,6 +162,14 @@ class Settings:
     market_briefing_us_query: str = "뉴욕증시 마감 다우 나스닥"
     market_briefing_max_items: int = 5
     market_briefing_lookback_hours: float = 20.0
+
+    # 일정 브리핑 엔진 (schedule_engine + cogs/schedule_briefing.py).
+    # 뉴스 본문에서 추출한 예정 이벤트(실적발표/주주총회/임상/상장 등)를
+    # 누적해 /일정브리핑 명령으로 조회하거나, 하루 한 번 자동 요약을 보낸다.
+    schedule_briefing_enabled: bool = False  # 자동 일일 요약 발송 여부(명령 조회는 이 값과 무관하게 항상 가능)
+    schedule_briefing_daily_time: str = "08:30"  # KST, "HH:MM"
+    schedule_briefing_default_days: int = 14  # /일정브리핑 기본 조회 기간
+    schedule_event_retention_days: int = 30  # 지나간 이벤트 보관 기간(그 이후 정리)
 
     health_stale_threshold_seconds: int = 1800
     health_check_interval_seconds: int = 300
@@ -252,25 +260,13 @@ def load_settings() -> Settings:
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID"),
         rss_feeds=_get_str_list("RSS_FEEDS"),
-        blog_feeds=_get_str_list("BLOG_FEEDS") or _get_str_list("BLOG_RSS_FEEDS"),
-        youtube_channel_ids=_get_str_list("YOUTUBE_CHANNEL_IDS"),
-        youtube_search_queries=_get_str_list("YOUTUBE_SEARCH_QUERIES"),
-        youtube_search_max_results=max(1, _get_int("YOUTUBE_SEARCH_MAX_RESULTS", 10)),
-        youtube_search_interval_seconds=max(60, _get_int("YOUTUBE_SEARCH_INTERVAL_SECONDS", 60)),
-        blog_search_queries=_get_str_list("BLOG_SEARCH_QUERIES"),
-        telegram_search_queries=_get_str_list("TELEGRAM_SEARCH_QUERIES"),
-        blog_search_max_results=max(1, _get_int("BLOG_SEARCH_MAX_RESULTS", 10)),
-        telegram_search_max_results=max(1, _get_int("TELEGRAM_SEARCH_MAX_RESULTS", 10)),
-        source_search_interval_seconds=max(60, _get_int("SOURCE_SEARCH_INTERVAL_SECONDS", 60)),
-        telegram_source_channels=(
-            _get_str_list("TELEGRAM_SOURCE_CHANNELS")
-            or _get_str_list("TELEGRAM_CHANNEL_FILTERED")
-            or _get_str_list("TELEGRAM_CHANNEL_FORCE")
-        ),
+        # 유튜브/텔레그램/블로그 관련 설정값 전체는 content_sources.py의
+        # load_source_env_settings()에 모아뒀다(관리하기 쉽도록 한 곳에 정리).
+        # os.getenv 호출은 이 아래 _get_str/_get_bool/_get_int/_get_str_list를
+        # 그대로 넘겨서 하므로, "설정은 config.py를 통해서만 읽는다"는
+        # 원칙은 그대로 유지된다.
+        **load_source_env_settings(_get_str, _get_bool, _get_int, _get_str_list),
         news_keywords=_get_str_list("NEWS_KEYWORDS"),
-        enable_blog=_get_str("ENABLE_BLOG", "true").lower() not in {"0", "false", "no", "off"},
-        enable_youtube=_get_str("ENABLE_YOUTUBE", "true").lower() not in {"0", "false", "no", "off"},
-        enable_telegram_channels=_get_str("ENABLE_TELEGRAM_CHANNELS", "true").lower() not in {"0", "false", "no", "off"},
         news_value_mid=_get_int("NEWS_SEND_MIN_SCORE", _get_int("MEDIUM_NEWS_SCORE", 45)),
         news_value_high=_get_int("STRONG_NEWS_SCORE", 75),
         fetch_interval_seconds=max(60, _get_int("FETCH_INTERVAL_SECONDS", 60)),
@@ -295,7 +291,6 @@ def load_settings() -> Settings:
         price_reaction_lookback_days=_get_int("PRICE_REACTION_LOOKBACK_DAYS", 30),
         price_reaction_min_sample=_get_int("PRICE_REACTION_MIN_SAMPLE", 5),
         price_reaction_retention_days=_get_int("PRICE_REACTION_RETENTION_DAYS", 90),
-        schedule_event_retention_days=_get_int("SCHEDULE_EVENT_RETENTION_DAYS", 60),
         gemini_api_key=_get_str("GEMINI_API_KEY"),
         llm_model=_get_str("LLM_MODEL", "gemini-3.5-flash-lite"),
         openrouter_api_key=_get_str("OPENROUTER_API_KEY"),
@@ -308,8 +303,12 @@ def load_settings() -> Settings:
         market_briefing_us_times=_get_str_list("MARKET_BRIEFING_US_TIMES") or ["07:00"],
         market_briefing_kr_query=_get_str("MARKET_BRIEFING_KR_QUERY", "코스피 코스닥 마감 시황"),
         market_briefing_us_query=_get_str("MARKET_BRIEFING_US_QUERY", "뉴욕증시 마감 다우 나스닥"),
-        market_briefing_max_items=max(1, _get_int("MARKET_BRIEFING_MAX_ITEMS", 5)),
+        market_briefing_max_items=max(1, _get_int("MARKET_BRIEFING_MAX_ITEMS", 15)),
         market_briefing_lookback_hours=max(1.0, _get_float("MARKET_BRIEFING_LOOKBACK_HOURS", 20.0)),
+        schedule_briefing_enabled=_get_bool("SCHEDULE_BRIEFING_ENABLED", False),
+        schedule_briefing_daily_time=_get_str("SCHEDULE_BRIEFING_DAILY_TIME", "08:30"),
+        schedule_briefing_default_days=max(1, _get_int("SCHEDULE_BRIEFING_DEFAULT_DAYS", 14)),
+        schedule_event_retention_days=max(1, _get_int("SCHEDULE_EVENT_RETENTION_DAYS", 30)),
         health_stale_threshold_seconds=_get_int("HEALTH_STALE_THRESHOLD_SECONDS", 1800),
         health_check_interval_seconds=_get_int("HEALTH_CHECK_INTERVAL_SECONDS", 300),
         log_level=_get_str("LOG_LEVEL", "INFO"),
