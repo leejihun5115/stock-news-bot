@@ -23,7 +23,7 @@ from stock_news_bot.cogs.notifier import (
 )
 from stock_news_bot.monitor.health import HealthMonitor
 from stock_news_bot.cogs.analysis_engine import analyze_item
-from stock_news_bot.cogs.llm_analyzer import analyze_news, analyze_deep_dive
+from stock_news_bot.cogs.llm_analyzer import analyze_news
 from stock_news_bot.cogs.article_reader import fetch_article_text
 from stock_news_bot.monitor.telegram_alert import TelegramAlerter, send_startup_probe
 from stock_news_bot.status import status as bot_status
@@ -72,6 +72,8 @@ def _has_stock_selection_evidence(item) -> bool:
     투자자가 종목을 선정할 때 확인할 수 있는 구체적 근거가 하나 이상 필요하다.
     """
     company = str(getattr(item, "company", "") or "").strip()
+    if not company:
+        return False
     text = f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')}".lower()
     evidence = (
         "계약", "공급", "납품", "수주", "투자", "증설", "양산", "출시",
@@ -657,36 +659,6 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                             item.title[:100],
                         )
 
-                    # AI 심층분석(딥다이브): 상장사(company)가 확인된 뉴스에 한해
-                    # 회사 핵심사업/팩트/체크포인트를 별도로 생성해 item에 채운다.
-                    # 실패해도 기존 발송 흐름은 막지 않는다(그냥 필드가 비어있게 됨).
-                    if item.company:
-                        try:
-                            deep_dive_result = await asyncio.to_thread(
-                                analyze_deep_dive,
-                                gemini_api_key=self.settings.gemini_api_key,
-                                gemini_model=self.settings.llm_model,
-                                openrouter_api_key=self.settings.openrouter_api_key,
-                                openrouter_model=self.settings.openrouter_model,
-                                title=item.title,
-                                summary=item.summary,
-                                company=item.company,
-                                reason=item.reason,
-                                amounts=item.amounts,
-                                theme=result.theme or "",
-                                score=item.score,
-                                article_body=article_body,
-                                timeout_seconds=self.settings.llm_analysis_timeout_seconds,
-                                max_chars=self.settings.llm_analysis_max_chars,
-                            )
-                            if deep_dive_result:
-                                item.deep_dive_business = deep_dive_result.business
-                                item.deep_dive_facts = list(deep_dive_result.facts)
-                                item.deep_dive_checkpoints = list(deep_dive_result.checkpoints)
-                                logger.info("🏭 AI 심층분석 완료 | %s", item.title[:80])
-                        except Exception:
-                            logger.exception("AI 심층분석 실패 | title=%s", item.title[:100])
-
                 item.analysis_title = result.title
                 item.classification = result.classification
                 item.confidence = result.confidence
@@ -818,14 +790,11 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                             news_value_high=self.settings.news_value_high,
                             company_profile=company_profile,
                         )
-                        from stock_news_bot.image_resolver import get_image_url_for_title as _get_image_url
-                        _image_url = _get_image_url(item.title)
                         await self.alerter.send_news(
                             summary_text,
                             button_label="상세보기",
                             callback_data=item.dedup_key,
                             detail=detail_text,
-                            photo_url=_image_url,
                         )
                         telegram_sent = True
                     except Exception:

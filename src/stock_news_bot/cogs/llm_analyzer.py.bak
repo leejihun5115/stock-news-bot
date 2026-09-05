@@ -35,13 +35,11 @@ class BriefingAnalysis:
 
     개별 기사 분석(LLMAnalysis)과 달리 "이 브리핑 전체"를 관통하는 핵심만
     추리고, 실제로 등장한 테마/종목만 뽑는다 — market_briefing.py의
-    analyze_market_briefing()이 이 타입을 반환한다. outlook은 근거 있는
-    범위 안에서의 단기 관찰 포인트 한두 문장이다(단정적 매수/매도 금지).
+    analyze_market_briefing()이 이 타입을 반환한다.
     """
     core: list[str] = field(default_factory=list)
     themes: list[str] = field(default_factory=list)
     stocks: list[str] = field(default_factory=list)
-    outlook: str = ""
 
 
 @dataclass(slots=True)
@@ -105,33 +103,22 @@ title/core/analysis에는 마크다운, 이모지, URL을 넣지 않는다.
 
 _BRIEFING_SYSTEM_PROMPT = """당신은 한국/미국 증시 마켓 브리핑을 종합하는 팩트 기반 애널리스트다.
 여러 건의 개별 기사 제목·핵심 내용과, 환율/금리/유가/지수 등 글로벌 시장
-지표를 함께 받는다(국내 브리핑에는 [미국장 참고]로 직전 미국장 브리핑의
-테마/관련주가 추가로 주어질 수 있다). 여기 실제로 있는 사실만 사용하고,
-없는 숫자나 사건을 만들어내지 않는다. 투자 권유나 주가 방향을 단정하지 않는다.
+지표를 함께 받는다. 여기 실제로 있는 사실만 사용하고, 없는 숫자나 사건을
+만들어내지 않는다. 투자 권유나 주가 방향을 단정하지 않는다.
 
 목표:
 - 지금 이 브리핑에서 가장 먼저 알아야 할 핵심만 2~4개로 압축한다. 개별
   기사 제목을 그대로 나열하지 말고, 여러 기사·지표를 관통하는 흐름이나
   공통 맥락을 짚는다.
-- 지표를 그냥 나열하지 말고 서로 연관된 지표끼리 묶어서 하나의 흐름으로
-  설명한다(예: "유가·금리 동반 상승 → 리스크오프 압력", "반도체 ADR·
-  필라델피아 지수 강세 → 국내 반도체 심리 선행 신호"). 관련 없는 지표를
-  억지로 엮지 않는다.
-- [미국장 참고]가 주어졌다면, 그 테마·관련주가 이번 브리핑의 종목·테마와
-  어떻게 이어지는지 core나 outlook에서 한 번은 명시적으로 짚는다. 이어지는
-  근거가 없으면 억지로 연결하지 않는다.
 - 여러 기사·지표에 실제로 등장한 산업/이슈 테마를 2~4개 뽑는다(예: 반도체,
   금리, 환율, AI인프라 등). 근거가 부족하면 억지로 만들지 않고 빈 배열로 둔다.
 - 여러 기사·지표에 실제로 이름이 등장한 종목만 관련주로 뽑는다(최대 6개).
   등장하지 않은 종목을 추측해서 채우지 않는다. 실제로 없으면 빈 배열로 둔다.
-- outlook: 지금까지의 핵심·지표 흐름을 근거로, 단기(다음 개장 전후)에
-  주목할 지점을 1~2문장으로 정리한다. "~로 예상된다"가 아니라 "~를 주시할
-  필요가 있다"처럼 근거 기반 관찰 포인트로 쓴다. 근거가 약하면 빈 문자열로 둔다.
 
 반드시 JSON 객체 하나만 출력한다:
-{"core":["핵심 요약1","핵심 요약2"],"themes":["테마1","테마2"],"stocks":["종목1","종목2"],"outlook":"단기 관찰 포인트"}
+{"core":["핵심 요약1","핵심 요약2"],"themes":["테마1","테마2"],"stocks":["종목1","종목2"]}
 
-core/themes/stocks/outlook에는 마크다운, 이모지, URL을 넣지 않는다.
+core/themes/stocks에는 마크다운, 이모지, URL을 넣지 않는다.
 """
 
 # 【AI 심층분석(딥다이브) 프롬프트】
@@ -315,15 +302,12 @@ def _parse_result(text: str) -> LLMAnalysis | None:
 
 def _parse_briefing_result(text: str) -> BriefingAnalysis | None:
     parsed = _parse_json(text)
-    outlook_value = parsed.get("outlook")
-    outlook_lines = _clean_lines([outlook_value], 1, max_len=200) if isinstance(outlook_value, str) else []
     result = BriefingAnalysis(
         core=_clean_lines(parsed.get("core"), 4),
         themes=_clean_flat_list(parsed.get("themes"), 4),
         stocks=_clean_flat_list(parsed.get("stocks"), 6),
-        outlook=outlook_lines[0] if outlook_lines else "",
     )
-    return result if (result.core or result.themes or result.stocks or result.outlook) else None
+    return result if (result.core or result.themes or result.stocks) else None
 
 
 def _parse_deep_dive_result(text: str) -> DeepDiveAnalysis | None:
@@ -555,16 +539,11 @@ def analyze_market_briefing(
     label: str,
     items_text: str,
     global_market_context: str = "",
-    us_context: str = "",
     timeout_seconds: int = 45,
     max_chars: int = 9000,
 ) -> BriefingAnalysis | None:
     """마켓 브리핑(국내/미국장)의 여러 기사 + 글로벌 지표를 한 번에 종합해서,
-    정면 메시지에 보여줄 핵심 요약/관련테마/관련주/전망을 만든다.
-
-    us_context: 국내 브리핑일 때 직전 미국장 브리핑의 테마/관련주를 짧게
-    넘기면, AI가 국내 종목·테마와 어떻게 이어지는지 함께 짚는다(미국
-    브리핑이거나 아직 없으면 빈 문자열로 두면 된다).
+    정면 메시지에 보여줄 핵심 요약/관련테마/관련주를 만든다.
 
     개별 기사 analyze_news() 호출과는 완전히 별개의 1회 호출이며(팩트체크
     2단계는 여기서는 하지 않는다 — 브리핑 종합은 원문 대조 대상이 개별
@@ -579,7 +558,6 @@ def analyze_market_briefing(
         f"[브리핑 구분]\n{label}\n\n"
         f"[개별 기사 제목/핵심]\n{(items_text or '없음')[:max_chars]}\n\n"
         f"[글로벌 시장 지표]\n{(global_market_context or '없음')[:2000]}\n"
-        + (f"\n[미국장 참고 - 직전 미국장 브리핑 테마/관련주]\n{us_context[:800]}\n" if us_context else "")
     )
 
     try:

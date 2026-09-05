@@ -1,53 +1,16 @@
 """텔레그램 '⚙️ 설정' 명령으로 재시작 없이 즉시 바꿀 수 있는 런타임 설정.
 
 .env/Render 환경변수(NEWS_SEND_MIN_SCORE 등)는 기본값일 뿐이고, 여기 담긴
-override가 있으면 그 값이 우선한다. 값은 data/runtime_overrides.json 파일에
-자동 저장되며, 프로세스가 재시작돼도 이 파일에서 다시 불러와 유지된다.
+override가 있으면 그 값이 우선한다. 프로세스가 재시작되면 override는
+초기화되고 다시 환경변수 기본값으로 돌아간다(영구 저장이 필요하면 추후
+DB에 옮기면 된다).
 """
 from __future__ import annotations
 
-import json
 import threading
-from pathlib import Path
 
 _lock = threading.Lock()
 _overrides: dict[str, object] = {}
-
-# src/stock_news_bot/runtime_settings.py -> parents[2] == 프로젝트 루트
-_SETTINGS_FILE = Path(__file__).resolve().parents[2] / "data" / "runtime_overrides.json"
-
-
-def _load_overrides() -> None:
-    """기동 시 저장된 override를 불러온다. 파일이 없거나 손상돼 있어도
-    봇 기동을 막지 않고 빈 값(기본 환경변수값)으로 계속 진행한다."""
-    global _overrides
-    try:
-        if _SETTINGS_FILE.exists():
-            with _SETTINGS_FILE.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                _overrides = data
-    except Exception:
-        _overrides = {}
-
-
-def _save_overrides() -> None:
-    """현재 override를 파일에 저장한다. 임시파일에 먼저 쓰고 원자적으로
-    app체(rename)해서, 저장 도중 프로세스가 죽어도 기존 파일이 깨지지 않는다."""
-    try:
-        _SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = _SETTINGS_FILE.with_suffix(".json.tmp")
-        with _lock:
-            data = dict(_overrides)
-        with tmp_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        tmp_path.replace(_SETTINGS_FILE)
-    except Exception:
-        # 저장 실패해도(예: 디스크 꽉 참) 봇 동작 자체는 계속돼야 한다.
-        pass
-
-
-_load_overrides()
 
 
 def get_min_score(default: int) -> int:
@@ -60,7 +23,6 @@ def set_min_score(value: int) -> int:
     value = max(0, min(100, int(value)))
     with _lock:
         _overrides["min_score"] = value
-    _save_overrides()
     return value
 
 
@@ -72,7 +34,6 @@ def get_keyword_filter_enabled(default: bool = True) -> bool:
 def set_keyword_filter_enabled(value: bool) -> None:
     with _lock:
         _overrides["keyword_filter_enabled"] = bool(value)
-    _save_overrides()
 
 
 # ---------------------------------------------------------------------------
@@ -104,8 +65,7 @@ def add_keyword(keyword: str) -> list[str]:
             added.append(keyword)
         _overrides["keyword_added"] = added
         _overrides["keyword_removed"] = removed
-    _save_overrides()
-    return added
+        return added
 
 
 def remove_keyword(keyword: str) -> list[str]:
@@ -119,8 +79,7 @@ def remove_keyword(keyword: str) -> list[str]:
             removed.append(keyword)
         _overrides["keyword_added"] = added
         _overrides["keyword_removed"] = removed
-    _save_overrides()
-    return removed
+        return removed
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +109,6 @@ def set_variable(name: str, value: int) -> int:
     value = max(lo, min(hi, int(value)))
     with _lock:
         _overrides[f"var:{name}"] = value
-    _save_overrides()
     return value
 
 

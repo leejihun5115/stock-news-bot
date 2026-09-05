@@ -143,14 +143,13 @@ class TelegramAlerter:
                             return
                         return
 
-    async def send_news(self, message: str, *, button_label: str, callback_data: str, detail: str, photo_url: str | None = None) -> None:
+    async def send_news(self, message: str, *, button_label: str, callback_data: str, detail: str) -> None:
         """뉴스와 함께 인라인 버튼을 전송하고 상세정보를 서버 메모리에 등록한다.
 
         callback_data(item.dedup_key, 64자 sha256 hex)는 그 자체로 이미
         텔레그램 callback_data 바이트 제한(64바이트)을 꽉 채우므로 접두사를
         붙일 여유가 없다 — 대신 내부적으로 짧은 토큰을 새로 만들어 그 토큰만
         주고받고, 실제 상세 내용은 self._details[token]에 보관한다.
-        photo_url이 있으면 sendPhoto로, 없으면 기존처럼 sendMessage로 보낸다.
         """
         if not self.enabled:
             return
@@ -160,33 +159,19 @@ class TelegramAlerter:
             # 오래된 항목부터 정리. 딕셔너리 삽입순서를 이용한다.
             for key in list(self._details)[:100]:
                 self._details.pop(key, None)
-        reply_markup = {
-            "inline_keyboard": [
-                [
-                    {"text": f"🔓 {button_label}", "callback_data": f"s:{token}"},
-                    {"text": "⚙️ 설정", "callback_data": "o:open"},
-                ],
-            ]
-        }
-        if photo_url:
-            photo_payload = {
-                "chat_id": self._chat_id,
-                "photo": photo_url,
-                "caption": message[:1024],
-                "parse_mode": "HTML",
-                "reply_markup": reply_markup,
-            }
-            try:
-                await self._post_with_retry("sendPhoto", photo_payload, log_label="텔레그램 뉴스(이미지)")
-                return
-            except Exception:
-                logger.exception("텔레그램 이미지 뉴스 전송 중 예외 발생 — 텍스트로 재시도합니다.")
         payload = {
             "chat_id": self._chat_id,
             "text": message[:4000],
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
-            "reply_markup": reply_markup,
+            "reply_markup": {
+                "inline_keyboard": [
+                    [
+                        {"text": f"🔓 {button_label}", "callback_data": f"s:{token}"},
+                        {"text": "⚙️ 설정", "callback_data": "o:open"},
+                    ],
+                ]
+            },
         }
         try:
             await self._post_with_retry("sendMessage", payload, log_label="텔레그램 뉴스")

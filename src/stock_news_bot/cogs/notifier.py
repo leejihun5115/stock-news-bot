@@ -525,7 +525,7 @@ _ENGLISH_SOURCE_TAIL_RE = re.compile(
 # Google News RSS 관행도 함께 제거한다. 매체명은 보통 공백 없이
 # 2~8자인 짧은 고유명사이므로, 그 조건으로 범위를 좁혀 오탐(제목 내부의
 # 실제 문장이 잘려나가는 것)을 최소화한다.
-_SHORT_KOREAN_SOURCE_TAIL_RE = re.compile(r"\s+[-–—]\s+[가-힣]{2,8}$")
+_SHORT_KOREAN_SOURCE_TAIL_RE = re.compile(r"\s+[-–—]\s+(?:[A-Za-z]{1,6}[가-힣]{1,8}|[가-힣]{2,8})$")
 # "... : 네이버 블로그"처럼 영문 출처("- Naver Blog")가 뒤따르지 않고
 # 콜론+한글 출처만 단독으로 붙는 경우도 있다. 이런 경우는 임의의 한글
 # 문구를 다 지우면 제목 내부의 진짜 부제("... : 실적 발표")까지 잘려나갈
@@ -784,6 +784,8 @@ def build_message_summary(item: NewsItem, company_profile: CompanyProfile | None
     if not _study_header(item):
         verdict_label = f"{verdict} ({score}점)" if verdict != "⚪ 판단 보류" else verdict
         lines += ["", verdict_label]
+    if item.llm_success_rate is not None:
+        lines += ["", f"🧠 AI 분석 성공률: 이번 실행 기준 {item.llm_success_rate:.0f}%"]
     if item.url:
         lines += ["", f"🔗 [기사 원문 보기]({item.url})"]
     return "\n".join(_push_body_inward(lines))
@@ -1099,6 +1101,8 @@ def build_telegram_summary_text(item: NewsItem, company_profile: CompanyProfile 
     if not _study_header(item):
         verdict_label = f"{esc(verdict)} ({score}점)" if verdict != "⚪ 판단 보류" else esc(verdict)
         lines += ["", verdict_label]
+    if item.llm_success_rate is not None:
+        lines += ["", f"🧠 AI 분석 성공률: 이번 실행 기준 {item.llm_success_rate:.0f}%"]
     if item.url:
         lines += ["", f'🔗 <a href="{esc(item.url)}">[기사 원문 보기]</a>']
     return "\n".join(_push_body_inward(lines))
@@ -1129,6 +1133,10 @@ class NotifierCog(commands.Cog, name="Notifier"):
                     content = "@here 🚨 중요 뉴스" if item.importance == Importance.HIGH else None
                     company_profile = await asyncio.to_thread(resolve_company_profile, item.company, item.sectors) if item.company else CompanyProfile(company="")
                     summary_embed = build_embed_summary(item, company_profile)
+                    from stock_news_bot.image_resolver import get_image_url_for_title as _get_image_url
+                    _image_url = _get_image_url(item.title)
+                    if _image_url:
+                        summary_embed.set_image(url=_image_url)
                     detail_embed = build_embed(item, cumulative_line, price_reaction_line, company_profile)
                     view = TradePointView(summary_embed, detail_embed)
                     await channel.send(

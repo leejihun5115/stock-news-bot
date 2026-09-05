@@ -22,6 +22,7 @@ import asyncio
 import logging
 import os
 import sys
+import traceback
 
 from stock_news_bot.utils.errors import ConfigError
 
@@ -36,6 +37,9 @@ def _send_boot_failure_alert(stage: str, exc: BaseException) -> None:
     이미 이 함수가 호출되는 시점엔 실행되어 .env 값이 os.environ에
     반영돼 있다 — config 모듈이 어느 단계에서 실패했든 load_dotenv 줄은
     그보다 먼저 실행되기 때문).
+
+    traceback에서 마지막 프레임(실제로 예외가 터진 파일:줄번호:함수)을 뽑아
+    메시지에 "발생 위치"로 포함시켜, 어느 파일을 고쳐야 하는지 바로 알 수 있게 한다.
     """
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -49,11 +53,18 @@ def _send_boot_failure_alert(stage: str, exc: BaseException) -> None:
         )
         return
 
+    tb_list = traceback.extract_tb(exc.__traceback__)
+    location = "알 수 없음"
+    if tb_list:
+        last = tb_list[-1]
+        location = f"{last.filename}:{last.lineno} (함수 {last.name})"
+
     message = (
         "🚨 [부팅 실패] stock-news-bot이 시작되지 못했습니다.\n\n"
         f"↳ 실패 단계: <b>{stage}</b>\n"
         f"↳ 오류 유형: <b>{type(exc).__name__}</b>\n"
-        f"↳ 내용: {str(exc)[:500]}\n\n"
+        f"↳ 내용: {str(exc)[:500]}\n"
+        f"↳ 발생 위치: <code>{location}</code>\n\n"
         "Render 로그에서 전체 트레이스백을 확인하세요."
     )
     try:
@@ -64,6 +75,26 @@ def _send_boot_failure_alert(stage: str, exc: BaseException) -> None:
         logger.info("텔레그램으로 부팅 실패 알림을 전송했습니다.")
     except Exception:
         logger.exception("부팅 실패 알림 전송 자체가 실패했습니다.")
+
+
+async def _notify_boot_success(bot) -> None:
+    """디스코드 접속이 실제로 완료된 뒤(on_ready) 텔레그램으로 부팅 성공을 알린다."""
+    await bot.wait_until_ready()
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        logger.warning(
+            "TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID가 없어 부팅 성공 알림을 보낼 수 없습니다."
+        )
+        return
+    try:
+        from stock_news_bot.monitor.telegram_alert import TelegramAlerter
+
+        alerter = TelegramAlerter(bot_token=token, chat_id=chat_id, enabled=True)
+        await alerter.send("✅ [부팅 성공] stock-news-bot이 정상적으로 시작되었습니다.")
+        logger.info("텔레그램으로 부팅 성공 알림을 전송했습니다.")
+    except Exception:
+        logger.exception("부팅 성공 알림 전송 자체가 실패했습니다.")
 
 
 async def _run(settings, bot) -> None:
@@ -82,9 +113,13 @@ async def _run(settings, bot) -> None:
             await asyncio.gather(
                 bot.start(settings.discord_token),
                 run_dummy_server(),
+                _notify_boot_success(bot),
             )
         else:
-            await bot.start(settings.discord_token)
+            await asyncio.gather(
+                bot.start(settings.discord_token),
+                _notify_boot_success(bot),
+            )
 
 
 def main() -> None:

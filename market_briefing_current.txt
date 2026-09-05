@@ -111,19 +111,6 @@ def _google_news_rss_url(query: str) -> str:
     return f"https://news.google.com/rss/search?q={quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
 
 
-def _display_sort_key(item: NewsItem, ai_results: dict) -> tuple:
-    """브리핑 상세보기에 나열할 뉴스 순서를 정한다.
-
-    1순위: 특정 종목(company)이 걸린 "종목뉴스"를 지수/거시 뉴스보다 먼저
-    2순위: 점수(AI 점수 우선, 없으면 규칙 기반 점수)가 높은 뉴스가 먼저
-    3순위: 그래도 같으면 최신순
-    """
-    ai = ai_results.get(item.url or item.title)
-    has_company = bool(item.company)
-    score = (ai.score if ai and ai.score else 0) or (item.score or 0)
-    return (0 if has_company else 1, -score, -item.published_at.timestamp())
-
-
 class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -133,9 +120,6 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
             chat_id=self.settings.telegram_chat_id,
             enabled=self.settings.telegram_alert_enabled,
         )
-        # 국내 브리핑에서 "미국장 참고"로 이어붙이기 위해, 가장 최근
-        # 미국장 브리핑(장중/마감 공통)의 테마.관련주 요약을 보관해둔다.
-        self._last_us_context: str = ""
 
         if not self.settings.market_briefing_enabled:
             logger.info("마켓 브리핑(국내/미국장): 비활성화 (MARKET_BRIEFING_ENABLED=true로 설정하면 켜집니다)")
@@ -410,7 +394,6 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
                     label=label,
                     items_text=items_text,
                     global_market_context=global_market_context,
-                    us_context=self._last_us_context if label.startswith("국내") else "",
                     timeout_seconds=self.settings.fetch_timeout_seconds,
                 )
             except Exception:
@@ -425,19 +408,7 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
                     parts.append("🏷 테마: " + ", ".join(briefing.themes))
                 if briefing.stocks:
                     parts.append("🎯 관련주: " + ", ".join(briefing.stocks))
-                if briefing.outlook:
-                    parts.append("📌 전망: " + briefing.outlook)
                 briefing_summary_text = "\n".join(parts)
-
-            # 국내 브리핑이 다음 번에 "미국장 참고"로 이어붙일 수 있도록,
-            # 이번이 미국장 브리핑이었다면 테마/관련주를 보관해둔다.
-            if label.startswith("미국") and briefing and (briefing.themes or briefing.stocks):
-                us_parts = []
-                if briefing.themes:
-                    us_parts.append("테마: " + ", ".join(briefing.themes))
-                if briefing.stocks:
-                    us_parts.append("관련주: " + ", ".join(briefing.stocks))
-                self._last_us_context = " / ".join(us_parts)
 
         # Discord
         try:
@@ -494,50 +465,33 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
             logger.exception("%s 브리핑 디스코드 전송 실패", label)
 
         # Telegram (독립 채널 — 디스코드 실패와 무관하게 항상 별도 시도)
-        # 정면에는 AI 종합(총평/테마/관련주/전망)만 보여주고, 개별 기사
-        # 원문 전체는 "🔓 상세보기" 버튼 뒤로 감춘다(기존 뉴스알림과 동일한
-        # send_news 패턴 재사용 — 상세보기/설정 버튼은 send_news가 자동으로 붙인다).
         try:
-            front_lines = [f"<b>{header}</b>", ""]
+            lines = [f"<b>{header}</b>", ""]
             if briefing_summary_text:
-                front_lines.append(briefing_summary_text[:1500])
-            else:
-                front_lines.append("(AI 종합 요약을 만들지 못했습니다 — 상세보기에서 원문을 확인하세요)")
-
-            display_items = sorted(items, key=lambda i: _display_sort_key(i, ai_results))
-
-            detail_lines = [f"<b>{header}</b>", ""]
-            if briefing_summary_text:
-                detail_lines.append("🌎 <b>글로벌 시장 영향</b>")
-                detail_lines.append(briefing_summary_text[:1500])
-                detail_lines.append("")
-            for item in display_items:
+                lines.append("🌎 <b>글로벌 시장 영향</b>")
+                lines.append(briefing_summary_text[:1500])
+                lines.append("")
+            for item in items:
                 pub_kst = item.published_at.astimezone(_KST).strftime("%H:%M")
                 ai = ai_results.get(item.url or item.title)
                 if ai:
                     title = ai.title or item.title
-                    detail_lines.append(
+                    lines.append(
                         f"• [{pub_kst}] <a href=\"{item.url}\"><b>{title[:100]}</b></a> ({item.source})"
                     )
                     if ai.core:
-                        detail_lines.append("  🧠 " + " / ".join(ai.core[:2]))
+                        lines.append("  🧠 " + " / ".join(ai.core[:2]))
                     if ai.analysis:
-                        detail_lines.append("  📊 " + " / ".join(ai.analysis[:1]))
+                        lines.append("  📊 " + " / ".join(ai.analysis[:1]))
                     if ai.score:
-                        detail_lines.append(f"  🎯 AI 점수 {ai.score}")
+                        lines.append(f"  🎯 AI 점수 {ai.score}")
                     if ai.confidence:
-                        detail_lines.append(f"  🔎 신뢰도 {ai.confidence}%")
+                        lines.append(f"  🔎 신뢰도 {ai.confidence}%")
                 else:
-                    detail_lines.append(
+                    lines.append(
                         f"• [{pub_kst}] <a href=\"{item.url}\">{item.title[:100]}</a> ({item.source})"
                     )
-
-            await self.alerter.send_news(
-                "\n".join(front_lines),
-                button_label="상세보기",
-                callback_data=f"briefing:{label}:{now_kst.strftime('%Y%m%d%H%M')}",
-                detail="\n".join(detail_lines),
-            )
+            await self.alerter.send("\n".join(lines))
         except Exception:
             logger.exception("%s 브리핑 텔레그램 전송 실패", label)
 

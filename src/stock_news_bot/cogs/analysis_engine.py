@@ -273,10 +273,6 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
     if reason not in bad_reason and len(reason_key) >= 12 and reason_key != title_key:
         analysis.append(f"사업 근거: {reason}")
 
-    # 신뢰도 근거는 실제 분석 내용이 하나 이상 있을 때만 노출한다.
-    if analysis and evidence_reasons:
-        reasons_text = " · ".join(dict.fromkeys(evidence_reasons))
-        analysis.append(f"신뢰도 근거: {reasons_text} (근거 충족 {raw_evidence_score}점)")
 
     strength = "🔥 강함" if item.score >= 75 else ("🟢 보통" if item.score >= 45 else "⚪️ 약함")
 

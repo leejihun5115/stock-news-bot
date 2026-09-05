@@ -141,6 +141,7 @@ class Settings:
     price_reaction_lookback_days: int = 30      # 섹터별 주가 반응 통계 조회 기간
     price_reaction_min_sample: int = 5          # 이보다 표본이 적으면 "표본 부족"으로 표시
     price_reaction_retention_days: int = 90     # 주가 반응 추적 DB 보관 기간
+    schedule_event_retention_days: int = 60  # 일정 이벤트 DB 보관 기간
 
     # 무료 LLM 3단계 fallback: Gemini -> OpenRouter free -> 규칙 엔진.
     gemini_api_key: str = ""
@@ -294,6 +295,7 @@ def load_settings() -> Settings:
         price_reaction_lookback_days=_get_int("PRICE_REACTION_LOOKBACK_DAYS", 30),
         price_reaction_min_sample=_get_int("PRICE_REACTION_MIN_SAMPLE", 5),
         price_reaction_retention_days=_get_int("PRICE_REACTION_RETENTION_DAYS", 90),
+        schedule_event_retention_days=_get_int("SCHEDULE_EVENT_RETENTION_DAYS", 60),
         gemini_api_key=_get_str("GEMINI_API_KEY"),
         llm_model=_get_str("LLM_MODEL", "gemini-3.5-flash-lite"),
         openrouter_api_key=_get_str("OPENROUTER_API_KEY"),
