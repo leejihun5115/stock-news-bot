@@ -527,6 +527,65 @@ def verify_company_relevance(
     return None
 
 
+_SEARCH_RELEVANCE_SYSTEM_PROMPT = (
+    "당신은 유튜브/블로그/텔레그램에서 키워드로 검색된 콘텐츠가 실제로 "
+    "한국 주식 투자와 관련된 유의미한 내용인지 판별하는 검수자다. "
+    "아래 중 하나에 해당해야 '관련있음'이다: "
+    "(1) 특정 상장회사의 사업/실적/주가와 실제로 관련된 내용을 다룬다, "
+    "(2) 코스피/코스닥/환율/금리 등 시장 전반(시황)을 실제로 설명하는 내용이다. "
+    "채널 이름, 진행자 이름, 시리즈 제목에 우연히 특정 단어가 들어있는 것, "
+    "여행/일상/잡담 브이로그, 단순 인사말은 '관련없음'이다. "
+    "반드시 아래 JSON 형식으로만 답하라. 다른 텍스트는 절대 포함하지 마라.\n"
+    '{"relevant": true 또는 false, "reason": "10자 이내 짧은 이유"}'
+)
+
+
+def verify_search_content_relevance(
+    *,
+    title: str,
+    text: str,
+    company: str = "",
+    gemini_api_key: str = "",
+    gemini_model: str = "gemini-3.5-flash-lite",
+    openrouter_api_key: str = "",
+    openrouter_model: str = "openrouter/free",
+    timeout_seconds: int = 15,
+) -> bool | None:
+    """검색(키워드 전체검색)으로 수집된 유튜브/블로그/텔레그램 콘텐츠가
+    실제로 종목 또는 시황과 관련된 내용인지 AI에게 확인한다. 채널명/
+    진행자명에 우연히 걸린 흔한 단어 때문에 무관한 콘텐츠(잡담, 브이로그
+    등)가 통과하는 것을 막기 위함이다. 판단 불가(키 없음/호출 실패/응답
+    파싱 실패) 시 None을 돌려주며, 호출부는 이 경우 안전하게 차단
+    (fail-closed) 처리한다."""
+    if not gemini_api_key and not openrouter_api_key:
+        return None
+    company_line = f"[확인할 종목명] {company}\n\n" if company else ""
+    article = f"{company_line}[제목] {title}\n\n[본문]\n{text}"
+    if gemini_api_key:
+        try:
+            result = _call_gemini(
+                api_key=gemini_api_key, model=gemini_model, article=article,
+                timeout_seconds=timeout_seconds, system_prompt=_SEARCH_RELEVANCE_SYSTEM_PROMPT,
+                parse_fn=_parse_relevance_result,
+            )
+            if result is not None:
+                return result
+        except Exception as exc:
+            logger.warning("🧪 검색콘텐츠검증 | Gemini 실패 | %s", str(exc)[:300])
+    if openrouter_api_key:
+        try:
+            result = _call_openrouter(
+                api_key=openrouter_api_key, model=openrouter_model or "openrouter/free",
+                article=article, timeout_seconds=timeout_seconds, system_prompt=_SEARCH_RELEVANCE_SYSTEM_PROMPT,
+                parse_fn=_parse_relevance_result,
+            )
+            if result is not None:
+                return result
+        except Exception as exc:
+            logger.warning("🧪 검색콘텐츠검증 | OpenRouter 실패 | %s", str(exc)[:300])
+    return None
+
+
 def analyze_news(
     *,
     gemini_api_key: str = "",

@@ -119,6 +119,97 @@ def _lacks_market_relevance(result) -> bool:
     return not result.theme and not result.related_stocks
 
 
+_KEYWORD1_THEME_SECTOR = {
+    "AI", "AI데이터센터", "AI반도체", "AI에이전트", "반도체", "반도체소재", "반도체장비",
+    "HBM", "DDR5", "CXL", "온디바이스AI", "생성AI", "피지컬AI", "휴머노이드", "로봇",
+    "로봇부품", "협동로봇", "산업용로봇", "방산", "K방산", "방산수출", "조선", "K조선",
+    "조선기자재", "조선수주", "LNG선", "컨테이너선", "배터리", "전고체배터리", "양극재",
+    "음극재", "폐배터리", "ESS", "전기차", "전기차충전", "원전", "원전수출", "원전해체",
+    "SMR", "수소", "수소에너지", "수소차", "태양광", "풍력", "해상풍력", "전력기기",
+    "전력망", "전력인프라", "스마트그리드", "변압기", "전선", "바이오", "제약", "신약",
+    "신약개발", "신약허가", "CDMO", "ADC", "GLP-1", "위고비", "비만치료제", "임상",
+    "임상3상", "임상성공", "FDA", "FDA승인", "항암제", "세포치료", "유전자치료", "알츠하이머",
+    "우주항공", "우주발사체", "저궤도위성", "위성", "UAM", "드론", "잠수함", "양자암호",
+    "양자컴퓨터", "초전도체", "LK-99", "유리기판", "첨단패키징", "동박", "사이버보안",
+    "비트코인", "이더리움", "스테이블코인", "M&A", "인수합병", "리쇼어링", "웹툰", "OTT",
+    "엔터", "K-POP", "게임신작", "드라마흥행", "원숭이두창", "신종감염병", "조류독감", "코로나19",
+    "누리호",
+}
+
+
+def _has_keyword1_theme(text_lower: str) -> bool:
+    return any(kw.lower() in text_lower for kw in _KEYWORD1_THEME_SECTOR)
+
+
+def _is_search_source(item) -> bool:
+    """등록 채널 구독이 아니라 '검색어로 전체검색'해서 들어온 콘텐츠인지
+    확인한다. fetcher.py가 검색 결과에는 item.source를
+    "YouTube 검색 | <검색어>" 또는 "<라벨> 검색 | <검색어>" 형태로 채워
+    넣으므로 이 표시로 구분한다. 검색 소스는 검색어로 쓰인 채널명/진행자
+    이름에 우연히 흔한 단어(예: "투자")가 섞여 있어도 실제 내용과 무관하게
+    기존 필터를 통과하는 사례가 있어, 더 엄격한 별도 조건을 적용한다."""
+    source = str(getattr(item, "source", "") or "")
+    return " 검색 | " in source
+
+
+_ai_search_relevance_cache: dict[tuple, "bool | None"] = {}
+
+
+def _cached_verify_search_relevance(
+    title: str,
+    text: str,
+    company: str,
+    gemini_api_key: str,
+    gemini_model: str,
+    openrouter_api_key: str,
+    openrouter_model: str,
+):
+    key = (title, text, company, gemini_api_key, gemini_model, openrouter_api_key, openrouter_model)
+    if key in _ai_search_relevance_cache:
+        return _ai_search_relevance_cache[key]
+    from stock_news_bot.cogs.llm_analyzer import verify_search_content_relevance
+    result = verify_search_content_relevance(
+        title=title, text=text, company=company,
+        gemini_api_key=gemini_api_key, gemini_model=gemini_model,
+        openrouter_api_key=openrouter_api_key, openrouter_model=openrouter_model,
+    )
+    _ai_search_relevance_cache[key] = result
+    if len(_ai_search_relevance_cache) > 500:
+        _ai_search_relevance_cache.clear()
+    return result
+
+
+def _passes_strict_search_filter(item, settings) -> bool:
+    """검색(전체검색)으로 들어온 유튜브/블로그/텔레그램 콘텐츠 전용 강화
+    필터. (1) 상장종목명이 있고 + 테마/섹터 키워드가 있고 + AI가 실제
+    관련성을 확인하거나, (2) 시황 키워드가 있고 + AI가 실제 시황 설명임을
+    확인해야 통과한다. AI 판단이 불가능(키 없음/호출 실패)하면 안전하게
+    차단한다(fail-closed) — 채널명에 우연히 걸리는 오탐을 막는 것이
+    목적이므로, 판단 못 할 땐 통과시키지 않는다."""
+    text_lower = f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')}".lower()
+    company = str(getattr(item, "company", "") or "").strip()
+    gemini_api_key = getattr(settings, "gemini_api_key", "") or ""
+    gemini_model = getattr(settings, "llm_model", "") or ""
+    openrouter_api_key = getattr(settings, "openrouter_api_key", "") or ""
+    openrouter_model = getattr(settings, "openrouter_model", "") or ""
+
+    if company and _has_keyword1_theme(text_lower):
+        verdict = _cached_verify_search_relevance(
+            item.title, item.summary, company,
+            gemini_api_key, gemini_model, openrouter_api_key, openrouter_model,
+        )
+        return verdict is True
+
+    if _is_market_condition_content(item):
+        verdict = _cached_verify_search_relevance(
+            item.title, item.summary, "",
+            gemini_api_key, gemini_model, openrouter_api_key, openrouter_model,
+        )
+        return verdict is True
+
+    return False
+
+
 class SchedulerCog(commands.Cog, name="Scheduler"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -1009,8 +1100,17 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             if _is_study_source(item)
             and (
                 _is_largo_tv_exception(item)
-                or _has_stock_selection_evidence(item)
-                or _is_market_condition_content(item)
+                or (
+                    _is_search_source(item)
+                    and _passes_strict_search_filter(item, self.settings)
+                )
+                or (
+                    not _is_search_source(item)
+                    and (
+                        _has_stock_selection_evidence(item)
+                        or _is_market_condition_content(item)
+                    )
+                )
             )
         ]
         news_items = [item for item in classified if not _is_study_source(item)]
