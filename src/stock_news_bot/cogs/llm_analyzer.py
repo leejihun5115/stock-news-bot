@@ -460,7 +460,70 @@ def _call_llm(
             logger.warning("🧪 LLM 진단 | OpenRouter %s 응답은 왔지만 유효한 JSON이 없습니다.", step_label)
         except Exception as exc:
             logger.warning("🧪 LLM 진단 | OpenRouter %s 실패 | %s", step_label, str(exc)[:500])
+    return None
 
+
+_RELEVANCE_SYSTEM_PROMPT = (
+    "당신은 한국 주식 뉴스에서 특정 상장회사명이 실제로 그 회사 사업/실적/주가와 "
+    "관련된 맥락으로 언급됐는지 판별하는 검수자다. "
+    "본문에 그 이름이 등장하더라도, 단순 출처 표기(예: 언론사명), 흔한 일반 단어의 "
+    "우연한 사용, 다른 의미(지명/단위/보통명사 등)로 쓰인 경우는 '관련없음'이다. "
+    "반드시 아래 JSON 형식으로만 답하라. 다른 텍스트는 절대 포함하지 마라.\n"
+    '{"relevant": true 또는 false, "reason": "10자 이내 짧은 이유"}'
+)
+
+
+def _parse_relevance_result(text: str) -> bool | None:
+    data = _parse_json(text)
+    if not isinstance(data, dict) or "relevant" not in data:
+        return None
+    value = data.get("relevant")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "y", "1"}
+    return None
+
+
+def verify_company_relevance(
+    *,
+    corp_name: str,
+    text: str,
+    gemini_api_key: str = "",
+    gemini_model: str = "gemini-3.5-flash-lite",
+    openrouter_api_key: str = "",
+    openrouter_model: str = "openrouter/free",
+    timeout_seconds: int = 15,
+) -> bool | None:
+    """대상/태양/나노/레이/수도/YTN처럼 흔한 단어·언론사명과 겹치는
+    종목명이, 본문에서 실제로 그 상장회사를 가리키는지 AI에게 짧게
+    확인한다. 판단 불가(키 없음/호출 실패/응답 파싱 실패) 시 None을
+    돌려주며, 호출부는 이 경우 기존처럼 통과(fail-open) 처리한다."""
+    if not gemini_api_key and not openrouter_api_key:
+        return None
+    article = f"[확인할 종목명] {corp_name}\n\n[본문]\n{text}"
+    if gemini_api_key:
+        try:
+            result = _call_gemini(
+                api_key=gemini_api_key, model=gemini_model, article=article,
+                timeout_seconds=timeout_seconds, system_prompt=_RELEVANCE_SYSTEM_PROMPT,
+                parse_fn=_parse_relevance_result,
+            )
+            if result is not None:
+                return result
+        except Exception as exc:
+            logger.warning("🧪 관련성검증 | Gemini 실패 | %s", str(exc)[:300])
+    if openrouter_api_key:
+        try:
+            result = _call_openrouter(
+                api_key=openrouter_api_key, model=openrouter_model or "openrouter/free",
+                article=article, timeout_seconds=timeout_seconds, system_prompt=_RELEVANCE_SYSTEM_PROMPT,
+                parse_fn=_parse_relevance_result,
+            )
+            if result is not None:
+                return result
+        except Exception as exc:
+            logger.warning("🧪 관련성검증 | OpenRouter 실패 | %s", str(exc)[:300])
     return None
 
 

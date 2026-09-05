@@ -258,10 +258,68 @@ def find_mentioned_companies(text: str) -> set[str]:
             continue
         if not _has_genuine_company_mention(name, text):
             continue
-        if name in _AMBIGUOUS_COMMON_WORD_NAMES and not _FINANCE_CONTEXT_RE.search(text):
-            continue
+        if name in _AMBIGUOUS_COMMON_WORD_NAMES:
+            if not _FINANCE_CONTEXT_RE.search(text):
+                continue
+            verdict = _verify_ambiguous_company_with_ai(name, text)
+            if verdict is False:
+                continue
         found.add(name)
     return found
+
+
+_ai_relevance_cache: dict[tuple, "bool | None"] = {}
+
+
+def _cached_verify_with_ai(
+    corp_name: str,
+    text: str,
+    gemini_api_key: str,
+    gemini_model: str,
+    openrouter_api_key: str,
+    openrouter_model: str,
+):
+    key = (corp_name, text, gemini_api_key, gemini_model, openrouter_api_key, openrouter_model)
+    if key in _ai_relevance_cache:
+        return _ai_relevance_cache[key]
+    from stock_news_bot.cogs.llm_analyzer import verify_company_relevance
+    result = verify_company_relevance(
+        corp_name=corp_name, text=text,
+        gemini_api_key=gemini_api_key, gemini_model=gemini_model,
+        openrouter_api_key=openrouter_api_key, openrouter_model=openrouter_model,
+    )
+    _ai_relevance_cache[key] = result
+    if len(_ai_relevance_cache) > 500:
+        _ai_relevance_cache.clear()
+    return result
+
+
+def _verify_ambiguous_company_with_ai(corp_name: str, text: str):
+    """대상/태양/나노/레이/수도/YTN처럼 흔한 단어·언론사명과 겹치는
+    종목명은, 본문에 금융 문맥이 있어도 여전히 오탐일 수 있다(이 봇이
+    다루는 기사 자체가 거의 다 증시 기사라 금융 문맥 체크만으론 부족).
+    AI에게 "본문이 실제로 이 상장회사와 관련있는가"를 짧게 물어 최종
+    확인한다. API 키 미설정/호출 실패 등 판단 불가 시 None을 돌려주며,
+    호출부는 이 경우 기존처럼 통과(fail-open)시켜, 이 오탐방지 기능의
+    장애가 알림 자체를 막지는 않게 한다."""
+    try:
+        from stock_news_bot.config import load_settings
+        settings = load_settings()
+    except Exception:
+        return None
+    if not settings.gemini_api_key and not settings.openrouter_api_key:
+        return None
+    try:
+        return _cached_verify_with_ai(
+            corp_name,
+            text[:1500],
+            settings.gemini_api_key,
+            settings.llm_model,
+            settings.openrouter_api_key,
+            settings.openrouter_model,
+        )
+    except Exception:
+        return None
 
 def resolve_company_profile(company,sectors=None):
  company=(company or '').strip();sectors=sectors or []
