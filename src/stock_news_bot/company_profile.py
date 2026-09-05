@@ -241,7 +241,27 @@ def find_mentioned_companies(text: str) -> set[str]:
     text = text or ''
     if not text:
         return set()
-    return {name for name in _ALL_ALIAS_NAMES if name and name in text}
+    # 2026-09 패치: 순수 substring 매칭만 하면 YTN/아시아경제 같은
+    # 언론사명, 대상/태양/나노/레이/수도 같은 흔한 단어형 종목명이
+    # 근거 없이 오탐된다. dart_client.py가 이미 검증한 보호 로직
+    # (_has_genuine_company_mention: 단어경계+언론사접미사 제외,
+    # _AMBIGUOUS_COMMON_WORD_NAMES: 흔한 단어는 금융 문맥 있을 때만
+    # 인정)을 그대로 재사용한다.
+    from .storage.dart_client import (
+        _has_genuine_company_mention,
+        _AMBIGUOUS_COMMON_WORD_NAMES,
+        _FINANCE_CONTEXT_RE,
+    )
+    found = set()
+    for name in _ALL_ALIAS_NAMES:
+        if not name or name not in text:
+            continue
+        if not _has_genuine_company_mention(name, text):
+            continue
+        if name in _AMBIGUOUS_COMMON_WORD_NAMES and not _FINANCE_CONTEXT_RE.search(text):
+            continue
+        found.add(name)
+    return found
 
 def resolve_company_profile(company,sectors=None):
  company=(company or '').strip();sectors=sectors or []

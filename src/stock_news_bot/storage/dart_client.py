@@ -93,7 +93,7 @@ _META_LAST_REFRESHED = "corp_code_last_refreshed_at"
 # 다수는 "20대 남성", "이 남성" 같은 일반 명사 용법이다.) 이 목록에 있는
 # 이름은 본문에 _FINANCE_CONTEXT_RE에 걸리는 금융 문맥 신호가 함께 있을
 # 때만 종목으로 인정한다. 새로운 오탐 사례가 보고되면 여기에 추가한다.
-_AMBIGUOUS_COMMON_WORD_NAMES = {"남성"}
+_AMBIGUOUS_COMMON_WORD_NAMES = {"남성", "대상", "태양", "나노", "레이", "수도", "YTN"}
 
 _FINANCE_CONTEXT_RE = re.compile(
     r"주가|주식|종목|코스피|코스닥|상한가|하한가|급등|급락|거래량|시가총액|"
