@@ -607,7 +607,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     or _has_stock_selection_evidence(item)
                 )
                 if not exempt and _lacks_market_relevance(result):
-                    self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
+                    self.dedup_store.mark_seen(item.dedup_key, item.title, item.url, company=item.company)
                     logger.info(
                         "🚫 관련테마/관련주 없음으로 제외 | score=%d | source=%s | %s",
                         item.score, item.source, item.title[:100],
@@ -868,14 +868,14 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     hours=self.settings.news_lookback_hours
                 )
                 if item.published_at < cutoff:
-                    self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
+                    self.dedup_store.mark_seen(item.dedup_key, item.title, item.url, company=item.company)
                     logger.info(
                         "⏭️ 송출 직전 오래된 뉴스 폐기(%s시간 초과): %s",
                         self.settings.news_lookback_hours, item.title[:100],
                     )
                     continue
                 if item.is_generic_title:
-                    self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
+                    self.dedup_store.mark_seen(item.dedup_key, item.title, item.url, company=item.company)
                     logger.info(
                         "⏭️ 송출 직전 뚝뚝그린 제목(회사명 미확인) 폐기: %s",
                         item.title[:100],
@@ -939,7 +939,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     continue
 
                 self._sent_timestamps.append(datetime.now(timezone.utc).timestamp())
-                self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
+                self.dedup_store.mark_seen(item.dedup_key, item.title, item.url, company=item.company)
                 try:
                     await asyncio.to_thread(self.history_store.record_sent, item)
                 except Exception:
@@ -1077,7 +1077,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             if item.published_at < cutoff or item.published_at > future_cutoff
         ]
         for item in backlog:
-            self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
+            self.dedup_store.mark_seen(item.dedup_key, item.title, item.url, company=item.company)
         classified = [
             item for item in classified
             if cutoff <= item.published_at <= future_cutoff
@@ -1185,7 +1185,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             key = item.dedup_key
             async with self._inflight_lock:
                 inflight = key in self._inflight_keys
-            if key in cycle_seen or inflight or not self.dedup_store.is_new(key):
+            if key in cycle_seen or inflight or not self.dedup_store.is_new(key, title=item.title, company=item.company):
                 continue
             cycle_seen.add(key)
             new_items.append(item)
