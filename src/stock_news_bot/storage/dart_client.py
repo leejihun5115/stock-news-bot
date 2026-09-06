@@ -18,6 +18,7 @@ from stock_news_bot.storage.dart_service import (
     DartDisclosure,
     WatchedStock,
     build_earnings_comparison,
+    _has_genuine_company_mention,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "DartDisclosure",
     "WatchedStock",
     "build_earnings_comparison",
+    "_has_genuine_company_mention",
 ]
