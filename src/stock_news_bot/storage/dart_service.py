@@ -1179,6 +1179,13 @@ try:
     _PYKRX_AVAILABLE = True
 except ImportError:
     pykrx_stock = None  # type: ignore[assignment]
+
+try:
+    from pykrx_openapi import KRXOpenAPI
+    _KRX_OPENAPI_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _KRX_OPENAPI_AVAILABLE = False
+    KRXOpenAPI = None  # type: ignore[assignment]
     _PYKRX_AVAILABLE = False
 
 _DART_FINANCIAL_YEAR_LOOKBACK = 1  # 사업보고서가 아직 없는 당해 초에는 작년치를 조회
@@ -1248,6 +1255,15 @@ class MarketIntelCog(commands.Cog, name="MarketIntel"):
 
         self.dart_client = DartClient(self.settings.db_path)
         self.market_store = MarketDataStore(self.settings.db_path)
+        self.krx_client = None
+        self._krx_daily_cache: dict[str, list[dict] | None] = {}
+        if _KRX_OPENAPI_AVAILABLE and self.settings.krx_openapi_key:
+            os.environ.setdefault("KRX_OPENAPI_KEY", self.settings.krx_openapi_key)
+            try:
+                self.krx_client = KRXOpenAPI()
+            except Exception:
+                logger.exception("KRXOpenAPI 클라이언트 초기화 실패")
+                self.krx_client = None
 
         # 종목코드별 "최근 연속 전체 실패 횟수". 휴일 하루이틀 수준은
         # 정상이라 조용히 넘어가지만(로그는 INFO), 이게 계속 쌓이면
@@ -1272,6 +1288,12 @@ class MarketIntelCog(commands.Cog, name="MarketIntel"):
         if not _PYKRX_AVAILABLE:
             logger.info(
                 "pykrx가 설치되어 있지 않아 market_intel의 시세 연동 작업을 비활성화합니다."
+            )
+        if self.krx_client is None:
+            logger.info(
+                "KRX_OPENAPI_KEY가 없거나 pykrx-openapi가 설치되지 않아 "
+                "_closing_price_on_or_before/_nth_trading_close_on_or_after가 "
+                "동작하지 않습니다."
             )
         self.corp_code_loop.start()
         self.watched_stock_loop.start()
@@ -1493,37 +1515,64 @@ class MarketIntelCog(commands.Cog, name="MarketIntel"):
             date, close = result
             set_fn(pending.dedup_key, date=date, close=close)
 
-    def _closing_price_on_or_before(self, stock_code: str, at: datetime) -> tuple[str, int] | None:
-        """at 시점 기준, 그 날짜(또는 그 이전 최근 거래일)의 종가."""
-        end = at.strftime("%Y%m%d")
-        start = (at - timedelta(days=10)).strftime("%Y%m%d")
+    def _krx_daily_snapshot(self, date_str: str) -> list[dict] | None:
+        """date_str(YYYYMMDD) 하루치 전종목 시세 스냅샷을 반환한다(캐시됨).
+
+        pykrx-openapi는 옛 pykrx와 반대로 "날짜 하나 + 전종목"을 한 번에
+        주는 방식이다. 같은 날짜를 여러 종목이 반복 조회할 때 중복 호출을
+        막기 위해 인스턴스 수명 동안 날짜별로 캐시해둔다(휴장일/조회 실패
+        시에는 None을 캐시해서 같은 날을 또 두드리지 않게 한다).
+        """
+        if self.krx_client is None:
+            return None
+        if date_str in self._krx_daily_cache:
+            return self._krx_daily_cache[date_str]
         with _suppress_pykrx_noise():
             try:
-                df = pykrx_stock.get_market_ohlcv_by_date(start, end, stock_code)
+                result = self.krx_client.get_stock_daily_trade(bas_dd=date_str)
+                rows = result.get("OutBlock_1") or None
             except Exception:
-                df = None
-        if df is None or df.empty:
-            return None
-        last_row = df.iloc[-1]
-        date_str = df.index[-1].strftime("%Y%m%d")
-        return date_str, int(last_row["종가"])
+                rows = None
+        self._krx_daily_cache[date_str] = rows
+        return rows
+
+    def _closing_price_on_or_before(self, stock_code: str, at: datetime) -> tuple[str, int] | None:
+        """at 시점 기준, 그 날짜(또는 그 이전 최근 거래일)의 종가."""
+        for delta in range(0, 11):
+            date_str = (at - timedelta(days=delta)).strftime("%Y%m%d")
+            rows = self._krx_daily_snapshot(date_str)
+            if not rows:
+                continue
+            for row in rows:
+                if str(row.get("ISU_CD")) == stock_code:
+                    try:
+                        return date_str, int(row["TDD_CLSPRC"])
+                    except (KeyError, TypeError, ValueError):
+                        return None
+        return None
 
     def _nth_trading_close_on_or_after(
         self, stock_code: str, at: datetime, n: int,
     ) -> tuple[str, int] | None:
         """at 이후 n번째 거래일의 종가 (조회 범위 내에 n개 거래일이 없으면 None)."""
-        start = at.strftime("%Y%m%d")
-        end = (at + timedelta(days=n * 3 + 10)).strftime("%Y%m%d")
-        with _suppress_pykrx_noise():
-            try:
-                df = pykrx_stock.get_market_ohlcv_by_date(start, end, stock_code)
-            except Exception:
-                df = None
-        if df is None or len(df) < n:
+        trading_day_count = 0
+        max_days = n * 3 + 10
+        for delta in range(0, max_days + 1):
+            date_str = (at + timedelta(days=delta)).strftime("%Y%m%d")
+            rows = self._krx_daily_snapshot(date_str)
+            if not rows:
+                continue
+            trading_day_count += 1
+            if trading_day_count != n:
+                continue
+            for row in rows:
+                if str(row.get("ISU_CD")) == stock_code:
+                    try:
+                        return date_str, int(row["TDD_CLSPRC"])
+                    except (KeyError, TypeError, ValueError):
+                        return None
             return None
-        row = df.iloc[n - 1]
-        date_str = df.index[n - 1].strftime("%Y%m%d")
-        return date_str, int(row["종가"])
+        return None
 
 
 async def setup(bot: commands.Bot) -> None:

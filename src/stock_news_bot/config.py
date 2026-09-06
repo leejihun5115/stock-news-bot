@@ -133,6 +133,7 @@ class Settings:
     # DART_API_KEY가 비어있으면 market_intel은 조용히 비활성화되고,
     # classifier는 하드코딩 화이트리스트로만 종목명을 인식한다.
     dart_api_key: str = ""
+    krx_openapi_key: str = ""
     dart_disclosure_enabled: bool = False
     dart_disclosure_min_score: int = 50
     dart_disclosure_fetch_interval_seconds: int = 300
@@ -282,6 +283,7 @@ def load_settings() -> Settings:
         history_min_sample=_get_int("HISTORY_MIN_SAMPLE", 5),
         history_retention_days=_get_int("HISTORY_RETENTION_DAYS", 90),
         dart_api_key=_get_str("DART_API_KEY"),
+        krx_openapi_key=_get_str("KRX_OPENAPI_KEY"),
         dart_disclosure_enabled=_get_bool("DART_DISCLOSURE_ENABLED", False),
         dart_disclosure_min_score=_get_int("DART_DISCLOSURE_MIN_SCORE", 50),
         dart_disclosure_fetch_interval_seconds=_get_int("DART_DISCLOSURE_FETCH_INTERVAL_SECONDS", 300),

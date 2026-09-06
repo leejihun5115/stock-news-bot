@@ -11,6 +11,7 @@ dependencies = [
     "tenacity>=8.2.3",
     "requests>=2.31.0",
     "pykrx>=1.2.8",
+    "pykrx_openapi>=0.1.1",
     "googlenewsdecoder>=0.1.6",
 ]
 
