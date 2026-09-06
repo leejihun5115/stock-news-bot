@@ -23,7 +23,8 @@ from stock_news_bot.cogs.notifier import (
 )
 from stock_news_bot.monitor.health import HealthMonitor
 from stock_news_bot.cogs.analysis_engine import analyze_item
-from stock_news_bot.cogs.llm_analyzer import analyze_news, analyze_deep_dive
+from stock_news_bot.cogs.llm_analyzer import analyze_news, analyze_deep_dive, analyze_watchlist_outlook
+from stock_news_bot.biotech_watchlist import get_pipelines, is_biotech_watchlist_item
 from stock_news_bot.cogs.article_reader import fetch_article_text
 from stock_news_bot.monitor.telegram_alert import TelegramAlerter, send_startup_probe
 from stock_news_bot.status import status as bot_status
@@ -590,6 +591,8 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     price_count=price_stats.count if price_stats else 0,
                     price_up_ratio=price_stats.plus1_up_ratio if price_stats else None,
                     price_avg_pct=price_stats.plus1_avg_pct if price_stats else None,
+                    dart_client=self.dart_client,
+                    db_path=str(self.settings.db_path),
                 )
 
                 # 관련테마·관련주가 둘 다 없어서 주식 시세와 관련짓거나
@@ -777,6 +780,48 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                                 logger.info("🏭 AI 심층분석 완료 | %s", item.title[:80])
                         except Exception:
                             logger.exception("AI 심층분석 실패 | title=%s", item.title[:100])
+
+                    # 바이오 워치리스트(하이브리드): (1) 수동 큐레이션된
+                    # 파이프라인이 있으면 AI 호출 없이 그 정적 데이터를 그대로
+                    # 쓰고, (2) 미등록 종목이라도 임상/허가 테마 키워드가
+                    # 있으면 AI로 보조 전망을 생성한다. 실패해도 기존 발송
+                    # 흐름은 막지 않는다.
+                    if item.company:
+                        pipelines = get_pipelines(item.company)
+                        if pipelines:
+                            item.watchlist_outlook = [
+                                f"{p.pipeline_name}({p.event_type}) : {p.stage} — 예상시기 {p.expected_period}"
+                                for p in pipelines
+                            ]
+                            logger.info("🧬 바이오 워치리스트(등록) 반영 | %s", item.title[:80])
+                        elif is_biotech_watchlist_item(item):
+                            try:
+                                outlook_result = await asyncio.to_thread(
+                                    analyze_watchlist_outlook,
+                                    gemini_api_key=self.settings.gemini_api_key,
+                                    gemini_model=self.settings.llm_model,
+                                    openrouter_api_key=self.settings.openrouter_api_key,
+                                    openrouter_model=self.settings.openrouter_model,
+                                    title=item.title,
+                                    summary=item.summary,
+                                    company=item.company,
+                                    reason=item.reason,
+                                    amounts=item.amounts,
+                                    theme=result.theme or "",
+                                    score=item.score,
+                                    article_body=article_body,
+                                    timeout_seconds=self.settings.llm_analysis_timeout_seconds,
+                                    max_chars=self.settings.llm_analysis_max_chars,
+                                )
+                                if outlook_result:
+                                    outlook_lines = []
+                                    if outlook_result.stage:
+                                        outlook_lines.append(f"진행단계 : {outlook_result.stage}")
+                                    outlook_lines.extend(outlook_result.milestones)
+                                    item.watchlist_outlook = outlook_lines
+                                    logger.info("🧬 바이오 워치리스트(AI 보조) 전망 완료 | %s", item.title[:80])
+                            except Exception:
+                                logger.exception("바이오 워치리스트 AI 전망 실패 | title=%s", item.title[:100])
 
                 _GENERIC_MARKER = "\u0000GENERIC\u0000"
                 if result.title.startswith(_GENERIC_MARKER):

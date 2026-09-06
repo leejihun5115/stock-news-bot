@@ -618,7 +618,8 @@ def _analysis_parts(item: NewsItem):
         if x.endswith(": 확인되지 않음") or x.endswith(": 미확인") or x.endswith(": 없음"):
             continue
         analysis.append(x)
-    return title, core, analysis[:6], result.theme, result.related_stocks, result.related_reasons, result.schedule, result.terms
+    schedule = list(item.watchlist_outlook) + list(result.schedule) if item.watchlist_outlook else result.schedule
+    return title, core, analysis[:6], result.theme, result.related_stocks, result.related_reasons, schedule, result.terms
 
 
 def _has_direct_company_evidence(item: NewsItem, analysis: list[str]) -> bool:

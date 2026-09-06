@@ -171,7 +171,7 @@ def _theme(text: str) -> str | None:
     return max(hits)[1] if hits else None
 
 
-def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = False, data_lines: list[str] | None = None, history_count: int = 0, history_avg_score: float | None = None, price_count: int = 0, price_up_ratio: float | None = None, price_avg_pct: float | None = None, dart_client=None) -> AnalysisResult:
+def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = False, data_lines: list[str] | None = None, history_count: int = 0, history_avg_score: float | None = None, price_count: int = 0, price_up_ratio: float | None = None, price_avg_pct: float | None = None, dart_client=None, db_path: str | None = None) -> AnalysisResult:
     text = re.sub(r"\s+", " ", f"{_clean_title(item.title)} {item.summary}").strip()
     sentences = _sentences(item.summary) or _sentences(item.title)
     core: list[str] = []
@@ -219,6 +219,24 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
         for corp_name in extra:
             related.append(corp_name)
             reasons.setdefault(corp_name, "기사 본문에 실제 언급된 상장사(추가 매칭)")
+
+    # 기사 본문 직접 언급으로도 관련주를 하나도 못 찾았을 때(예: 해외종목이라
+    # DART 상장사 캐시에 없거나, company 매칭이 실패한 경우)는 related_stocks_engine의
+    # 누적 특징주/상한가 통계로 보완한다. 시황 브리핑(global_market.py)이 쓰던
+    # 것과 동일한 판정 로직을 개별 뉴스에도 재사용하는 것 — AI 추측이 아니라
+    # 실제 저장된 뉴스 원문에 등장한 종목만 집계한 결과다.
+    if not related and theme and dart_client is not None and db_path:
+        from stock_news_bot.related_stocks_engine import rank_accumulated_companies
+
+        theme_keywords = list(_THEME_MAP.get(theme, ()))
+        if theme_keywords:
+            try:
+                ranked = rank_accumulated_companies(db_path, dart_client, theme_keywords, top_n=3)
+            except Exception:
+                ranked = []
+            for r in ranked:
+                related.append(r.corp_name)
+                reasons.setdefault(r.corp_name, f"누적 데이터 기준({r.source}): {r.reason}")
 
     if upgraded:
         classification = "업그레이드"

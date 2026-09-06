@@ -54,6 +54,15 @@ class DeepDiveAnalysis:
     checkpoints: list[str] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class WatchlistOutlookAnalysis:
+    """바이오 워치리스트 종목의 임상/허가 진행단계 + 다음 마일스톤 전망.
+    종목 자체의 중장기 투자포인트는 다루지 않는다(analyze_deep_dive의
+    business/facts 영역과 역할이 겹치지 않도록 범위를 좁혀놓음)."""
+    stage: str = ""
+    milestones: list[str] = field(default_factory=list)
+
+
 _NEWS_SYSTEM_PROMPT = """당신은 한국 주식 뉴스를 취재하는 시니어 애널리스트다. 바쁜 투자자가
 5초 안에 훑고 판단할 수 있게 쓴다. 기사에 없는 사실, 숫자, 계약 상대방, 실적 전망을
 만들어내지 않는다. 제공된 기사와 추출 사실만 사용한다. 투자 권유나 주가 방향을 단정하지 않는다.
@@ -336,6 +345,17 @@ def _parse_deep_dive_result(text: str) -> DeepDiveAnalysis | None:
         checkpoints=_clean_lines(parsed.get("checkpoints"), 3),
     )
     return result if (result.business or result.facts or result.checkpoints) else None
+
+
+def _parse_watchlist_outlook_result(text: str) -> WatchlistOutlookAnalysis | None:
+    parsed = _parse_json(text)
+    stage_value = parsed.get("stage")
+    stage_lines = _clean_lines([stage_value], 1, max_len=200) if isinstance(stage_value, str) else []
+    result = WatchlistOutlookAnalysis(
+        stage=stage_lines[0] if stage_lines else "",
+        milestones=_clean_lines(parsed.get("milestones"), 3),
+    )
+    return result if (result.stage or result.milestones) else None
 
 
 _gemini_rate_lock = threading.Lock()
@@ -752,6 +772,55 @@ def analyze_deep_dive(
         openrouter_api_key=openrouter_api_key, openrouter_model=openrouter_model,
         content=article, system_prompt=_DEEP_DIVE_SYSTEM_PROMPT, timeout_seconds=timeout_seconds,
         step_label="AI 심층분석", parse_fn=_parse_deep_dive_result,
+    )
+
+
+_WATCHLIST_OUTLOOK_SYSTEM_PROMPT = """당신은 바이오/제약 업종을 전문으로 다루는 애널리스트다.
+기사에 언급된 임상시험·인허가 진행 상황만 근거로 이 종목의 현재 단계와 다음 단계
+일정을 정리한다. 종목의 중장기 투자매력이나 목표주가는 다루지 않는다. 기사에 없는
+임상 결과나 승인 여부를 만들어내지 않는다. 확실하지 않은 시점은 "~예상" 수준으로만
+표현하고, 근거가 부족하면 해당 항목을 비운다.
+
+반드시 JSON 객체 하나만 출력한다:
+{"stage":"현재 확인된 임상/허가 단계(예: 임상 3상 진행중)","milestones":["다음 예상 마일스톤과 시점"]}
+
+stage/milestones에는 마크다운, 이모지, URL을 넣지 않는다. milestones는 최대 3개까지만 담는다.
+"""
+
+
+def analyze_watchlist_outlook(
+    *,
+    gemini_api_key: str = "",
+    gemini_model: str = "gemini-3.5-flash-lite",
+    openrouter_api_key: str = "",
+    openrouter_model: str = "openrouter/free",
+    title: str,
+    summary: str,
+    company: str = "",
+    reason: str = "",
+    amounts: list[str] | None = None,
+    theme: str = "",
+    score: int = 0,
+    article_body: str = "",
+    timeout_seconds: int = 45,
+    max_chars: int = 9000,
+) -> WatchlistOutlookAnalysis | None:
+    """바이오 워치리스트 대상(biotech_watchlist.is_biotech_watchlist_item로
+    판별된) 뉴스에 한해 호출한다. 임상/허가 진행단계와 다음 마일스톤
+    일정만 다루고, 실패해도 None을 반환할 뿐 상위(scheduler.py)에서
+    기존 발송 흐름을 막지 않는다."""
+    if not gemini_api_key and not openrouter_api_key:
+        return None
+    article = _build_article(
+        title=title, summary=summary, company=company, reason=reason,
+        amounts=amounts, theme=theme, score=score, article_body=article_body,
+        max_chars=max_chars,
+    )
+    return _call_llm(
+        gemini_api_key=gemini_api_key, gemini_model=gemini_model,
+        openrouter_api_key=openrouter_api_key, openrouter_model=openrouter_model,
+        content=article, system_prompt=_WATCHLIST_OUTLOOK_SYSTEM_PROMPT, timeout_seconds=timeout_seconds,
+        step_label="AI 워치리스트 전망", parse_fn=_parse_watchlist_outlook_result,
     )
 
 

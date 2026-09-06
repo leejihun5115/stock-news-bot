@@ -62,7 +62,6 @@ class NewsItem:
     # 일반 뉴스(news)와 학습용 소스(youtube/blog/telegram)를 분리한다.
     source_kind: str = "news"
     is_reply: bool = False  # 댓글/답글형 게시물이면 True (원본 게시물 아님)
-    is_reply: bool = False  # 댓글/답글형 게시물이면 True (원본 게시물 아님)
 
     # classifier.py가 채워 넣는 필드들 (수집 시점에는 비어있다)
     sectors: list[str] = field(default_factory=list)
@@ -84,6 +83,14 @@ class NewsItem:
     progress_stage: str = ""  # 기사에서 확인된 사업 진행 단계
     earnings_comparison: EarningsComparison | None = None  # 실적 비교 데이터(선택)
     contract_impact: ContractImpact | None = None  # 계약 규모 비교 데이터(선택)
+
+    # 【AI 심층분석(딥다이브) 결과】 — scheduler.py의 analyze_deep_dive 결과를
+    # 채워 넣는다. slots=True이므로 여기 선언되지 않으면 대입 시
+    # AttributeError가 발생해 조용히 실패한다(과거 버그).
+    deep_dive_business: str = ""  # 회사 핵심사업 요약
+    deep_dive_facts: list[str] = field(default_factory=list)  # 확인된 팩트
+    deep_dive_checkpoints: list[str] = field(default_factory=list)  # 향후 체크포인트
+    watchlist_outlook: list[str] = field(default_factory=list)  # 바이오 워치리스트 임상/허가 마일스톤 전망
 
     @property
     def dedup_key(self) -> str:
