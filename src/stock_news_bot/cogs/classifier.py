@@ -348,7 +348,12 @@ def _lacks_required_evidence(item: NewsItem) -> bool:
     text = f"{item.title} {item.summary}"
     if not any(kw in text for kw in EVIDENCE_TRIGGER_KEYWORDS):
         return False
-    return not item.reason and not item.amounts
+    has_reason = bool(item.reason or item.amounts)
+    has_company = bool(item.company)
+    # 이유가 있어도 특정 상장 종목과 연결되지 않으면(예: 물가/거시 테마
+    # 뉴스) 발송 제외한다 — 원인은 있지만 결과(어느 종목 시세인지)가
+    # 없는 헤드라인은 오해만 유발한다.
+    return not (has_reason and has_company)
 
 
 class ClassifierCog(commands.Cog, name="Classifier"):
