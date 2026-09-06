@@ -142,6 +142,9 @@ def _sentences(text: str) -> list[str]:
     return [x.strip(" \t\r\n•·") for x in re.split(r"(?<=[.!?。])\s+|\n+", text) if x.strip()]
 
 
+_GENERIC_TITLE_MARKER = "\u0000GENERIC\u0000"
+
+
 def _make_title(item: NewsItem) -> str:
     title = _clean_title(item.title)
     # 지나치게 서술형/긴 제목은 기사에서 확인되는 이벤트와 기업을 우선한다.
@@ -153,7 +156,9 @@ def _make_title(item: NewsItem) -> str:
     if company and event:
         return f"{company}, {event} 관련 핵심 내용 확인"
     if event:
-        return f"{event} 관련 시장 영향 주목"
+        # 회사명 없이 이벤트 키워드만으로 뭉뚱그려진 제목: 정보값이 없으니
+        # scheduler.py의 발송 필터가 이 마커로 걸러내도록 표시해둔다.
+        return _GENERIC_TITLE_MARKER + f"{event} 관련 시장 영향 주목"
     return title[:70].rstrip(" ,.-")
 
 

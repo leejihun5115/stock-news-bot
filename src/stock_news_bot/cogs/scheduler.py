@@ -778,6 +778,10 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                         except Exception:
                             logger.exception("AI 심층분석 실패 | title=%s", item.title[:100])
 
+                _GENERIC_MARKER = "\u0000GENERIC\u0000"
+                if result.title.startswith(_GENERIC_MARKER):
+                    item.is_generic_title = True
+                    result.title = result.title[len(_GENERIC_MARKER):]
                 item.analysis_title = result.title
                 item.classification = result.classification
                 item.confidence = result.confidence
@@ -868,6 +872,13 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                     logger.info(
                         "⏭️ 송출 직전 오래된 뉴스 폐기(%s시간 초과): %s",
                         self.settings.news_lookback_hours, item.title[:100],
+                    )
+                    continue
+                if item.is_generic_title:
+                    self.dedup_store.mark_seen(item.dedup_key, item.title, item.url)
+                    logger.info(
+                        "⏭️ 송출 직전 뚝뚝그린 제목(회사명 미확인) 폐기: %s",
+                        item.title[:100],
                     )
                     continue
 

@@ -80,6 +80,7 @@ class NewsItem:
     ai_analysis: list[str] = field(default_factory=list)  # LLM이 생성한 맥락 분석
     classification: str = "신규"
     confidence: int = 0
+    is_generic_title: bool = False  # 회사명 없이 이벤트 키워드만으로 뭉뚱그려진 제목
     progress_stage: str = ""  # 기사에서 확인된 사업 진행 단계
     earnings_comparison: EarningsComparison | None = None  # 실적 비교 데이터(선택)
     contract_impact: ContractImpact | None = None  # 계약 규모 비교 데이터(선택)
