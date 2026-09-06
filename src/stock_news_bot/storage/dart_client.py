@@ -19,6 +19,8 @@ from stock_news_bot.storage.dart_service import (
     WatchedStock,
     build_earnings_comparison,
     _has_genuine_company_mention,
+    _AMBIGUOUS_COMMON_WORD_NAMES,
+    _FINANCE_CONTEXT_RE,
 )
 
 __all__ = [
@@ -29,4 +31,6 @@ __all__ = [
     "WatchedStock",
     "build_earnings_comparison",
     "_has_genuine_company_mention",
+    "_AMBIGUOUS_COMMON_WORD_NAMES",
+    "_FINANCE_CONTEXT_RE",
 ]
