@@ -234,9 +234,14 @@ def analyze_item(item: NewsItem, *, prior_same: bool = False, upgraded: bool = F
                 ranked = rank_accumulated_companies(db_path, dart_client, theme_keywords, top_n=3)
             except Exception:
                 ranked = []
-            for r in ranked:
+            rank_labels = {1: "🥇1위", 2: "🥈2위", 3: "🥉3위"}
+            for idx, r in enumerate(ranked, start=1):
                 related.append(r.corp_name)
-                reasons.setdefault(r.corp_name, f"누적 데이터 기준({r.source}): {r.reason}")
+                label = rank_labels.get(idx, f"{idx}위")
+                reasons.setdefault(
+                    r.corp_name,
+                    f"누적 데이터 기준 {label}({r.source}): {r.reason}",
+                )
 
     if upgraded:
         classification = "업그레이드"
