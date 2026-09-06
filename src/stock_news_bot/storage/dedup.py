@@ -25,7 +25,11 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import logging
+
 from stock_news_bot.utils.errors import StorageError
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS seen_news (
@@ -142,6 +146,10 @@ class DedupStore:
         for (candidate_title,) in cur.fetchall():
             ratio, shared = _token_jaccard(title, candidate_title)
             if ratio >= _SIMILAR_THRESHOLD and shared >= _SIMILAR_MIN_SHARED_TOKENS:
+                logger.info(
+                    "🔁 재탕 감지(유사도 %.2f, 겹치는 단어 %d개): '%s' ~= '%s'",
+                    ratio, shared, title, candidate_title,
+                )
                 return True
         return False
 
