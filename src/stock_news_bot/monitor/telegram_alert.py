@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
+from pathlib import Path
 from typing import Awaitable, Callable
 
 import aiohttp
@@ -23,6 +25,9 @@ DetailCallback = Callable[[str], Awaitable[str | None]]
 # 무한 루프+3초 대기 재시도 구조라 별도로 감싸지 않는다.
 _SEND_RETRY_ATTEMPTS = 3
 _SEND_TIMEOUT_SECONDS = 15
+
+# monitor/telegram_alert.py -> parents[3] == 프로젝트 루트 (stock-news-bot)
+_DETAILS_FILE = Path(__file__).resolve().parents[3] / "data" / "telegram_details.json"
 
 
 class TelegramAlerter:
@@ -48,9 +53,37 @@ class TelegramAlerter:
         # token -> {"summary": 최초 요약 텍스트, "detail": 상세 텍스트, "button_label": 상세보기 버튼 라벨}
         # "🔙 원문으로" 버튼을 누르면 summary로 되돌리기 위해 요약도 함께 보관한다.
         self._details: dict[str, dict[str, str]] = {}
+        self._load_details()
         self._callback_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
         self._offset = 0
+
+    def _load_details(self) -> None:
+        """기동 시 저장된 상세정보를 불러온다. 봇이 재시작돼도 이미 보낸
+        메시지의 '상세보기' 버튼이 계속 동작하게 하기 위함(2026-09-09
+        추가 — 재시작마다 상세정보가 사라져 "만료" 처리되던 문제 해결).
+        파일이 없거나 손상돼 있어도 기동을 막지 않는다."""
+        try:
+            if _DETAILS_FILE.exists():
+                with _DETAILS_FILE.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._details = data
+        except Exception:
+            pass
+
+    def _save_details(self) -> None:
+        """현재 상세정보를 파일에 저장한다. 임시파일에 먼저 쓰고 원자적으로
+        교체해서, 저장 도중 프로세스가 죽어도 기존 파일이 깨지지 않는다."""
+        try:
+            _DETAILS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = _DETAILS_FILE.with_suffix(".json.tmp")
+            with tmp_path.open("w", encoding="utf-8") as f:
+                json.dump(self._details, f, ensure_ascii=False)
+            tmp_path.replace(_DETAILS_FILE)
+        except Exception:
+            # 저장 실패해도(예: 디스크 꽉 참) 봇 동작 자체는 계속돼야 한다.
+            pass
 
     def _url(self, method: str) -> str:
         return _API_BASE.format(token=self._bot_token, method=method)
@@ -160,6 +193,7 @@ class TelegramAlerter:
             # 오래된 항목부터 정리. 딕셔너리 삽입순서를 이용한다.
             for key in list(self._details)[:100]:
                 self._details.pop(key, None)
+        self._save_details()
         reply_markup = {
             "inline_keyboard": [
                 [
