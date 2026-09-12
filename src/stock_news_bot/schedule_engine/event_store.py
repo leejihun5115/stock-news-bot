@@ -121,6 +121,22 @@ class ScheduleEventStore:
             )
             return cur.fetchall()
 
+    def get_recent(self, since_iso: str) -> list[sqlite3.Row]:
+        """created_at이 since_iso 이후(초과)인 이벤트를 event_date 오름차순으로
+        반환한다. since_iso는 datetime.now(timezone.utc).isoformat() 형식이어야
+        created_at과 문자열 비교가 정확히 맞는다."""
+        with self._lock:
+            self._conn.row_factory = sqlite3.Row
+            cur = self._conn.execute(
+                """
+                SELECT * FROM schedule_events
+                WHERE created_at > ?
+                ORDER BY event_date ASC
+                """,
+                (since_iso,),
+            )
+            return cur.fetchall()
+
     def close(self) -> None:
         with self._lock:
             if not self._closed:
