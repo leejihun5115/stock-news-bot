@@ -237,6 +237,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         self.market_store = MarketDataStore(self.settings.db_path)
         self.dart_client = DartClient(self.settings.db_path)
         self.schedule_store = ScheduleEventStore(self.settings.db_path)
+        self._last_digest_at = datetime.now(timezone.utc).isoformat()
         # 일정 브리핑 엔진: 같은 db_path를 공유하는 별도 테이블(schedule_events).
         # dedup.py/history.py와 같은 패턴으로 독립 커넥션을 연다.
         # 실시간 파이프라인: 수집과 분석/송출을 분리한다.
@@ -292,6 +293,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         )
         self.pipeline_loop.start()
         self.health_loop.start()
+        self.schedule_digest_loop.start()
         if self.settings.github_backup_enabled:
             self.backup_loop.start()
             logger.info(
@@ -1314,6 +1316,77 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         logger.exception("GitHub 백업 루프가 예상치 못하게 중단되었습니다", exc_info=exc)
         if not self.backup_loop.is_running():
             self.backup_loop.restart()
+
+
+    @tasks.loop(minutes=30)
+    async def schedule_digest_loop(self) -> None:
+        """30분마다 (1) 그동안 새로 추가된 일정 이벤트와 (2) 앞으로 예정된
+        모든(기간 제한 없는) 일정을 요약해 텔레그램/디스코드 양쪽에 발송한다."""
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            new_events = self.schedule_store.get_recent(self._last_digest_at)
+            self._last_digest_at = now_iso
+
+            # company가 비어있는 항목은 대부분 날짜/종목 오파싱된 잡음이라
+            # 다이제스트에서는 제외한다.
+            upcoming = [
+                row for row in self.schedule_store.get_upcoming(days_ahead=36500)
+                if row["company"]
+            ]
+
+            lines: list[str] = ["\U0001F4C5 일정 다이제스트 (30분 주기)"]
+
+            if new_events:
+                lines.append(f"\n\U0001F195 신규 이벤트 {len(new_events)}건")
+                for ev in new_events[:15]:
+                    company = ev["company"] or "-"
+                    lines.append(f"\u2022 [{ev['event_date']}] {company} \u00b7 {ev['event_type']}")
+                if len(new_events) > 15:
+                    lines.append(f"\u2026\uc678 {len(new_events) - 15}\uac74")
+            else:
+                lines.append("\n\U0001F195 신규 이벤트 없음")
+
+            if upcoming:
+                lines.append(f"\n\U0001F52E 앞으로 예정된 일정 {len(upcoming)}건 (기간 제한 없음)")
+                for ev in upcoming:
+                    lines.append(f"\u2022 [{ev['event_date']}] {ev['company']} \u00b7 {ev['event_type']}")
+            else:
+                lines.append("\n\U0001F52E 앞으로 예정된 일정 없음")
+
+            text = "\n".join(lines)
+
+            try:
+                await self.alerter.send(text)
+            except Exception:
+                logger.exception("일정 다이제스트 텔레그램 발송 실패")
+
+            try:
+                channel_id = self.settings.discord_news_channel_id
+                channel = self.bot.get_channel(channel_id)
+                if channel is not None:
+                    # 디스코드 메시지 2000자 제한 대응: 넘으면 잘라서 보낸다.
+                    for i in range(0, len(text), 1900):
+                        await channel.send(text[i:i + 1900])
+                else:
+                    logger.warning(
+                        "일정 다이제스트: 디스코드 채널(%s)을 찾을 수 없습니다.",
+                        channel_id,
+                    )
+            except Exception:
+                logger.exception("일정 다이제스트 디스코드 발송 실패")
+
+        except Exception:
+            logger.exception("일정 다이제스트 루프 실행 중 오류")
+
+    @schedule_digest_loop.before_loop
+    async def _before_schedule_digest(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @schedule_digest_loop.error
+    async def _on_schedule_digest_loop_error(self, exc: BaseException) -> None:
+        logger.exception("일정 다이제스트 루프가 예상치 못하게 중단되었습니다", exc_info=exc)
+        if not self.schedule_digest_loop.is_running():
+            self.schedule_digest_loop.restart()
 
 
 async def setup(bot: commands.Bot) -> None:
