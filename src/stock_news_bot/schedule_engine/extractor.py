@@ -50,7 +50,7 @@ def _find_event_type(window: str) -> str | None:
 
 
 def _make_dedup_key(company: str, event_type: str, event_date_iso: str, url: str) -> str:
-    raw = f"{company}|{event_type}|{event_date_iso}|{url}"
+    raw = f"{company}|{event_type}|{event_date_iso}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
