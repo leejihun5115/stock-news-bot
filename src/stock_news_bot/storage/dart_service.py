@@ -151,7 +151,21 @@ _META_LAST_REFRESHED = "corp_code_last_refreshed_at"
 # 다수는 "20대 남성", "이 남성" 같은 일반 명사 용법이다.) 이 목록에 있는
 # 이름은 본문에 _FINANCE_CONTEXT_RE에 걸리는 금융 문맥 신호가 함께 있을
 # 때만 종목으로 인정한다. 새로운 오탐 사례가 보고되면 여기에 추가한다.
-_AMBIGUOUS_COMMON_WORD_NAMES = {"남성"}
+_AMBIGUOUS_COMMON_WORD_NAMES = {"나노", "남성", "대상", "레이", "배럴", "수도", "태양"}
+# ↑ 2026-09-13 추가: 원유 단위(배럴), 소재/재료 일반명사(나노), 회사명
+#   "대상"(식품기업)과 흔한 단어 "대상"(target)이 겹쳐 오탐 반복 보고됨.
+
+# 언론사이면서 동시에 실제 상장사이기도 한 이름.
+# 텔레그램으로 들어오는 기사 대부분이 맨 앞에 "[SBS]", "[YTN]"처럼
+# 출처를 그대로 달고 오기 때문에, 기사 내용과 무관하게 거의 100% 오탐이
+# 발생한다. _AMBIGUOUS_COMMON_WORD_NAMES와 달리 이건 "금융 문맥이
+# 있어도" 오탐이므로(뉴스 자체가 시황 기사인 경우가 많음) 아예 후보에서
+# 통째로 제외한다. ⚠️ DART corp_name 표기와 정확히 일치해야 하므로,
+# 새 오탐 사례가 보고되면 실제 corp_name 값을 확인해서 추가할 것.
+_PRESS_COMPANY_NAMES = {
+    "SBS", "YTN", "한국경제TV", "아시아경제", "이데일리",
+    "머니투데이", "매일경제", "헤럴드경제", "서울경제", "JTBC",
+}
 
 _FINANCE_CONTEXT_RE = re.compile(
     r"주가|주식|종목|코스피|코스닥|상한가|하한가|급등|급락|거래량|시가총액|"
@@ -184,31 +198,76 @@ _GENERIC_PRESS_SUFFIXES = (
     "경제", "일보", "신문", "타임즈", "데일리", "저널", "방송", "포스트", "투데이",
 )
 
+# 【2026-09-13 추가】 언론사 이름 자체가 곧 상장사명인 경우.
+# _GENERIC_PRESS_SUFFIXES는 "회사명이 언론사 이름의 일부로 포함된 경우"만
+# 걸러낸다(예: "지디"가 "지디넷코리아"에 포함). 그런데 SBS/YTN/한국경제TV/
+# 아시아경제처럼 언론사 이름 자체가 그대로 DART 상장사명인 경우는, 기사
+# 출처 표기나 "OOO 기자" 바이라인에 실려서 본문에 계속 등장하기 때문에
+# 위 로직으로는 전혀 걸러지지 않는다. 이 봇의 목적(그 기사가 실제로
+# 다루는 관련주 찾기)상 언론사 자신이 관련주로 뜨는 건 문맥과 무관하게
+# 항상 오탐이므로, 아예 후보군에서 원천 제외한다. 새로운 언론사 오탐
+# 사례가 보고되면 이 목록에 추가하면 된다.
+_PRESS_OUTLET_NAMES = {
+    "SBS", "MBC", "KBS", "JTBC", "MTN", "채널A", "TV조선", "YTN",
+    "한국경제TV", "한국경제", "서울경제", "매일경제", "헤럴드경제", "아시아경제",
+    "이데일리", "머니투데이", "조선일보", "중앙일보", "동아일보", "한겨레",
+    "경향신문", "국민일보", "문화일보", "세계일보", "파이낸셜뉴스", "뉴시스",
+    "연합뉴스", "노컷뉴스",
+}
+
+
+_ATTRIBUTION_PREFIXES = ("사진=", "자료=", "제공=", "영상=", "그래픽=", "사진:", "자료:")
+
+
+def _is_bracketed_source_tag(text: str, start: int, end: int) -> bool:
+    """"[SBS]", "[YTN]"처럼 대괄호로 정확히 감싸인 단독 출처 표기인지 확인한다.
+
+    기사 상단에 흔히 붙는 출처 태그는 앞뒤로 다른 글자 없이 대괄호
+    하나로만 감싸여 있다("[포토]", "[속보]"와 같은 패턴). 이 형태로
+    등장했다면 실제 본문 내용이 아니라 출처 표기이므로, 아직 목록에
+    없는 새 언론사/상장사 이름이라도 구조적으로 자동 제외된다.
+    """
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+    return before == "[" and after == "]"
+
+
+def _is_attribution_credit(text: str, start: int) -> bool:
+    """"(사진=지디넷코리아)"처럼 사진/자료 출처 표기 바로 뒤에 오는 이름인지 확인한다."""
+    return any(text[max(0, start - len(p)): start] == p for p in _ATTRIBUTION_PREFIXES)
+
 
 def _has_genuine_company_mention(corp_name: str, text: str) -> bool:
-    """corp_name이 본문에 "다른 단어에 파묻힌 조각"이 아닌 독립된 형태로
-    최소 한 번 등장하는지 확인한다.
+    """corp_name이 본문에 "다른 단어에 파묻힌 조각"이나 "출처 표기"가 아닌
+    독립된 내용으로 최소 한 번 등장하는지 확인한다.
 
     먼저 빠른 substring 검사로 본문에 아예 없으면 즉시 False(대부분의
     후보가 여기서 걸러지므로 정규식 비용을 아낀다). 등장하더라도 앞뒤에
-    한글/영문/숫자가 바로 붙어 있으면(예: "선별대상"의 "대상",
-    "인플레이션"의 "레이", "NEWS"의 "NEW") 다른 단어 안에 파묻힌 것으로
-    보고 제외한다(단어 경계 검사, 2026-09-01 추가 — 짧은 종목명이 무관한
-    단어 속에 우연히 포함되어 오탐나는 사례가 반복 보고됨). 경계를
-    통과하더라도, 언론사 접미사가 바로 이어지는 경우는 매체명 표기로
-    보고 추가로 제외한다.
+    한글/영문/숫자가 바로 붙어 있으면(예: "선별대상"의 "대상") 다른 단어
+    안에 파묻힌 것으로 보고 제외한다(단어 경계 검사). 경계를 통과하더라도
+    다음 두 경우는 "출처 표기"로 보고 추가로 제외한다:
+      - 언론사 접미사(경제/일보/신문 등)가 바로 이어지는 경우
+      - "[SBS]"처럼 대괄호로 정확히 감싸인 단독 출처 태그인 경우
+      - "(사진=OOO)"처럼 사진/자료 출처 표기 바로 뒤에 오는 경우
+    본문에 여러 번 등장하면 그중 "출처 표기가 아닌" 등장이 하나라도
+    있으면 True — 즉 진짜 언급이 단 한 번이라도 있으면 종목으로 인정한다.
     """
     if corp_name not in text:
         return False
     curated = _FALSE_POSITIVE_NAME_SUFFIXES.get(corp_name, ())
     bad_suffixes = tuple(dict.fromkeys(curated + _GENERIC_PRESS_SUFFIXES))
     pattern = re.compile(
-        r"(?<![0-9A-Za-z\uac00-\ud7a3])"
-        + re.escape(corp_name)
-        + "(?!" + "|".join(re.escape(s) for s in bad_suffixes) + ")"
-        + r"(?![0-9A-Za-z\uac00-\ud7a3])"
+        r"(?<![0-9A-Za-z\uac00-\ud7a3])" + re.escape(corp_name) + r"(?![0-9A-Za-z\uac00-\ud7a3])"
     )
-    return bool(pattern.search(text))
+    for m in pattern.finditer(text):
+        if any(text[m.end():m.end() + len(suf)] == suf for suf in bad_suffixes):
+            continue
+        if _is_bracketed_source_tag(text, m.start(), m.end()):
+            continue
+        if _is_attribution_credit(text, m.start()):
+            continue
+        return True
+    return False
 
 
 # 뉴스 본문/제목에 정식 종목명 대신 흔히 쓰이는 줄임말(약칭). 정식
@@ -492,6 +551,10 @@ class DartClient:
         if not text:
             return None
         for match in self._load_name_cache():
+            if match.corp_name in _PRESS_OUTLET_NAMES:
+                continue
+            if match.corp_name in _PRESS_COMPANY_NAMES:
+                continue
             if not _has_genuine_company_mention(match.corp_name, text):
                 continue
             if match.corp_name in _AMBIGUOUS_COMMON_WORD_NAMES and not _FINANCE_CONTEXT_RE.search(text):
@@ -530,6 +593,10 @@ class DartClient:
         results: list[CompanyMatch] = []
         for match in self._load_name_cache():
             if match.corp_code in seen_codes:
+                continue
+            if match.corp_name in _PRESS_OUTLET_NAMES:
+                continue
+            if match.corp_name in _PRESS_COMPANY_NAMES:
                 continue
             if not _has_genuine_company_mention(match.corp_name, text):
                 continue

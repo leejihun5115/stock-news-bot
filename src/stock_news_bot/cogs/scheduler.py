@@ -1323,6 +1323,9 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         """30분마다 (1) 그동안 새로 추가된 일정 이벤트와 (2) 앞으로 예정된
         모든(기간 제한 없는) 일정을 요약해 텔레그램/디스코드 양쪽에 발송한다."""
         try:
+            import json
+            import os
+
             now_iso = datetime.now(timezone.utc).isoformat()
             new_events = self.schedule_store.get_recent(self._last_digest_at)
             self._last_digest_at = now_iso
@@ -1334,7 +1337,42 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 if row["company"]
             ]
 
-            lines: list[str] = ["\U0001F4C5 일정 다이제스트 (30분 주기)"]
+            # 직전 발송 시점의 "앞으로 예정된 일정" 목록과 비교할 시그니처.
+            # 순서 차이로 오탐하지 않도록 정렬 후 튜플로 만든다.
+            current_signature = tuple(sorted(
+                (row["event_date"], row["company"], row["event_type"])
+                for row in upcoming
+            ))
+
+            # 재시작 후에도 중복 발송을 막기 위해 직전 시그니처를 파일로도 저장한다.
+            digest_state_path = os.path.join("data", "schedule_digest_state.json")
+            last_signature = getattr(self, "_last_digest_signature", None)
+            if last_signature is None:
+                try:
+                    with open(digest_state_path, "r", encoding="utf-8") as f:
+                        saved = json.load(f)
+                    raw_sig = saved.get("signature")
+                    if raw_sig is not None:
+                        last_signature = tuple(tuple(item) for item in raw_sig)
+                except FileNotFoundError:
+                    last_signature = None
+                except Exception:
+                    logger.exception("일정 다이제스트 상태 파일 읽기 실패")
+                    last_signature = None
+
+            if not new_events and current_signature == last_signature:
+                # 신규 이벤트도 없고 예정 일정도 직전과 동일하면 조용히 넘어간다.
+                return
+
+            self._last_digest_signature = current_signature
+            try:
+                os.makedirs("data", exist_ok=True)
+                with open(digest_state_path, "w", encoding="utf-8") as f:
+                    json.dump({"signature": list(current_signature)}, f, ensure_ascii=False)
+            except Exception:
+                logger.exception("일정 다이제스트 상태 파일 저장 실패")
+
+            lines: list[str] = ["\U0001F4C5 일정 변경 알림"]
 
             if new_events:
                 lines.append(f"\n\U0001F195 신규 이벤트 {len(new_events)}건")
