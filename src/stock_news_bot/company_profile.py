@@ -264,6 +264,10 @@ def find_mentioned_companies(text: str) -> set[str]:
             verdict = _verify_ambiguous_company_with_ai(name, text)
             if verdict is False:
                 continue
+        else:
+            verdict = _verify_ambiguous_company_with_ai(name, text)
+            if verdict is False:
+                continue
         found.add(name)
     return found
 

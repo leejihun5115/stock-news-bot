@@ -279,6 +279,12 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             self.backup_loop.change_interval(seconds=self.settings.github_backup_interval_seconds)
 
     async def cog_load(self) -> None:
+        # 텔레그램 채팅에서 "뉴스수집"(또는 "뉴스브리핑")을 치면 파이프라인
+        # 전체(수집→분류→발송)를 즉시 한 번 실행하고 결과를 알려준다.
+        # market_briefing.py의 "국내장브리핑" 등과 동일한 패턴.
+        self.alerter.register_command(
+            "뉴스수집", "뉴스브리핑", handler=self._telegram_manual_run_now
+        )
         # 수집 루프와 처리 worker를 분리한다. 기존의 한 사이클 전체 Lock 때문에
         # 분석/번역/전송이 끝날 때까지 다음 뉴스 수집이 막히던 구조를 제거한다.
         self._analysis_workers = [
@@ -545,6 +551,24 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
             raise BaseBotError("스케줄러가 일시정지 상태입니다. /resume 후 다시 실행하세요.")
         async with self._run_lock:
             return await self._run_pipeline_once()
+
+    async def _telegram_manual_run_now(self) -> None:
+        """텔레그램 채팅에 "뉴스수집"을 직접 쳤을 때 실행되는 핸들러.
+
+        admin.py의 디스코드 /run-now 슬래시 명령과 동일하게 run_now()를
+        호출하고 동일한 형식(수집/신규/전송 건수)으로 결과를 알려준다.
+        """
+        await self.alerter.send("\U0001F4F0 뉴스 파이프라인 수동 실행을 시작합니다...")
+        try:
+            result = await self.run_now()
+            await self.alerter.send(
+                f"\u2705 수동 실행 완료 \u2014 수집 {result['fetched']}건 / "
+                f"신규 {result['new']}건 / 전송 {result['sent']}건"
+            )
+            logger.info("\U0001F4F0 뉴스 파이프라인 수동 실행 완료(텔레그램 트리거)")
+        except Exception as exc:
+            logger.exception("뉴스 파이프라인 수동 실행 실패(텔레그램 트리거)")
+            await self.alerter.send(f"\u274c 뉴스 파이프라인 수동 실행 중 오류가 발생했습니다: {exc}")
 
     async def _analysis_worker(self, worker_id: int) -> None:
         """분석/송출 worker.
@@ -1153,24 +1177,25 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         #      (b) 코스피/환율/금리 같은 시황 관련 내용이면 통과
         #   단순 이모지/감상/잡담/빈 게시물(제목 추출 실패로 대체된 텍스트
         #   등)은 위 (a)(b) 어디에도 안 걸려 자연스럽게 걸러진다.
-        study_items = [
-            item for item in classified
-            if _is_study_source(item)
-            and (
-                _is_largo_tv_exception(item)
-                or (
-                    _is_search_source(item)
-                    and _passes_strict_search_filter(item, self.settings)
+        study_items = []
+        for item in classified:
+            if not _is_study_source(item):
+                continue
+            if _is_largo_tv_exception(item):
+                study_items.append(item)
+                continue
+            if _is_search_source(item):
+                # _passes_strict_search_filter는 내부에서 Gemini API를
+                # 동기 호출(time.sleep 포함)하므로, asyncio 이벤트 루프를
+                # 막지 않도록 별도 스레드에서 실행한다.
+                passed = await asyncio.to_thread(
+                    _passes_strict_search_filter, item, self.settings
                 )
-                or (
-                    not _is_search_source(item)
-                    and (
-                        _has_stock_selection_evidence(item)
-                        or _is_market_condition_content(item)
-                    )
-                )
-            )
-        ]
+                if passed:
+                    study_items.append(item)
+                continue
+            if _has_stock_selection_evidence(item) or _is_market_condition_content(item):
+                study_items.append(item)
         news_items = [item for item in classified if not _is_study_source(item)]
         dart_min = max(0, int(getattr(self.settings, "dart_disclosure_min_score", 50)))
         dart_items = [item for item in news_items if item.source_kind == "dart"]
@@ -1200,6 +1225,19 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 if item.dedup_key in study_keys
                 or any(kw in item.title.lower() for kw in keywords_lower)
             ]
+        # 라르고TV(@scalpinglove)는 일반 게시물만 무조건 발송 대상에 포함한다.
+        # 단, 댓글/답글은 절대 발송하지 않는다.
+        largo_items = [
+            item for item in classified
+            if _is_largo_tv_exception(item)
+            and not bool(getattr(item, "is_reply", False))
+        ]
+        qualified_keys = {item.dedup_key for item in qualified}
+        for item in largo_items:
+            if item.dedup_key not in qualified_keys:
+                qualified.append(item)
+                qualified_keys.add(item.dedup_key)
+
         filtered_out = [item for item in classified if item not in qualified]
         self._last_scan["filtered"] = len(filtered_out)
         if study_items:
@@ -1305,7 +1343,7 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
         requests(동기 라이브러리) 호출이라 asyncio 루프를 막지 않도록
         스레드로 분리한다.
         """
-        await asyncio.to_thread(backup_db, self.settings)
+        logger.info("🔄 backup_loop 진입"); await asyncio.to_thread(backup_db, self.settings)
 
     @backup_loop.before_loop
     async def _before_backup(self) -> None:
@@ -1385,6 +1423,16 @@ class SchedulerCog(commands.Cog, name="Scheduler"):
                 lines.append("\n\U0001F195 신규 이벤트 없음")
 
             if upcoming:
+                # [featured-schedule] 일정 알림 특징주/상한가 섹션 (일정_특징주_섹션_패치_v4)
+                try:
+                    from stock_news_bot.schedule_featured import build_featured_section as _bfs
+                    _feat_text = await asyncio.to_thread(_bfs, self.settings.db_path)
+                except Exception:
+                    __import__('logging').getLogger(__name__).exception('일정 특징주 섹션 생성 실패(무시)')
+                    _feat_text = ''
+                if _feat_text:
+                    lines.append(_feat_text)
+                    lines.append("")
                 lines.append(f"\n\U0001F52E 앞으로 예정된 일정 {len(upcoming)}건 (기간 제한 없음)")
                 for ev in upcoming:
                     lines.append(f"\u2022 [{ev['event_date']}] {ev['company']} \u00b7 {ev['event_type']}")

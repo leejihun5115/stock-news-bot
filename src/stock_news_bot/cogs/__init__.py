@@ -23,6 +23,9 @@ LOAD_ORDER: list[str] = [
     "stock_news_bot.cogs.notifier",
     "stock_news_bot.cogs.scheduler",
     "stock_news_bot.cogs.market_intel",
+    # 라르고TV 전용 독립 피드. scheduler의 alerter를 재사용하므로
+    # scheduler보다 뒤, admin보다는 앞이면 된다.
+    "stock_news_bot.cogs.largotv_feed",
     # 종목 뉴스 파이프라인과 완전히 독립적인 정시 브리핑이라 순서에
     # 의존성이 없다 — admin보다 앞이기만 하면 된다.
     "stock_news_bot.cogs.market_briefing",

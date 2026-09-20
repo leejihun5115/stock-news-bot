@@ -131,13 +131,52 @@ def extract_reason(text: str) -> str:
     return ""
 
 
+# 【금액 = 근거? 아니다 — 실제 기업가치와 무관한 금액을 배제】
+# 예전 extract_amounts()는 본문에 등장하는 "N원" 표현을 문맥 상관없이
+# 전부 긁어모아 "규칙 엔진이 추출한 사실"로 LLM에 넘겼다. 그 결과
+# "목표주가 5만원", "투자의견 매수(목표가 6만원)"처럼 증권사 의견/전망에
+# 딸린 금액이나, 사업 맥락과 무관하게 근처에 있던 다른 금액까지 마치
+# "이 회사의 실제 사업 규모"인 것처럼 근거로 둔갑하는 문제가 있었다.
+# 목표가는 증권사의 "전망"이지 회사가 실제로 만들어낸 매출/계약/투자
+# 금액이 아니므로 사실 근거가 될 수 없다. 그래서 이제는 (1) 목표가/
+# 투자의견 문맥에 붙은 금액은 아예 버리고, (2) 실제 사업 재료 키워드
+# (수주/계약/공급/매출/영업이익/투자 등) 근처에 있는 금액만 "이 회사의
+# 실제 기업가치와 관련된 금액"으로 인정한다.
+_AMOUNT_OPINION_CONTEXT_KEYWORDS = [
+    "목표주가", "목표가", "목표 주가", "목표 가격", "적정주가", "적정 주가",
+    "투자의견", "투자 의견",
+]
+_AMOUNT_CONTEXT_WINDOW = 25
+
+
 def extract_amounts(text: str) -> list[str]:
-    """본문에서 금액 표현을 전부 찾아서 반환한다 (중복 제거, 등장 순서 유지)."""
+    """본문에서 '실제 기업가치와 관련된' 금액 표현만 찾아서 반환한다
+    (중복 제거, 등장 순서 유지).
+
+    본문에 등장하는 모든 "N원" 표현을 무조건 근거로 삼지 않는다 —
+    목표주가·투자의견처럼 증권사 의견에 딸린 금액이나, 실제 사업 재료
+    (수주/계약/공급/매출 등) 문맥이 전혀 없는 금액은 이 회사의 실제
+    기업가치를 보여주는 사실이 아니므로 제외한다.
+    """
     seen: list[str] = []
     for m in _AMOUNT_PATTERN.finditer(text):
         value = m.group().strip()
-        if value not in seen:
-            seen.append(value)
+        if value in seen:
+            continue
+        start = max(m.start() - _AMOUNT_CONTEXT_WINDOW, 0)
+        end = min(m.end() + _AMOUNT_CONTEXT_WINDOW, len(text))
+        window = text[start:end]
+        if any(kw in window for kw in _AMOUNT_OPINION_CONTEXT_KEYWORDS):
+            # 목표가/투자의견에 딸린 금액 — 회사의 실제 기업가치가 아니라
+            # 증권사의 전망일 뿐이므로 근거에서 제외한다.
+            continue
+        if not any(kw in window for kw in _BUSINESS_MATERIAL_SIGNAL_KEYWORDS) and not any(
+            kw in window for kw in _EVIDENCE_MATERIAL_KEYWORDS
+        ):
+            # 근처에 실제 사업 재료 키워드가 전혀 없으면(예: 기사 내 다른
+            # 맥락의 금액이 우연히 근처에 있는 경우) 근거로 인정하지 않는다.
+            continue
+        seen.append(value)
     return seen
 
 
@@ -348,12 +387,7 @@ def _lacks_required_evidence(item: NewsItem) -> bool:
     text = f"{item.title} {item.summary}"
     if not any(kw in text for kw in EVIDENCE_TRIGGER_KEYWORDS):
         return False
-    has_reason = bool(item.reason or item.amounts)
-    has_company = bool(item.company)
-    # 이유가 있어도 특정 상장 종목과 연결되지 않으면(예: 물가/거시 테마
-    # 뉴스) 발송 제외한다 — 원인은 있지만 결과(어느 종목 시세인지)가
-    # 없는 헤드라인은 오해만 유발한다.
-    return not (has_reason and has_company)
+    return not item.reason and not item.amounts
 
 
 class ClassifierCog(commands.Cog, name="Classifier"):

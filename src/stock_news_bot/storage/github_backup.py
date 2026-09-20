@@ -36,6 +36,7 @@ DB는 WAL 저널 모드로 열리므로 최근 커밋이 메인 .sqlite3 파일�
 from __future__ import annotations
 
 import base64
+import gzip
 import logging
 import sqlite3
 import tempfile
@@ -49,6 +50,11 @@ logger = logging.getLogger(__name__)
 
 _API_ROOT = "https://api.github.com"
 _TIMEOUT = 30
+
+# 백업은 항상 이 두 브랜치와 다른 전용 브랜치를 써야 한다 — backup_db()가
+# 매번 브랜치 히스토리를 강제로(force) 덮어쓰기 때문에, 소스 코드가 있는
+# 브랜치에 쓰면 코드 히스토리가 통째로 사라질 수 있다.
+_PROTECTED_BRANCHES = {"main", "master"}
 
 
 def _contents_url(settings: Settings) -> str:
@@ -169,6 +175,21 @@ def restore_db(settings: Settings) -> bool:
         )
         return False
 
+    if raw[:2] == b"\x1f\x8b":
+        # gzip 매직바이트 — 압축 패치 이후에 올라간 백업이다.
+        try:
+            raw = gzip.decompress(raw)
+        except OSError:
+            logger.exception("GitHub 백업 압축 해제 실패 — 복원을 건너뜁니다.")
+            return False
+        if not raw:
+            logger.warning(
+                "GitHub 백업 압축 해제 결과가 비어 있습니다 — 안전을 위해 복원을 건너뜁니다."
+            )
+            return False
+    # 매직바이트가 없으면 압축 패치 이전에 올라간 구버전(비압축) 백업이므로
+    # 그대로 사용한다 — 하위호환.
+
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db_path.write_bytes(raw)
     logger.info(
@@ -179,12 +200,31 @@ def restore_db(settings: Settings) -> bool:
 
 
 def backup_db(settings: Settings) -> bool:
-    """현재 로컬 DB 파일 전체를 GitHub 저장소에 새 커밋으로 올린다.
+    """현재 로컬 DB 파일 전체를 GitHub 저장소에 "고아 커밋"으로 올린다.
+
+    직전 백업과 부모-자식 관계를 맺지 않는 새 커밋을 만들어 브랜치를
+    강제로(force) 이 커밋 하나로 덮어쓴다 — 그래서 저장소에는 사실상
+    최신 백업 1개 분량만 남고, 이전 백업들은 GitHub 쪽에서 가비지
+    컬렉션되어 저장공간이 계속 쌓이는 문제를 막는다.
 
     이 함수는 예외를 밖으로 던지지 않는다 — 백업 실패가 뉴스 파이프라인을
     멈추면 안 된다. 실패는 로그로만 남는다.
     """
     if not settings.github_backup_enabled:
+        return False
+
+    branch = settings.github_backup_branch
+    if branch in _PROTECTED_BRANCHES:
+        # 이 함수는 백업마다 브랜치 히스토리를 강제로 통째 덮어쓴다.
+        # 소스 코드가 있는 브랜치에 이걸 실행하면 코드 커밋이 전부
+        # 사라질 수 있으므로, 전용 백업 브랜치가 아니면 아예 실행하지 않는다.
+        logger.error(
+            "GITHUB_BACKUP_BRANCH가 '%s'로 설정되어 있습니다 — 이 브랜치는 "
+            "소스 코드용이라 백업 전용으로 쓸 수 없습니다(백업마다 히스토리를 "
+            "강제로 덮어써서 코드 커밋이 전부 사라질 위험이 있음). .env에서 "
+            "GITHUB_BACKUP_BRANCH=db-backup 처럼 전용 브랜치로 반드시 바꿔주세요.",
+            branch,
+        )
         return False
 
     db_path = Path(settings.db_path)
@@ -197,62 +237,120 @@ def backup_db(settings: Settings) -> bool:
     except sqlite3.Error:
         logger.exception("DB 스냅샷 생성 실패 — 이번 백업 주기는 건너뜁니다.")
         return False
-    content_b64 = base64.b64encode(raw).decode("ascii")
 
-    # 기존 파일을 업데이트하려면 GitHub API가 현재 blob의 sha를 요구한다.
-    # 파일이 없으면(최초 백업) sha 없이 생성 요청을 보낸다.
-    sha = None
-    try:
-        existing = requests.get(
-            _contents_url(settings),
-            headers=_headers(settings),
-            params={"ref": settings.github_backup_branch},
-            timeout=_TIMEOUT,
-        )
-        if existing.status_code == 200:
-            sha = existing.json().get("sha")
-    except requests.RequestException:
-        logger.exception("GitHub 백업 전 기존 파일 조회 실패 — 새 업로드를 계속 시도합니다.")
+    # GitHub Contents API 업로드 한도(422 too large)에 걸리지 않도록
+    # 올리기 전에 gzip으로 압축한다. SQLite DB는 텍스트/인덱스 비중이 커서
+    # 보통 60~80%까지 줄어든다. restore_db()는 매직바이트(1f 8b)로 압축
+    # 여부를 자동 판별하므로, 예전에 올려둔 비압축 백업도 그대로 복원된다.
+    compressed = gzip.compress(raw, compresslevel=9)
+    content_b64 = base64.b64encode(compressed).decode("ascii")
 
-    payload: dict = {
-        "message": "chore: update stock-news-bot accumulated DB backup",
-        "content": content_b64,
-        "branch": settings.github_backup_branch,
-    }
-    if sha:
-        payload["sha"] = sha
+    repo = settings.github_backup_repo.strip("/")
+    path = settings.github_backup_path.lstrip("/")
+    api_root = f"{_API_ROOT}/repos/{repo}/git"
+    headers = _headers(settings)
+
+    def _too_large(resp: "requests.Response") -> bool:
+        return resp.status_code == 422 and "too large" in resp.text.lower()
 
     try:
-        resp = requests.put(
-            _contents_url(settings),
-            headers=_headers(settings),
-            json=payload,
+        # 1) blob 생성 — 압축된 DB 바이트 자체.
+        blob_resp = requests.post(
+            f"{api_root}/blobs",
+            headers=headers,
+            json={"content": content_b64, "encoding": "base64"},
             timeout=_TIMEOUT,
         )
+        if blob_resp.status_code not in (200, 201):
+            if _too_large(blob_resp):
+                logger.warning(
+                    "GitHub DB 백업 업로드 실패: 압축 후에도 파일이 너무 큽니다"
+                    "(원본 %.1fMB → 압축 %.1fMB). "
+                    "DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 "
+                    "DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.",
+                    len(raw) / (1024 * 1024),
+                    len(compressed) / (1024 * 1024),
+                )
+            else:
+                logger.warning(
+                    "GitHub DB 백업 실패(blob 생성, status=%s): %s",
+                    blob_resp.status_code, blob_resp.text[:300],
+                )
+            return False
+        blob_sha = blob_resp.json()["sha"]
+
+        # 2) tree 생성 — base_tree를 주지 않아 이 파일 하나만 있는 새 트리를
+        #    만든다(직전 백업의 트리를 이어받지 않음 → 히스토리 단절).
+        tree_resp = requests.post(
+            f"{api_root}/trees",
+            headers=headers,
+            json={"tree": [{"path": path, "mode": "100644", "type": "blob", "sha": blob_sha}]},
+            timeout=_TIMEOUT,
+        )
+        if tree_resp.status_code not in (200, 201):
+            logger.warning(
+                "GitHub DB 백업 실패(tree 생성, status=%s): %s",
+                tree_resp.status_code, tree_resp.text[:300],
+            )
+            return False
+        tree_sha = tree_resp.json()["sha"]
+
+        # 3) 커밋 생성 — parents=[]로 고아(orphan) 커밋을 만든다. 이전 백업
+        #    커밋과 부모-자식 관계를 맺지 않으므로, 브랜치를 이 커밋 하나로
+        #    강제 갱신하면 이전 백업들은 브랜치에서 도달 불가능해지고
+        #    GitHub 쪽에서 주기적으로 가비지 컬렉션되어 저장공간이 회수된다.
+        commit_resp = requests.post(
+            f"{api_root}/commits",
+            headers=headers,
+            json={
+                "message": "chore: stock-news-bot DB backup (replaces previous backup)",
+                "tree": tree_sha,
+                "parents": [],
+            },
+            timeout=_TIMEOUT,
+        )
+        if commit_resp.status_code not in (200, 201):
+            logger.warning(
+                "GitHub DB 백업 실패(commit 생성, status=%s): %s",
+                commit_resp.status_code, commit_resp.text[:300],
+            )
+            return False
+        commit_sha = commit_resp.json()["sha"]
+
+        # 4) 브랜치 ref를 이 커밋으로 강제(force) 갱신 — 직전 백업 커밋과의
+        #    연결을 끊고 브랜치가 항상 최신 백업 1개만 가리키게 만든다.
+        #    ref가 아직 없으면(최초 백업) 새로 만든다.
+        ref_update = requests.patch(
+            f"{api_root}/refs/heads/{branch}",
+            headers=headers,
+            json={"sha": commit_sha, "force": True},
+            timeout=_TIMEOUT,
+        )
+        if ref_update.status_code in (404, 422):
+            ref_create = requests.post(
+                f"{api_root}/refs",
+                headers=headers,
+                json={"ref": f"refs/heads/{branch}", "sha": commit_sha},
+                timeout=_TIMEOUT,
+            )
+            if ref_create.status_code not in (200, 201):
+                logger.warning(
+                    "GitHub DB 백업 실패(브랜치 '%s' 생성, status=%s): %s",
+                    branch, ref_create.status_code, ref_create.text[:300],
+                )
+                return False
+        elif ref_update.status_code not in (200, 201):
+            logger.warning(
+                "GitHub DB 백업 실패(브랜치 갱신, status=%s): %s",
+                ref_update.status_code, ref_update.text[:300],
+            )
+            return False
     except requests.RequestException:
         logger.exception("GitHub DB 백업 업로드 실패")
         return False
 
-    if resp.status_code not in (200, 201):
-        if resp.status_code == 422 and "too large" in resp.text.lower():
-            # GitHub Contents API는 100MB 근처에서 업로드 자체를 거부한다.
-            # DB가 이 지점까지 커졌다면 보존 기간 설정을 줄이거나 외부
-            # DB로 전환해야 하는 신호이므로 원인을 명확히 남긴다.
-            logger.warning(
-                "GitHub DB 백업 업로드 실패: 파일이 너무 큽니다(%.1fMB). "
-                "DEDUP_RETENTION_DAYS/HISTORY_RETENTION_DAYS/PRICE_REACTION_RETENTION_DAYS로 "
-                "DB 크기를 줄이거나 외부 상시 DB로 전환을 검토하세요.",
-                len(raw) / (1024 * 1024),
-            )
-        else:
-            logger.warning(
-                "GitHub DB 백업 업로드 실패(status=%s): %s",
-                resp.status_code, resp.text[:300],
-            )
-        return False
-
     logger.info(
-        "📦 GitHub DB 백업 완료: repo=%s path=%s (%.1fKB)",
-        settings.github_backup_repo, settings.github_backup_path, len(raw) / 1024,
+        "📦 GitHub DB 백업 완료(이전 백업 대체): repo=%s branch=%s path=%s (원본 %.1fKB → 압축 %.1fKB)",
+        settings.github_backup_repo, branch, path, len(raw) / 1024, len(compressed) / 1024,
     )
     return True

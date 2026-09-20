@@ -128,11 +128,26 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.settings = bot.settings  # type: ignore[attr-defined]
-        self.alerter = TelegramAlerter(
-            bot_token=self.settings.telegram_bot_token,
-            chat_id=self.settings.telegram_chat_id,
-            enabled=self.settings.telegram_alert_enabled,
-        )
+        # scheduler.py의 Scheduler 코그가 유일하게 텔레그램 콜백 폴링을
+        # 수행하는 alerter 인스턴스를 가지고 있다. 여기서 별도의
+        # TelegramAlerter를 새로 만들면, 아래에서 이 alerter에 등록하는
+        # "국내장브리핑" 등의 명령이 실제 폴링 루프에서 전혀 체크되지 않는다
+        # (2026-09-10에 고친 것과 동일한 문제, 재발 방지를 위해 재사용으로 고정).
+        scheduler_cog = bot.get_cog("Scheduler")
+        if scheduler_cog is not None and getattr(scheduler_cog, "alerter", None) is not None:
+            self.alerter = scheduler_cog.alerter
+        else:
+            # LOAD_ORDER상 scheduler가 market_briefing보다 먼저 로드되므로
+            # 정상적인 경우 이 분기로는 오지 않는다. 방어적으로만 남겨둔다.
+            logger.warning(
+                "MarketBriefing: Scheduler 코그의 alerter를 찾지 못해 별도 TelegramAlerter를 생성합니다. "
+                "텔레그램 수동 명령(국내장브리핑 등)이 동작하지 않을 수 있습니다."
+            )
+            self.alerter = TelegramAlerter(
+                bot_token=self.settings.telegram_bot_token,
+                chat_id=self.settings.telegram_chat_id,
+                enabled=self.settings.telegram_alert_enabled,
+            )
         # 국내 브리핑에서 "미국장 참고"로 이어붙이기 위해, 가장 최근
         # 미국장 브리핑(장중/마감 공통)의 테마.관련주 요약을 보관해둔다.
         self._last_us_context: str = ""
@@ -160,6 +175,15 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
         logger.info(
             "마켓 브리핑(국내/미국장): 활성화 (국내=장중 30분 간격+15:40 마감, 미국=장중 30분 간격+마감 자동감지)",
         )
+
+        # 텔레그램 채팅에 아래 문구를 정확히 치면 장중여부와 무관하게 즉시
+        # 수동 실행된다(디스코드 접속 없이 상세보기 버튼 등을 빠르게 테스트하기
+        # 위한 용도). _run_kr_briefing/_run_us_briefing과 달리 장중 시간대
+        # 체크를 건너뛰고 _run_briefing을 바로 호출한다.
+        self.alerter.register_command("국내장브리핑", "국내브리핑", handler=self._manual_kr_briefing)
+        self.alerter.register_command("국내마감브리핑", "국내마감", handler=self._manual_kr_close_briefing)
+        self.alerter.register_command("미국장브리핑", "미국브리핑", handler=self._manual_us_briefing_text)
+        self.alerter.register_command("미국마감브리핑", "미국마감", handler=self._manual_us_close_briefing)
 
     @commands.command(name="미국장브리핑", aliases=["usbriefing"])
     @commands.is_owner()
@@ -190,6 +214,34 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
 
     async def _before_loop(self) -> None:
         await self.bot.wait_until_ready()
+
+    # 【텔레그램 채팅 수동 트리거 4종】 장중여부 체크 없이 _run_briefing을
+    # 바로 호출한다 — 실제 스케줄 진입점(_run_kr_briefing 등)과 파라미터를
+    # 동일하게 맞춰서, 이 4개 중 아무거나로도 market_briefing.py의 최신
+    # 수정사항을 장중 여부와 무관하게 바로 검증할 수 있게 한다.
+    async def _manual_kr_briefing(self) -> None:
+        await self._run_briefing(
+            label="국내", emoji="🇰🇷", title="국내 증시 브리핑",
+            query=self.settings.market_briefing_kr_query,
+        )
+
+    async def _manual_kr_close_briefing(self) -> None:
+        await self._run_briefing(
+            label="국내 마감", emoji="🇰🇷", title="국내 증시 마감 브리핑",
+            query=self.settings.market_briefing_kr_query,
+        )
+
+    async def _manual_us_briefing_text(self) -> None:
+        await self._run_briefing(
+            label="미국", emoji="🇺🇸", title="미국장 브리핑",
+            query=self.settings.market_briefing_us_query,
+        )
+
+    async def _manual_us_close_briefing(self) -> None:
+        await self._run_briefing(
+            label="미국 마감", emoji="🇺🇸", title="미국장 마감 브리핑",
+            query=self.settings.market_briefing_us_query,
+        )
 
     async def _run_kr_briefing(self) -> None:
         now_kst = datetime.now(timezone.utc).astimezone(_KST)
@@ -378,12 +430,14 @@ class MarketBriefingCog(commands.Cog, name="MarketBriefing"):
                     ai.analysis = _meaningful_lines(ai.analysis)
                     ai_results[item.url or item.title] = ai
                     logger.info(
-                        "🇺🇸 미국장 AI 분석 완료 | %s",
+                        "%s %s AI 분석 완료 | %s",
+                        emoji, label,
                         item.title[:80],
                     )
             except Exception as exc:
                 logger.warning(
-                    "🇺🇸 미국장 AI 분석 실패 | %s | %s",
+                    "%s %s AI 분석 실패 | %s | %s",
+                    emoji, label,
                     item.title[:80],
                     str(exc)[:300],
                 )
