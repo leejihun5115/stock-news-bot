@@ -109,6 +109,21 @@ KNOWN_COMPANY_NAMES = [
 CompanyMatcher = Callable[[str], str]
 
 
+def _expand_to_word_boundary(text, start, end):
+    """자르는 지점이 단어/문장 중간이면 가장 가까운 공백.문장부호 경계까지
+    바깥쪽으로 넓힌다 (2026-09-15 도입, 09-25 회귀 재수정).
+
+    고정폭(N자)으로 그냥 자르면 단어가 중간에 뚝 끊긴 채로 텔레그램에
+    노출되는 문제가 있었다.
+    """
+    boundary_chars = set(list(" \t\n.,;:!?()[]{}") + [chr(34), chr(39)] + list("『』「」·—-"))
+    while start > 0 and text[start] not in boundary_chars:
+        start -= 1
+    while end < len(text) and text[end] not in boundary_chars:
+        end += 1
+    return start, end
+
+
 def extract_reason(text: str) -> str:
     """본문에서 '왜'에 해당하는 근거 스니펫을 찾아서 반환한다.
 
@@ -119,6 +134,7 @@ def extract_reason(text: str) -> str:
     if match:
         start = max(match.start() - 20, 0)
         end = min(match.end() + 20, len(text))
+        start, end = _expand_to_word_boundary(text, start, end)
         return text[start:end].strip()
 
     for kw in _EVIDENCE_MATERIAL_KEYWORDS:
@@ -126,6 +142,7 @@ def extract_reason(text: str) -> str:
         if idx != -1:
             start = max(idx - 15, 0)
             end = min(idx + len(kw) + 20, len(text))
+            start, end = _expand_to_word_boundary(text, start, end)
             return text[start:end].strip()
 
     return ""
@@ -217,10 +234,14 @@ _MACRO_ONLY_KEYWORDS = {
 # "계약/실적/공시"처럼 실제 사업상 재료로 인정할 수 있는 신호. 아래
 # _macro_only_context / _personal_event_only_context가 함께 사용한다.
 _BUSINESS_MATERIAL_SIGNAL_KEYWORDS = (
-    "수주", "계약", "공급", "납품", "투자", "증설", "양산", "출시",
+    # 2026-09-15: "투자/주가/주식/종목"은 순수 금리.환율 시황 코멘트에도
+    # 흔히 등장하는 범용 단어라, 여기 있으면 그런 기사도 "사업 재료
+    # 있음"으로 오판된다. 09-25에 이 목록이 옛 버전으로 회귀해 다시
+    # 들어와 있던 것을 재차 제거함.
+    "수주", "계약", "공급", "납품", "증설", "양산", "출시",
     "승인", "허가", "임상", "기술수출", "기술이전", "실적", "매출",
     "영업이익", "자사주", "배당", "인수", "합병", "신제품", "특허",
-    "주가", "주식", "종목", "급등", "급락", "상한가", "하한가", "공시",
+    "급등", "급락", "상한가", "하한가", "공시",
 )
 
 
