@@ -8,6 +8,7 @@ import sqlite3
 from typing import Optional
 
 import yfinance as yf
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 
 from stock_news_bot.storage.dart_client import DartClient
 from stock_news_bot.related_stocks_engine import rank_accumulated_companies, format_theme_leader_lines
@@ -219,6 +220,20 @@ _TICKERS = {
 }
 
 
+def _fetch_history_with_timeout(ticker: str, timeout_sec: float = 15.0):
+    """yfinance가 응답 없이 멈추는 것을 막기 위해 별도 스레드에서 실행하고
+    timeout_sec 안에 안 끝나면 포기한다. (2026-09-25: 이게 멈추면
+    market_briefing.py 30분 주기 루프 전체가 같이 멈추는 문제 있었음)
+    """
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            lambda: yf.Ticker(ticker).history(
+                period="5d", interval="1d", auto_adjust=False,
+            )
+        )
+        return future.result(timeout=timeout_sec)
+
+
 def _get_indicator(name: str, ticker: str) -> MarketIndicator:
     """Yahoo Finance에서 최근값과 전일 대비 변동률을 가져온다."""
 
@@ -228,11 +243,7 @@ def _get_indicator(name: str, ticker: str) -> MarketIndicator:
     )
 
     try:
-        data = yf.Ticker(ticker).history(
-            period="5d",
-            interval="1d",
-            auto_adjust=False,
-        )
+        data = _fetch_history_with_timeout(ticker, timeout_sec=15.0)
 
         if data.empty or "Close" not in data.columns:
             logger.warning(
@@ -260,9 +271,9 @@ def _get_indicator(name: str, ticker: str) -> MarketIndicator:
 
         return indicator
 
-    except Exception as exc:
+    except (Exception, _FutureTimeoutError) as exc:
         logger.warning(
-            "글로벌 지표 수집 실패 | %s | %s | %s",
+            "글로벌 지표 수집 실패(타임아웃 포함) | %s | %s | %s",
             name,
             ticker,
             str(exc)[:300],
